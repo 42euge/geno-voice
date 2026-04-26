@@ -14,13 +14,37 @@ Used by [geno-reflect](https://github.com/42euge/geno-reflect) and other geno-* 
 - **TTS (Text-to-Speech):** Kokoro / Piper — local speech synthesis
 - **VAD (Voice Activity Detection):** Silero VAD — detect when the user starts/stops speaking
 
+## Installation
+
+Install via geno-tools:
+
+```bash
+geno-tools install geno-voice
+```
+
+Or from within an agent session:
+
+```
+/geno-tools install geno-voice
+```
+
 ## Project Structure
 
 ```
 geno-voice/
-├── README.md
-├── stt/              # Speech-to-text pipeline
-├── tts/              # Text-to-speech pipeline
-├── vad/              # Voice activity detection
-└── examples/         # Usage examples and integration demos
+├── GENO.md           # agent instructions
+├── SKILL.md          # umbrella skill manifest
+├── genotools.yaml    # geno-tools manifest
+├── skills/           # skill definitions
+│   └── geno-voice/   #   umbrella
+├── stt/              # speech-to-text pipeline
+├── tts/              # text-to-speech pipeline
+├── vad/              # voice activity detection
+├── examples/         # usage examples and integration demos
+├── docs/             # documentation site
+└── mkdocs.yml        # MkDocs configuration
 ```
+
+## License
+
+MIT
