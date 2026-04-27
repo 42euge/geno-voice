@@ -1,0 +1,6 @@
+name: voice
+version: 0.1.0
+description: >-
+  Local voice pipeline for offline, privacy-first AI voice interaction.
+  Provides STT (Whisper.cpp), TTS (Kokoro/Piper), and VAD (Silero) —
+  all running entirely on-device with no cloud APIs.
