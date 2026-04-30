@@ -33,6 +33,26 @@ geno-voice/
 - The umbrella skill at `skills/geno-voice/SKILL.md` describes the full skillset
 - Component pipelines (STT, TTS, VAD) are organized in their own top-level directories
 
+### Prefix aliasing
+
+Slash commands use the canonical `geno-` prefix in source (e.g., `geno-voice`).
+Short `/gt-` aliases (e.g., `/gt-voice`) are configured per-install by `geno-tools`
+and are not stored in this repo. When writing skill definitions or documentation,
+always reference the canonical `geno-` prefix; alias registration happens
+automatically at install time.
+
+### Adding new skills
+
+To add a new skill to this skillset:
+
+1. Create a directory under `skills/<skill-name>/`
+2. Add a `SKILL.md` inside it describing the skill's purpose, trigger phrases,
+   and instructions
+3. Register the skill in `genotools.yaml` if it exposes a slash command
+4. Update the Skills table in this file (`GENO.md`) with the new entry
+5. If the skill has sub-commands, follow the naming pattern
+   `geno-voice-<component>` (e.g., `geno-voice-stt`)
+
 ## Architecture
 
 ### Components

@@ -1,4 +1,4 @@
-name: voice
+name: geno-voice
 version: 0.1.0
 description: >-
   Local voice pipeline for offline, privacy-first AI voice interaction.
