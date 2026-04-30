@@ -1,0 +1,28 @@
+server:
+  host: 127.0.0.1
+  port: 5111
+
+stt:
+  engine: whisper
+  model: mlx-community/whisper-large-v3-turbo
+  language: en
+  gemma4:
+    ollama_url: http://localhost:11434/api/chat
+    model: gemma4:e4b
+    chunk_seconds: 30
+    overlap_seconds: 2
+    max_retries: 3
+    repeat_penalty: 1.5
+    num_predict: 256
+
+tts:
+  engine: kokoro
+  voice: af_heart
+  speed: 1.0
+  language: a
+
+vad:
+  silence_threshold: 0.02
+  silence_duration: 0.8
+  min_chunk_duration: 0.5
+  max_chunk_duration: 25
