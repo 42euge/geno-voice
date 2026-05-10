@@ -1,8 +1,11 @@
+import logging
 import os
 import tempfile
 import time
 
 from .base import STTEngine
+
+log = logging.getLogger("stt.whisper")
 
 
 class WhisperEngine(STTEngine):
@@ -18,6 +21,9 @@ class WhisperEngine(STTEngine):
             self._mlx_whisper = mlx_whisper
 
     def transcribe(self, wav_bytes: bytes) -> tuple[str | None, float]:
+        if len(wav_bytes) < 1000:
+            return "", 0.0
+
         self._load()
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             f.write(wav_bytes)
@@ -29,7 +35,8 @@ class WhisperEngine(STTEngine):
             )
             elapsed = time.monotonic() - t0
             return result["text"].strip(), elapsed
-        except Exception:
+        except Exception as e:
+            log.error("transcription failed: %s", e)
             return None, time.monotonic() - t0
         finally:
             os.unlink(tmp_path)
