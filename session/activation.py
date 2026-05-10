@@ -1,9 +1,9 @@
 """
-Arousal tracker — real-time emotional activation from audio features.
+Activation tracker — real-time emotional activation from audio features.
 
 Extracts pitch (F0), energy (RMS), and vocal tension (ZCR) from audio
 chunks, normalizes against a per-session speaker baseline, and computes
-a running arousal score (0.0 = calm, 1.0 = agitated) with dual-rate
+a running activation score (0.0 = calm, 1.0 = agitated) with dual-rate
 EMA trajectory tracking.
 
 No ML dependencies — pure numpy, <2ms per chunk.
@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 
 
 @dataclass
-class ArousalState:
+class ActivationState:
     score: float = 0.5
     fast_ema: float = 0.5
     slow_ema: float = 0.5
@@ -38,7 +38,7 @@ class AudioFeatures:
     zcr: float = 0.0
 
 
-class ArousalTracker:
+class ActivationTracker:
     def __init__(
         self,
         sample_rate: int = 16000,
@@ -63,9 +63,9 @@ class ArousalTracker:
             "f0var_mean": 0.0, "f0var_std": 1.0,
             "zcr_mean": 0.0, "zcr_std": 1.0,
         }
-        self.state = ArousalState()
+        self.state = ActivationState()
 
-    def process_chunk(self, pcm_bytes: bytes) -> ArousalState:
+    def process_chunk(self, pcm_bytes: bytes) -> ActivationState:
         features = self.extract_features(pcm_bytes)
 
         if not self._baseline_ready:
@@ -74,12 +74,12 @@ class ArousalTracker:
                 self._compute_baseline()
             return self.state
 
-        arousal = self._compute_arousal(features)
+        activation = self._compute_activation(features)
         crying = self._detect_crying(features)
 
-        self.state.score = arousal
-        self.state.fast_ema = self.fast_alpha * arousal + (1 - self.fast_alpha) * self.state.fast_ema
-        self.state.slow_ema = self.slow_alpha * arousal + (1 - self.slow_alpha) * self.state.slow_ema
+        self.state.score = activation
+        self.state.fast_ema = self.fast_alpha * activation + (1 - self.fast_alpha) * self.state.fast_ema
+        self.state.slow_ema = self.slow_alpha * activation + (1 - self.slow_alpha) * self.state.slow_ema
         self.state.trajectory = self.state.fast_ema - self.state.slow_ema
         self.state.is_elevated = self.state.fast_ema > self.elevated_threshold
         self.state.is_crying = crying
@@ -168,7 +168,7 @@ class ArousalTracker:
         }
         self._baseline_ready = True
 
-    def _compute_arousal(self, f: AudioFeatures) -> float:
+    def _compute_activation(self, f: AudioFeatures) -> float:
         b = self._baseline
         rms_z = self._z(f.rms, b["rms_mean"], b["rms_std"])
         f0_z = self._z(f.f0_hz, b["f0_mean"], b["f0_std"]) if f.f0_hz > 0 else 0.0

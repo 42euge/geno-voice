@@ -3,7 +3,7 @@
 Full M1 pipeline simulation — no mic needed.
 
 Simulates a realistic reflection session through all components:
-  VAD events → Whisper transcription → arousal tracking →
+  VAD events → Whisper transcription → activation tracking →
   NLP triggers → turn-taking engine → session notes (Ollama)
 
 Exercises the entire M1 architecture with realistic timing and
@@ -40,7 +40,8 @@ from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
-from session.arousal import ArousalTracker
+from session.activation import ActivationTracker
+from session.compute import ComputeMonitor, ComputeMonitorProcessor
 from session.notes import SessionNoteProcessor
 from session.triggers import detect_triggers
 from session.turn_taking import TurnTakingEngine, Action
@@ -119,12 +120,13 @@ def make_audio(freq, amplitude, duration_s, sr=16000):
 
 
 class SimulatedPipelineProcessor(FrameProcessor):
-    """Processes frames through arousal + turn-taking + display."""
+    """Processes frames through compute monitor + activation + turn-taking."""
 
-    def __init__(self, engine: TurnTakingEngine, arousal: ArousalTracker):
+    def __init__(self, engine: TurnTakingEngine, activation: ActivationTracker, monitor: ComputeMonitor):
         super().__init__()
         self._engine = engine
-        self._arousal = arousal
+        self._activation = activation
+        self._monitor = monitor
         self._last_speech_end = time.time()
 
     async def process_frame(self, frame, direction):
@@ -132,6 +134,7 @@ class SimulatedPipelineProcessor(FrameProcessor):
 
         if isinstance(frame, VADUserStoppedSpeakingFrame):
             self._last_speech_end = time.time()
+            self._monitor.on_stt_done()
 
         if isinstance(frame, TranscriptionFrame):
             text = frame.text.strip()
@@ -140,6 +143,12 @@ class SimulatedPipelineProcessor(FrameProcessor):
                 return
 
             silence = time.time() - self._last_speech_end
+            activation_state = self._activation.state
+
+            self._engine.update_state(
+                emotional_content=activation_state.is_elevated,
+                user_crying=activation_state.is_crying,
+            )
 
             decision = self._engine.decide(
                 silence_duration_secs=silence,
@@ -147,11 +156,13 @@ class SimulatedPipelineProcessor(FrameProcessor):
                 transcript_chunk=text,
             )
 
-            arousal = self._arousal.state
             icon = ACTION_ICONS.get(decision.action, "❓")
+            pipe = self._monitor.state.pipeline.value
+            bg_ok = self._monitor.can_run_background_llm()
 
             print(f"\n📝 \"{text}\"")
-            print(f"   Arousal: {arousal.score:.2f} (fast={arousal.fast_ema:.2f} slow={arousal.slow_ema:.2f} traj={arousal.trajectory:+.2f})")
+            print(f"   Activation: {activation_state.score:.2f} (fast={activation_state.fast_ema:.2f} slow={activation_state.slow_ema:.2f} traj={activation_state.trajectory:+.2f} cry={activation_state.is_crying})")
+            print(f"   Compute: {pipe} | bg_llm={bg_ok} | cancel_llm={self._monitor.should_cancel_llm()}")
             print(f"   {icon} Turn: {decision.action.value} — {decision.reason}")
             if decision.cue:
                 print(f"   Cue: {decision.cue.cue_type}")
@@ -162,10 +173,10 @@ class SimulatedPipelineProcessor(FrameProcessor):
 class ChunkFeeder(FrameProcessor):
     """Feeds simulated speech through the pipeline with realistic timing."""
 
-    def __init__(self, scenario, arousal_tracker):
+    def __init__(self, scenario, activation_tracker):
         super().__init__()
         self._scenario = scenario
-        self._arousal = arousal_tracker
+        self._activation = activation_tracker
 
     async def process_frame(self, frame, direction):
         await super().process_frame(frame, direction)
@@ -178,7 +189,7 @@ class ChunkFeeder(FrameProcessor):
             print(f"{'='*60}")
 
             audio = make_audio(chunk["pitch"], chunk["amplitude"], chunk["speech_secs"])
-            self._arousal.process_chunk(audio)
+            self._activation.process_chunk(audio)
 
             await task.queue_frame(VADUserStartedSpeakingFrame())
             await asyncio.sleep(0.1)
@@ -204,28 +215,30 @@ async def main():
 
     engine = TurnTakingEngine()
     engine.state.session_start = time.time() - 300
-    arousal = ArousalTracker(baseline_chunks=2)
+    activation = ActivationTracker(baseline_chunks=2)
+    monitor = ComputeMonitor()
 
     # Pre-fill baseline with first two "calm" chunks
     for chunk in SCENARIO[:2]:
         audio = make_audio(chunk["pitch"], chunk["amplitude"], 2.0)
-        arousal.process_chunk(audio)
+        activation.process_chunk(audio)
 
     print("=" * 60)
     print("  MindReflect — Full M1 Pipeline Simulation")
     print()
-    print("  All components: VAD → STT → Arousal → Turn-Taking → Notes")
+    print("  All 7 modules: VAD → Compute → Activation → Turn-Taking → Notes")
     print()
     print(f"  Session notes: {session_dir}")
     print(f"  Scenario: {len(SCENARIO)} chunks, ~37s speech")
     print(f"  Notes model: gemma4:e2b (Ollama)")
     print("=" * 60)
 
-    feeder = ChunkFeeder(SCENARIO, arousal)
-    sim = SimulatedPipelineProcessor(engine, arousal)
+    feeder = ChunkFeeder(SCENARIO, activation)
+    compute_proc = ComputeMonitorProcessor(monitor)
+    sim = SimulatedPipelineProcessor(engine, activation, monitor)
     notes = SessionNoteProcessor(session_dir=session_dir, model="gemma4:e2b")
 
-    pipeline = Pipeline([feeder, sim, notes])
+    pipeline = Pipeline([feeder, compute_proc, sim, notes])
     runner = PipelineRunner()
     task = PipelineTask(pipeline)
 
@@ -242,7 +255,7 @@ async def main():
 
     print(f"\n  Speaking total: {engine.state.user_speaking_total_secs:.0f}s")
     print(f"  Chunks processed: {engine.state.chunks_since_last_response}")
-    print(f"  Arousal: score={arousal.state.score:.2f} traj={arousal.state.trajectory:+.2f}")
+    print(f"  Activation: score={activation.state.score:.2f} traj={activation.state.trajectory:+.2f}")
 
     for f in ["summary.md", "moments.jsonl", "meta.json"]:
         p = Path(session_dir) / f
