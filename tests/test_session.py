@@ -11,6 +11,7 @@ from session.turn_taking import TurnTakingEngine, TurnTakingConfig, Action
 from session.activation import ActivationTracker, ActivationState
 from session.compute import ComputeMonitor, PipelineState
 from session.notes import SessionNoteProcessor
+from session.timer import SessionTimer, TimerConfig
 
 
 # ─── Triggers ───────────────────────────────────────────────
@@ -226,6 +227,67 @@ class TestActivation:
 
 
 # ─── Compute Monitor ────────────────────────────────────────
+
+
+# ─── Session Timer ───────────────────────────────────────────
+
+
+class TestSessionTimer:
+    def test_initial_state(self):
+        t = SessionTimer()
+        s = t.tick()
+        assert s.elapsed_mins < 1
+        assert not s.is_extended
+
+    def test_no_checkin_before_threshold(self):
+        t = SessionTimer(TimerConfig(gentle_checkin_mins=20))
+        assert not t.should_checkin()
+
+    def test_checkin_after_threshold(self):
+        t = SessionTimer(TimerConfig(gentle_checkin_mins=5))
+        t.state.started_at = time.time() - 360  # 6 minutes ago
+        assert t.should_checkin()
+
+    def test_checkin_interval_respected(self):
+        t = SessionTimer(TimerConfig(gentle_checkin_mins=5, checkin_interval_mins=15))
+        t.state.started_at = time.time() - 360
+        assert t.should_checkin()
+        t.record_checkin()
+        assert not t.should_checkin()  # just checked in
+
+    def test_extended_session(self):
+        t = SessionTimer(TimerConfig(extended_session_mins=30))
+        t.state.started_at = time.time() - 2400  # 40 minutes ago
+        t.tick()
+        assert t.state.is_extended
+
+    def test_elapsed_display_minutes(self):
+        t = SessionTimer()
+        t.state.elapsed_mins = 15
+        assert t.state.elapsed_display == "15m"
+
+    def test_elapsed_display_hours(self):
+        t = SessionTimer()
+        t.state.elapsed_mins = 75
+        assert t.state.elapsed_display == "1h 15m"
+
+    def test_checkin_messages_vary(self):
+        t = SessionTimer(TimerConfig(gentle_checkin_mins=5))
+        t.state.started_at = time.time() - 600
+        t.tick()
+        msg1 = t.checkin_message()
+        assert "reflecting" in msg1
+        t.record_checkin()
+        msg2 = t.checkin_message()
+        assert "No rush" in msg2
+
+    def test_extended_checkin_message(self):
+        t = SessionTimer(TimerConfig(gentle_checkin_mins=5, extended_session_mins=30))
+        t.state.started_at = time.time() - 2400
+        t.tick()
+        t.record_checkin()
+        msg = t.checkin_message()
+        assert "pause" in msg
 
 
 # ─── Session Notes (closing ritual) ─────────────────────────
