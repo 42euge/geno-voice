@@ -288,6 +288,50 @@ class SessionNoteProcessor(FrameProcessor):
             log.error("finalize failed: %s", e)
             return None
 
+    async def export_to_journal(self, journal_dir: str | None = None) -> str | None:
+        """Export session themes to a local journal file.
+
+        Opt-in only — never called automatically. Writes a timestamped
+        markdown file with session summary, themes, and duration.
+        Returns the file path, or None if nothing to export.
+        """
+        if not self.running_summary and not self.active_themes:
+            return None
+
+        if journal_dir is None:
+            journal_dir = str(Path.home() / ".mindreflect" / "journal")
+
+        journal_path = Path(journal_dir)
+        journal_path.mkdir(parents=True, exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+        filename = f"session-{timestamp}.md"
+        filepath = journal_path / filename
+
+        lines = [
+            f"# Session — {datetime.now().strftime('%B %d, %Y at %I:%M %p')}",
+            "",
+        ]
+
+        if self.active_themes:
+            lines.append("## Themes")
+            lines.append("")
+            for theme in self.active_themes:
+                lines.append(f"- {theme}")
+            lines.append("")
+
+        if self.running_summary:
+            lines.append("## Summary")
+            lines.append("")
+            lines.append(self.running_summary)
+            lines.append("")
+
+        lines.append(f"*{self.chunk_index} exchanges · Exported from MindReflect*")
+
+        filepath.write_text("\n".join(lines))
+        log.info("journal exported: %s", filepath)
+        return str(filepath)
+
     def _update_meta(self):
         meta_path = self.session_dir / "meta.json"
         meta = json.loads(meta_path.read_text())

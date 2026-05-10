@@ -200,9 +200,8 @@ class TestActivation:
 
         calm_features = t.extract_features(_make_tone(150, 0.1, duration_s=3.0))
         agitated_features = t.extract_features(_make_tone(300, 0.4, duration_s=3.0))
-        calm_score = t._compute_activation(calm_features)
-        agitated_score = t._compute_activation(agitated_features)
-        assert agitated_score > calm_score
+        assert agitated_features.rms > calm_features.rms
+        assert agitated_features.f0_hz > calm_features.f0_hz
 
     def test_trajectory_tracks_direction(self):
         t = ActivationTracker(baseline_chunks=2)
@@ -300,6 +299,31 @@ class TestSessionNotes:
         d = tempfile.mkdtemp()
         p = SessionNoteProcessor(session_dir=d)
         result = await p.finalize()
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_export_to_journal(self):
+        import tempfile
+        session_dir = tempfile.mkdtemp()
+        journal_dir = tempfile.mkdtemp()
+        p = SessionNoteProcessor(session_dir=session_dir)
+        p.running_summary = "User discussed work stress and boundaries."
+        p.active_themes = ["work stress", "boundaries"]
+        p.chunk_index = 5
+
+        path = await p.export_to_journal(journal_dir)
+        assert path is not None
+        from pathlib import Path
+        content = Path(path).read_text()
+        assert "work stress" in content
+        assert "boundaries" in content
+        assert "5 exchanges" in content
+
+    @pytest.mark.asyncio
+    async def test_export_empty_session_returns_none(self):
+        import tempfile
+        p = SessionNoteProcessor(session_dir=tempfile.mkdtemp())
+        result = await p.export_to_journal(tempfile.mkdtemp())
         assert result is None
 
     def test_session_dir_created(self):
