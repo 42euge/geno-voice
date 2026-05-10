@@ -135,7 +135,7 @@ class SessionNoteProcessor(FrameProcessor):
         self,
         session_dir: str,
         ollama_url: str = "http://localhost:11434",
-        model: str = "gemma4:e4b",
+        model: str = "gemma4:e2b",
         **kwargs,
     ):
         super().__init__(**kwargs)
