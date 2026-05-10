@@ -14,6 +14,42 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 
+# Whisper hallucination patterns (common artifacts on silence/noise)
+_HALLUCINATION_PATTERNS = [
+    re.compile(r"^(thanks for watching|thank you for watching)", re.IGNORECASE),
+    re.compile(r"^(subscribe|like and subscribe)", re.IGNORECASE),
+    re.compile(r"^(music|applause|\[music\]|\[applause\])\s*$", re.IGNORECASE),
+    re.compile(r"^\.+$"),
+    re.compile(r"^(you|\.)\s*$", re.IGNORECASE),
+]
+
+# Filler-only utterances (not meaningful speech)
+_FILLER_ONLY = re.compile(
+    r"^(um+|uh+|hmm+|hm+|ah+|oh+|er+|like|so|yeah|okay|ok|right|well|and|but)\s*\.?\s*$",
+    re.IGNORECASE,
+)
+
+
+def filter_noise(text: str) -> str | None:
+    """Filter out noise, hallucinations, and filler-only utterances.
+
+    Returns the cleaned text, or None if the entire chunk should be
+    discarded (hallucination, pure filler, or too short to be meaningful).
+    """
+    text = text.strip()
+
+    if not text or len(text) < 2:
+        return None
+
+    for pattern in _HALLUCINATION_PATTERNS:
+        if pattern.match(text):
+            return None
+
+    if _FILLER_ONLY.match(text):
+        return None
+
+    return text
+
 
 class TriggerType(Enum):
     DIRECT_QUESTION = "direct_question"

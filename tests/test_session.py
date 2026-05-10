@@ -6,7 +6,7 @@ import time
 import numpy as np
 import pytest
 
-from session.triggers import detect_triggers, TriggerType, ResponseHint
+from session.triggers import detect_triggers, filter_noise, TriggerType, ResponseHint
 from session.turn_taking import TurnTakingEngine, TurnTakingConfig, Action
 from session.activation import ActivationTracker, ActivationState
 from session.compute import ComputeMonitor, PipelineState
@@ -82,6 +82,38 @@ class TestTriggers:
     def test_invitation_priority_over_question(self):
         r = detect_triggers("What do you think about this?")
         assert r.trigger_type == TriggerType.INVITATION
+
+
+class TestNoiseFilter:
+    @pytest.mark.parametrize("text", [
+        "um", "uh", "hmm", "ah", "oh", "like", "so", "yeah", "okay",
+        "Um.", "Uh.", "Hmm.", "Right", "Well", "And", "But",
+    ])
+    def test_filler_only_filtered(self, text):
+        assert filter_noise(text) is None
+
+    @pytest.mark.parametrize("text", [
+        "Thanks for watching", "Subscribe", "Like and subscribe",
+        "[Music]", "[Applause]", "...", ".", "you",
+    ])
+    def test_hallucinations_filtered(self, text):
+        assert filter_noise(text) is None
+
+    @pytest.mark.parametrize("text", [
+        "I feel stressed about work",
+        "Yeah I don't know what to do",
+        "Um, I think the problem is",
+        "So like, my manager keeps",
+    ])
+    def test_real_speech_passes(self, text):
+        assert filter_noise(text) is not None
+
+    def test_empty_and_short(self):
+        assert filter_noise("") is None
+        assert filter_noise("a") is None
+
+    def test_returns_stripped(self):
+        assert filter_noise("  hello world  ") == "hello world"
 
 
 # ─── Turn-Taking Engine ─────────────────────────────────────
