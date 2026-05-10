@@ -21,6 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import (
     Frame,
     InputAudioRawFrame,
@@ -133,9 +134,7 @@ async def main():
             audio_out_enabled=False,
             vad_enabled=True,
             vad_analyzer=SileroVADAnalyzer(
-                params=SileroVADAnalyzer.Params(
-                    min_volume=0.02,
-                )
+                params=VADParams(min_volume=0.02, stop_secs=0.8),
             ),
         )
     )
