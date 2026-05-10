@@ -10,6 +10,7 @@ from session.triggers import detect_triggers, TriggerType, ResponseHint
 from session.turn_taking import TurnTakingEngine, TurnTakingConfig, Action
 from session.activation import ActivationTracker, ActivationState
 from session.compute import ComputeMonitor, PipelineState
+from session.notes import SessionNoteProcessor
 
 
 # ─── Triggers ───────────────────────────────────────────────
@@ -222,6 +223,31 @@ class TestActivation:
         t = ActivationTracker()
         f = t.extract_features(b"")
         assert f.rms == 0.0
+
+
+# ─── Compute Monitor ────────────────────────────────────────
+
+
+# ─── Session Notes (closing ritual) ─────────────────────────
+
+
+class TestSessionNotes:
+    @pytest.mark.asyncio
+    async def test_finalize_returns_none_without_summary(self):
+        import tempfile
+        d = tempfile.mkdtemp()
+        p = SessionNoteProcessor(session_dir=d)
+        result = await p.finalize()
+        assert result is None
+
+    def test_session_dir_created(self):
+        import tempfile
+        d = tempfile.mkdtemp() + "/new-session"
+        p = SessionNoteProcessor(session_dir=d)
+        from pathlib import Path
+        assert Path(d).exists()
+        assert (Path(d) / "meta.json").exists()
+        assert (Path(d) / "wiki").is_dir()
 
 
 # ─── Compute Monitor ────────────────────────────────────────

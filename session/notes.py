@@ -242,6 +242,52 @@ class SessionNoteProcessor(FrameProcessor):
         with open(self.session_dir / filename, "a") as f:
             f.write(content)
 
+    async def finalize(self) -> str | None:
+        """Generate a closing summary for the session.
+
+        Called when the session ends. Returns a closing message that
+        can be displayed to the user or spoken via TTS.
+        """
+        if not self.running_summary:
+            return None
+
+        prompt = (
+            "The reflection session is ending. Here is what was discussed:\n\n"
+            f"{self.running_summary}\n\n"
+            f"Themes: {', '.join(self.active_themes)}\n\n"
+            "Write a brief, warm closing message (2-3 sentences). "
+            "Summarize what was explored, offer one gentle takeaway thought, "
+            "and end with an encouraging note. Do not give advice. "
+            "Do not use the phrase 'I hear you' or 'that's valid.'"
+        )
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                payload = {
+                    "model": self.model,
+                    "messages": [
+                        {"role": "system", "content": "You are a reflective companion closing a session."},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "stream": False,
+                }
+                async with session.post(
+                    f"{self.ollama_url}/api/chat", json=payload
+                ) as resp:
+                    result = await resp.json()
+
+            closing = result.get("message", {}).get("content", "").strip()
+
+            if closing:
+                self._append_file("closing.md", f"# Closing\n\n{closing}\n")
+                log.info("session closing generated: %s", closing[:80])
+
+            return closing
+
+        except Exception as e:
+            log.error("finalize failed: %s", e)
+            return None
+
     def _update_meta(self):
         meta_path = self.session_dir / "meta.json"
         meta = json.loads(meta_path.read_text())
