@@ -14,11 +14,13 @@ from fastapi.responses import JSONResponse, Response
 import config as cfg
 from stt import get_engine as get_stt_engine
 from tts import get_engine as get_tts_engine
+from session.activation import ActivationTracker
 
 log = logging.getLogger("geno-voice")
 
 stt_engine = None
 tts_engine = None
+activation_tracker = ActivationTracker()
 
 
 def _init_stt():
@@ -113,7 +115,24 @@ async def stt_transcribe(request: Request):
 
     if text is None:
         return JSONResponse({"error": "transcription failed", "elapsed": elapsed}, status_code=500)
+
+    activation_tracker.process_chunk(wav_bytes)
+
     return {"text": text, "elapsed": elapsed}
+
+
+@app.get("/activation")
+async def get_activation():
+    s = activation_tracker.state
+    return {
+        "score": round(s.score, 3),
+        "fast_ema": round(s.fast_ema, 3),
+        "slow_ema": round(s.slow_ema, 3),
+        "trajectory": round(s.trajectory, 3),
+        "is_elevated": s.is_elevated,
+        "is_crying": s.is_crying,
+        "chunks": s.chunks_processed,
+    }
 
 
 @app.post("/tts/synthesize")
