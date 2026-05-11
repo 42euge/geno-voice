@@ -197,16 +197,34 @@ async def receive_raw_audio(request: Request):
 
     if _raw_audio_file is None:
         wav_path = recordings_dir / "full-session.wav"
-        import wave
-        _raw_audio_file = wave.open(str(wav_path), "wb")
-        _raw_audio_file.setnchannels(1)
-        _raw_audio_file.setsampwidth(2)
-        _raw_audio_file.setframerate(48000)
+        _raw_audio_file = {"path": str(wav_path), "total_bytes": 0}
+        # Write initial WAV header
+        with open(wav_path, "wb") as f:
+            import struct
+            sr = 48000
+            f.write(b"RIFF")
+            f.write(struct.pack("<I", 0))  # placeholder
+            f.write(b"WAVEfmt ")
+            f.write(struct.pack("<IHHIIHH", 16, 1, 1, sr, sr * 2, 2, 16))
+            f.write(b"data")
+            f.write(struct.pack("<I", 0))  # placeholder
         _raw_rms_log = open(recordings_dir / "rms-log.csv", "a")
         _raw_rms_log.write("timestamp,rms\n")
 
-    _raw_audio_file.writeframes(body)
-    # Don't close — keep appending
+    # Append audio data
+    wav_path = _raw_audio_file["path"]
+    with open(wav_path, "ab") as f:
+        f.write(body)
+    _raw_audio_file["total_bytes"] += len(body)
+
+    # Update WAV header sizes so the file is always playable
+    import struct
+    total = _raw_audio_file["total_bytes"]
+    with open(wav_path, "r+b") as f:
+        f.seek(4)
+        f.write(struct.pack("<I", 36 + total))
+        f.seek(40)
+        f.write(struct.pack("<I", total))
 
     # Parse RMS from query param if provided
     rms = request.query_params.get("rms", "")
