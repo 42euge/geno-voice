@@ -15,6 +15,7 @@ import config as cfg
 from stt import get_engine as get_stt_engine
 from tts import get_engine as get_tts_engine
 from session.activation import ActivationTracker
+from session.triggers import filter_noise
 
 log = logging.getLogger("geno-voice")
 
@@ -118,7 +119,11 @@ async def stt_transcribe(request: Request):
 
     activation_tracker.process_chunk(wav_bytes)
 
-    return {"text": text, "elapsed": elapsed}
+    filtered = filter_noise(text)
+    if filtered is None:
+        return {"text": "", "elapsed": elapsed, "filtered": True}
+
+    return {"text": filtered, "elapsed": elapsed}
 
 
 @app.get("/activation")
