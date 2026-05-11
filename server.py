@@ -130,6 +130,9 @@ async def stt_transcribe(request: Request):
     if text is None:
         return JSONResponse({"error": "transcription failed", "elapsed": elapsed}, status_code=500)
 
+    activation_tracker.process_chunk(wav_bytes)
+    filtered = filter_noise(text)
+
     # Record raw audio + transcription for training/development
     if session_notes:
         recordings_dir = Path(session_notes.session_dir) / "recordings"
@@ -137,18 +140,15 @@ async def stt_transcribe(request: Request):
         chunk_num = session_notes.chunk_index + 1
         audio_path = recordings_dir / f"chunk-{chunk_num:04d}.wav"
         audio_path.write_bytes(wav_bytes)
-        meta_path = recordings_dir / f"chunk-{chunk_num:04d}.json"
         import json as _json
+        meta_path = recordings_dir / f"chunk-{chunk_num:04d}.json"
         meta_path.write_text(_json.dumps({
             "text": text,
-            "filtered": filtered is None,
+            "filtered_text": filtered,
+            "was_filtered": filtered is None,
             "elapsed": elapsed,
             "bytes": len(wav_bytes),
         }))
-
-    activation_tracker.process_chunk(wav_bytes)
-
-    filtered = filter_noise(text)
     if filtered is None:
         return {"text": "", "elapsed": elapsed, "filtered": True}
 
