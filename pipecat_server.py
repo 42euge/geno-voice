@@ -327,6 +327,12 @@ async def main():
     log.info("WebSocket on ws://127.0.0.1:%d", PORT)
 
     if args.test_audio:
+        # Wait for a WebSocket client to connect before sending test audio
+        log.info("Waiting for client to connect...")
+        while not ws_clients:
+            await asyncio.sleep(0.5)
+        log.info("Client connected — starting test audio")
+        await asyncio.sleep(2)  # let client settle
         await run_test_audio(args.test_audio, args.start, args.duration)
     else:
         await run_mic()
