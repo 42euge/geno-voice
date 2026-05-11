@@ -202,6 +202,7 @@ async def get_themes():
         "themes": session_notes.active_themes,
         "summary": session_notes.running_summary,
         "chunks": session_notes.chunk_index,
+        "session_dir": str(session_notes.session_dir),
     }
 
 
