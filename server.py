@@ -4,6 +4,7 @@ import logging
 import signal
 import sys
 import time
+from pathlib import Path
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -147,6 +148,20 @@ async def get_activation():
         "is_crying": s.is_crying,
         "chunks": s.chunks_processed,
     }
+
+
+@app.get("/cue/{cue_type}")
+async def get_cue(cue_type: str):
+    """Return a random backchannel cue WAV for the given type."""
+    import random
+    cue_dir = Path(__file__).parent / "session" / "cues" / cue_type
+    if not cue_dir.exists():
+        return JSONResponse({"error": f"unknown cue type: {cue_type}"}, status_code=404)
+    wavs = list(cue_dir.glob("*.wav"))
+    if not wavs:
+        return JSONResponse({"error": "no cues available"}, status_code=404)
+    chosen = random.choice(wavs)
+    return Response(content=chosen.read_bytes(), media_type="audio/wav")
 
 
 @app.post("/tts/synthesize")
