@@ -17,12 +17,14 @@ from stt import get_engine as get_stt_engine
 from tts import get_engine as get_tts_engine
 from session.activation import ActivationTracker
 from session.triggers import filter_noise, detect_triggers
+from session.notes import SessionNoteProcessor
 
 log = logging.getLogger("geno-voice")
 
 stt_engine = None
 tts_engine = None
 activation_tracker = ActivationTracker()
+session_notes = None
 
 
 def _init_stt():
@@ -51,14 +53,24 @@ def _init_tts():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global session_notes
     _init_stt()
     _init_tts()
+
+    from datetime import datetime
+    session_id = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    session_dir = str(Path.home() / ".mindreflect" / "sessions" / session_id)
+    session_notes = SessionNoteProcessor(session_dir=session_dir, model="gemma4:e2b")
+    log.info("Session notes: %s", session_dir)
+
     log.info(
         "geno-voice ready on %s:%s",
         cfg.get("server", "host"),
         cfg.get("server", "port"),
     )
     yield
+    if session_notes:
+        session_notes._update_meta()
     log.info("Shutting down geno-voice")
 
 
@@ -147,6 +159,33 @@ async def get_activation():
         "is_elevated": s.is_elevated,
         "is_crying": s.is_crying,
         "chunks": s.chunks_processed,
+    }
+
+
+@app.post("/notes/process")
+async def process_note(request: Request):
+    """Process a transcript chunk in the background via Ollama tool use."""
+    if not session_notes:
+        return JSONResponse({"error": "no session"}, status_code=503)
+    body = await request.json()
+    text = body.get("text", "").strip()
+    if not text:
+        return {"status": "skipped"}
+
+    session_notes.chunk_index += 1
+    asyncio.create_task(session_notes._process_chunk(text, session_notes.chunk_index))
+    return {"status": "processing", "chunk": session_notes.chunk_index}
+
+
+@app.get("/notes/themes")
+async def get_themes():
+    """Get current session themes and summary."""
+    if not session_notes:
+        return {"themes": [], "summary": ""}
+    return {
+        "themes": session_notes.active_themes,
+        "summary": session_notes.running_summary,
+        "chunks": session_notes.chunk_index,
     }
 
 
