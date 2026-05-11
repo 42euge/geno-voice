@@ -196,12 +196,17 @@ async def receive_raw_audio(request: Request):
     recordings_dir.mkdir(exist_ok=True)
 
     if _raw_audio_file is None:
-        _raw_audio_file = open(recordings_dir / "full-session.pcm", "ab")
+        wav_path = recordings_dir / "full-session.wav"
+        import wave
+        _raw_audio_file = wave.open(str(wav_path), "wb")
+        _raw_audio_file.setnchannels(1)
+        _raw_audio_file.setsampwidth(2)
+        _raw_audio_file.setframerate(48000)
         _raw_rms_log = open(recordings_dir / "rms-log.csv", "a")
         _raw_rms_log.write("timestamp,rms\n")
 
-    _raw_audio_file.write(body)
-    _raw_audio_file.flush()
+    _raw_audio_file.writeframes(body)
+    # Don't close — keep appending
 
     # Parse RMS from query param if provided
     rms = request.query_params.get("rms", "")
