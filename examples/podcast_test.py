@@ -107,6 +107,14 @@ def main():
                 "elapsed": round(elapsed, 2),
             })
 
+            # Send to session notes (same as the app does)
+            if text:
+                requests.post(
+                    f"{VOICE_URL}/notes/process",
+                    json={"text": text},
+                    timeout=5,
+                ).close()
+
         except Exception as e:
             print(f"[{i+1:3d}] ERROR: {e}")
             results.append({"chunk": i + 1, "error": str(e)})
