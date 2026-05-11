@@ -1,0 +1,976 @@
+[
+  {
+    "chunk": 1,
+    "text": "most of my time. I do not know how to interact with adults. I don't feel like I have any like, anything fucking interesting to say to anybody.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 2,
+    "text": "No, Chris. Fuck you. So the actual main thing that's bothering you...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 3,
+    "text": "is being alone with law and not having Mitchell join the two of you. Yes, that we're not a priority.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 4,
+    "text": "important. The way you're going about trying to solve your problem is...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 5,
+    "text": "by doing your best to push Mitchell away. Okay. So let's think about that.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 6,
+    "text": "Okay, Michelle, I asked Ileana to kind of try to get to the root feeling of what she's missing.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 7,
+    "text": "And what did you hear her say? She said that she felt lonely. Yeah. Does that make sense to you? It makes sense. And .",
+    "trigger": {
+      "type": "invitation",
+      "hint": "speak_full",
+      "confidence": 0.85
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 8,
+    "text": "I feel bad. Bad. Yeah, like I feel bad that she's going through that. But she feels those things. So it moves you.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 9,
+    "text": "Yeah, like I've experienced genuine loneliness. Like I know what it's like. What are you referring to?",
+    "trigger": {
+      "type": "direct_question",
+      "hint": "speak_brief",
+      "confidence": 0.7
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 10,
+    "text": "Just like as a kid. When my parents had split, my mom ended up staying with her sister. Uh...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 11,
+    "text": "It was me, my two older brothers, my mom and my aunt, and her and my aunts.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 12,
+    "text": "one bedroom apartment. So my oldest brother got the sofa, and when it came time to swap, he never did.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 13,
+    "text": "So me and my other brother, we just consistently slept on the floor. And during this time, whenever my mom and I had a difference of a...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 14,
+    "text": "she would always, like her go-to line was like, go live with your father. Go live with your father. So it was one of those things where it's just,",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 15,
+    "text": "I was like, okay, well, she doesn't really want and appreciate me here, right? And that's okay. So I felt loneliness. Like I know what that's like.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 16,
+    "text": "Yeah, loneliness and it sounds like there's no room for you anywhere. Yeah, and during that time, like, I had video games.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 17,
+    "text": "I'm not sure if you're familiar with this, but I discovered YouTube at this point. So I got into, no, not YouTube per se, but anime.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 18,
+    "text": "Another place to go. Yeah. But when I was growing up, watching anime was considered to be",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 19,
+    "text": "like, corny. Like you're a loser if you did this. So it was one of those things that I sort of repressed, but I found a friend group.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 20,
+    "text": "later on who was just like very openly and accepting of these things and we all did the same stuff. Me being with my",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 21,
+    "text": "friends for a few hours out of the week, literally, brings me back, makes me feel whole.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 22,
+    "text": "again because that's a part of what I identify as like my heart's home. I can't go home.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 23,
+    "text": "and rely on there being peace at home. I can't go home to her and rely on there being peace there. But I can...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 24,
+    "text": "always go to my friends for those few hours out of the week and rely on that always being consistent. There is consistency there.",
+    "trigger": {
+      "type": "emotional_peak",
+      "hint": "play_cue",
+      "confidence": 0.8
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 25,
+    "text": "If I could do this one thing once every other week, is it really that bad? I get that, and I'm not mad at it.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 26,
+    "text": "I think that a part of me is just like, I'm trying to be that place. Like I'm trying to make our family that thing.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 27,
+    "text": "that maybe we both didn't have growing up. I'm not saying to take those things away from you fully, but I'm saying like...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 28,
+    "text": "we can create peaceful things together. It was first of all a scheduling thing about",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 29,
+    "text": "me getting an opportunity for a circus gig, but it's like near New York so I...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 30,
+    "text": "get to spend more time with Josh. And I assumed that Josh would want to have more time with me because I'm spending actually a lot of time.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 31,
+    "text": "in Las Vegas. This is just all understand concretely, this would mean that you would be in New York regularly more than.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 32,
+    "text": "than you were planning to be. Yeah, two to three days more per week. Got it. And I think it's like, that's definitely exciting, but the conversation",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 33,
+    "text": "around something that would impact me dramatically was never had. The majority of the conversation.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 34,
+    "text": "was focused on logistical exercises and assumptions. Rather than asking you",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 35,
+    "text": "How would that impact you? Or just like, hey, we're a team. Let's sit down and this would be a big impact on you. Like, can we just talk about the way...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 36,
+    "text": "in which this will impact you and if you're up for this. What are you thinking, Erin? I was honestly pretty hurt that...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 37,
+    "text": "I like... wasn't immediately welcome in our home.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 38,
+    "text": "that like everything you've ever told me is like you want more time with me so I was like",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 39,
+    "text": "It felt contradictory to everything that you ever asked for. But you're each talking from...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 40,
+    "text": "your own hurt or grievance. In a way, you're each saying, why don't you understand?",
+    "trigger": {
+      "type": "direct_question",
+      "hint": "speak_brief",
+      "confidence": 0.7
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 41,
+    "text": "what hurt me. But you're talking about different things. But shouldn't we be focusing our energy on the beginning parts of the...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 42,
+    "text": "friction and argument? I think that's one way to possibly go. From my experience, it doesn't really work.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 43,
+    "text": "And it doesn't matter who started. I just feel like it does matter who started it.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 44,
+    "text": "It matters if you're in court. I mean... It doesn't matter if you want to just make things better. Oh, man, I just feel like...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 45,
+    "text": "like for the person that initially causes the miscommunication. But people don't always see things the same way. Who knows when it's...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 46,
+    "text": "It could have started half an hour before the conversation even started. Oof. That's hard.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 47,
+    "text": "for me. I understand. I feel like most of the conflicts that I'm in...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 48,
+    "text": "I'm the one that's more clear about the emotional range that I'm experiencing. And I get that there's like a whole bunch of reasons why that isn't the case.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 49,
+    "text": "for women in the United States, just culturally. Right? Definitely. You're getting abstract and...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 50,
+    "text": "and let's stay a little closer to what actually happened. What do you think about this conversation? Where are you?",
+    "trigger": {
+      "type": "invitation",
+      "hint": "speak_full",
+      "confidence": 0.95
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 51,
+    "text": "I think one of the things that I personally struggle with the most is that I have no point of real reference of what it would be like to...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 52,
+    "text": "be in partnership with Josh if Aaron was here consistently. I think Josh and I's time together is predicated on Aaron being...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 53,
+    "text": "busy pretty much up until really recently. When Erin comes home, I don't really see Josh or our plans would like drop.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 54,
+    "text": "And you have worked really hard on shifting that or making things consistent. I do appreciate it. And you've also been so great about that too.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 55,
+    "text": "about being flexible and understanding that. Yeah, I guess I'm thinking about like a few weeks ago. That was really frustrating. We had breakfast plans.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 56,
+    "text": "At 11 I text him at 10 a.m. like super excited see you have breakfast whatever Don't hear anything you",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 57,
+    "text": "and it's like 10 minutes before we're supposed to hang out and you're like, oh yeah, no, I'm gonna have coffee with Aaron, so I'm not gonna.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 58,
+    "text": "gonna be able to be there. I'm gonna leave here in 15 minutes so that means you're gonna show up 30 minutes after we discuss. And so that...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 59,
+    "text": "Like that kind of stuff really eats me. Because I'm like, what does this mean if Aaron moves home? Like, does that mean...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 60,
+    "text": "I really am just like secondary. And if so, I really want to know that so I can orient myself appropriately, because I'm pouring.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 61,
+    "text": "a lot into this. What are you feeling? Well, I mean, that, like, in those moments, I can totally understand and empathize.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 62,
+    "text": "how all of a sudden having the time being slightly shifted, even if it's a small amount of time, can be emotionally hard.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 63,
+    "text": "to experience and confusing. Do you get that it's less about the time thing, though? Yeah, it's more about the larger part of it.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 64,
+    "text": "Which is the feeling, the secondary, that your time is not respected as much as Erin's time. And that it can just be moved around. Yeah. With like little concern.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 65,
+    "text": "to you. No consent. Yeah. Yeah. Lorena, do you know that Josh suggested changing our partner?",
+    "trigger": {
+      "type": "direct_question",
+      "hint": "speak_brief",
+      "confidence": 0.7
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 66,
+    "text": "title from primary partnership to anchor partners to not put you second I mean",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.7
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 67,
+    "text": "And I, through context, kind of understood that to be happening. And I feel like Josh and I didn't really discuss.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 68,
+    "text": "what anchor partner means to us much. It's like my own disappointment a little bit, but I guess Josh would reassure me that it like...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 69,
+    "text": "it's kind of like a primary partnership, but without the inherent hierarchy. Or is there any- I mean, I think I wouldn't have dis- I didn't-",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 70,
+    "text": "ever describe it as similar to a primary partnership. I think I said, wow, we actually, based on our relationship and how it has evolved, we actually prescribe",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 71,
+    "text": "way more to relationship anarchy and the values of relationship anarchy. And those things are us creating the rules of our relationship.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 72,
+    "text": "relationship between us ourselves. We had a pretty intimate first two years and then it...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 73,
+    "text": "just died. It just completely like got cut off. What killed it?",
+    "trigger": {
+      "type": "direct_question",
+      "hint": "speak_brief",
+      "confidence": 0.7
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 74,
+    "text": "her belief in abstinence. Well, we started off casually, so I was having fun too without thinking.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 75,
+    "text": "it was going to really go anywhere. But why is casual sex or intimacy okay? And when you get...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 76,
+    "text": "It's not okay. It wasn't. But I think maybe I was rebelling then.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 77,
+    "text": "I was probably angry and upset and going through a breakup. And just meeting him, I felt like...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 78,
+    "text": "was like, oh, he's a bad boy, so I'm going to do bad things with the bad boy that I'm not going to marry. And that's...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 79,
+    "text": "allowing yourself some freedom internally. Well, it only goes for a very short period of time where I can just let it go.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 80,
+    "text": "and just let my flesh just do whatever it wants. And then I'm hit with a whole bunch of shame and guilt and this...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 81,
+    "text": "But the struggle is with doing things or even wanting things.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 82,
+    "text": "Yeah, both. So it's not even just the act of doing it. It's just like... Just any desires? Yeah. Like for example, like masturbation.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 83,
+    "text": "Like, I feel the same way. So it's not just... It's not just what you do with someone else. It's sexuality in general. In general.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 84,
+    "text": "But now there's nothing to feel guilty about. We're married and this is something we should be enjoying. But there is no...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 85,
+    "text": "like, urge or, like, desire for me, like, wanting him, unless, like, I had to...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 86,
+    "text": "And when I do focus and it actually happens, A, it hurt, and two, he get disappointed because...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 87,
+    "text": "I couldn't finish or he couldn't finish. So are the two of you operating in this case that the idea of",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 88,
+    "text": "Sexuality is intercourse? Yes. OK. Well, maybe. Yeah. Right.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 89,
+    "text": "Well, when couples meet this kind of impasse, they have to get a little creative and expansive about.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 90,
+    "text": "like what, how they define sexuality. What if you're aiming to just restore some sense?",
+    "trigger": {
+      "type": "direct_question",
+      "hint": "speak_brief",
+      "confidence": 0.7
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 91,
+    "text": "of intimacy, physical intimacy between the two of you, not intercourse.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 92,
+    "text": "just intimacy and some basic pleasure. Intercourse off the table.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 93,
+    "text": "I'm all on board for it. I just, I'm afraid it's, he's going to push to the next, and then he's going to express disappointment. Okay, okay.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 94,
+    "text": "Can you not do that? Well, anything's better than not. Exactly. Right? Exactly.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 95,
+    "text": "many other things you can do. I just don't know what it looks like. I'm sure you can think of what it looks like.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 96,
+    "text": "That's the thing with our relationship, that when it's good, it's really, really good. And it just takes like a pin",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 97,
+    "text": "drop and then it's really, really bad. So maybe you're both really good dissociators?",
+    "trigger": {
+      "type": "direct_question",
+      "hint": "speak_brief",
+      "confidence": 0.7
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 98,
+    "text": "Well, I am for sure. Uh-huh. Yeah. He actually does all things. So, do you want to...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 99,
+    "text": "Just help me, just how much do you dissociate? What's your... We're jumping right in, so tell me your speech.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 100,
+    "text": "I mean, apparently, um... You look like you...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 101,
+    "text": "Do you think it's the best to not say anything? Sometimes...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 102,
+    "text": "it's easier for me to speak and then yeah yeah yeah so i i guess it's just kind of like a moment where it just gets so",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 103,
+    "text": "heightened to the point that his conscious self is like, I can't do this anymore. And like, he won't remember the right.",
+    "trigger": {
+      "type": "resignation",
+      "hint": "speak_brief",
+      "confidence": 0.9
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 104,
+    "text": "the rest of the night. So... So... You dissociate? Yeah. Okay. So you're saying...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 105,
+    "text": "your relationship goes through certain periods that you're like this and then other periods when the bats are out. Yeah.",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.5
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 106,
+    "text": "Sometimes when we have one fight, and it's like three months of like a struggle to...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 107,
+    "text": "To get back from the fight? Yeah. What are the main issues? Family dynamics. I don't have family.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 108,
+    "text": "because I've excommunicated myself from the family who's been very abusive to me, but then his dynamic.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 109,
+    "text": "with his family, he will still defend them, even if they're hurtful towards him. And in all of our issues, I think this is our .",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 110,
+    "text": "main like catalyst that we come from very different perspectives. Mm-hmm because you'll have",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 111,
+    "text": "different versions? Not only different versions. Actually, we will have the same version. We don't.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 112,
+    "text": "make up stuff, but we have a different feeling. To the both of us, this is right here. I just see it from this angle. I see the logo.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 113,
+    "text": "and you don't. No. You see the logo? I see the...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 114,
+    "text": "the bottle about to explode, and me holding it together and my hands bleeding.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 115,
+    "text": "You're saying you feel things intensely. If something is really bad, you're saying you just go to sever the relationship.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 116,
+    "text": "So that's kind of an intense reaction. Yeah, for sure. And you're saying about Kazimir, you...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 117,
+    "text": "you, I guess, tolerate more? Well, yeah, be fast. Or you don't have that intensity of a reaction? To you it's not an ex...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 118,
+    "text": "Yeah, to me it's not an exploding bottle. Right. What would be your response to that?",
+    "trigger": {
+      "type": "direct_question",
+      "hint": "speak_brief",
+      "confidence": 0.7
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 119,
+    "text": "",
+    "trigger": null,
+    "filtered": true
+  },
+  {
+    "chunk": 120,
+    "text": "I'm afraid of the fighting. I'm afraid of... It's the intensity of the fight.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 121,
+    "text": "What happens? I don't like it. Like, it's the y-",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 122,
+    "text": "the yelling, the drinking, the name calling, and when it gets there,",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 123,
+    "text": "And to that point, it feels helpless. He's my best friend. I want it to.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 124,
+    "text": "work. I don't want the anger.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 125,
+    "text": "Mm-hmm. What are you thinking? I mean, this is kind of where I was talking about the bottle earlier.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 126,
+    "text": "that I do want the anger sometimes.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 127,
+    "text": "",
+    "trigger": null,
+    "filtered": true
+  },
+  {
+    "chunk": 128,
+    "text": "",
+    "trigger": null,
+    "filtered": true
+  },
+  {
+    "chunk": 129,
+    "text": "",
+    "trigger": null,
+    "filtered": true
+  }
+]

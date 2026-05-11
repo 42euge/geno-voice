@@ -1,0 +1,236 @@
+[
+  {
+    "chunk": 1,
+    "text": "intense thing to say. Yeah, I've heard a lot of painful things and...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 2,
+    "text": "So it's terribly painful, but also what is going on in her mind? I don't know.",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.7
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 3,
+    "text": "Do you have a reaction to this? Like 90% of the things that come of her mouth are like, Biblical, Christian.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 4,
+    "text": "like heavy Christian stuff. And that's where she gets all this death. She once told me that she...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 5,
+    "text": "just dropped on the floor and like basically rolled around crying and saying that uh like you're with him like like over my dead",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 6,
+    "text": "and we literally lock our bedroom door thinking she might come in and kill me. Mm-hmm. A lot of themes of death.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 7,
+    "text": "She will die, you're the devil, the baby will die. It's like really intense imagery. Right.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 8,
+    "text": "I guess even the acknowledgement that someone else thinks that's like extreme is, I feel like I need it.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 9,
+    "text": "to hear that because yeah, maybe we just get numbed and desensitized to just hearing it. But it also...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 10,
+    "text": "It sounds like it scrambles your ability to connect to what you want. Right. What are you thinking?",
+    "trigger": {
+      "type": "direct_question",
+      "hint": "speak_brief",
+      "confidence": 0.7
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 11,
+    "text": "I don't know. I like listening to Joey talk about her mother saying all those things. I just had like a...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 12,
+    "text": "flashback of how I would not want my child to grow up without my...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 13,
+    "text": "my dad treated me. Yeah. Like I didn't like those images of my f-----",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 14,
+    "text": "and I'm thinking I'm always busy too, so. You look so sad.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 15,
+    "text": "Well, I'm more sad for Joey. Mm-hmm. Not myself. Of course.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 16,
+    "text": "Like, this is what I wanted. I just wanted to know how you feel about it. Like, we need to be honest with each other.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 17,
+    "text": "what we want. The more I know how you feel, the more my mom has less power over my...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 18,
+    "text": "decision, it's our decisions. Let's not use the word decision and just talk about wants. OK.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 19,
+    "text": "wants like i want her right um",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 20,
+    "text": "body and all Right, but we just don't have any sex. So even bring",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 21,
+    "text": "up having a baby is like... How's that even gonna happen? Right. Even these days.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 22,
+    "text": "just running my hand down her body she would like flick it away",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 23,
+    "text": "Every day, months, years. Do you have any thoughts on this?",
+    "trigger": {
+      "type": "invitation",
+      "hint": "speak_full",
+      "confidence": 0.85
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 24,
+    "text": "I don't know what happened, but I just couldn't. It's gotten to a point where it physically, like, actually...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 25,
+    "text": "like, is very unpleasant. Mm-hmm. And it hurts. So I'm... Mm-hmm. I've felt so much fear around it now.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 26,
+    "text": "Yeah. And I feel terrible, but I don't know how to fix that part yet. Mm-hmm.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 27,
+    "text": "Even without sex for years, I still remain with Joey. Yeah. So that was...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 28,
+    "text": "It's like a big, not sacrifice that I made. And I'm still not.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 29,
+    "text": "Joey want a sexual life herself. Right. This is not just for you. Mm-hmm.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 30,
+    "text": "\u041f\u0440\u043e\u0434\u043e\u043b\u0436\u0435\u043d\u0438\u0435 \u0441\u043b\u0435\u0434\u0443\u0435\u0442...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 31,
+    "text": "",
+    "trigger": null,
+    "filtered": true
+  }
+]
