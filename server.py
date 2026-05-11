@@ -178,6 +178,40 @@ async def get_activation():
     }
 
 
+_raw_audio_file = None
+_raw_rms_log = None
+
+@app.post("/raw-audio")
+async def receive_raw_audio(request: Request):
+    """Receive continuous raw PCM audio for full session recording."""
+    global _raw_audio_file, _raw_rms_log
+    if not session_notes:
+        return {"status": "no session"}
+
+    body = await request.body()
+    if not body:
+        return {"status": "empty"}
+
+    recordings_dir = Path(session_notes.session_dir) / "recordings"
+    recordings_dir.mkdir(exist_ok=True)
+
+    if _raw_audio_file is None:
+        _raw_audio_file = open(recordings_dir / "full-session.pcm", "ab")
+        _raw_rms_log = open(recordings_dir / "rms-log.csv", "a")
+        _raw_rms_log.write("timestamp,rms\n")
+
+    _raw_audio_file.write(body)
+    _raw_audio_file.flush()
+
+    # Parse RMS from query param if provided
+    rms = request.query_params.get("rms", "")
+    if rms and _raw_rms_log:
+        _raw_rms_log.write(f"{time.time()},{rms}\n")
+        _raw_rms_log.flush()
+
+    return {"status": "ok", "bytes": len(body)}
+
+
 @app.post("/notes/process")
 async def process_note(request: Request):
     """Process a transcript chunk in the background via Ollama tool use."""
