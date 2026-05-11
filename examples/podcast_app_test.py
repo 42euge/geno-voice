@@ -31,14 +31,22 @@ def set_audio(device, type_):
     subprocess.run(["SwitchAudioSource", "-s", device, "-t", type_], capture_output=True)
 
 
-def play_wav(wav_bytes):
+def play_wav(wav_bytes, volume_boost=10):
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
         f.write(wav_bytes)
-        tmp = f.name
+        src = f.name
+    boosted = src + ".boosted.wav"
     try:
-        subprocess.run(["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", tmp], check=True, timeout=30)
+        subprocess.run([
+            "ffmpeg", "-y", "-i", src,
+            "-filter:a", f"volume={volume_boost}",
+            boosted,
+        ], capture_output=True, timeout=10)
+        subprocess.run(["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", boosted], check=True, timeout=30)
     finally:
-        os.unlink(tmp)
+        for f in [src, boosted]:
+            try: os.unlink(f)
+            except: pass
 
 
 def main():
