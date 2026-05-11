@@ -16,18 +16,29 @@ from enum import Enum
 
 # Whisper hallucination patterns (common artifacts on silence/noise)
 _HALLUCINATION_PATTERNS = [
-    re.compile(r"^(thanks for watching|thank you for watching)", re.IGNORECASE),
+    re.compile(r"^(thanks? (for watching|you)|thank you\.?)$", re.IGNORECASE),
     re.compile(r"^(subscribe|like and subscribe)", re.IGNORECASE),
     re.compile(r"^(music|applause|\[music\]|\[applause\])\s*$", re.IGNORECASE),
     re.compile(r"^\.+$"),
     re.compile(r"^(you|\.)\s*$", re.IGNORECASE),
+    re.compile(r"^(goodbye|bye|see you|cheers)\.?\s*$", re.IGNORECASE),
+    re.compile(r"^(yes|no|whoa|wow|hey|hi|hello)\.?\s*$", re.IGNORECASE),
+    re.compile(r"^(one|two|three|four|five)[\s,\.]*((one|two|three|four|five)[\s,\.]*)*$", re.IGNORECASE),
 ]
 
 # Filler-only utterances (not meaningful speech)
 _FILLER_ONLY = re.compile(
-    r"^(um+|uh+|hmm+|hm+|ah+|oh+|er+|like|so|yeah|okay|ok|right|well|and|but)\s*\.?\s*$",
+    r"^(um+|uh+|hmm+|hm+|ah+|oh+|er+|like|so|yeah|okay|ok|right|well|and|but|sure|yep|nah)\s*\.?\s*$",
     re.IGNORECASE,
 )
+
+# Repetitive text (Whisper loops)
+def _is_repetitive(text):
+    words = text.split()
+    if len(words) < 5:
+        return False
+    unique = set(w.lower() for w in words)
+    return len(unique) < len(words) * 0.3
 
 
 def filter_noise(text: str) -> str | None:
@@ -46,6 +57,9 @@ def filter_noise(text: str) -> str | None:
             return None
 
     if _FILLER_ONLY.match(text):
+        return None
+
+    if _is_repetitive(text):
         return None
 
     return text
