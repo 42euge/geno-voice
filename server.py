@@ -15,7 +15,7 @@ import config as cfg
 from stt import get_engine as get_stt_engine
 from tts import get_engine as get_tts_engine
 from session.activation import ActivationTracker
-from session.triggers import filter_noise
+from session.triggers import filter_noise, detect_triggers
 
 log = logging.getLogger("geno-voice")
 
@@ -123,7 +123,16 @@ async def stt_transcribe(request: Request):
     if filtered is None:
         return {"text": "", "elapsed": elapsed, "filtered": True}
 
-    return {"text": filtered, "elapsed": elapsed}
+    trigger = detect_triggers(filtered)
+    trigger_info = None
+    if trigger.triggered:
+        trigger_info = {
+            "type": trigger.trigger_type.value,
+            "hint": trigger.hint.value,
+            "confidence": trigger.confidence,
+        }
+
+    return {"text": filtered, "elapsed": elapsed, "trigger": trigger_info}
 
 
 @app.get("/activation")
