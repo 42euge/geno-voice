@@ -291,7 +291,7 @@ async def run_mic():
             )
             pipeline = Pipeline([transport.input(), STTProcessor(), Broadcaster()])
             runner = PipelineRunner()
-            task = PipelineTask(pipeline)
+            task = PipelineTask(pipeline, idle_timeout_secs=None)
             log.info("Listening on system mic...")
             await runner.run(task)
             break
