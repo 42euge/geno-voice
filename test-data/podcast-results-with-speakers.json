@@ -1,0 +1,2696 @@
+[
+  {
+    "chunk": 1,
+    "time_offset": 60,
+    "text": "for him. Changed my religion for him. My wife is Russian Orthodox. I'm a",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 12.47,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 2,
+    "time_offset": 68,
+    "text": "Muslim American. We come from very different backgrounds. But I went for him.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 10.43,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 3,
+    "time_offset": 76,
+    "text": "And at the end, he turns around and does this. I think I need to show my partner.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 11.69,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 4,
+    "time_offset": 84,
+    "text": "that she could trust me again. But I also personally need to feel like she is in love with me.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 15.13,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 5,
+    "time_offset": 92,
+    "text": "and wants to be in this relationship. So here we are with the couple.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 13.33,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 6,
+    "time_offset": 100,
+    "text": "one year after the revelation of the husband's infidelity. And while I was in the hospital,",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 14.1,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 7,
+    "time_offset": 108,
+    "text": "they would love to be able to reconcile and continue as a family. The wound, the virus.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 14.18,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 8,
+    "time_offset": 116,
+    "text": "of trust, the hurt, the disillusionment that she experiences feels insurmountable.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 18.83,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 9,
+    "time_offset": 124,
+    "text": "I honestly don't even know if I want to have this relationship anymore. I don't know if I love him.",
+    "trigger": {
+      "type": "emotional_peak",
+      "hint": "play_cue",
+      "confidence": 0.7
+    },
+    "filtered": false,
+    "elapsed": 22.64,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 10,
+    "time_offset": 132,
+    "text": "I can never love him after this. How do you work on your feelings? How do you love somebody again?",
+    "trigger": {
+      "type": "direct_question",
+      "hint": "speak_brief",
+      "confidence": 0.7
+    },
+    "filtered": false,
+    "elapsed": 26.45,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 11,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 12,
+    "time_offset": 148,
+    "text": "I'm not that angry anymore. It's almost...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false,
+    "elapsed": 12.67,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 13,
+    "time_offset": 156,
+    "text": "like I just don't care about it. Like a little bit of indifference and we're more like friends.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 21.25,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 14,
+    "time_offset": 164,
+    "text": "no sex because I don't",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 28.74,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 15,
+    "time_offset": 172,
+    "text": "want because I don't know because when I gave myself to you",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 21.51,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 16,
+    "time_offset": 180,
+    "text": "you didn't respect it, and now I'm going to protect myself. Yes. Say it in your own words.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 16.82,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 17,
+    "time_offset": 188,
+    "text": "I think because I was hurt to the point where I just don't feel any",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 25.03,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 18,
+    "time_offset": 196,
+    "text": "intimate anymore. So I feel that we have a family, we have three children and we get along very well.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 18.87,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 19,
+    "time_offset": 204,
+    "text": "well on all the levels except that level and that",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 23.47,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 20,
+    "time_offset": 212,
+    "text": "With the affair, it just killed it for me. Do you miss it? And him? Or the two of you?",
+    "trigger": {
+      "type": "direct_question",
+      "hint": "speak_brief",
+      "confidence": 0.7
+    },
+    "filtered": false,
+    "elapsed": 24.85,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 21,
+    "time_offset": 220,
+    "text": "you in that way? No. I feel sad about it, that everything had to change.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 24.42,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 22,
+    "time_offset": 228,
+    "text": "\u0422\u0430\u043a\u043e\u0435 \u0438\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u0435. \u041f\u043e\u0442\u043e\u043c\u0443 \u0447\u0442\u043e \u044f \u043d\u0435 \u043f\u043b\u0430\u043d\u0438\u0440\u043e\u0432\u0430\u043b\u0430, \u0447\u0442\u043e\u0431\u044b \u0436\u0438\u0437\u043d\u044c \u043f\u0440\u0435\u0432\u0440\u0430\u0442\u0438\u043b\u0430\u0441\u044c \u0442\u0430\u043a. \u041d\u043e \u043f\u043e\u0442\u043e\u043c...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false,
+    "elapsed": 22.29,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 23,
+    "time_offset": 236,
+    "text": "I also see a lot of people going through this after having little kids and things are different.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 21.26,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 24,
+    "time_offset": 244,
+    "text": "There's a lot of affairs around from what I see. So maybe it is normal, I don't know. But it's not the affair that hurts.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 22.94,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 25,
+    "time_offset": 252,
+    "text": "It's the betrayal. Like it's not the sex part. It's... That...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false,
+    "elapsed": 22.97,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 26,
+    "time_offset": 260,
+    "text": "somebody else was more important I guess I don't know I am hoping that the time just",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 27.33,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 27,
+    "time_offset": 268,
+    "text": "will put things in place because I can see with the time like even like two months ago I was so angry",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 25.6,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 28,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 29,
+    "time_offset": 284,
+    "text": "because you're numb, what you call indifferent. And that's not necessarily...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false,
+    "elapsed": 11.28,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 30,
+    "time_offset": 292,
+    "text": "where you want to stay. How do you fix that? I'm assuming just time, right?",
+    "trigger": {
+      "type": "direct_question",
+      "hint": "speak_brief",
+      "confidence": 0.7
+    },
+    "filtered": false,
+    "elapsed": 27.25,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 31,
+    "time_offset": 300,
+    "text": "No. Time never exists in its own. It's what happens in it. You have to give it...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false,
+    "elapsed": 29.83,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 32,
+    "time_offset": 308,
+    "text": "meaning. You have to shape it. How? I think you've just began now.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 25.01,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 33,
+    "time_offset": 316,
+    "text": "Again now when you started to say, there's something to the betrayal. And I don't know that he has a .",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 27.48,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 34,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 35,
+    "time_offset": 332,
+    "text": "that there's a part of you that wonders if he ever truly appreciated how much you had given yourself.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 15.47,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 36,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 37,
+    "time_offset": 348,
+    "text": "I wasn't there for him, I wasn't, which I don't think it's true. I had three little kids and I was home and doing everything.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 11.07,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 38,
+    "time_offset": 356,
+    "text": "What I sensed was that trust had not come easy to her and she had",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 27.14,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 39,
+    "time_offset": 364,
+    "text": "had allowed this man to enter her life. She had completely",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 23.5,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 40,
+    "time_offset": 372,
+    "text": "given herself to him. And by him trampling that, by having another woman become more important.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 24.05,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 41,
+    "time_offset": 380,
+    "text": "than her. It devalued everything she had done. It sapped the meaning out of it. And from that place she did not know.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 27.22,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 42,
+    "time_offset": 388,
+    "text": "how to come back. So she was frozen and her tears were streaming down her face.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 27.7,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 43,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 44,
+    "time_offset": 404,
+    "text": "and the frozenness of emotions at the same time. For me, the problem started",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 9.87,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 45,
+    "time_offset": 412,
+    "text": "much further back than when I chose to be intimate.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 28.36,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 46,
+    "time_offset": 420,
+    "text": "with somebody else. You know, it was more about just feeling like I didn't have, like, a connection anymore. We didn't talk.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 25.17,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 47,
+    "time_offset": 428,
+    "text": "anymore and then eventually it just became easy to you know you get attention from somebody else and it just",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 27.94,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 48,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 49,
+    "time_offset": 444,
+    "text": "ways but but I didn't stop it and I think we were both mentally in the same",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 10.7,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 50,
+    "time_offset": 452,
+    "text": "place and this bad place. I just acted upon it much earlier and...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false,
+    "elapsed": 27.92,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 51,
+    "time_offset": 460,
+    "text": "much more significantly. I mean, I think one of the things was that, and this was before she knew anything about me.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 26.65,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 52,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 53,
+    "time_offset": 476,
+    "text": "found out that she had gone home with somebody that she randomly met. I believe her that she's never done that before.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 13.13,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 54,
+    "time_offset": 484,
+    "text": "and whatnot, but that instead of it kind of being a wake-up call to me, and I wish now that it was just a wake-up call.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 29.32,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 55,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 56,
+    "time_offset": 500,
+    "text": "This is a couple who is at a very vulnerable stage in the cycle of life. They have three young children.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 10.55,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 57,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 58,
+    "time_offset": 516,
+    "text": "from each other. They both seek comfort, attention, love, responsiveness.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 10.6,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 59,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 60,
+    "time_offset": 532,
+    "text": "Each of them has a plot of entitlement and a series of justifications about why they could do what they do.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 10.5,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 61,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 62,
+    "time_offset": 548,
+    "text": "I thought he was different. I've met a lot of men that...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false,
+    "elapsed": 10.55,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 63,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 64,
+    "time_offset": 564,
+    "text": "Like I thought he was gonna be the man who just gonna love me. He had the values that he presented to me. I thought he had such a",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 9.65,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 65,
+    "time_offset": 572,
+    "text": "high values. So partially why this is heartbreaking for me because he's not what I thought he was.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 25.66,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 66,
+    "time_offset": 580,
+    "text": "Yes. There's another way of looking at this. If a man that has such values\u2026",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 23.93,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 67,
+    "time_offset": 588,
+    "text": "ends up doing something that is unthinkable even to him, then there's something important to figure out.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 23.63,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 68,
+    "time_offset": 596,
+    "text": "there. I don't think it's unthinkable to him. I think he's been like this before.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 24.32,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 69,
+    "time_offset": 604,
+    "text": "During I just didn't know him well It's true that you know when I've been",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 27.39,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 70,
+    "time_offset": 612,
+    "text": "with other people I have not, you know, I haven't been faithful. But when I got married,",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 22.92,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 71,
+    "time_offset": 620,
+    "text": "I was like, this is it. Like, I'm not gonna be that way. And I remember even my friends... But everybody said that. Everybody said that when...",
+    "trigger": {
+      "type": "emotional_peak",
+      "hint": "play_cue",
+      "confidence": 0.8
+    },
+    "filtered": false,
+    "elapsed": 26.92,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 72,
+    "time_offset": 628,
+    "text": "they get married, from what I learned. And maybe, but I knew that the people I was with in the past weren't the right people and at any time I wasn't faithful.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 26.74,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 73,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 74,
+    "time_offset": 644,
+    "text": "was I mean I felt like we had lost this connection. Did you go to tell her? I didn't. And I should have. I wish I did.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 9.35,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 75,
+    "time_offset": 652,
+    "text": "Meaning, did you tell her, did the two of you at any point say, something's off here? I always did.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 27.32,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 76,
+    "time_offset": 660,
+    "text": "About the year before I found out about the affair, I told him, listen, you're not home a lot at all.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 26.8,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 77,
+    "time_offset": 668,
+    "text": "You're not with kids. I understand you work hard, but I am lonely. You're not there for me anymore. And he said, well.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 25.87,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 78,
+    "time_offset": 676,
+    "text": "you can sit me home, but I'm not going to be happy. And I'm thinking, okay, I don't want him to be unhappy. I said, fine.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 28.99,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 79,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 80,
+    "time_offset": 692,
+    "text": "because you're looking at me and you're talking to me. And he's shaking his head and shaking his head. So you can both tell me...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false,
+    "elapsed": 11.72,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 81,
+    "time_offset": 700,
+    "text": "kinds of things. And I can listen to each of you. I'm married to none of you.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 29.0,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 82,
+    "time_offset": 708,
+    "text": "very easy. Okay? But you need to reach each other. We did. We talked so much about this.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 29.09,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 83,
+    "time_offset": 716,
+    "text": "I see the two of you talking. And most of the time you wait for the other one to be done and then you start to give your version and you don't hear and nothing is.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 28.63,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 84,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 85,
+    "time_offset": 732,
+    "text": "counter each other. That is not communication. I understand. I totally understand him. But there is understanding.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 10.58,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 86,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 87,
+    "time_offset": 748,
+    "text": "point, neither of you really has had the experience that the other person actually gets it, connects to it, cares about it.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 20.39,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 88,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 89,
+    "time_offset": 764,
+    "text": "are on a minefield and the next time it will be you and you will feel vindicated and you",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 18.63,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 90,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 91,
+    "time_offset": 780,
+    "text": "At first, I think that she is so mad that she's mad even at me.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 20.85,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 92,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 93,
+    "time_offset": 796,
+    "text": "So what we often do is we farm out one half of the equation. So one person becomes the holder of the equation.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 19.77,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 94,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 95,
+    "time_offset": 812,
+    "text": "So at this moment, he holds the flame and he says, I believe we can come back from here. And she says,",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 16.08,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 96,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 97,
+    "time_offset": 828,
+    "text": "and they are in a standstill at this moment where a part of her wants to be loved again and a part of her",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 16.28,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 98,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 99,
+    "time_offset": 844,
+    "text": "It was almost frustrating for me to hear I married you because you had good values. Because I appreciate...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false,
+    "elapsed": 17.13,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 100,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 101,
+    "time_offset": 860,
+    "text": "And it still frustrates me that a lot of times that you're just, you're okay.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 16.61,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 102,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 103,
+    "time_offset": 876,
+    "text": "That's probably what just gets better with time. But I'm still unhappy about the fact that I feel like your response has just been...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false,
+    "elapsed": 17.79,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 104,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 105,
+    "time_offset": 892,
+    "text": "what we had and still have is worth fighting for. And I'm hoping that at some point...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false,
+    "elapsed": 18.63,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 106,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 107,
+    "time_offset": 908,
+    "text": "each other again not just cohabitate. Of course I married you because I loved you but you look at other things.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 18.78,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 108,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 109,
+    "time_offset": 924,
+    "text": "years and get old together. That's what I mean by, like, I thought you had values. I mean, we should be able to survive this.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 21.0,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 110,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 111,
+    "time_offset": 940,
+    "text": "something died for me after this. Like, I just cannot get over this. I felt like we had a difficult life.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 21.47,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 112,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 113,
+    "time_offset": 956,
+    "text": "But after you betrayed me, I was like, what was all the hard work for?",
+    "trigger": {
+      "type": "direct_question",
+      "hint": "speak_brief",
+      "confidence": 0.7
+    },
+    "filtered": false,
+    "elapsed": 31.01,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 114,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 115,
+    "time_offset": 972,
+    "text": "It's very hard because you want to equalize it. Let it exist in its own...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false,
+    "elapsed": 22.09,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 116,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 117,
+    "time_offset": 988,
+    "text": "Together we are going to aim for a different conversation, a different exchange. Okay. How do I do that?",
+    "trigger": {
+      "type": "direct_question",
+      "hint": "speak_brief",
+      "confidence": 0.7
+    },
+    "filtered": false,
+    "elapsed": 18.74,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 118,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 119,
+    "time_offset": 1004,
+    "text": "useful, just reflect back. You just repeat to the other person. So what I'm here.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 20.51,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 120,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 121,
+    "time_offset": 1020,
+    "text": "with anything. You just have to be open and curious. Okay. I can do that. Yeah.",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.5
+    },
+    "filtered": false,
+    "elapsed": 21.26,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 122,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 123,
+    "time_offset": 1036,
+    "text": "And every time one says, I felt lonely, the other person says, I felt more so.",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false,
+    "elapsed": 20.25,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 124,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 125,
+    "time_offset": 1052,
+    "text": "rather than empathize. So the first part is for me to see if he can listen to her. It could have been.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 21.04,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 126,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 127,
+    "time_offset": 1068,
+    "text": "I thought, let's start here. So tell me what it is that you're feeling. I feel...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false,
+    "elapsed": 19.88,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 128,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 129,
+    "time_offset": 1084,
+    "text": "Sometimes I feel like something is coming back to me. Like I am, I can hug with you.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 22.29,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 130,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 131,
+    "time_offset": 1100,
+    "text": "this way, I guess. Tell him about the experience of betrayal. It hurt, I want to experience hard pain.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 24.35,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 132,
+    "time_offset": 1108,
+    "text": "painful painful one of the important things for me would be a guy who loves me",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 29.62,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 133,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 134,
+    "time_offset": 1124,
+    "text": "You guys talk a lot, you travel together. So it's not just sex. I think it was more than that for you.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 29.56,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 135,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 136,
+    "time_offset": 1140,
+    "text": "Right? Do you ever ask? I don't deny that completely. You told me. I, so I don't.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 20.27,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 137,
+    "time_offset": 1148,
+    "text": "Can I answer? Answer. It was not an emotional affair for me.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 29.77,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 138,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 139,
+    "time_offset": 1164,
+    "text": "that kind of that i was looking for that led to it was companionship and i think",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 30.6,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 140,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 141,
+    "time_offset": 1180,
+    "text": "that I missed us having, and I was trying to...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false,
+    "elapsed": 19.71,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 142,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 143,
+    "time_offset": 1196,
+    "text": "really missed that you and I had that we didn't have anymore. I get it. Because",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 25.53,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 144,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 145,
+    "time_offset": 1212,
+    "text": "You don't have all these problems. You just have fun and sex. This is your out. Maybe people know.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 20.44,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 146,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 147,
+    "time_offset": 1228,
+    "text": "But I get it. And I'm thinking... I dated a lot of selfish guys. Which I...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false,
+    "elapsed": 21.86,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 148,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 149,
+    "time_offset": 1244,
+    "text": "golden apple in the basket and now he's been relegated to that category called men.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 19.76,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 150,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 151,
+    "time_offset": 1260,
+    "text": "I start asking around and everybody has an affair. So I just don't know what's normal anymore. Right. But between...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false,
+    "elapsed": 20.49,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 152,
+    "time_offset": 1268,
+    "text": "What is normal and what is hurtful, I think we are going to stick with the hurtful. Okay. He also is taking...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false,
+    "elapsed": 29.85,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 153,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 154,
+    "time_offset": 1284,
+    "text": "Well, you were home, but he didn't find you. Now he didn't look for you either, enough. But when you were home,",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 30.3,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 155,
+    "time_offset": 1292,
+    "text": "When he says I didn't find you, you tell him, kids, normal, that's life. How was I supposed to do it?",
+    "trigger": {
+      "type": "direct_question",
+      "hint": "speak_brief",
+      "confidence": 0.7
+    },
+    "filtered": false,
+    "elapsed": 29.94,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 156,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 157,
+    "time_offset": 1308,
+    "text": "need to reconnect, we need a conversation, we need just a walk, we need to hug, we need in the midst of the three young children which is",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 24.64,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 158,
+    "time_offset": 1316,
+    "text": "always a period. Or when they hugged and we had sex during all that time. Yes, but I'm not talking about",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 29.48,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 159,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 160,
+    "time_offset": 1332,
+    "text": "and felt nothing. So that is not a proof of anything. Right, that's how it was. But I felt like I had to have sex with...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false,
+    "elapsed": 14.7,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 161,
+    "time_offset": 1340,
+    "text": "because he's my husband and he needs it and no matter what you know I would give you sex and then after all that he does",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 29.78,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 162,
+    "time_offset": 1348,
+    "text": "I didn't even want to have sex. Why didn't you come to me if you just have sex with me? You know? So there are two people...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false,
+    "elapsed": 29.89,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 163,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 164,
+    "time_offset": 1364,
+    "text": "when you have three young kids and when you've got pretty much the most stressful period for any couple, for any couple.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 17.25,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 165,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 166,
+    "time_offset": 1380,
+    "text": "of playfulness, of creativity, it's all being redirected. It's very hard for some people to be able",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 15.32,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 167,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 168,
+    "time_offset": 1396,
+    "text": "I know what's happening to us so that the complicity is maintained. That's how I thought it's going to be. But it wasn't. And it wasn't on your...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false,
+    "elapsed": 11.34,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 169,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 170,
+    "time_offset": 1412,
+    "text": "When I don't feel loved by you, I wander. And when I don't feel loved by you, I cut up.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 14.35,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 171,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 172,
+    "time_offset": 1428,
+    "text": "But isn't it for everybody like that? No, there's a few other options.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 16.01,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 173,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 174,
+    "time_offset": 1444,
+    "text": "and this and that, but you're going to stick in your back and forth between feeling deeply wounded and trying to be",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 13.49,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 175,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 176,
+    "time_offset": 1460,
+    "text": "and it sucks because it's anything but who you are. Right. So...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false,
+    "elapsed": 15.55,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 177,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 178,
+    "time_offset": 1476,
+    "text": "He didn't feel betrayed. He felt abandoned. And you were basically saying, grow up. Right.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 13.38,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 179,
+    "time_offset": 1484,
+    "text": "And it's not true. And I don't think it's true. I don't think he got abandoned. You want to hear or you want to be right? I want to hear.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 29.96,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 180,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 181,
+    "time_offset": 1500,
+    "text": "When I meet her, I meet a woman who is at the same time deeply hurt and deeply trying to protect her.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 19.81,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 182,
+    "time_offset": 1508,
+    "text": "herself against the hurt. And she vacillates between intense romanticism and cynicism. And she challenges everything I say.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 29.55,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 183,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 184,
+    "time_offset": 1524,
+    "text": "is emerging when I push back and she laughs and she laughs and she feels like I'm holding her and I'm right.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 22.25,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 185,
+    "time_offset": 1532,
+    "text": "there with her and now I can begin to help her listen to him differently and not just want him to listen to her all the time.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 29.45,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 186,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 187,
+    "time_offset": 1548,
+    "text": "would be figuring it out from the second he opened his mouth. So ask him. Why didn't you? I know we didn't.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 25.79,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 188,
+    "time_offset": 1556,
+    "text": "disagree on this, but I feel like I did. I feel like I did many times. We lay down in bed or in front of the TV and we start.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 29.61,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 189,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 190,
+    "time_offset": 1572,
+    "text": "I know the kids and, you know, should I go back to work? Should I not go back to work? What should I do? Like, I just, it was very hard.",
+    "trigger": {
+      "type": "invitation",
+      "hint": "speak_full",
+      "confidence": 0.9
+    },
+    "filtered": false,
+    "elapsed": 29.82,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 191,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 192,
+    "time_offset": 1588,
+    "text": "and maybe I shouldn't, like, you know, it's hard enough to talk about as it is. So when you start to talk about something and about anything that's difficult.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 19.0,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 193,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 194,
+    "time_offset": 1604,
+    "text": "you know and i wish i wasn't like that but it just found that i changed the subject and purpose it i was trying to get away i didn't understand what",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 20.17,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 195,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 196,
+    "time_offset": 1620,
+    "text": "If you tell her I feel something and she answers with what she feels.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 21.67,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 197,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 198,
+    "time_offset": 1636,
+    "text": "her feelings for a minute and let's just focus on mine. And maybe I'm wrong, but I think I try to do that for you.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 19.52,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 199,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 200,
+    "time_offset": 1652,
+    "text": "to talk to somebody about my feelings. And where did you learn that? I guess maybe my parents. I mean, I...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false,
+    "elapsed": 25.18,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 201,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 202,
+    "time_offset": 1668,
+    "text": "more religious. But I always kind of felt like I had to live a little bit of a double life in a way.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 22.72,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 203,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 204,
+    "time_offset": 1684,
+    "text": "to be the son at home that pretended to be that which his parents expected from him.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 20.5,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 205,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 206,
+    "time_offset": 1700,
+    "text": "one and the authentic one the traditional muslim one and the american one living dual realities is",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 21.64,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 207,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 208,
+    "time_offset": 1716,
+    "text": "Now I think back and you know I guess hindsight's 20-20 and I'm like you know, yes, instead of acting,",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 20.61,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 209,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 210,
+    "time_offset": 1732,
+    "text": "you weren't happy with our sex life, but I actually was completely unhappy with our sex life. I felt bad.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 22.68,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 211,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 212,
+    "time_offset": 1748,
+    "text": "not into it. I felt like you wanted me to do everything and I felt like everything was very forced.",
+    "trigger": {
+      "type": "emotional_peak",
+      "hint": "play_cue",
+      "confidence": 0.8
+    },
+    "filtered": false,
+    "elapsed": 24.56,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 213,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 214,
+    "time_offset": 1764,
+    "text": "that means that I was satisfied. Because you didn't, that, and I did, that that meant that it was great.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 24.54,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 215,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 216,
+    "time_offset": 1780,
+    "text": "a dead body, you know, like because I could I know when you're into it and when you're not right and I don't mean this to",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 24.97,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 217,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 218,
+    "time_offset": 1796,
+    "text": "I'm not saying this to try to like... I'm not like that. Okay. I'm telling you that I felt that way. Okay.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 26.87,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 219,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 220,
+    "time_offset": 1812,
+    "text": "For one, I don't think that that's the case. Just so we are clear, the conversation about sex that we're having,",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 26.77,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 221,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 222,
+    "time_offset": 1828,
+    "text": "experience was. Okay. If he could do the same thing right now about cooking. You understand?",
+    "trigger": {
+      "type": "direct_question",
+      "hint": "speak_brief",
+      "confidence": 0.7
+    },
+    "filtered": false,
+    "elapsed": 27.46,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 223,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 224,
+    "time_offset": 1844,
+    "text": "Okay, then you're not listening. Because you're listening and you're basically inside of you saying that's not who I am, that's not how I see myself.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 25.48,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 225,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 226,
+    "time_offset": 1860,
+    "text": "talking about. So I don't understand why it happened like this between us because on all other levels. Because you're not listening.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 26.2,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 227,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 228,
+    "time_offset": 1876,
+    "text": "enough that this one he's gonna fight for. Of course he cares now. It doesn't matter. He's not getting any sex. That's got nothing to do with it. You see,",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 33.5,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 229,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 230,
+    "time_offset": 1892,
+    "text": "shoving it down, making sure he comes as fast as possible so it's done with. I hate it. That's what he hates.",
+    "trigger": {
+      "type": "emotional_peak",
+      "hint": "play_cue",
+      "confidence": 0.7
+    },
+    "filtered": false,
+    "elapsed": 28.31,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 231,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 232,
+    "time_offset": 1908,
+    "text": "He doesn't care, he would take me? I did care. Come in five minutes and leave me. This is our sex life. Did you have...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false,
+    "elapsed": 29.71,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 233,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 234,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 235,
+    "time_offset": 1932,
+    "text": "Say more. I've had better, but I didn't think that that would be so important.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 9.36,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 236,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 237,
+    "time_offset": 1948,
+    "text": "Also didn't like the five minutes of sex. It was terrible. What did you do? Why did you?",
+    "trigger": {
+      "type": "direct_question",
+      "hint": "speak_brief",
+      "confidence": 0.7
+    },
+    "filtered": false,
+    "elapsed": 28.18,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 238,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 239,
+    "time_offset": 1964,
+    "text": "I didn't want it to be five minutes, but he was done in five minutes and gone. And then nobody said, stay.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 26.86,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 240,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 241,
+    "time_offset": 1980,
+    "text": "It can be like a long romantic sex in the morning, right? Why not rent a hotel and start with that?",
+    "trigger": {
+      "type": "direct_question",
+      "hint": "speak_brief",
+      "confidence": 0.7
+    },
+    "filtered": false,
+    "elapsed": 28.79,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 242,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 243,
+    "time_offset": 1996,
+    "text": "It wasn't, it was more about just the excitement of... All right, let me stop you a second, people. Because...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false,
+    "elapsed": 29.57,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 244,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 245,
+    "time_offset": 2012,
+    "text": "You're a year into the discovery of the affair. And so we're not in the crisis mode. We're not.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 28.29,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 246,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 247,
+    "time_offset": 2028,
+    "text": "happened? What did it mean for you? What did you find there? It's a both end. It's what happened to you and what happened to us.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 28.95,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 248,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 249,
+    "time_offset": 2044,
+    "text": "quite unhappy. Neither of us really felt the other person is going to hear it, is going to take it, is going to...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false,
+    "elapsed": 29.41,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 250,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 251,
+    "time_offset": 2060,
+    "text": "I hear you're trying to have. It doesn't really matter if it's around sex or about something else. The form is the same. Once you have this kind of pattern,",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 29.51,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 252,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 253,
+    "time_offset": 2076,
+    "text": "You get very defensive that like I'm trying to Say something negative about you, but I'm not",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 31.71,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 254,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 255,
+    "time_offset": 2092,
+    "text": "So here's the way you can tweak that. She already told you, I was doing something that didn't feel good.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 38.55,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 256,
+    "time_offset": 2100,
+    "text": "but I was doing it for you. So when you talk to her, include that. Neither you like to...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false,
+    "elapsed": 29.49,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 257,
+    "time_offset": 2108,
+    "text": "nor I liked it and then it becomes a we statement. That's what I mean by integrating the experience of the other.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 29.51,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 258,
+    "time_offset": 2116,
+    "text": "And then she can do the same. You know, here I was trying to be nice and to please you. Little did I.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 29.08,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 259,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 260,
+    "time_offset": 2132,
+    "text": "that's not who I am. And then it's less polarized. Then you're not talking from the extremes.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 31.88,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 261,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 262,
+    "time_offset": 2148,
+    "text": "What do I have to do differently? That's a beautiful question, first of all. I wish that you...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false,
+    "elapsed": 32.48,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 263,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 264,
+    "time_offset": 2164,
+    "text": "I promise it's not my intention with whatever I'm saying to be attacking you. I'm just trying to tell you.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 34.88,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 265,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 266,
+    "time_offset": 2180,
+    "text": "She just caught herself. Good. It's very rare that I just make a blanket statement like this.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 31.84,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 267,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 268,
+    "time_offset": 2196,
+    "text": "No, that doesn't mean as a whole. But this thing that I'm watching here is at the root.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 29.89,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 269,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 270,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 271,
+    "time_offset": 2220,
+    "text": "and your experiences that you had. I do see that it wasn't good for both of you and that conversation...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false,
+    "elapsed": 29.48,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 272,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 273,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 274,
+    "time_offset": 2244,
+    "text": "Something shut down. So here's the idea. I don't know what your relationship is like.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 22.5,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 275,
+    "time_offset": 2252,
+    "text": "sexually but I have a sense for both of you",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 29.83,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 276,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 277,
+    "time_offset": 2268,
+    "text": "of you and unsatisfying. It's terrible to be with a man who you feel is only pleasing himself.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 31.24,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 278,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 279,
+    "time_offset": 2284,
+    "text": "The first thing is touch. How you touch each other, how you stroke each other, how you kiss each other, and zero.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 32.28,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 280,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 281,
+    "time_offset": 2300,
+    "text": "What the hell did you learn that BS? Why is that supposed to be work?",
+    "trigger": {
+      "type": "direct_question",
+      "hint": "speak_brief",
+      "confidence": 0.7
+    },
+    "filtered": false,
+    "elapsed": 31.79,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 282,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 283,
+    "time_offset": 2316,
+    "text": "many people because it presumes that you should just know rather than the fact that it's",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 31.1,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 284,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 285,
+    "time_offset": 2332,
+    "text": "that if you think it's natural, then in fact you often remain ignorant. So here's what I would like to suggest.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 28.97,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 286,
+    "time_offset": 2340,
+    "text": "I suggest to you. You're going to do it in writing. That was our best way of communication, actually. Right? When we start texting to each other.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 29.99,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 287,
+    "time_offset": 2348,
+    "text": "We could communicate. So you're going to take out a separate email address that nobody else knows. Ladies,",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 29.71,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 288,
+    "time_offset": 2356,
+    "text": "the one that is reserved for the couple, not for the parents, not for the professionals.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 28.74,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 289,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 290,
+    "time_offset": 2372,
+    "text": "talk to each other and there's a certain kind of intimacy that you have not experienced in a long time.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 32.78,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 291,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 292,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 293,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 294,
+    "time_offset": 2404,
+    "text": "bad he felt. It has less to do with what he did with the other woman.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 30.93,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 295,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 296,
+    "time_offset": 2420,
+    "text": "Do you understand? Do you want him to repeat it? I want him to repeat.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 29.31,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 297,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 298,
+    "time_offset": 2436,
+    "text": "what happened with the other girl but because you felt that you did certain things and i didn't",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 36.93,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 299,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 300,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 301,
+    "time_offset": 2460,
+    "text": "clocks were off and so when I wanted to have sex and you... Okay, hold on, hold on, let me help.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 10.0,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 302,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 303,
+    "time_offset": 2476,
+    "text": "You see, what she needs to hear from you is to be left there, feeling nothing, and just feeling like...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false,
+    "elapsed": 26.83,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 304,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 305,
+    "time_offset": 2492,
+    "text": "No, I shouldn't have done that. I'm sorry that I made you feel the way that you did. The way that you do now.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 27.86,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 306,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 307,
+    "time_offset": 2508,
+    "text": "the worst feeling you can imagine. Do you actually understand that?",
+    "trigger": {
+      "type": "direct_question",
+      "hint": "speak_brief",
+      "confidence": 0.7
+    },
+    "filtered": false,
+    "elapsed": 30.92,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 308,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 309,
+    "time_offset": 2524,
+    "text": "I think so. Because I don't think you do. Ask her what's most important for...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false,
+    "elapsed": 28.19,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 310,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 311,
+    "time_offset": 2540,
+    "text": "that you feel is the most important thing for me to understand that maybe you think I don't? I feel used.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 30.44,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 312,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 313,
+    "time_offset": 2556,
+    "text": "and you never try. Like, I know that you think by providing that, that you're not.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 27.89,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 314,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 315,
+    "time_offset": 2572,
+    "text": "to show you that. I don't know if I've been doing a good job of it. You've been much better in terms of how you're at home.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 27.89,
+    "speaker": "SPEAKER_1"
+  },
+  {
+    "chunk": 316,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 317,
+    "time_offset": 2588,
+    "text": "with us, that I don't know how to bring back. So one of the ways it comes back is when you",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 28.41,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 318,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 319,
+    "time_offset": 2604,
+    "text": "That doesn't mean it's all what he did. I understand. And a part of what...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false,
+    "elapsed": 26.69,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 320,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 321,
+    "time_offset": 2620,
+    "text": "of I have to give it to him. Because that's what men need. That's part of how we're raised.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 27.67,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 322,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 323,
+    "time_offset": 2636,
+    "text": "The conversation will be primarily on each of you having the experience that the other person gets it.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 28.14,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 324,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 325,
+    "time_offset": 2652,
+    "text": "Don't let this sit and don't think time is going to do all of it. It needs attention. Your kids are watching.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 26.17,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 326,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 327,
+    "time_offset": 2668,
+    "text": "When I talk about how dissatisfying their respective experiences have been, both in",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 28.75,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 328,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 329,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 330,
+    "time_offset": 2692,
+    "text": "In my work with this couple, I'm not looking for a happy denouement. And while they become at the same time very sad,",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 11.11,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 331,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 332,
+    "time_offset": 2708,
+    "text": "long time. And perhaps this is the most we will be able to do today in this one session that I will have had with this.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 28.29,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 333,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 334,
+    "time_offset": 2724,
+    "text": "Esther Perel is the author of Mating in Captivity Unlocking Erotic Intelligence Available on Audible",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 30.48,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 335,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 336,
+    "time_offset": 2740,
+    "text": "in recording a session with Esther. You can find out more at estherperel.com slash audible or at audible.com.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 25.41,
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 337,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=5111): Read timed out. (read timeout=30)",
+    "speaker": "SPEAKER_0"
+  },
+  {
+    "chunk": 338,
+    "time_offset": 2756,
+    "text": "Produced and sound designed by Paul Schneider.",
+    "trigger": null,
+    "filtered": false,
+    "elapsed": 8.13,
+    "speaker": "SPEAKER_0"
+  }
+]
