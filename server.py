@@ -100,6 +100,26 @@ async def voices():
     return {"voices": tts_engine.list_voices()}
 
 
+@app.get("/audio-devices")
+async def audio_devices():
+    import pyaudio
+    p = pyaudio.PyAudio()
+    inputs, outputs = [], []
+    try:
+        di = p.get_default_input_device_info()["index"]
+        do = p.get_default_output_device_info()["index"]
+    except Exception:
+        di, do = -1, -1
+    for i in range(p.get_device_count()):
+        d = p.get_device_info_by_index(i)
+        if d["maxInputChannels"] > 0:
+            inputs.append({"index": i, "name": d["name"], "default": i == di})
+        if d["maxOutputChannels"] > 0:
+            outputs.append({"index": i, "name": d["name"], "default": i == do})
+    p.terminate()
+    return {"inputs": inputs, "outputs": outputs}
+
+
 @app.get("/config")
 async def get_config():
     return cfg.load_config()
