@@ -45,9 +45,37 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message
 log = logging.getLogger("sidecar")
 
 PORT = int(os.environ.get("PIPECAT_PORT", "8765"))
+VOICE_SERVER = os.environ.get("VOICE_SERVER_URL", "http://127.0.0.1:5111")
 SAMPLE_RATE = 16000
 ws_clients: set = set()
 executor = ThreadPoolExecutor(max_workers=1)
+_http_session = None
+
+
+async def get_http_session():
+    global _http_session
+    if _http_session is None:
+        import aiohttp as _aiohttp
+        _http_session = _aiohttp.ClientSession()
+    return _http_session
+
+
+async def post_notes(text):
+    """Forward transcript to voice server for background note processing."""
+    try:
+        import aiohttp
+        session = await get_http_session()
+        async with session.post(
+            f"{VOICE_SERVER}/notes/process",
+            json={"text": text},
+            timeout=aiohttp.ClientTimeout(total=5),
+        ) as resp:
+            if resp.status == 200:
+                log.info("Notes: posted chunk (%d chars)", len(text))
+            else:
+                log.warning("Notes endpoint returned %d", resp.status)
+    except Exception as e:
+        log.warning("Notes post failed: %s", e)
 
 # Session recording
 session_dir = None
@@ -190,6 +218,7 @@ class Broadcaster(FrameProcessor):
                 } if trigger.triggered else None,
                 "turn": decision.action.value,
             })
+            asyncio.create_task(post_notes(text))
 
         await self.push_frame(frame, direction)
 
@@ -308,9 +337,12 @@ async def run_test_audio(audio_path, start=60, duration=120):
             "turn": decision.action.value,
         }
         await broadcast(msg)
+        await post_notes(text)
         log.info("[%d] %s %s", stt._chunk_num, "TRIGGER" if trigger.triggered else "ok", text[:60])
 
     log.info("Test complete: %d chunks", stt._chunk_num)
+    if _http_session:
+        await _http_session.close()
 
 
 async def main():
