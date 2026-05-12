@@ -278,20 +278,29 @@ async def ws_handler(ws):
 
 
 async def run_mic():
-    """Normal mode: capture from system mic."""
-    transport = LocalAudioTransport(
-        LocalAudioTransportParams(
-            audio_in_enabled=True,
-            audio_out_enabled=False,
-            vad_enabled=True,
-            vad_analyzer=SileroVADAnalyzer(params=VADParams(min_volume=0.01, stop_secs=0.8)),
-        )
-    )
-    pipeline = Pipeline([transport.input(), STTProcessor(), Broadcaster()])
-    runner = PipelineRunner()
-    task = PipelineTask(pipeline)
-    log.info("Listening on system mic...")
-    await runner.run(task)
+    """Normal mode: capture from system mic. Retries on audio device errors."""
+    for attempt in range(5):
+        try:
+            transport = LocalAudioTransport(
+                LocalAudioTransportParams(
+                    audio_in_enabled=True,
+                    audio_out_enabled=False,
+                    vad_enabled=True,
+                    vad_analyzer=SileroVADAnalyzer(params=VADParams(min_volume=0.01, stop_secs=0.8)),
+                )
+            )
+            pipeline = Pipeline([transport.input(), STTProcessor(), Broadcaster()])
+            runner = PipelineRunner()
+            task = PipelineTask(pipeline)
+            log.info("Listening on system mic...")
+            await runner.run(task)
+            break
+        except Exception as e:
+            log.warning("Mic capture failed (attempt %d): %s", attempt + 1, e)
+            if attempt < 4:
+                await asyncio.sleep(3)
+            else:
+                log.error("Mic capture failed after 5 attempts, giving up")
 
 
 async def run_test_audio(audio_path, start=60, duration=120):
