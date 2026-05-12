@@ -405,7 +405,10 @@ async def main():
         await asyncio.sleep(2)  # let client settle
         await run_test_audio(args.test_audio, args.start, args.duration)
     else:
-        await run_mic()
+        while True:
+            await run_mic()
+            log.warning("Mic pipeline exited, restarting in 3s...")
+            await asyncio.sleep(3)
 
 
 if __name__ == "__main__":
