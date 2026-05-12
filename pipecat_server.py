@@ -220,7 +220,36 @@ class Broadcaster(FrameProcessor):
             })
             asyncio.create_task(post_notes(text))
 
+            if decision.action == Action.play_cue and not trigger.triggered:
+                asyncio.create_task(broadcast_cue())
+
         await self.push_frame(frame, direction)
+
+
+CUE_TYPES = ["mhmm", "hmm", "okay", "i_see", "right", "go_on"]
+
+
+async def broadcast_cue():
+    """Fetch a random cue from the voice server and broadcast as base64 audio."""
+    import base64, random
+    cue_type = random.choice(CUE_TYPES)
+    try:
+        session = await get_http_session()
+        import aiohttp
+        async with session.get(
+            f"{VOICE_SERVER}/cue/{cue_type}",
+            timeout=aiohttp.ClientTimeout(total=3),
+        ) as resp:
+            if resp.status == 200:
+                wav = await resp.read()
+                await broadcast({
+                    "type": "cue",
+                    "cue_type": cue_type,
+                    "audio": base64.b64encode(wav).decode(),
+                })
+                log.info("Cue: %s (%d bytes)", cue_type, len(wav))
+    except Exception as e:
+        log.debug("Cue fetch failed: %s", e)
 
 
 async def broadcast(msg):
