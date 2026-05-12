@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import asyncio
 import logging
+import os
 import signal
 import sys
 import time
@@ -60,7 +61,8 @@ async def lifespan(app: FastAPI):
     from datetime import datetime
     session_id = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
     session_dir = str(Path.home() / ".mindreflect" / "sessions" / session_id)
-    session_notes = SessionNoteProcessor(session_dir=session_dir, model="gemma4:e2b")
+    notes_model = os.environ.get("MINDREFLECT_NOTES_MODEL", "gemma4:e4b")
+    session_notes = SessionNoteProcessor(session_dir=session_dir, model=notes_model)
     log.info("Session notes: %s", session_dir)
 
     log.info(
