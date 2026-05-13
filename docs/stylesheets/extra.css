@@ -1,0 +1,88 @@
+/* ── geno ecosystem theme: deep purple + orange ── */
+
+:root {
+  --md-primary-fg-color: #1a0a2e;
+  --md-primary-fg-color--light: #2d1b4e;
+  --md-primary-fg-color--dark: #0f0619;
+  --md-primary-bg-color: #fff;
+  --md-primary-bg-color--light: #ffffffb3;
+  --md-accent-fg-color: #e8650a;
+  --md-accent-fg-color--transparent: #e8650a1a;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #1a0a2e;
+  --md-primary-fg-color--light: #2d1b4e;
+  --md-primary-fg-color--dark: #0f0619;
+  --md-primary-bg-color: #e8e0f0;
+  --md-primary-bg-color--light: #e8e0f0b3;
+  --md-accent-fg-color: #f0923a;
+  --md-accent-fg-color--transparent: #f0923a1a;
+  --md-default-bg-color: #0e0b14;
+  --md-default-bg-color--light: #161120;
+  --md-default-bg-color--lighter: #1e1830;
+  --md-default-bg-color--lightest: #2a2240;
+  --md-default-fg-color: #e0dce6;
+  --md-default-fg-color--light: #b8b0c8;
+  --md-default-fg-color--lighter: #8a7fa0;
+  --md-default-fg-color--lightest: #5c5470;
+  --md-code-bg-color: #16112080;
+  --md-code-fg-color: #e0dce6;
+  --md-typeset-color: #e0dce6;
+  --md-typeset-a-color: #f0923a;
+  --md-footer-bg-color: #0a0710;
+  --md-footer-bg-color--dark: #060410;
+}
+
+.md-header {
+  background: linear-gradient(135deg, #1a0a2e 0%, #2d1050 50%, #3a1560 100%);
+}
+
+.md-tabs {
+  background: linear-gradient(135deg, #0f0619 0%, #1a0a2e 100%);
+}
+
+.md-tabs__link--active,
+.md-tabs__link:hover {
+  color: #f0923a !important;
+}
+
+.md-typeset code {
+  border-radius: 0.3rem;
+}
+
+.md-typeset pre > code {
+  border-radius: 0.5rem;
+}
+
+[data-md-color-scheme="slate"] .highlight code {
+  border: 1px solid #2d1b4e40;
+}
+
+.md-typeset .admonition.tip,
+.md-typeset details.tip {
+  border-color: #e8650a;
+}
+
+.md-typeset .tip > .admonition-title,
+.md-typeset .tip > summary {
+  background-color: #e8650a15;
+}
+
+.md-typeset table:not([class]) th {
+  background: linear-gradient(135deg, #1a0a2e, #2d1050);
+  color: #fff;
+}
+
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) th {
+  background: linear-gradient(135deg, #2d1b4e, #3a1560);
+}
+
+.md-footer {
+  background: linear-gradient(135deg, #0f0619, #1a0a2e);
+}
+
+[data-md-color-scheme="slate"] ::-webkit-scrollbar { width: 8px; }
+[data-md-color-scheme="slate"] ::-webkit-scrollbar-track { background: #0e0b14; }
+[data-md-color-scheme="slate"] ::-webkit-scrollbar-thumb { background: #2d1b4e; border-radius: 4px; }
+[data-md-color-scheme="slate"] ::-webkit-scrollbar-thumb:hover { background: #3a1560; }

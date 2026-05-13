@@ -1,6 +1,6 @@
 site_name: geno-voice
-site_description: Local voice pipeline for offline, privacy-first AI voice interaction
-site_url: https://42euge.github.io/geno-voice
+site_description: Voice pipeline — STT, TTS, VAD
+site_url: https://42euge.github.io/geno-voice/
 repo_url: https://github.com/42euge/geno-voice
 repo_name: 42euge/geno-voice
 
@@ -27,15 +27,22 @@ theme:
   icon:
     repo: fontawesome/brands/github
   features:
+    - navigation.tabs
+    - navigation.tabs.sticky
     - navigation.sections
     - navigation.top
     - content.code.copy
+    - content.code.annotate
     - search.highlight
+    - search.suggest
     - toc.follow
 
 nav:
   - Home: index.md
   - Getting Started: getting-started.md
+
+extra_css:
+  - stylesheets/extra.css
 
 markdown_extensions:
   - admonition
@@ -47,5 +54,13 @@ markdown_extensions:
   - pymdownx.tabbed:
       alternate_style: true
   - attr_list
+  - md_in_html
+  - def_list
   - toc:
       permalink: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/42euge
+  generator: false
