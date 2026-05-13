@@ -6,11 +6,7 @@ import time
 
 from .base import STTEngine
 
-<<<<<<< Updated upstream
-log = logging.getLogger("stt.whisper")
-=======
 log = logging.getLogger("geno-voice.stt.whisper")
->>>>>>> Stashed changes
 
 
 class WhisperEngine(STTEngine):
@@ -27,13 +23,6 @@ class WhisperEngine(STTEngine):
             self._mlx_whisper = mlx_whisper
 
     def transcribe(self, wav_bytes: bytes) -> tuple[str | None, float]:
-<<<<<<< Updated upstream
-        if len(wav_bytes) < 1000:
-            return "", 0.0
-
-        self._load()
-=======
->>>>>>> Stashed changes
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             f.write(wav_bytes)
             tmp_path = f.name
@@ -49,13 +38,8 @@ class WhisperEngine(STTEngine):
                 )
             elapsed = time.monotonic() - t0
             return result["text"].strip(), elapsed
-<<<<<<< Updated upstream
-        except Exception as e:
-            log.error("transcription failed: %s", e)
-=======
         except Exception as exc:
             log.exception("Whisper transcription failed: %s", exc)
->>>>>>> Stashed changes
             return None, time.monotonic() - t0
         finally:
             os.unlink(tmp_path)
