@@ -6,7 +6,7 @@ Feeds fake TranscriptionFrames through a real Pipecat pipeline.
 No mic needed — tests the LLM tool-use pipeline independently.
 
 Usage:
-    cd /Users/euge/code-red/mind-reflect-ws/geno-voice
+    cd /Users/euge/code-red/rest-reflect-ws/geno-voice
     .venv/bin/python examples/session_notes_test.py
 
 Requires Ollama running with gemma4:e4b pulled.
@@ -81,7 +81,7 @@ class ChunkFeeder(FrameProcessor):
 
 
 async def main():
-    session_dir = tempfile.mkdtemp(prefix="mindreflect-test-")
+    session_dir = tempfile.mkdtemp(prefix="restreflect-test-")
     log.info("Session directory: %s", session_dir)
 
     processor = SessionNoteProcessor(

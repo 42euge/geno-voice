@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Feed podcast audio through the running MindReflect app via loopback.
+Feed podcast audio through the running RestReflect app via loopback.
 
 Sets system audio to Loopback Audio, plays podcast chunks through it,
 and monitors the voice server for transcriptions + session notes.
 
 Usage:
-    # With MindReflect app already running:
+    # With RestReflect app already running:
     .venv/bin/python examples/podcast_app_test.py --start 120 --duration 60
 """
 
@@ -102,7 +102,7 @@ def main():
             print(f"  Chunks processed: {themes.get('chunks', 0)}, Themes: {themes.get('themes', [])}")
 
             # Check recordings
-            sessions = sorted(Path.home().glob(".mindreflect/sessions/*/recordings/full-session.wav"))
+            sessions = sorted(Path.home().glob(".restreflect/sessions/*/recordings/full-session.wav"))
             if sessions:
                 size = sessions[-1].stat().st_size
                 print(f"  Recording: {size/1024:.0f}KB")

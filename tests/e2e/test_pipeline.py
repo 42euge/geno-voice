@@ -1,7 +1,7 @@
 """
 E2E pipeline integration tests.
 
-Tests the full MindReflect pipeline using diarized clips routed through
+Tests the full RestReflect pipeline using diarized clips routed through
 internal loopback audio. Each test plays clips → sidecar captures via
 loopback → STT → triggers → WebSocket → verifies output.
 

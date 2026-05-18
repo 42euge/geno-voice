@@ -10,7 +10,7 @@ Exercises the entire M1 architecture with realistic timing and
 content, producing real session notes via Ollama tool use.
 
 Usage:
-    cd /Users/euge/code-red/mind-reflect-ws/geno-voice
+    cd /Users/euge/code-red/rest-reflect-ws/geno-voice
     .venv/bin/python examples/full_pipeline_sim.py
 """
 
@@ -211,7 +211,7 @@ class ChunkFeeder(FrameProcessor):
 
 
 async def main():
-    session_dir = tempfile.mkdtemp(prefix="mindreflect-sim-")
+    session_dir = tempfile.mkdtemp(prefix="restreflect-sim-")
 
     engine = TurnTakingEngine()
     engine.state.session_start = time.time() - 300
@@ -224,7 +224,7 @@ async def main():
         activation.process_chunk(audio)
 
     print("=" * 60)
-    print("  MindReflect — Full M1 Pipeline Simulation")
+    print("  RestReflect — Full M1 Pipeline Simulation")
     print()
     print("  All 7 modules: VAD → Compute → Activation → Turn-Taking → Notes")
     print()

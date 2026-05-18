@@ -1,5 +1,5 @@
 """
-Turn-taking engine for MindReflect.
+Turn-taking engine for RestReflect.
 
 Combines multiple signals to decide: stay silent, play a backchannel
 cue, or generate a spoken response. Default is silence — this is the

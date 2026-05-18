@@ -6,7 +6,7 @@ Proves Pipecat can orchestrate local audio capture with Silero VAD
 and our mlx-whisper engine for continuous transcription.
 
 Usage:
-    cd /Users/euge/code-red/mind-reflect-ws/geno-voice
+    cd /Users/euge/code-red/rest-reflect-ws/geno-voice
     .venv/bin/python examples/pipecat_stt_test.py
 
 Press Ctrl+C to stop.
@@ -122,7 +122,7 @@ class TranscriptPrinter(FrameProcessor):
 
 async def main():
     print("=" * 60)
-    print("  MindReflect — Pipecat Continuous STT Spike")
+    print("  RestReflect — Pipecat Continuous STT Spike")
     print("  Speak into your microphone.")
     print("  VAD detects speech → mlx-whisper transcribes.")
     print("  Press Ctrl+C to stop.")

@@ -9,7 +9,7 @@ plays these at runtime instead of generating TTS on-the-fly.
 Output: session/cues/<cue_type>/<variant>.wav
 
 Usage:
-    cd /Users/euge/code-red/mind-reflect-ws/geno-voice
+    cd /Users/euge/code-red/rest-reflect-ws/geno-voice
     .venv/bin/python session/generate_cues.py
 """
 

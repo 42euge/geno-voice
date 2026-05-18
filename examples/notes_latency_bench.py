@@ -8,7 +8,7 @@ Tests:
   3. gemma4:e2b — fast path only (verbatim + assess_moment)
 
 Usage:
-    cd /Users/euge/code-red/mind-reflect-ws/geno-voice
+    cd /Users/euge/code-red/rest-reflect-ws/geno-voice
     .venv/bin/python examples/notes_latency_bench.py
 """
 

@@ -299,7 +299,7 @@ class SessionNoteProcessor(FrameProcessor):
             return None
 
         if journal_dir is None:
-            journal_dir = str(Path.home() / ".mindreflect" / "journal")
+            journal_dir = str(Path.home() / ".restreflect" / "journal")
 
         journal_path = Path(journal_dir)
         journal_path.mkdir(parents=True, exist_ok=True)
@@ -326,7 +326,7 @@ class SessionNoteProcessor(FrameProcessor):
             lines.append(self.running_summary)
             lines.append("")
 
-        lines.append(f"*{self.chunk_index} exchanges · Exported from MindReflect*")
+        lines.append(f"*{self.chunk_index} exchanges · Exported from RestReflect*")
 
         filepath.write_text("\n".join(lines))
         log.info("journal exported: %s", filepath)

@@ -9,7 +9,7 @@ speakers, no echo cancellation issues.
 Setup:
     1. Set macOS input device to "Loopback Audio"
     2. Run this script — it plays to "Loopback Audio" output
-    3. MindReflect's mic captures the audio internally
+    3. RestReflect's mic captures the audio internally
 
 Usage:
     .venv/bin/python examples/loopback_test.py "I feel stressed"
@@ -143,7 +143,7 @@ def main():
         set_input_device("MacBook Air Microphone")
         print("Audio restored to defaults.")
 
-    print("Done. Check MindReflect for transcribed messages.")
+    print("Done. Check RestReflect for transcribed messages.")
 
 
 if __name__ == "__main__":

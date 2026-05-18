@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MindReflect full pipeline — mic → VAD → Whisper → turn-taking + notes.
+RestReflect full pipeline — mic → VAD → Whisper → turn-taking + notes.
 
 All M1 components wired together in a single Pipecat pipeline:
     LocalAudioTransport (mic)
@@ -11,10 +11,10 @@ All M1 components wired together in a single Pipecat pipeline:
         → TranscriptDisplay (terminal output)
 
 Usage:
-    cd /Users/euge/code-red/mind-reflect-ws/geno-voice
+    cd /Users/euge/code-red/rest-reflect-ws/geno-voice
     .venv/bin/python examples/full_pipeline_test.py
 
-Session notes: /tmp/mindreflect-session-<timestamp>/
+Session notes: /tmp/restreflect-session-<timestamp>/
 Press Ctrl+C to stop.
 """
 
@@ -180,12 +180,12 @@ class TranscriptDisplay(FrameProcessor):
 
 async def main():
     session_id = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
-    session_dir = f"/tmp/mindreflect-session-{session_id}"
+    session_dir = f"/tmp/restreflect-session-{session_id}"
 
     engine = TurnTakingEngine()
 
     print("=" * 60)
-    print("  MindReflect — Full Pipeline Test (All M1 Components)")
+    print("  RestReflect — Full Pipeline Test (All M1 Components)")
     print()
     print("  mic → VAD → Whisper → Turn-Taking → Session Notes")
     print()

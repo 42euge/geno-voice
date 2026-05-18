@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test MindReflect with real therapy audio from "Where Should We Begin" podcast.
+Test RestReflect with real therapy audio from "Where Should We Begin" podcast.
 
 Feeds chunks of the podcast directly to the STT endpoint, bypassing the
 browser entirely. Tests: Whisper accuracy, trigger detection, session notes,

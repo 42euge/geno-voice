@@ -36,7 +36,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "=== MindReflect E2E Tests ==="
+echo "=== RestReflect E2E Tests ==="
 echo ""
 
 # Check prerequisites

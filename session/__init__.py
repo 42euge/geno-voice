@@ -1,4 +1,4 @@
-"""MindReflect session module — voice pipeline components."""
+"""RestReflect session module — voice pipeline components."""
 
 from session.activation import ActivationTracker, ActivationState
 from session.compute import ComputeMonitor, ComputeMonitorProcessor, PipelineState

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MindReflect voice sidecar — Python captures audio, Electron displays.
+RestReflect voice sidecar — Python captures audio, Electron displays.
 
 Captures audio directly via PyAudio (reliable, no browser quirks).
 Runs VAD, STT, triggers, session notes, and broadcasts everything
@@ -86,7 +86,7 @@ raw_wav_bytes = 0
 def init_session():
     global session_dir, raw_wav, raw_wav_bytes
     ts = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
-    session_dir = Path.home() / ".mindreflect" / "sessions" / ts
+    session_dir = Path.home() / ".restreflect" / "sessions" / ts
     session_dir.mkdir(parents=True, exist_ok=True)
     (session_dir / "recordings").mkdir(exist_ok=True)
 
