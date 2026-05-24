@@ -30,6 +30,7 @@ from tts import get_engine as get_tts_engine
 from examples._chat_helpers import (
     SENTENCE_END,
     flush_pending_audio,
+    render_preview,
     split_complete_sentences,
     trim_history,
 )
@@ -220,8 +221,11 @@ def record_utterance_streaming(stream, stt_engine) -> tuple[bytes, float, float]
             text = _transcribe_quick(stt_engine, wav)
             if text and text != preview_text:
                 preview_text = text
-                sys.stdout.write(f"\r{CLEAR_LINE}  {DIM}You: {preview_text}{RESET}")
-                sys.stdout.flush()
+                # Width-clamp the preview so a long utterance doesn't wrap
+                # to a second row (which breaks the next \r rewrite). Bug #4.
+                import shutil
+                term_cols = shutil.get_terminal_size(fallback=(80, 24)).columns
+                render_preview(preview_text, max_width=term_cols, prefix="  You: ")
 
     speech_duration = time.monotonic() - speech_start - SILENCE_DURATION
     if speech_duration < MIN_SPEECH_DURATION:

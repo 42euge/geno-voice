@@ -20,6 +20,7 @@ from examples._chat_helpers import (  # noqa: E402
     TurnTimings,
     flush_pending_audio,
     format_preview_line,
+    render_preview,
     split_complete_sentences,
     trim_history,
 )
@@ -250,3 +251,90 @@ class TestFlushPendingAudio:
         drained = flush_pending_audio(s, chunk_size=2000)
         assert drained == 8000
         assert s.reads == [2000, 2000, 2000, 2000]
+
+
+class TestRenderPreview:
+    """Bug #4 regression tests — preview must never exceed terminal width.
+
+    The visible width is what matters: ANSI escapes don't take up cells, so
+    we strip them when measuring. The line must:
+      - start with \\r and the clear-line escape so it overwrites cleanly
+      - have visible_len <= max_width (no wraparound)
+      - include the prefix verbatim
+    """
+
+    @staticmethod
+    def _strip_ansi(s: str) -> str:
+        import re
+        return re.sub(r"\x1b\[[0-9;]*m|\x1b\[2K", "", s)
+
+    def test_short_text_visible_under_width(self):
+        from io import StringIO
+        buf = StringIO()
+        line = render_preview("hello world", max_width=80, file=buf)
+        visible = self._strip_ansi(line).lstrip("\r")
+        assert visible == "  You: hello world"
+        assert len(visible) <= 80
+
+    def test_long_text_truncated_to_fit(self):
+        from io import StringIO
+        buf = StringIO()
+        long = "x" * 500
+        line = render_preview(long, max_width=40, file=buf)
+        visible = self._strip_ansi(line).lstrip("\r")
+        # Must never exceed the requested width.
+        assert len(visible) <= 40
+        # Must end with the ellipsis indicating truncation.
+        assert visible.endswith("…")
+        # Must still start with the prefix.
+        assert visible.startswith("  You: ")
+
+    def test_starts_with_carriage_return_and_clear(self):
+        from io import StringIO
+        buf = StringIO()
+        line = render_preview("hi", max_width=80, file=buf)
+        assert line.startswith("\r\x1b[2K")  # \r + CLEAR_LINE
+
+    def test_writes_to_provided_file_and_flushes(self):
+        class CountingBuf:
+            def __init__(self):
+                self.text = ""
+                self.flushes = 0
+
+            def write(self, s):
+                self.text += s
+
+            def flush(self):
+                self.flushes += 1
+
+        buf = CountingBuf()
+        render_preview("test", max_width=80, file=buf)
+        assert buf.text != ""
+        assert buf.flushes == 1
+
+    def test_dim_off_omits_dim_codes(self):
+        from io import StringIO
+        buf = StringIO()
+        line = render_preview("hi", max_width=80, file=buf, dim=False)
+        # When dim=False the body should not be wrapped in dim ANSI.
+        assert "\x1b[2m" not in line
+
+    def test_custom_prefix_used_in_width_calculation(self):
+        from io import StringIO
+        buf = StringIO()
+        # Prefix is 12 chars visible. Max width 30 → 18 cells for body.
+        line = render_preview("y" * 100, max_width=30, file=buf, prefix=" Listening: ")
+        visible = self._strip_ansi(line).lstrip("\r")
+        assert visible.startswith(" Listening: ")
+        assert len(visible) <= 30
+        assert visible.endswith("…")
+
+    def test_repeated_calls_can_overwrite_previous(self):
+        # Simulate the live-preview rendering loop: each call should produce
+        # output that begins with \r so prior contents on the row are erased.
+        from io import StringIO
+        buf = StringIO()
+        render_preview("hello", max_width=80, file=buf)
+        render_preview("hello world", max_width=80, file=buf)
+        # Second \r in the buffer means we performed a rewrite-on-line.
+        assert buf.getvalue().count("\r") == 2

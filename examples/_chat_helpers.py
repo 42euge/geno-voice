@@ -163,3 +163,46 @@ def format_preview_line(text: str, max_width: int = 80, prefix_len: int = 7) -> 
     if len(text) <= available:
         return text
     return text[: available - 1] + "…"
+
+
+# ANSI helpers used by render_preview. Kept local so this module stays
+# stdlib-only and matches the constants in mic_chat.py without importing.
+_ANSI_DIM = "\033[2m"
+_ANSI_RESET = "\033[0m"
+_ANSI_CLEAR_LINE = "\033[2K"
+
+
+def render_preview(
+    text: str,
+    *,
+    max_width: int,
+    prefix: str = "  You: ",
+    file=None,
+    dim: bool = True,
+) -> str:
+    """Write a single-line live STT preview to `file` (default sys.stdout).
+
+    Uses `\\r\\033[2K` to overwrite the current row, then writes the prefix
+    plus a width-truncated version of `text` so it cannot wrap. This is the
+    fix for bug #4 — the original code did `\\r{CLEAR_LINE}  You: {text}`
+    with no length cap, so any text wider than the terminal pushed onto a
+    second row and broke the rewrite on the next iteration.
+
+    Returns the exact string written, primarily so tests can assert on it
+    without needing to capture file I/O.
+
+    `prefix` defaults to the user-facing "  You: " label. Pass a different
+    prefix (e.g. "  Bot: ") to reuse this for other live-update lines.
+    `dim` wraps the body in ANSI dim; set False for plain output.
+    """
+    import sys as _sys
+    out = file if file is not None else _sys.stdout
+    visible_prefix_len = len(prefix)
+    body = format_preview_line(text, max_width=max_width, prefix_len=visible_prefix_len)
+    if dim:
+        line = f"\r{_ANSI_CLEAR_LINE}{prefix}{_ANSI_DIM}{body}{_ANSI_RESET}"
+    else:
+        line = f"\r{_ANSI_CLEAR_LINE}{prefix}{body}"
+    out.write(line)
+    out.flush()
+    return line
