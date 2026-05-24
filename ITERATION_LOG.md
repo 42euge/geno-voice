@@ -424,3 +424,92 @@ Next:
   is high, emit a pre-rendered "hmm…" or "let me think…" via TTS
   before the real first sentence. Cheap latency-perception win.
   Configurable via `config.local.yaml`.
+
+---
+
+## iter-008 — streaming LLM → TTS overlap via SentenceWorker
+
+**Branch:** `iter-008-streaming-overlap` (merged ff to main, commit `ad4d946`)
+**Date:** 2026-05-24
+
+The headline architecture change. Previously the chat for-loop
+synthesized + played each sentence synchronously *inside* the
+token-receipt loop, so every byte of audio playback was a byte of
+LLM stream latency the network connection was otherwise wasting.
+Multi-sentence replies stacked the cost linearly.
+
+Now: a background `SentenceWorker` thread consumes complete
+sentences off a `Queue`, runs synth + play, and reports metrics. The
+main thread submits and keeps consuming tokens.
+
+What changed:
+- New module `examples/_chat_pipeline.py` with `SentenceWorker`.
+  - Constructor: `speaker_factory`, `synth_fn`, `play_fn`, optional
+    `clock` and `output` (all dependency-injected).
+  - Lifecycle: `start` → `submit` × N → `submit_done` →
+    `wait_done(timeout=...)`. Or `stop(timeout=...)` for
+    early termination (LLM error / Ctrl+C).
+  - Metrics tracked: `sentences_spoken`, `tts_time`,
+    `playback_time`, `first_audio_at`, `errors`.
+  - Owns one persistent speaker stream — opens via `speaker_factory`
+    in `_run`, closes (`stop_stream` + `close`) in the `finally`
+    block. No more open-per-sentence overhead.
+- `mic_chat.run_chat` rewired:
+  - Replaces the in-loop synth + `play_aligned` calls with
+    `worker.submit(sentence)`.
+  - `wait_done(timeout=120)` after `submit_done` to drain any
+    sentences still queued when LLM stream ends.
+  - TTFS now derives from `worker.first_audio_at` (slightly more
+    accurate — captured just before first audio is written, rather
+    than before synth begins).
+  - Error path calls `worker.stop()` for clean teardown before the
+    bug-3 mic flush.
+
+Tests (18 new in `tests/unit/test_chat_pipeline.py`):
+- Lifecycle: submit + done + wait runs clean; double start raises;
+  wait_done without start raises; submit after submit_done dropped.
+- Ordering: sentences play in submission order (proven via
+  growing-sample-count synth); `is_first_sentence` only True on first;
+  metrics accumulate; `first_audio_at` set exactly once.
+- Skipping: empty/whitespace sentences and empty audio from synth
+  both skipped without incrementing count.
+- Error handling: synth raising captured in `errors`, loop
+  continues; play raising same; speaker_factory raising exits
+  cleanly without hang.
+- Stop: pending dropped + thread joined; before-start is a no-op;
+  submit_done immediately followed by stop doesn't hang.
+- Speaker wiring: `speaker._closed is True` after worker exit;
+  loopback to `VirtualMicStream` round-trips audio (seed for
+  iter-009 barge-in).
+
+Verification: `python -m pytest tests/unit/` → **117 passed in 9s**
+(99 existing + 18 new).
+
+Notes:
+- The threaded `stop` test uses a `synth_started` Event +
+  `proceed` Event to deterministically place the worker in
+  "currently synthesizing, two more queued" state before calling
+  `stop()`. The assertion is "exactly one sentence got spoken" —
+  the in-flight one finishes, the queued ones are dropped. This
+  was the most likely-to-be-flaky test; it consistently runs in
+  <50ms.
+- `worker.errors` exists so production code can surface background
+  failures without taking down the chat loop. `mic_chat.run_chat`
+  prints any worker errors after `wait_done` returns.
+- Single-sentence replies see no behavior change. Multi-sentence
+  replies should show lower TTFS for sentence 2+ because the LLM
+  stream now overlaps with playback.
+
+Next:
+- iter-009: barge-in. Run `VadState` on the mic stream *during*
+  speaker writes. When the user starts speaking, signal the worker
+  to drop pending sentences and stop the speaker mid-sentence.
+  Requires a "hard cancel" path on the worker (the current `stop`
+  is "drain + finish current"); add `cancel()` that sets a flag
+  the play_fn checks per audio chunk. Test using loopback paired
+  with a "user injection" feeder that pushes user-speech into the
+  mic the worker is also watching.
+- iter-010: filler words during LLM first-token wait. Pre-render
+  short audio clips ("hmm…", "let me think…") and have the worker
+  play them if the queue stays empty for more than ~600ms. Hide
+  behind a config flag so it's opt-in.
