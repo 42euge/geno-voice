@@ -146,3 +146,61 @@ Next:
   the next token receipt. A producer/consumer queue with the LLM
   streaming on the main thread and TTS+playback on a worker would
   cut median TTFS substantially.
+
+---
+
+## iter-004 — extract VadState pure helper, 11 new tests
+
+**Branch:** `iter-004-vad` (merged ff to main, commit `dff3f9e`)
+**Date:** 2026-05-23
+
+What changed:
+- Added `VadState` (and `VadEvent` enum) in
+  `examples/_chat_helpers.py`. Pure state machine: `feed(level, now)`
+  returns one of IDLE / ACTIVE / DONE_OK / DONE_TOO_SHORT and updates
+  `speaking`, `speech_start`, `silence_start`, `last_speech_duration`.
+  Auto-resets on either DONE event so the state machine is ready for
+  the next utterance.
+- `record_utterance_streaming` in `mic_chat.py` rewritten to consume
+  events instead of managing inline flags. Behavioral parity preserved:
+  the trailing silence frame is still appended to `frames` before
+  break (matches the original `frames.append(data); ... break` order).
+  `too_short` flag replaces the post-loop duration recheck.
+- 11 new tests covering: initial idle, first loud frame, continuous
+  speech, silence timer start, brief silence doesn't end utterance,
+  full silence window → DONE_OK, too-short window → DONE_TOO_SHORT,
+  state-reset-between-utterances, strictly-greater threshold boundary,
+  speech_duration recorded correctly, sub-threshold blips stay IDLE.
+
+Verification: `python -m pytest tests/unit/` → **47 passed in 0.04s**.
+
+Notes:
+- A full integration test of `record_utterance_streaming` itself was
+  considered but skipped: `mic_chat.py` imports `pyaudio` at module
+  level, which isn't installable on x86_64 Linux without ALSA dev
+  headers. The pure VadState unit tests give us complete coverage of
+  the extracted logic; the wiring is straightforward and small.
+- Hit a real bug while writing the threshold-boundary test:
+  `1.4 - 0.6 = 0.7999999999999999`, which silently fails a `>= 0.8`
+  comparison. Tests now use timestamps that avoid float-precision
+  cliffs (e.g. 1.5 instead of 1.4 for the 0.8s silence window). Worth
+  remembering for any future timestamp-comparison code.
+
+Next:
+- iter-005: streaming LLM → TTS overlap. The for-loop currently does
+  synth + playback synchronously inside each iteration, blocking the
+  next token. A `Queue` + worker thread for synth and a second worker
+  for playback would let the LLM stream proceed at network speed
+  while audio is being produced and played. Median TTFS could drop
+  substantially since first-sentence synth could start the moment the
+  first sentence's text is complete, even if more tokens are still
+  arriving.
+- iter-006: filler-word generation. While waiting for the first LLM
+  token (`metrics.llm_first_token` typically 200-800ms), play a
+  pre-rendered "hmm" or "let me think" so the user perceives lower
+  latency. Configurable via `config.local.yaml`.
+- iter-007: barge-in. Run a thin VAD on the mic input *during*
+  bot playback. If the user starts speaking, kill the playback
+  stream, drop pending sentences, and start recording. Requires the
+  TTS + playback work from iter-005 since playback needs to be
+  cancellable from outside the playing thread.
