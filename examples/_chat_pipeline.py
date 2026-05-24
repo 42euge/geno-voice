@@ -614,6 +614,14 @@ class BargeInCoordinator:
         self._lock = threading.Lock()
         # When the trigger fired, sampled from ``clock``. None until set.
         self.triggered_at: Optional[float] = None
+        # iter-041: when worker.cancel() returned (i.e. the moment
+        # the SentenceWorker thread had been joined and playback
+        # was actually stopped). None until trigger() runs and
+        # reaches that point.
+        # Latency = playback_stopped_at - triggered_at. Metric 2.10
+        # in the perf-metrics taxonomy. Barge-in feel >200ms is the
+        # moment the user thinks the bot is ignoring them.
+        self.playback_stopped_at: Optional[float] = None
 
     @property
     def event(self) -> threading.Event:
@@ -647,6 +655,12 @@ class BargeInCoordinator:
                 self._worker.cancel(timeout=5.0)
             except Exception:
                 pass
+        # iter-041: stamp playback_stopped_at AFTER worker.cancel
+        # has joined the thread — that's the moment playback is
+        # truly halted. If no worker was bound, stamp now anyway
+        # (the trigger itself counts as "stopped" — there was
+        # nothing to stop).
+        self.playback_stopped_at = self._clock()
         if self._on_trigger is not None:
             try:
                 self._on_trigger()

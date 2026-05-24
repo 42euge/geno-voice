@@ -339,6 +339,16 @@ class ChatLoop:
             metrics.sentences_cancelled = worker.cancelled_sentences
             metrics.fillers_played = worker.fillers_played
             metrics.barge_in = coord.is_set()
+            # iter-041: barge-in latency from coordinator timestamps.
+            # Both pieces only valid when the trigger actually fired.
+            if (
+                coord.triggered_at is not None
+                and coord.playback_stopped_at is not None
+            ):
+                metrics.barge_in_latency = max(
+                    0.0,
+                    coord.playback_stopped_at - coord.triggered_at,
+                )
             metrics.mic_stale_frames = stale_frames
             metrics.response = full_response.strip()
             metrics.total_e2e = self._clock() - turn_start

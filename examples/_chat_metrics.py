@@ -58,6 +58,13 @@ class TurnMetrics:
     # made it into the per-turn summary.
     fillers_played: int = 0
     barge_in: bool = False
+    # iter-041: time from BargeInCoordinator.trigger() firing to
+    # playback being fully stopped (worker thread joined). Metric
+    # 2.10 in the perf-metrics taxonomy. The whole barge-in feature
+    # lives or dies on this number — >200ms is when the user
+    # thinks the bot is ignoring them. 0.0 means no barge-in this
+    # turn (or the coordinator wasn't measured).
+    barge_in_latency: float = 0.0
     # iter-037: count of mic frames flushed at start of turn (or
     # on the LLM-error path). Metric 2.19 from the perf-metrics
     # taxonomy. Many stale frames means the mic accumulated
@@ -117,6 +124,23 @@ class TurnMetrics:
                 f"  {_DIM}│{_RESET}  {_YELLOW}Barge-in:      "
                 f"yes (user interrupted){cancel_note}{_RESET}"
             )
+            # iter-041: barge-in latency. Only meaningful when
+            # >0 (some test paths leave it at 0). Color-code:
+            # red if >300ms (user notices), yellow if 100-300ms,
+            # green if <100ms.
+            if self.barge_in_latency > 0:
+                lat_ms = self.barge_in_latency * 1000
+                if lat_ms > 300:
+                    color = _YELLOW  # we don't have red, yellow is alarm
+                elif lat_ms > 100:
+                    color = _YELLOW
+                else:
+                    color = _GREEN
+                print(
+                    f"  {_DIM}│{_RESET}  {color}Barge latency: "
+                    f"{lat_ms:>6.0f}ms{_RESET}  "
+                    f"(detect → halt)"
+                )
         # iter-037: only emit when non-zero — a clean turn shouldn't
         # spend pixels on a stale-frame counter that's almost always 0.
         # When >0 it's worth noticing — bot voice leaking back through
@@ -208,6 +232,14 @@ def print_session_summary(metrics_list: list[TurnMetrics], llm_config: dict, *, 
     mid_cancels = sum(
         1 for m in metrics_list if m.barge_in and m.sentences_cancelled > 0
     )
+    # iter-041: barge-in latency over turns where it was measured
+    # (>0 — both triggered_at and playback_stopped_at have to be
+    # set for the metric to be meaningful).
+    barge_latencies = [
+        m.barge_in_latency
+        for m in metrics_list
+        if m.barge_in and m.barge_in_latency > 0
+    ]
     # iter-037: aggregate mic-stale-frame totals. Only surface when
     # something actually leaked — a clean session shouldn't be cluttered
     # with a "0 stale frames" line.
@@ -243,6 +275,17 @@ def print_session_summary(metrics_list: list[TurnMetrics], llm_config: dict, *, 
             _emit(
                 f"    Barge-ins:        {barges_total} "
                 f"(all between sentences)"
+            )
+        # iter-041: median + worst barge-in latency. Useful for
+        # tuning the watcher's poll interval and the worker cancel
+        # path. >200ms median is a reliable "feels broken" signal.
+        if barge_latencies:
+            _emit(
+                f"    Median barge:     {_median_ms(barge_latencies):.0f}ms"
+            )
+            _emit(
+                f"    Worst barge:      "
+                f"{max(barge_latencies) * 1000:.0f}ms"
             )
     if stale_total:
         # iter-037: surface aggregate stale-frame total so a "session
