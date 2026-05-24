@@ -335,6 +335,8 @@ class ChatLoop:
             metrics.tts_time = worker.tts_time
             metrics.playback_time = worker.playback_time
             metrics.sentences_spoken = worker.sentences_spoken
+            # iter-040: count of sentences cut mid-stream by cancel_event.
+            metrics.sentences_cancelled = worker.cancelled_sentences
             metrics.fillers_played = worker.fillers_played
             metrics.barge_in = coord.is_set()
             metrics.mic_stale_frames = stale_frames

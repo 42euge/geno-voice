@@ -45,6 +45,14 @@ class TurnMetrics:
     ttfs: float = 0.0
     total_e2e: float = 0.0
     sentences_spoken: int = 0
+    # iter-040: count of sentences cut mid-stream by cancel_event
+    # (vs completed naturally before barge-in fired). Only non-zero
+    # on barge-in turns where the cancel landed during a sentence's
+    # playback. 0 on barge-in turns means the cancel landed cleanly
+    # in the silent gap between sentences (also a good outcome).
+    # Metric 2.18 in the perf-metrics taxonomy. Validates the
+    # iter-009 / iter-026 cancel plumbing.
+    sentences_cancelled: int = 0
     # iter-014: surface filler + barge-in counters that were added
     # to the worker / coordinator in iter-011 / iter-012 but never
     # made it into the per-turn summary.
@@ -93,9 +101,21 @@ class TurnMetrics:
         print(f"  {_DIM}│{_RESET}  TTS:           {self.tts_time*1000:>7.0f}ms  {tts_suffix}")
         print(f"  {_DIM}│{_RESET}  Playback:      {self.playback_time*1000:>7.0f}ms")
         if self.barge_in:
+            # iter-040: distinguish mid-stream cancel (cancel landed
+            # during sentence playback — clean cut-off) vs between-
+            # sentences cancel (cancel landed in the silent gap —
+            # also clean, sentence ended naturally). Both are
+            # success outcomes but they tell different stories
+            # about how the user is timing their interruption.
+            if self.sentences_cancelled > 0:
+                cancel_note = (
+                    f" ({self.sentences_cancelled} cut mid-stream)"
+                )
+            else:
+                cancel_note = " (between sentences)"
             print(
                 f"  {_DIM}│{_RESET}  {_YELLOW}Barge-in:      "
-                f"yes (user interrupted){_RESET}"
+                f"yes (user interrupted){cancel_note}{_RESET}"
             )
         # iter-037: only emit when non-zero — a clean turn shouldn't
         # spend pixels on a stale-frame counter that's almost always 0.
@@ -181,6 +201,13 @@ def print_session_summary(metrics_list: list[TurnMetrics], llm_config: dict, *, 
     ttfs_times = [m.ttfs for m in metrics_list if m.ttfs > 0]
     fillers_total = sum(m.fillers_played for m in metrics_list)
     barges_total = sum(1 for m in metrics_list if m.barge_in)
+    # iter-040: barge-ins where the cancel actually cut a sentence
+    # mid-stream. The "mid-stream rate" tells you "how aggressively
+    # are users interrupting" — high = interrupt mid-sentence
+    # (impatient or wrong response); low = wait for a natural pause.
+    mid_cancels = sum(
+        1 for m in metrics_list if m.barge_in and m.sentences_cancelled > 0
+    )
     # iter-037: aggregate mic-stale-frame totals. Only surface when
     # something actually leaked — a clean session shouldn't be cluttered
     # with a "0 stale frames" line.
@@ -206,7 +233,17 @@ def print_session_summary(metrics_list: list[TurnMetrics], llm_config: dict, *, 
     if fillers_total:
         _emit(f"    Fillers played:   {fillers_total}")
     if barges_total:
-        _emit(f"    Barge-ins:        {barges_total}")
+        if mid_cancels:
+            pct = (mid_cancels / barges_total) * 100
+            _emit(
+                f"    Barge-ins:        {barges_total} "
+                f"({mid_cancels} mid-stream, {pct:.0f}%)"
+            )
+        else:
+            _emit(
+                f"    Barge-ins:        {barges_total} "
+                f"(all between sentences)"
+            )
     if stale_total:
         # iter-037: surface aggregate stale-frame total so a "session
         # had constant echo" pattern is visible at the end of the run.

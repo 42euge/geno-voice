@@ -154,6 +154,16 @@ class SentenceWorker:
 
         # Public metrics — read after wait_done() / stop() returns.
         self.sentences_spoken: int = 0
+        # iter-040: count of sentences whose play_fn was interrupted
+        # by ``cancel_event`` mid-stream (vs completed naturally).
+        # Detected by sampling cancel_event before and after each
+        # play_fn call — if it transitioned from clear to set DURING
+        # the call, that sentence was cut mid-stream. Tighter than
+        # sampling only after, which would false-positive when
+        # cancel fires in the microseconds after natural completion.
+        # Metric 2.18 in the perf-metrics taxonomy. Validates the
+        # iter-009 / iter-026 cancel plumbing.
+        self.cancelled_sentences: int = 0
         self.fillers_played: int = 0
         self.tts_time: float = 0.0
         self.playback_time: float = 0.0
@@ -253,6 +263,13 @@ class SentenceWorker:
             return False
         if self.first_audio_at is None:
             self.first_audio_at = self._clock()
+        # iter-040: capture cancel_event state BEFORE the play call.
+        # If it transitions to set DURING the call, the play_fn
+        # exited because of cancel_event (vs completing naturally).
+        # The before/after pair tightens the race vs sampling only
+        # after — a cancel firing in the microseconds after natural
+        # completion would otherwise count as a false positive.
+        cancel_was_set_before = self._cancel_event.is_set()
         try:
             # iter-023: signature was inspected at construction;
             # call with the right kwargs once. A TypeError raised
@@ -271,6 +288,13 @@ class SentenceWorker:
                     is_first_sentence=is_first,
                 )
             self.playback_time += float(elapsed) if elapsed else 0.0
+            # iter-040: cancel transitioned during the call —
+            # play_fn exited mid-stream.
+            if (
+                not cancel_was_set_before
+                and self._cancel_event.is_set()
+            ):
+                self.cancelled_sentences += 1
             return True
         except Exception as e:
             self.errors.append(e)
