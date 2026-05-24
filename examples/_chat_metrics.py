@@ -44,6 +44,13 @@ class TurnMetrics:
     # made it into the per-turn summary.
     fillers_played: int = 0
     barge_in: bool = False
+    # iter-037: count of mic frames flushed at start of turn (or
+    # on the LLM-error path). Metric 2.19 from the perf-metrics
+    # taxonomy. Many stale frames means the mic accumulated
+    # unwanted audio between turns — bot voice leaking back via
+    # OS loopback / Bluetooth duplex / acoustic echo. A reliable
+    # signal that echo cancellation is needed in the user's setup.
+    mic_stale_frames: int = 0
     transcript: str = ""
     response: str = ""
     model: str = ""
@@ -71,6 +78,18 @@ class TurnMetrics:
             print(
                 f"  {_DIM}│{_RESET}  {_YELLOW}Barge-in:      "
                 f"yes (user interrupted){_RESET}"
+            )
+        # iter-037: only emit when non-zero — a clean turn shouldn't
+        # spend pixels on a stale-frame counter that's almost always 0.
+        # When >0 it's worth noticing — bot voice leaking back through
+        # the OS mic is a real-world problem that points at acoustic
+        # echo / Bluetooth duplex / loopback misconfiguration.
+        if self.mic_stale_frames > 0:
+            stale_seconds = self.mic_stale_frames / 16000  # RATE
+            color = _YELLOW if stale_seconds > 0.5 else _DIM
+            print(
+                f"  {_DIM}│{_RESET}  {color}Mic stale:     "
+                f"{self.mic_stale_frames:>5} frames ({stale_seconds:.1f}s){_RESET}"
             )
         print(f"  {_DIM}│{_RESET}")
         ttfs_color = _GREEN if self.ttfs < 3.0 else _YELLOW
@@ -140,6 +159,10 @@ def print_session_summary(metrics_list: list[TurnMetrics], llm_config: dict, *, 
     ttfs_times = [m.ttfs for m in metrics_list if m.ttfs > 0]
     fillers_total = sum(m.fillers_played for m in metrics_list)
     barges_total = sum(1 for m in metrics_list if m.barge_in)
+    # iter-037: aggregate mic-stale-frame totals. Only surface when
+    # something actually leaked — a clean session shouldn't be cluttered
+    # with a "0 stale frames" line.
+    stale_total = sum(m.mic_stale_frames for m in metrics_list)
 
     _emit(f"{_BOLD}  Session Summary ({n} turn{'' if n == 1 else 's'}){_RESET}")
     _emit(f"    Median STT:       {_median_ms(stt_times):.0f}ms")
@@ -160,5 +183,13 @@ def print_session_summary(metrics_list: list[TurnMetrics], llm_config: dict, *, 
         _emit(f"    Fillers played:   {fillers_total}")
     if barges_total:
         _emit(f"    Barge-ins:        {barges_total}")
+    if stale_total:
+        # iter-037: surface aggregate stale-frame total so a "session
+        # had constant echo" pattern is visible at the end of the run.
+        stale_seconds_total = stale_total / 16000
+        _emit(
+            f"    Mic stale:        {stale_total} frames "
+            f"({stale_seconds_total:.1f}s) — check echo cancellation"
+        )
     _emit(f"    Model:            {llm_config.get('model', 'unknown')}")
     _emit()

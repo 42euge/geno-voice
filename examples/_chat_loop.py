@@ -225,7 +225,12 @@ class ChatLoop:
         )
         worker.start()
 
-        flush_pending_audio(self._mic, chunk_size=self._chunk)
+        # iter-037: capture the drained count so we can surface it
+        # via TurnMetrics. Metric 2.19 in the perf-metrics taxonomy.
+        # Many stale frames each turn means the mic accumulated bot
+        # audio between turns (acoustic echo / OS loopback / Bluetooth
+        # duplex). Reliable signal the user needs echo cancellation.
+        stale_frames = flush_pending_audio(self._mic, chunk_size=self._chunk)
 
         llm_gen = self._llm_stream_fn(messages, self._llm_config)
         # iter-030: pass the same clock so ``coord.triggered_at`` is
@@ -316,6 +321,7 @@ class ChatLoop:
             metrics.sentences_spoken = worker.sentences_spoken
             metrics.fillers_played = worker.fillers_played
             metrics.barge_in = coord.is_set()
+            metrics.mic_stale_frames = stale_frames
             metrics.response = full_response.strip()
             metrics.total_e2e = self._clock() - turn_start
 
