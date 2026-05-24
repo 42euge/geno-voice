@@ -409,15 +409,19 @@ class BargeInWatcher:
         clock: Callable[[], float] = time.monotonic,
         poll_interval: float = 0.005,
     ):
-        # Local import keeps this module independent of the helpers
-        # module's import path during type-checking.
+        # Local imports keep this module independent of the helpers
+        # / recording module import paths during type-checking.
         from examples._chat_helpers import VadEvent, VadState
+        from examples._chat_recording import rms
 
         self._mic = mic
         self._callback = on_speech_detected
         self._vad = vad if vad is not None else VadState()
         self._chunk = chunk_size
         self._rate = rate
+        # iter-024: bind the centralized rms helper at construction
+        # so the per-frame loop doesn't pay an import cost.
+        self._rms = rms
         if trigger_on not in ("active", "done_ok"):
             raise ValueError(
                 f"trigger_on must be 'active' or 'done_ok', got {trigger_on!r}"
@@ -484,7 +488,12 @@ class BargeInWatcher:
 
             self.frames.append(data)
             audio = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
-            level = float(np.sqrt(np.mean(audio ** 2))) if len(audio) else 0.0
+            # iter-024: use the centralized rms() helper instead of
+            # inlining the same expression. The two implementations
+            # were always equivalent (both have the iter-014
+            # NaN-on-empty guard), but consolidating prevents a
+            # future fix in one place from missing the other.
+            level = self._rms(audio)
             now = self._clock()
             event = self._vad.feed(level, now)
             self.events.append(event)
