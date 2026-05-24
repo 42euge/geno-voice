@@ -899,3 +899,113 @@ goal left. Diminishing returns at this point — the gap between
 virtual-audio-tested behavior and real-hardware behavior is small
 enough that real-mic CI is more about catching deployment
 regressions than driving development.
+
+---
+
+## iter-013 — extract SSE parser, close LLM stream on barge-in
+
+**Branch:** `iter-013-llm-close` (merged ff to main, commit `8d949a8`)
+**Date:** 2026-05-24
+
+iter-012 left a thread loose: when barge-in fires during the LLM
+stream phase, the consumer breaks out of the for-token loop, but
+the LLM generator (and its underlying HTTP response) hangs on until
+garbage collection eventually runs the finally block. This iter
+closes that gap and extracts the SSE parser as a side benefit.
+
+What changed:
+
+1. **Extract SSE parser** into `examples/_chat_llm.py`:
+  - `parse_sse_token_stream(lines)` — pure parser. Takes any
+    iterable of lines (bytes or str), yields content tokens.
+    Handles `[DONE]`, empty/non-`data:` lines, malformed JSON,
+    missing fields, bytes decoding (UTF-8 with replacement).
+  - `stream_chat_completion(messages, config)` — thin generator
+    wrapping `requests.post` + `parse_sse_token_stream` with a
+    `try/finally` that closes the `Response`.
+  - `examples/mic_chat.py` re-exports `stream_chat_completion`
+    as `llm_stream` so external imports still work.
+
+2. **Consumer-side close**:
+  - The naive idea (`coord.on_trigger = gen.close`) fails:
+    cross-thread generator close raises
+    `ValueError("generator already executing")` while the
+    consumer is mid-`next()`, and `BargeInCoordinator`'s
+    hook-exception swallow turns that into a silent no-op.
+  - Correct pattern: wrap the for-loop in `try/finally:
+    llm_gen.close()`. That runs in the consumer's thread after
+    it breaks, no race. The generator's own finally then closes
+    the response, releasing the TCP connection.
+  - `mic_chat.run_chat`:
+    * Holds the LLM generator handle up front.
+    * `try/finally` around the for-loop closes it on any exit
+      path (clean completion, barge-in break, exception).
+    * `on_trigger` is NOT wired to `gen.close` — comment
+      explains why so a future contributor doesn't reintroduce
+      the bug.
+
+Tests (18 new in `tests/unit/test_chat_llm.py`):
+
+`parse_sse_token_stream` (13):
+- empty input; single + multi data lines; `[DONE]` stops;
+  blank/non-data lines skipped; malformed JSON skipped; missing
+  `choices`/`delta`/`content` skipped; empty content skipped;
+  bytes decoded; invalid UTF-8 doesn't raise; empty
+  `"choices": []` handled.
+
+`stream_chat_completion` lifecycle (3):
+- Full consumption closes response once. Generator close
+  propagates to response close (verified with a slow fake
+  response so the close lands mid-stream). Exception in
+  response close is swallowed by the finally.
+
+Consumer-side close pattern (2):
+- Consumer breaks mid-stream after `coord.trigger`; outer
+  `try/finally` calls `gen.close`, response is released.
+  Mirrors the mic_chat.run_chat shape exactly.
+- Normal completion via `[DONE]` also releases response;
+  explicit `gen.close` after natural end is idempotent.
+
+Verification: `python -m pytest tests/unit/` → **190 passed in 11s**
+(172 existing + 18 new).
+
+Notes:
+- The first attempt at this iteration wired `on_trigger=gen.close`
+  and tested it cross-thread. Failing test caught the
+  generator-already-executing bug — that's the value of running
+  the test before assuming the design. The fix-in-place
+  documents the correct same-thread pattern.
+- Python generators are inherently single-threaded consumers —
+  `close()` must come from the iterating thread. Worth
+  remembering for any future generator-cleanup work (e.g. iter-014
+  if we ever want to interrupt synth_with_alignment).
+- The SSE parser handles edge cases (empty content, role chunks,
+  malformed JSON, `[DONE]`) that real providers actually emit.
+  Cheap insurance against expensive live debugging.
+
+---
+
+# Status
+
+12 iterations shipped. The architecture phase plus its loose ends
+are all closed:
+
+  ✓ Bugs #1-#4 fixed              — iter-001 through 003
+  ✓ VadState extracted            — iter-004
+  ✓ Virtual audio + TTS feeder    — iter-005
+  ✓ record_utterance_streaming    — iter-006
+  ✓ play_aligned                  — iter-007
+  ✓ Streaming overlap             — iter-008
+  ✓ Barge-in (playback)           — iter-009 + iter-010
+  ✓ Filler words                  — iter-011
+  ✓ Barge-in (LLM stream)         — iter-012
+  ✓ LLM stream cleanup on barge   — iter-013
+
+**190 unit tests passing in 11s** on x86_64 Linux without pyaudio,
+mlx-whisper, or a real LLM. Every primitive is testable in
+isolation, and three full-loop orchestration tests
+(iter-009, iter-010, iter-012) exercise the whole pipeline
+deterministically using virtual audio + faked LLM tokens.
+
+The only remaining log item is iter-014 (formerly iter-013) ALSA
+loopback CI — pure infrastructure work with diminishing returns.
