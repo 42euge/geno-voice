@@ -1,0 +1,12 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+kokoro>=0.9
+mlx-whisper>=0.4
+pyyaml>=6.0
+requests>=2.31
+soundfile>=0.12
+
+# benchmarking
+pytest>=8.0
+pytest-benchmark>=4.0
+jiwer>=3.0

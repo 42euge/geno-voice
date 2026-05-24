@@ -1,0 +1,18 @@
+[project]
+name = "geno-voice"
+version = "0.1.0"
+description = "Offline voice SDK for local AI agents"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "benchmarks"]
+markers = [
+    "slow: large model benchmarks (may take minutes)",
+    "quick: small/fast model benchmarks",
+]
+addopts = "-v --tb=short"
+
+[tool.pytest-benchmark]
+disable_gc = true
+warmup = true
+min_rounds = 3

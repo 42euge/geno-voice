@@ -1,0 +1,12 @@
+{
+  "name": "geno-voice",
+  "version": "0.1.0",
+  "description": "Local voice pipeline — server (Python) and browser client (JS).",
+  "type": "module",
+  "main": "client/index.js",
+  "exports": {
+    ".": "./client/index.js",
+    "./client/*": "./client/*"
+  },
+  "license": "MIT"
+}

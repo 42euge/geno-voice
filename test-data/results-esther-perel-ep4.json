@@ -1,0 +1,494 @@
+[
+  {
+    "chunk": 1,
+    "text": "how you've come to expect what you expect and why you repeat yourself. I don't want the anger. I do want the anger sometimes.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 2,
+    "text": "Kazimar and Alexis talked about it so beautifully. It was heroic and heartbreaking. You watch them and you understand deeply.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 3,
+    "text": "the ability relationships offer to heal from trauma and then the price it can extract from both participants in a relationship.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 4,
+    "text": "If we're both reverting to this protective personality that we've had since children, that personality is like, I don't know.",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.7
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 5,
+    "text": "I don't care about you. I'm protecting my own, you know? It's not a simple task. Endlessly trying to understand how early history",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 6,
+    "text": "The history shapes the now. As far as tips, whatever they've been through, there's a limit to what you can do.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 7,
+    "text": "to help repair or save that person or convince them that you're not repeating the trauma of the past.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 8,
+    "text": "And while you're aware of your limit, make sure you're taking care of yourself.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 9,
+    "text": "No, no, just listen. Okay. Just be curious. Active listening is not a simple thing. It's a profound thing.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 10,
+    "text": "to both offer to another person, but also to go through as a listener. It's really trying to understand what...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 11,
+    "text": "another person is saying on their own terms. To listen through empathy, through curiosity, in a way create.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 12,
+    "text": "what poets call a negative space within the listener. You don't approach the other person as if you know, but you approach the other person as if you don't know.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 13,
+    "text": "and you're willing to learn something new. Why don't you hold some of your feelings and make space to actually...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 14,
+    "text": "listen. It involves a lot of letting go of conviction, living in a place of uncertainty.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 15,
+    "text": "and letting new information from another person come into you. When you're doing that, so many things change. This really put me on a...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 16,
+    "text": "a rocket ship towards what felt like rewiring my brain. It's all about orienting you.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 17,
+    "text": "towards another person. It's not about trying to change them, convince them, tell them as a partner, as a friend.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 18,
+    "text": "as a parent, as a listener, often what you need to do is invite the other person to speak their",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 19,
+    "text": "give them a space to kind of process and work through what they're going through and sometimes that means tolerate the",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 20,
+    "text": "intense or difficult feelings that they're going through while they're trying to problem solve. You're giving another person like a very profound experience of being",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 21,
+    "text": "understood and heard, or at least someone really taking interest, but you're also giving yourself the experience of letting go of your own...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 22,
+    "text": "ego wow what a relief you don't have to be certain you don't have to know everything you can learn something new but what an amazing thing to",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 23,
+    "text": "yourself through.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 24,
+    "text": "They experience intimacy differently. They want different kinds of intimacy, and people have different levels of tolerance for intimacy.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 25,
+    "text": "which is one of the things couples need to very gradually discover about each other. Intimacy can be expressed or experienced.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 26,
+    "text": "on the level of physicality, touch, closeness, sex, eye contact. Intimacy can be experienced in mutual understanding.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 27,
+    "text": "understanding, feeling heard or understood deeply. For some people, intimacy is side-by-side play, just like hang out next to each other.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 28,
+    "text": "Intimacy is a lot of different things for different people. Intercourse off the table just restores some sense of basic pleasure. So many...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 29,
+    "text": "Are there any other things you can do? I just don't know what it looks like. I'm sure you can think of what it looks like. When you let your guard down, obviously you're making",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 30,
+    "text": "yourself more vulnerable whether it's piercing through shame or getting physically closer to another person when everything about you",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 31,
+    "text": "feels like, ah, I'm taking a risk. One of the things that gets in the way for couples is when they feel hurt, the inclination people are.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 32,
+    "text": "is to close up and retaliate. I would want her to be, like, much softer. I'm not gonna give you any circumstances",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 33,
+    "text": "of ammunition to call me soft. With Eliana and Mitch, one of them was trying to put themselves out there. The other person didn't respond well. The first person.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 34,
+    "text": "person would immediately clam up and retaliate, which is an automatic reflexive response. Rather than retaliate, tolerate the vulnerability.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 35,
+    "text": "Let's try it a different way. I will protect myself at any cost. OK, so what am I going to do with you guys then? I didn't realize that it was costing him.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 36,
+    "text": "When people are allowing themselves to be vulnerable, they take both a risk but a chance at getting closer to another person.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 37,
+    "text": "I think it's in our DNA. When we see vulnerability, we move towards it with care. So putting out vulnerability is an envisioning",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 38,
+    "text": "for closeness and for intimacy.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 39,
+    "text": "An indicator of communication breakdown is you're feeling misunderstood and your attempts",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 40,
+    "text": "to be understood are failing. I don't do that anymore. Not anymore. So then why are you bringing that up again? Because it happened. Often attempt...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 41,
+    "text": "to be understood fail because you keep making the same mistake over and over in the way you're talking and what you're saying but the breakdown is when people feel the inclination.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 42,
+    "text": "to give up, withdraw, or they feel the inclination to speak louder or more adamantly or kind of up the ante.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 43,
+    "text": "This is a relationship, but I felt like coming back home, I was coming back home to a teenager. You're attacking me instead of us attacking the issue. That sort of takes us a .",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 44,
+    "text": "off the course and it doesn't necessarily help us win. When good communication is happening, you don't have to agree, but you feel like something is developing.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 45,
+    "text": "developing in the back and forth. You're not stuck. You're not needing to insist harder and pierce through some kind of resistance.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 46,
+    "text": "The more serious breakdown is when people get into like a certain kind of groove and they feel like no matter how many times",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 47,
+    "text": "and how hard they try, nothing is changing. When we get into arguments, then it's either I'm put down or you're...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 48,
+    "text": "So now you want to start talking all of this crap about my family. I want to see how we talk to one another change. That's like a real impasse.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 49,
+    "text": "that's when you want some other method, like whether it's couples therapy or go to your rabbi or your priest or talk to a friend. I mean, that's when...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 50,
+    "text": "and you need, like, an intervention. You're too scared to say things to each other. Absolutely. But why can't you say, I'm having a hard time? Because I don't want to be weak.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 51,
+    "text": "What you call being weak is being courageous. If there's one thing that will help in communication break down, it's active listening.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 52,
+    "text": "It's like the medicine. The show demonstrates that the thing that drives you crazy, that you think is out there in your partner...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 53,
+    "text": "is not really in your partner, but you can dig some in yourself. Look at what's bothering you, look at what's going on in your life, look at your own history.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 54,
+    "text": "what is this reminding me of? And you might be able to resolve the communication breakdown within yourself. It's not always...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 55,
+    "text": "a relational issue, and you see that on the show.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 56,
+    "text": "There's several times I start thinking in my Orna-isms. What would Orna say? What would I ask? What do you want? What do you think?",
+    "trigger": {
+      "type": "invitation",
+      "hint": "speak_full",
+      "confidence": 0.95
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 57,
+    "text": "you need. What are you hearing? How you extend these kind of lessons beyond the room, it lives on a few different levels. There are things you can see.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 58,
+    "text": "say to each other that you can carry with you for the rest of time. I had a patient years ago, she had this acronym to herself, WAIT. Why am I...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 59,
+    "text": "I talking? Am I listening right now or am I trying to convince? How am I feeling? Checking in. What do I need right now to speak?",
+    "trigger": {
+      "type": "direct_question",
+      "hint": "speak_brief",
+      "confidence": 0.7
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 60,
+    "text": "and actually listen to understand. I'm trying the Orna technique of just listening for deeper knowing.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 61,
+    "text": "Do I need a break? Do I need to hold hands? Do I need to take a breath? Am I really agitated? What is this reminding me of? Am I actually...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 62,
+    "text": "thrown back into a scene from childhood or a scene from my previous relationship. Learning the difference between a defensive response and a...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 63,
+    "text": "is a huge thing that can extend from a therapy situation to anywhere in life. Partners, work environments with one's children,",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 64,
+    "text": "You've given us also a lot of great tools. And we continue to apply it in our lives. There are also things that you can commit to muscle memory that can extend.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 65,
+    "text": "beyond the therapy. Like, what does it feel like to speak to another person as if you trust them, as opposed to as if they're your enemy?",
+    "trigger": {
+      "type": "direct_question",
+      "hint": "speak_brief",
+      "confidence": 0.7
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 66,
+    "text": "What do I want out of this conversation beyond being right? What does it feel like to calm yourself down rather than to let yourself fly off?",
+    "trigger": {
+      "type": "direct_question",
+      "hint": "speak_brief",
+      "confidence": 0.7
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 67,
+    "text": "off the handle. Just making that distinction within oneself is a very helpful tool that you can carry with you forever. You can learn it both by going through it yourself.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 68,
+    "text": "but also by watching other people do it. I've learned things from watching my couples go through work. Do not make me cry, damn it. Well, thank you so much.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 69,
+    "text": "Thank you. Thank you.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 70,
+    "text": "\u0420\u0435\u0434\u0430\u043a\u0442\u043e\u0440 \u0441\u0443\u0431\u0442\u0438\u0442\u0440\u043e\u0432 \u0410.\u0421\u0435\u043c\u043a\u0438\u043d \u041a\u043e\u0440\u0440\u0435\u043a\u0442\u043e\u0440 \u0410.\u0415\u0433\u043e\u0440\u043e\u0432\u0430",
+    "trigger": null,
+    "filtered": false
+  }
+]

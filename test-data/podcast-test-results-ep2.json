@@ -1,0 +1,600 @@
+[
+  {
+    "chunk": 1,
+    "text": "to you, like, that's what you say. Like, there's a huge sense of, like, I feel like I can do nothing. It seems...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 2,
+    "text": "unsalvageable. It's unsalvageable. I think that is actually the energy of it. Yeah. When people...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 3,
+    "text": "blame each other. A lot of the time it's not just about that incident they might be carrying.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 4,
+    "text": "a whole lot of history. And what happens to the recipient is they receive a package of blame.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 5,
+    "text": "that is bigger than them. Mm. We lead a busy life. My schedule is...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 6,
+    "text": "morning, day, and night. Yeah, but what if our schedules were perfect? If we had a normal schedule?",
+    "trigger": {
+      "type": "direct_question",
+      "hint": "speak_brief",
+      "confidence": 0.7
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 7,
+    "text": "And would you say you would definitely want a child? If we were there for the kid, yes. Just say it fully.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 8,
+    "text": "Yes. Yes, that will work. But say something that includes you in it.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 9,
+    "text": "Yes, I... Yes, I would like to have a child with you.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 10,
+    "text": "if we had the perfect schedule. Well, it's nice to know, like,",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 11,
+    "text": "how you truly feel about it, because now I am less confused. Can I ask you, you're searching very...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 12,
+    "text": "very keenly after Rex's wishes.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 13,
+    "text": "really hard to get a sense of yours. I've always wanted a child. But as I got older,",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 14,
+    "text": "I didn't want children anymore because of my current situation with my mom, especially because she would...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 15,
+    "text": "remind me not to have children with him. It's manifesting right now. I mean, are you getting it? It's not. I'm not. I'm not. I'm really not. OK.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 16,
+    "text": "You sound angry. OK. You sound frustrated. Because I feel like, OK, OK. You do not sound like you want to hear what it feels like.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 17,
+    "text": "I do want to hear it. So do something with your demeanor that invites that. You just witness it. She triggers so quick.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 18,
+    "text": "And it's like, whoa, it's not, again, it is. Did you see what I did? Yeah, you did, absolutely. You can do that. Mm-hmm.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 19,
+    "text": "We need to tackle our issues. What does that mean? We need to talk about our finances. We need to get help and figure out what we need.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 20,
+    "text": "to do together. Do you want to try talking about finances? Sure. Go ahead. We know the answer. We need to make more income. That's the answer.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 21,
+    "text": "We can't cut back on anything because there's nothing to cut back on. We need to bring in more. There are things you spend on I don't, and it's another...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 22,
+    "text": "amount here and another x amount there and just we don't have conversations about that all of a sudden i see wow seven hundred dollars out in the bank where'd that go what are you talking about you",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 23,
+    "text": "You get your eyes tested last couple weeks ago and you spent $700. But you know it's once a year that I go and I get my eyes checked. I'm not gonna justify that.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 24,
+    "text": "And this is where I get angry. Because this is where, like, that's the conversation we're having. It just came up. It wasn't even... It wasn't conscious. What kind of...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 25,
+    "text": "What conversation do you want to be having? You wanted to talk about money, and then it was a conversation about money. So why didn't you talk to me about it then? Why did you have to wait?",
+    "trigger": {
+      "type": "direct_question",
+      "hint": "speak_brief",
+      "confidence": 0.7
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 26,
+    "text": "Like, if there's something bothering you. So if you want Rod to talk to you more, you have to .",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 27,
+    "text": "make the conversations inviting. OK. If you're going to keep being angry, you're not going to have.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 28,
+    "text": "that thing you want. So we've had like very few boundaries with who else we connect with and",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 29,
+    "text": "there was one person which we had agreed upon that I shouldn't connect with but then through courses that were totally",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 30,
+    "text": "against my own morals, mean the other person connected. What does that mean, connected?",
+    "trigger": {
+      "type": "direct_question",
+      "hint": "speak_brief",
+      "confidence": 0.7
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 31,
+    "text": "Like we crossed boundaries that shouldn't have been crossed. What's another term for that?",
+    "trigger": {
+      "type": "direct_question",
+      "hint": "speak_brief",
+      "confidence": 0.7
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 32,
+    "text": "Wait, what's happening with this inquisition? Yeah. No, I think it's important. Like, Aaron cheated on me. Okay.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 33,
+    "text": "Right? And like, that's what happened. Right? And so when I say like, now Aaron is being more",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 34,
+    "text": "than usual, it was because of this incident that almost destroyed our relationship. So we had been...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 35,
+    "text": "there for a little over three hours at this point. That's a long time. And for me personally, how much sex can...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 36,
+    "text": "you really have in one night, you know? But we had a moment of check-in and I was just like, okay, we've been here for three hours. We said,",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 37,
+    "text": "we were going to dinner, do you think it's time for us to go home? And he didn't quite say yes and no, he just kind of looked upset.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 38,
+    "text": "And it put me back in that place of feeling like the adult calling the shots again. By that point, he had shut down. He wasn't even listening.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 39,
+    "text": "And I'm just like, what the fuck, Kyle? Like, what's going on? Like, I could tell that it was killing the mood of what we had just experienced.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 40,
+    "text": "which was the euphoria of in this space. Suddenly that's out the window and I'm like, really, you're gonna shit on this right now? Like, what?",
+    "trigger": {
+      "type": "direct_question",
+      "hint": "speak_brief",
+      "confidence": 0.7
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 41,
+    "text": "We're here having a good time. Like, what's your problem? But then he was like, it wasn't enough. I didn't have enough. It wasn't enough.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 42,
+    "text": "I wanted more. I could keep going. Just when I started having fun, you took this away from me because I haven't been.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 43,
+    "text": "able to have fun until tonight. And I'm like, what the hell have we been doing for the past three days?",
+    "trigger": {
+      "type": "direct_question",
+      "hint": "speak_brief",
+      "confidence": 0.7
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 44,
+    "text": "And then it took a while, but eventually it came out of him where he starts expressing how the experience of being ,,",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 45,
+    "text": "with our friends and being together in the house. He was missing the deaf component, the exchange of a deaf person.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 46,
+    "text": "dialogue, the sign language, that all of that was missing. And I'm just like sitting here like, okay, I understand what your feelings are.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 47,
+    "text": "feelings are they're completely valid but why did it have to take us going to the bathhouse",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 48,
+    "text": "to be completely released, to suddenly say that that was my fun. And now you can't take that away from me. I think you're really scared.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 49,
+    "text": "of being judged, and you're really scared of that judgment destroying things that you've worked really hard to create.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 50,
+    "text": "Yeah, yeah, I think we live in a... Okay, let me just say it differently. I think the concern you're having is kind of an...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 51,
+    "text": "of how you're experiencing yourself in the dynamic, which is that you experience yourself as accessible.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 52,
+    "text": "and as that there's not enough room for you and that excess seems to you somehow toxic or monstrous.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 53,
+    "text": "and that is something to figure out. That is not something to just take as a fact. Sure, but for me to sit here...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 54,
+    "text": "and engage in all of this is to recall the failure to transform myself in these departments.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 55,
+    "text": "because believe me, I'm very aware that they make my life so much harder than it needs to be.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 56,
+    "text": "and it misaligns me completely with this person. Do you agree with that? Yeah, I mean, I agree with...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 57,
+    "text": "his portrayal of himself. And I have tried to be more inviting, exploratory.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 58,
+    "text": "What can I do to try to meet you halfway? And I just, I haven't been able...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 59,
+    "text": "to do the things that he would ask of me. And like, I knew that we just have been stuck and like...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 60,
+    "text": "these patterns and I feel us like opening up out of those patterns and like I think we've",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 61,
+    "text": "become much closer. Mm-hmm. I mean, I think we're both kind of like, what now? Like, how do we continue?",
+    "trigger": {
+      "type": "direct_question",
+      "hint": "speak_brief",
+      "confidence": 0.7
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 62,
+    "text": "Mm-hmm. I mean, it's a lot of things for me. I feel like it's just the beginning and, like, oh.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 63,
+    "text": "Okay, let's get started in a lot of ways. What did you say? What kind of therapy were you recommending for me? You need to get into psychoanalysis. Psychoanalysis.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 64,
+    "text": "I'm curious and excited about that opportunity.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 65,
+    "text": "It's going to be super interesting for you. Yeah, yeah. Yeah. I feel like the one thing that I'll walk away with is being able to just be like, hey,",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 66,
+    "text": "hey, I'm going through something hard. Can you give me a hug? Like, this is what's happening to me right now. And like, just that simplicity of like finding the words for what we need.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 67,
+    "text": "Yeah, but it seems to me like you're both very good at hearing when the other person speaks from that place.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 68,
+    "text": "You have plenty of goodwill to offer each other, plenty of real love. Mm-hmm. And like, that's so...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 69,
+    "text": "It's simple. Yeah, but it's big. But it's big. Yeah. Yeah. So a very different way of living. Yeah.",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.5
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 70,
+    "text": "Yeah, it is. So I felt loneliness. Like I know what that's like. Loneliness and it sounds like there's no way.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 71,
+    "text": "for you anywhere. Yeah. And during that time, like, I had video games. I'm not sure if you're familiar with this, but like I discovered YouTube.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 72,
+    "text": "at this point so like i got into i got into no not youtube per se but like anime and another place to go",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 73,
+    "text": "Yeah, but when I was growing up, watching anime was considered to be like corny.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 74,
+    "text": "Like you're a loser if you did this. So it was one of those things that I sort of repressed, but I found a friend group later on who was just like,",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 75,
+    "text": "like very openly and accepting of these things. And we all did the same stuff. Me being with my friends for a few hours out of the week.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 76,
+    "text": "literally, brings me back, makes me feel whole again, because that's a part of what I...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 77,
+    "text": "identify as like my heart's home. I can't go home and rely on there being people.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 78,
+    "text": "I can't go home to her and rely on there being peace there. But I can always go to my friends for those few hours of time.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 79,
+    "text": "out of the week and rely on that always being consistent. There is consistency there. If I could do this one thing,",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 80,
+    "text": "once every other week, is it really that bad? I get that, and I'm not mad at it. I think that a part of me is just like...",
+    "trigger": {
+      "type": "trailing_off",
+      "hint": "play_cue",
+      "confidence": 0.6
+    },
+    "filtered": false
+  },
+  {
+    "chunk": 81,
+    "text": "I'm trying to be that place. Like I'm trying to make our family that thing. That, you know, maybe we both did.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 82,
+    "text": "have growing up. I'm not saying to take those things away from you fully, but I'm saying like, we can create.",
+    "trigger": null,
+    "filtered": false
+  },
+  {
+    "chunk": 83,
+    "text": "peaceful things together.",
+    "trigger": null,
+    "filtered": false
+  }
+]
