@@ -340,6 +340,22 @@ class ChatLoop:
                 llm_gen.close()
             except Exception:
                 pass
+            # iter-027: also stop worker + watcher in finally so a
+            # KeyboardInterrupt during the for-token loop cleans
+            # them up. ``except Exception`` doesn't catch
+            # KeyboardInterrupt (which inherits from BaseException),
+            # so without these the worker thread keeps running with
+            # the speaker open until the daemon thread dies on
+            # process exit. Idempotent — already-stopped workers /
+            # watchers no-op.
+            try:
+                watcher.stop(timeout=1.0)
+            except Exception:
+                pass
+            try:
+                worker.stop(timeout=self._cancel_wait_timeout)
+            except Exception:
+                pass
 
         return TurnResult(
             metrics=metrics,

@@ -504,3 +504,120 @@ class TestChatLoopWithRealKokoro:
         # Verify the audio has actual signal (RMS > 0.001 in float32).
         decoded = spk_holder["spk"].captured_float32
         assert float(np.sqrt(np.mean(decoded ** 2))) > 0.001
+
+
+# ---- iter-027: KeyboardInterrupt cleanup ------------------------------------
+
+
+class TestKeyboardInterruptCleanup:
+    """``except Exception`` in run_one_turn doesn't catch
+    KeyboardInterrupt (which inherits from BaseException). Without
+    iter-027's finally additions, KeyboardInterrupt during the
+    for-token loop bypassed worker/watcher cleanup — the worker
+    thread kept running with the speaker stream open, only dying
+    when the daemon thread was killed at process exit.
+
+    iter-027 adds idempotent stop calls to the finally so any
+    exit path (normal, error, KeyboardInterrupt, anything else)
+    cleans up before propagating.
+    """
+
+    def test_keyboardinterrupt_propagates_and_closes_speaker(self):
+        """LLM raises KeyboardInterrupt mid-stream → exception
+        propagates out of run_one_turn AND the speaker stream
+        gets closed (which it can only do via worker._run's
+        finally, which only runs when the worker is stopped).
+        """
+        spk_holder = {"spk": None}
+
+        def factory():
+            spk_holder["spk"] = VirtualSpeakerStream(rate=24000)
+            return spk_holder["spk"]
+
+        def bad_llm(messages, config):
+            yield "First "
+            time.sleep(0.05)  # let worker thread start playing
+            raise KeyboardInterrupt
+
+        loop = _make_chat_loop(
+            mic=_mic_with_utterance(),
+            speaker_factory=factory,
+            transcript="hi",
+            llm_stream_fn=bad_llm,
+            play_fn=_slow_play,
+        )
+
+        with pytest.raises(KeyboardInterrupt):
+            loop.run_one_turn([])
+
+        # Speaker was closed via worker.stop in the finally block.
+        assert spk_holder["spk"]._closed is True
+
+    def test_keyboardinterrupt_stops_worker_thread(self):
+        """The worker thread should be joined (not is_alive)
+        after run_one_turn returns from KeyboardInterrupt.
+        """
+        # Capture worker reference via SentenceWorker construction hook.
+        from examples._chat_pipeline import SentenceWorker
+        captured = []
+
+        original_init = SentenceWorker.__init__
+
+        def hook_init(self, **kwargs):
+            original_init(self, **kwargs)
+            captured.append(self)
+
+        def bad_llm(messages, config):
+            yield "First "
+            time.sleep(0.05)
+            raise KeyboardInterrupt
+
+        loop = _make_chat_loop(
+            mic=_mic_with_utterance(),
+            speaker_factory=lambda: VirtualSpeakerStream(rate=24000),
+            transcript="hi",
+            llm_stream_fn=bad_llm,
+            play_fn=_slow_play,
+        )
+
+        SentenceWorker.__init__ = hook_init  # type: ignore[method-assign]
+        try:
+            with pytest.raises(KeyboardInterrupt):
+                loop.run_one_turn([])
+        finally:
+            SentenceWorker.__init__ = original_init  # type: ignore[method-assign]
+
+        assert len(captured) == 1
+        worker = captured[0]
+        # Thread should be joined within a short window after run_one_turn returns.
+        if worker._thread is not None:
+            worker._thread.join(timeout=2.0)
+            assert worker._thread.is_alive() is False
+        # And cancelled flag should be set (because stop sets it via
+        # the regular path... actually stop doesn't set cancelled,
+        # only cancel does. Just verify _stop_event was set.)
+        assert worker._stop_event.is_set()
+
+    def test_normal_completion_unaffected_by_finally_stop_calls(self):
+        """The new finally additions are idempotent — calling
+        stop on an already-completed worker/watcher should be a
+        no-op. Verify by running a normal turn and confirming
+        all the iter-015 expected outcomes still hold.
+        """
+        loop = _make_chat_loop(
+            mic=_mic_with_utterance(),
+            speaker_factory=lambda: VirtualSpeakerStream(rate=24000),
+            transcript="hi",
+            llm_text="Hello.",
+        )
+        result = loop.run_one_turn([])
+        assert result.metrics is not None
+        assert result.had_error is False
+        assert result.metrics.transcript == "hi"
+
+
+def _mic_with_utterance():
+    """Helper for the iter-027 tests below."""
+    mic = VirtualMicStream(rate=RATE, chunk_size=CHUNK)
+    mic.push(_utterance_audio())
+    return mic
