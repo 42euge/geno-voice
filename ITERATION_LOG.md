@@ -2429,3 +2429,68 @@ Notes:
   data" because successful turns produce non-zero values for them.
   TTFS is special because a successful turn (transcript + response)
   can still have 0 TTFS if the response was never spoken aloud.
+
+---
+
+## iter-032 — SSE parser swallows AttributeError on non-dict choices[0]
+
+**Branch:** `iter-032-sse-attrerror` (merged ff to main, commit `7d3bca5`)
+**Date:** 2026-05-24
+
+`parse_sse_token_stream` caught `(JSONDecodeError, KeyError, IndexError,
+TypeError)`. The OpenAI-shaped chunk lookup is:
+
+    chunk = json.loads(data)
+    delta = chunk["choices"][0].get("delta", {})
+
+A chunk like `{"choices": [null]}` is well-formed JSON, the index lookup
+`choices[0]` succeeds (returns `None`), and `.get("delta", {})` raises
+**AttributeError** — which was NOT in the except tuple. The entire
+generator then aborts mid-stream. Every token after the bad chunk
+(including the actual response) is lost.
+
+Observed in the wild: some local proxies / load balancers inject
+keep-alive heartbeats as `{"choices": [null]}` between real chunks.
+Before this fix, hitting one of those was fatal to the response.
+
+Verified the bug interactively before fixing:
+
+    >>> list(parse_sse_token_stream([
+    ...     'data: ' + json.dumps({"choices": [{"delta": {"content": "hello "}}]}),
+    ...     'data: ' + json.dumps({"choices": [None]}),
+    ...     'data: ' + json.dumps({"choices": [{"delta": {"content": "world"}}]}),
+    ...     'data: [DONE]',
+    ... ]))
+    AttributeError: 'NoneType' object has no attribute 'get'
+
+Fix: add `AttributeError` to the except tuple. Update the docstring
+to mention non-dict `choices[0]` as a tolerated failure mode.
+
+Tests (11 in `tests/unit/test_chat_llm_attribute_error.py`):
+- `TestNonDictChoicesElement` — `choices[0]` is None / string / int /
+  list. Each bad chunk gets skipped; trailing good tokens reach the
+  consumer.
+- `TestStreamFullyAbortsWithoutFix` — multiple bad chunks
+  interspersed with good ones; bad chunks at start / end of stream.
+  All good tokens make it through, `[DONE]` still terminates cleanly.
+- `TestExistingErrorPathsStillCaught` — regression guards for the
+  four error types we already handled (JSONDecodeError, KeyError,
+  IndexError, TypeError) so a future "narrow the except clause"
+  cleanup doesn't silently revert.
+
+Verification: `python -m pytest tests/unit/` → **413 passed in 17.9s**
+(402 existing + 11 new).
+
+Notes:
+- Pattern: when an except clause enumerates specific exceptions,
+  audit the protected expression for every TYPE of failure that
+  produces an error not in the list. Here the audit is "what does
+  `.get()` raise on non-dict?" — AttributeError. Easy to miss in
+  the original code review because the line "looks fine."
+- Wider exception (e.g. `except Exception`) would have caught this
+  but also masks bugs in the parser itself. The narrower fix is
+  better — explicit, documented, traceable.
+- Could be extended to `except (json.JSONDecodeError, LookupError,
+  AttributeError, TypeError)` (LookupError covers KeyError +
+  IndexError) for marginal compactness. Kept the explicit list to
+  preserve grep-ability of which conditions are tolerated.
