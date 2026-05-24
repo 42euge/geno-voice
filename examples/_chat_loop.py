@@ -261,6 +261,13 @@ class ChatLoop:
 
         llm_start = self._clock()
         first_token_at: Optional[float] = None
+        # iter-038: stamp the moment the first complete sentence
+        # leaves the splitter — i.e. the moment TTS can start. This
+        # is distinct from first_token_at: the LLM may stream chatty
+        # preamble for a while before terminating a sentence, which
+        # delays TTFS even if first-token was fast. Metric 1.10 in
+        # the perf-metrics taxonomy.
+        first_sentence_at: Optional[float] = None
         token_buffer = ""
         full_response = ""
         llm_stream_done_at: Optional[float] = None
@@ -277,6 +284,8 @@ class ChatLoop:
                 full_response += token
 
                 complete, token_buffer = split_complete_sentences(token_buffer)
+                if complete and first_sentence_at is None:
+                    first_sentence_at = self._clock()
                 for sentence in complete:
                     worker.submit(sentence)
 
@@ -312,6 +321,13 @@ class ChatLoop:
                 metrics.ttfs = worker.first_audio_at - speech_ended_at
             metrics.llm_first_token = (
                 (first_token_at - llm_start) if first_token_at else 0
+            )
+            # iter-038: time from LLM start to the first complete
+            # sentence reaching the worker. 0 if no complete sentence
+            # ever emerged (LLM yielded fragments only, or stream was
+            # cut off before a terminator).
+            metrics.llm_first_sentence = (
+                (first_sentence_at - llm_start) if first_sentence_at else 0
             )
             metrics.llm_total = (
                 (llm_stream_done_at - llm_start) if llm_stream_done_at else 0
