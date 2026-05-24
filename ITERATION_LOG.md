@@ -3121,3 +3121,78 @@ Notes:
   in the session summary, the operator now has a much richer
   picture: TTFS variance, sentence-level latency, and barge-in
   shape, not just totals.
+
+---
+
+## iter-041 — barge-in latency metric (taxonomy 2.10)
+
+**Branch:** `iter-041-barge-latency` (merged ff to main, commit `f05bf96`)
+**Date:** 2026-05-24
+
+Fourth metric pulled from `docs/perf-metrics-taxonomy.md`. **Metric
+2.10 — Barge-in latency**, in the "Architecture-specific" bucket.
+
+The taxonomy doc is blunt about why this matters: ">~200ms is the
+moment the user thinks the bot is ignoring them." The whole barge-in
+feature (iter-009 / iter-010 / iter-012 / iter-024 / iter-025 / iter-026
+/ iter-027 / iter-028) lives or dies on one number.
+
+Implementation:
+
+- `BargeInCoordinator` gains `playback_stopped_at: Optional[float]`,
+  stamped after `worker.cancel()` returns inside `trigger()`. That's
+  the moment the worker thread has joined and playback is truly
+  halted (cancel_event drained the play_aligned chunk loop, then
+  the thread exited).
+- `ChatLoop` computes
+  `metrics.barge_in_latency = max(0.0, playback_stopped_at - triggered_at)`.
+  Clamps negative (shouldn't happen, defensive against clock
+  injection bugs).
+- `TurnMetrics.barge_in_latency: float = 0.0` (new field).
+
+Surfaced at three layers:
+
+1. Per-turn print: "Barge latency: Nms (detect → halt)" on barge-in
+   turns. Yellow if >100ms, green if ≤100ms.
+2. Session summary: median + worst across the session. Filters
+   zero-latency turns (parallel to iter-031 / iter-038's filters).
+3. The performance.html time-series will pick this up
+   automatically once perf-iter-NNN.json snapshots include
+   barge-in scenarios with latency. (The current perf scenarios
+   don't trigger barge-ins, so this is a follow-on for a future
+   iter that adds a `barge_in` perf scenario.)
+
+Test design — using a `MagicMock` worker with a side_effect that
+mutates the fake clock during `cancel()`, we prove the
+`playback_stopped_at` is sampled AFTER cancel returns (not
+before). That's the contract the metric depends on.
+
+Tests (15 in `tests/unit/test_barge_latency.py`):
+- `TestCoordinatorTimestamps` — default None, trigger stamps both
+  timestamps, worker.cancel happens BEFORE the stamp (sleeping mock
+  proves the order), idempotent doesn't overwrite, no-worker still
+  stamps both.
+- `TestPerTurnPrint` — default 0, no-barge omits, barge with zero
+  latency omits, barge with latency emits with "(detect → halt)".
+- `TestChatLoopArithmetic` — subtraction, negative clamps to 0.
+- `TestSessionSummary` — no-barge omits block, barges with
+  latencies show median + worst, zero-latency turns filtered
+  from median, all-zero suppresses block.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **571 passed, 1 skipped in 20s** (556
+existing + 15 new).
+
+Notes:
+- Four metrics from the taxonomy now live: 2.19 (mic stale frames),
+  1.10 (LLM TTFsent), 2.18 (cancel correctness), 2.10 (barge
+  latency). The cadence — one per iteration — has held over four
+  iterations and the codebase has absorbed each cleanly.
+- Combined with iter-040's mid-stream count, you can now answer:
+  "of the barges this session, how many were mid-sentence and
+  how slow was the cancel?" That's the full barge-in story.
+- Future: a perf-suite scenario that explicitly fires a barge-in
+  mid-playback so this metric lands in the time-series charts.
+  iter-035's TestBargeInDuringPlayback is the right shape but
+  pytest.skipped due to flaky timing; the perf suite's deterministic
+  timeline could make it reliable.

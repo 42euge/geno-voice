@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-040 — cancel-correctness metric (taxonomy 2.18)</title>
+<title>iter-041 — barge-in latency metric (taxonomy 2.10)</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,26 +168,22 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-039.html">← iter-039</a><a href="iter-041.html">iter-041 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-040 — cancel-correctness metric (taxonomy 2.18)</h1>
-<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-040-cancel-correctness</code></span> · <span>commit: <code>441b05f</code></span> · <span>tests: <code>+12</code> (total 556)</span></div>
-</header><p><strong>Branch:</strong> <code>iter-040-cancel-correctness</code> (merged ff to main, commit <code>441b05f</code>) <strong>Date:</strong> 2026-05-24</p>
-<p>Third metric pulled from <code>docs/perf-metrics-taxonomy.md</code>. <strong>Metric 2.18 — Cancel-event correctness rate</strong>, in the &quot;Architecture-specific&quot; bucket. Validates the iter-009 / iter-026 cancel plumbing.</p>
-<p>A barge-in can land in two places: 1. <em>Mid-sentence</em> — cancel fires during a sentence&#x27;s playback, the play loop breaks via <code>cancel_event</code>, audio cuts off immediately. Clean cut-off. iter-026&#x27;s post-cancel-flush guard kicks in. 2. <em>Between sentences</em> — cancel fires in the silent gap, the current sentence finishes naturally, the worker exits before the next. Also clean.</p>
-<p>Both are success outcomes, but they tell different stories about how the user is interrupting:</p>
-<ul><li><strong>High mid-stream rate</strong> — users are impatient or the bot&#x27;s response is going wrong, and they&#x27;re cutting it off.</li><li><strong>Low mid-stream rate</strong> — users are waiting for natural pauses, the bot is being responsive enough that mid-sentence interrupts aren&#x27;t needed.</li></ul>
-<p>Detection mechanism: before/after sampling around <code>play_fn</code>. In <code>SentenceWorker._play_clip</code>:</p>
-<p>cancel_was_set_before = self._cancel_event.is_set() elapsed = self._play_fn(...) if not cancel_was_set_before and self._cancel_event.is_set(): self.cancelled_sentences += 1</p>
-<p>Tighter than sampling only after the call: a cancel firing in the microseconds following natural completion would otherwise count as a false positive. With the before-snapshot, we know cancel transitioned during the play.</p>
+<nav><a href="index.html">← Index</a><a href="iter-040.html">← iter-040</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-041 — barge-in latency metric (taxonomy 2.10)</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-041-barge-latency</code></span> · <span>commit: <code>f05bf96</code></span> · <span>tests: <code>+15</code> (total 571)</span></div>
+</header><p><strong>Branch:</strong> <code>iter-041-barge-latency</code> (merged ff to main, commit <code>f05bf96</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>Fourth metric pulled from <code>docs/perf-metrics-taxonomy.md</code>. <strong>Metric 2.10 — Barge-in latency</strong>, in the &quot;Architecture-specific&quot; bucket.</p>
+<p>The taxonomy doc is blunt about why this matters: &quot;&gt;~200ms is the moment the user thinks the bot is ignoring them.&quot; The whole barge-in feature (iter-009 / iter-010 / iter-012 / iter-024 / iter-025 / iter-026 / iter-027 / iter-028) lives or dies on one number.</p>
+<p>Implementation:</p>
+<ul><li><code>BargeInCoordinator</code> gains <code>playback_stopped_at: Optional[float]</code>, stamped after <code>worker.cancel()</code> returns inside <code>trigger()</code>. That&#x27;s the moment the worker thread has joined and playback is truly halted (cancel_event drained the play_aligned chunk loop, then the thread exited).</li><li><code>ChatLoop</code> computes <code>metrics.barge_in_latency = max(0.0, playback_stopped_at - triggered_at)</code>. Clamps negative (shouldn&#x27;t happen, defensive against clock injection bugs).</li><li><code>TurnMetrics.barge_in_latency: float = 0.0</code> (new field).</li></ul>
 <p>Surfaced at three layers:</p>
-<p>1. <code>SentenceWorker.cancelled_sentences: int = 0</code> — counter on the worker, accumulates across all sentences in the run. 2. <code>TurnMetrics.sentences_cancelled: int = 0</code> — ChatLoop transfers from worker. 3. Per-turn print and session summary use it to label barge-ins:</p>
-<ul><ul><ul></ul></ul></ul>
-<p>Tests (12 in <code>tests/unit/test_cancel_correctness.py</code>):</p>
-<ul><li><code>TestDefault</code> — counter defaults to 0 on both Worker and TurnMetrics.</li><li><code>TestPlayClipDetection</code>: sentences are drained without play, so don&#x27;t double-count). from cleanup paths).<ul><li>Natural completion does NOT increment.</li><li>Mid-stream cancel increments exactly once (subsequent queued</li><li>Pre-set cancel_event does NOT increment (no false positives</li></ul></li><li><code>TestPerTurnPrint</code> — no-barge omits, mid-stream shows count, between-sentences shows label.</li><li><code>TestSessionSummary</code> — no-barges omits, all-mid → &quot;100%&quot;, mixed → &quot;50%&quot;, all-gap → &quot;all between sentences&quot;.</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>556 passed, 1 skipped in 22s</strong> (544 existing + 12 new).</p>
+<p>1. Per-turn print: &quot;Barge latency: Nms (detect → halt)&quot; on barge-in turns. Yellow if &gt;100ms, green if ≤100ms. 2. Session summary: median + worst across the session. Filters zero-latency turns (parallel to iter-031 / iter-038&#x27;s filters). 3. The performance.html time-series will pick this up automatically once perf-iter-NNN.json snapshots include barge-in scenarios with latency. (The current perf scenarios don&#x27;t trigger barge-ins, so this is a follow-on for a future iter that adds a <code>barge_in</code> perf scenario.)</p>
+<p>Test design — using a <code>MagicMock</code> worker with a side_effect that mutates the fake clock during <code>cancel()</code>, we prove the <code>playback_stopped_at</code> is sampled AFTER cancel returns (not before). That&#x27;s the contract the metric depends on.</p>
+<p>Tests (15 in <code>tests/unit/test_barge_latency.py</code>):</p>
+<ul><li><code>TestCoordinatorTimestamps</code> — default None, trigger stamps both timestamps, worker.cancel happens BEFORE the stamp (sleeping mock proves the order), idempotent doesn&#x27;t overwrite, no-worker still stamps both.</li><li><code>TestPerTurnPrint</code> — default 0, no-barge omits, barge with zero latency omits, barge with latency emits with &quot;(detect → halt)&quot;.</li><li><code>TestChatLoopArithmetic</code> — subtraction, negative clamps to 0.</li><li><code>TestSessionSummary</code> — no-barge omits block, barges with latencies show median + worst, zero-latency turns filtered from median, all-zero suppresses block.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>571 passed, 1 skipped in 20s</strong> (556 existing + 15 new).</p>
 <p>Notes:</p>
-<ul><li>Three metrics from the taxonomy now live: 2.19 (mic stale frames), 1.10 (LLM TTFsent), 2.18 (cancel correctness). The cadence — one metric per iteration, small testable scope — is the right rhythm.</li><li>Originally planned as iter-039 but the user redirected to the per-iter perf history feature; iter-040 picks it up.</li><li>Subtle: the before/after sample handles the common race but not every edge. If cancel fires DURING the natural completion path in some platform-specific way, the detection might miss. For an aggregate metric across many turns, the noise is acceptable.</li><li>Combine with iter-031 (TTFS-zero filter) and iter-038 (TTFsent) in the session summary, the operator now has a much richer picture: TTFS variance, sentence-level latency, and barge-in shape, not just totals.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-039.html">← iter-039</a><a href="iter-041.html">iter-041 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li>Four metrics from the taxonomy now live: 2.19 (mic stale frames), 1.10 (LLM TTFsent), 2.18 (cancel correctness), 2.10 (barge latency). The cadence — one per iteration — has held over four iterations and the codebase has absorbed each cleanly.</li><li>Combined with iter-040&#x27;s mid-stream count, you can now answer: &quot;of the barges this session, how many were mid-sentence and how slow was the cancel?&quot; That&#x27;s the full barge-in story.</li><li>Future: a perf-suite scenario that explicitly fires a barge-in mid-playback so this metric lands in the time-series charts. iter-035&#x27;s TestBargeInDuringPlayback is the right shape but pytest.skipped due to flaky timing; the perf suite&#x27;s deterministic timeline could make it reliable.</li></ul><nav><a href="index.html">← Index</a><a href="iter-040.html">← iter-040</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>
