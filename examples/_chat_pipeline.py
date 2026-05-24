@@ -164,6 +164,15 @@ class SentenceWorker:
         # Metric 2.18 in the perf-metrics taxonomy. Validates the
         # iter-009 / iter-026 cancel plumbing.
         self.cancelled_sentences: int = 0
+        # iter-044: cumulative seconds the worker spent blocked on
+        # ``self._queue.get(...)`` between sentences. Excludes the
+        # first wait (that's TTFsent — covered by iter-038). High
+        # idle gap = LLM didn't produce complete sentences fast
+        # enough; low gap = synth is the bottleneck. Combined with
+        # iter-043's streaming_overlap_ratio, points at where the
+        # pipeline is actually slow. Metric 2.16 in the perf-metrics
+        # taxonomy.
+        self.idle_gap_total: float = 0.0
         self.fillers_played: int = 0
         self.tts_time: float = 0.0
         self.playback_time: float = 0.0
@@ -328,6 +337,11 @@ class SentenceWorker:
                     and self.sentences_spoken == 0
                     and not self._submit_done_called
                 )
+                # iter-044: time the queue.get call. Skip the first
+                # wait — that's TTFsent (already iter-038). After
+                # the first sentence has been spoken, the gap
+                # between sentences is the metric we want.
+                gap_t0 = self._clock()
                 try:
                     if use_filler_timeout:
                         item = self._queue.get(timeout=self._idle_threshold)
@@ -357,6 +371,12 @@ class SentenceWorker:
                 if self._stop_event.is_set():
                     # Drain remaining without playing.
                     continue
+
+                # iter-044: stamp the gap. Only count gaps AFTER the
+                # first sentence — the first wait is TTFsent
+                # territory, not "between-sentence stall."
+                if self.sentences_spoken > 0:
+                    self.idle_gap_total += self._clock() - gap_t0
 
                 sentence = item
                 if not isinstance(sentence, str) or not sentence.strip():

@@ -52,6 +52,13 @@ class TurnMetrics:
     # iter-008 streaming-overlap not buying us anything that turn.
     # Metric 2.1 in the perf-metrics taxonomy.
     streaming_overlap_ratio: float = 0.0
+    # iter-044: cumulative seconds the SentenceWorker spent blocked
+    # waiting for the next sentence, AFTER the first sentence
+    # (excludes TTFsent). High idle gap = LLM didn't keep up with
+    # synth+playback. Combined with streaming_overlap_ratio,
+    # localizes pipeline bottlenecks. Metric 2.16 in the
+    # perf-metrics taxonomy.
+    worker_idle_gap_total: float = 0.0
     ttfs: float = 0.0
     total_e2e: float = 0.0
     sentences_spoken: int = 0
@@ -129,6 +136,16 @@ class TurnMetrics:
                 f"  {_DIM}│{_RESET}  Overlap:       "
                 f"{color}{pct:>6.0f}%{_RESET}  "
                 f"({_DIM}LLM↔TTS concurrency{_RESET})"
+            )
+        # iter-044: between-sentence worker idle gap. Skip when 0
+        # (single-sentence responses or very fast LLM). >300ms is
+        # "the worker is starving" — investigate.
+        if self.worker_idle_gap_total > 0:
+            color = _YELLOW if self.worker_idle_gap_total > 0.3 else _DIM
+            print(
+                f"  {_DIM}│{_RESET}  Idle gap:      "
+                f"{color}{self.worker_idle_gap_total*1000:>6.0f}ms{_RESET}  "
+                f"({_DIM}worker waited for sentences{_RESET})"
             )
         if self.barge_in:
             # iter-040: distinguish mid-stream cancel (cancel landed

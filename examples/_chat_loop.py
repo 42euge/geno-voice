@@ -355,6 +355,8 @@ class ChatLoop:
                 metrics.streaming_overlap_ratio = min(
                     1.0, overlap / metrics.llm_total
                 )
+            # iter-044: cumulative between-sentence idle gap.
+            metrics.worker_idle_gap_total = worker.idle_gap_total
             metrics.tts_time = worker.tts_time
             metrics.playback_time = worker.playback_time
             metrics.sentences_spoken = worker.sentences_spoken
