@@ -2075,3 +2075,53 @@ Notes:
   Worth noting for future "small implementation" work: writing
   the test before/while writing the code keeps these orderings
   honest.
+
+---
+
+## iter-026 — skip post-loop token flush when play cancelled
+
+**Branch:** `iter-026-cancel-flush` (merged ff to main, commit `42d16b0`)
+**Date:** 2026-05-24
+
+Real UX bug found by code review. After the iter-009 cancel_event
+breaks `play_aligned`'s play loop, the post-loop "flush trailing
+tokens" branch ran unconditionally. Bot's voice cut correctly
+(audio chunks stop) but bot's text kept printing to the terminal —
+specifically tokens whose `start_ts` exceeded audio duration.
+
+Concrete demonstration before fix:
+
+```
+Audio: 4096 samples
+Tokens: ['hello' @ 0.0, 'world' @ 0.05, 'TRAILING' @ 1.5]
+Cancel: fires after first chunk
+
+Speaker bytes:    1024  ← correct, audio stopped
+Visible output:   'hello world TRAILING'   ← BUG: TRAILING shouldn't appear
+```
+
+Fix: guard the trailing-flush with `not cancelled`. The audio cut
+is the user-visible signal the bot stopped; the text should match.
+
+Tests (4 new):
+- Cancel mid-loop with trailing token → token suppressed
+- Pre-set cancel → both pre/post tokens suppressed (loop never
+  enters body, post-flush skipped)
+- No cancel_event → trailing flushed (control)
+- Unset cancel_event → trailing flushed (control, behaves like
+  no cancel_event)
+
+Verification: `python -m pytest tests/unit/` → **351 passed in 18s**
+(347 existing + 4 new).
+
+Notes:
+- "Trailing tokens" exist when the TTS engine emits tokens whose
+  `start_ts` exceeds synthesized audio duration — uncommon but
+  kokoro does it occasionally.
+- Two control tests catch any future regression that re-enables
+  the unconditional flush. Cheap insurance.
+- This bug is the kind that's invisible without a barge-in
+  scenario in the test corpus. The iter-009/010 orchestration
+  tests use cancellable_play that doesn't have trailing tokens,
+  so they didn't exercise this path. iter-026's targeted tests
+  fill that gap.
