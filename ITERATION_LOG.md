@@ -2632,3 +2632,100 @@ Notes:
   umbrella that delegates to per-section parsers, then `mic_chat`
   just unpacks one structured result. For now two parsers in
   sequence is fine.
+
+---
+
+## iter-035 — integration test suite + testing report with plots
+
+**Branch:** `iter-035-testing-report` (merged ff to main, commit `0a30a55`)
+**Date:** 2026-05-24
+
+Three pieces ship together to formalize testing visibility:
+
+**1. `tests/integration/` directory.** Until iter-035 the cross-module
+end-to-end tests lived under `tests/unit/test_chat_loop.py` and
+`tests/unit/test_bargein_orchestration.py` — fine, but they're
+structurally integration tests (real ChatLoop, virtual audio, stub
+LLM, multi-thread). Promoting them to a dedicated suite gives the
+testing report something to break out and signals what to add when
+a unit test isn't enough.
+
+Five integration tests in `tests/integration/test_chat_pipeline_e2e.py`:
+- `TestSingleTurnHappyPath` — full turn through ChatLoop with metrics,
+  messages, transcript, response. Plus no-speech-returns-None.
+- `TestMultiTurnConversation` — two turns; history preserved.
+  **Gotcha discovered:** the BargeInWatcher during turn 1's playback
+  reads the mic buffer; if turn 2's audio is pre-pushed, the watcher
+  eats it and turn 2 hangs forever waiting for speech. Must push
+  between turns. Documented in the test.
+- `TestLLMErrorRecovery` — failing_llm raises; ChatLoop pops the
+  user message, returns had_error=True.
+- `TestStreamingOverlap` — structural check that worker emitted
+  audio + TTFS measured. Stricter timing assertions kept in
+  unit suite (test_chat_loop.py) where mocked clocks make them
+  deterministic.
+
+One additional `TestBargeInDuringPlayback` test guarded by
+`pytest.skip` when the watcher doesn't trigger on a given run
+(timing-dependent across hosts).
+
+**2. `iter-reports/testing.html`** — single-page testing posture
+with three SVG charts (pure-Python, no matplotlib / no JS deps):
+- Total tests passing (cumulative line, scaled from iter-001's 22 to
+  iter-035's 481 — visualizes the test growth curve).
+- Tests added per iteration (bar chart — shows the lumpy adds: small
+  bug fixes vs big iterations like iter-005's virtual audio).
+- Test runtime in seconds (line, plotted only for iters where the
+  verification line had a parseable seconds value).
+
+Plus a stat grid (latest count, unit-files / integration-files,
+latest runtime, median added-per-iter) and run-instructions for
+both suites.
+
+**3. Testing nav link** on every iter page and the index, so a
+reader reviewing iter-NNN can jump directly to the longitudinal
+testing view.
+
+Generator extensions in `scripts/generate_iteration_reports.py`:
+- New `_RUNTIME_RE` regex pulls `"**N passed in S.Ss**"` (decimals
+  optional — early iters had no seconds suffix).
+- `Iteration.test_runtime_s` field, populated by `_populate_metadata`.
+- `_svg_line_chart` / `_svg_bar_chart` helpers — pure-Python SVG
+  with axes, gridlines, dots, HTML-escaped titles.
+- `_count_test_files` walks `tests/unit/` and `tests/integration/`
+  for `test_*.py` files (skips `conftest.py`, `__init__.py`).
+- `render_testing_page(iterations, repo_root)` composes the page.
+- `render_iteration` and `render_index` add `Testing →` to nav.
+- `main()` writes `testing.html` alongside index + iter pages.
+
+Tests (19 new in `tests/unit/test_testing_report.py`):
+- `TestRuntimeParsing` — decimal seconds, integer seconds, no-seconds
+  yields 0.0.
+- `TestSvgLineChart` — empty placeholder, single-point, multi-point
+  path commands and dots, HTML-escape on title.
+- `TestSvgBarChart` — empty placeholder, bars-per-data-point,
+  iter-NNN axis labels.
+- `TestCountTestFiles` — mixed unit/integration counts; missing dirs
+  return zero (no crash).
+- `TestRenderTestingPage` — three charts present, run instructions
+  emitted, links back to index, runtime chart handles
+  zero-runtime iters and all-zero placeholder.
+- `TestIterPageHasTestingLink` / `TestIndexHasTestingLink` — nav
+  link wired to iter pages and index.
+
+Verification: `python -m pytest tests/unit/ tests/integration/` →
+**481 passed, 1 skipped in 17.9s** (457 existing + 19 testing-report
++ 5 integration; 1 skipped is the timing-flaky barge-in).
+
+Notes:
+- Going forward each iter's ship process should run
+  `python scripts/generate_iteration_reports.py` after appending
+  the summary; testing.html refreshes automatically. This was
+  already established in iter-029 — iter-035 only adds the new
+  output file, no workflow change.
+- The runtime chart will sparsen as more old iterations are
+  considered (early iters had no seconds in the verification line).
+  That's fine — the chart explicitly notes this in its caption.
+- The "+22 tests" first-iter spike is real (iter-001 introduced the
+  unit suite). It dominates the bar chart; that's a faithful
+  picture of the real growth.

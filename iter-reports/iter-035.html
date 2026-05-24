@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-035 — integration test suite + testing report with plots</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-034.html">← iter-034</a><a href="testing.html">Testing →</a></nav><header>
+<h1>iter-035 — integration test suite + testing report with plots</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-035-testing-report</code></span> · <span>commit: <code>0a30a55</code></span></div>
+</header><p><strong>Branch:</strong> <code>iter-035-testing-report</code> (merged ff to main, commit <code>0a30a55</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>Three pieces ship together to formalize testing visibility:</p>
+<p><strong>1. <code>tests/integration/</code> directory.</strong> Until iter-035 the cross-module end-to-end tests lived under <code>tests/unit/test_chat_loop.py</code> and <code>tests/unit/test_bargein_orchestration.py</code> — fine, but they&#x27;re structurally integration tests (real ChatLoop, virtual audio, stub LLM, multi-thread). Promoting them to a dedicated suite gives the testing report something to break out and signals what to add when a unit test isn&#x27;t enough.</p>
+<p>Five integration tests in <code>tests/integration/test_chat_pipeline_e2e.py</code>:</p>
+<ul><li><code>TestSingleTurnHappyPath</code> — full turn through ChatLoop with metrics, messages, transcript, response. Plus no-speech-returns-None.</li><li><code>TestMultiTurnConversation</code> — two turns; history preserved. <strong>Gotcha discovered:</strong> the BargeInWatcher during turn 1&#x27;s playback reads the mic buffer; if turn 2&#x27;s audio is pre-pushed, the watcher eats it and turn 2 hangs forever waiting for speech. Must push between turns. Documented in the test.</li><li><code>TestLLMErrorRecovery</code> — failing_llm raises; ChatLoop pops the user message, returns had_error=True.</li><li><code>TestStreamingOverlap</code> — structural check that worker emitted audio + TTFS measured. Stricter timing assertions kept in unit suite (test_chat_loop.py) where mocked clocks make them deterministic.</li></ul>
+<p>One additional <code>TestBargeInDuringPlayback</code> test guarded by <code>pytest.skip</code> when the watcher doesn&#x27;t trigger on a given run (timing-dependent across hosts).</p>
+<p><strong>2. <code>iter-reports/testing.html</code></strong> — single-page testing posture with three SVG charts (pure-Python, no matplotlib / no JS deps):</p>
+<ul><li>Total tests passing (cumulative line, scaled from iter-001&#x27;s 22 to iter-035&#x27;s 481 — visualizes the test growth curve).</li><li>Tests added per iteration (bar chart — shows the lumpy adds: small bug fixes vs big iterations like iter-005&#x27;s virtual audio).</li><li>Test runtime in seconds (line, plotted only for iters where the verification line had a parseable seconds value).</li></ul>
+<p>Plus a stat grid (latest count, unit-files / integration-files, latest runtime, median added-per-iter) and run-instructions for both suites.</p>
+<p><strong>3. Testing nav link</strong> on every iter page and the index, so a reader reviewing iter-NNN can jump directly to the longitudinal testing view.</p>
+<p>Generator extensions in <code>scripts/generate_iteration_reports.py</code>:</p>
+<ul><li>New <code>_RUNTIME_RE</code> regex pulls <code>&quot;**N passed in S.Ss**&quot;</code> (decimals optional — early iters had no seconds suffix).</li><li><code>Iteration.test_runtime_s</code> field, populated by <code>_populate_metadata</code>.</li><li><code>_svg_line_chart</code> / <code>_svg_bar_chart</code> helpers — pure-Python SVG with axes, gridlines, dots, HTML-escaped titles.</li><li><code>_count_test_files</code> walks <code>tests/unit/</code> and <code>tests/integration/</code> for <code>test_*.py</code> files (skips <code>conftest.py</code>, <code>__init__.py</code>).</li><li><code>render_testing_page(iterations, repo_root)</code> composes the page.</li><li><code>render_iteration</code> and <code>render_index</code> add <code>Testing →</code> to nav.</li><li><code>main()</code> writes <code>testing.html</code> alongside index + iter pages.</li></ul>
+<p>Tests (19 new in <code>tests/unit/test_testing_report.py</code>):</p>
+<ul><li><code>TestRuntimeParsing</code> — decimal seconds, integer seconds, no-seconds yields 0.0.</li><li><code>TestSvgLineChart</code> — empty placeholder, single-point, multi-point path commands and dots, HTML-escape on title.</li><li><code>TestSvgBarChart</code> — empty placeholder, bars-per-data-point, iter-NNN axis labels.</li><li><code>TestCountTestFiles</code> — mixed unit/integration counts; missing dirs return zero (no crash).</li><li><code>TestRenderTestingPage</code> — three charts present, run instructions emitted, links back to index, runtime chart handles zero-runtime iters and all-zero placeholder.</li><li><code>TestIterPageHasTestingLink</code> / <code>TestIndexHasTestingLink</code> — nav link wired to iter pages and index.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/</code> → <strong>481 passed, 1 skipped in 17.9s</strong> (457 existing + 19 testing-report + 5 integration; 1 skipped is the timing-flaky barge-in).</p>
+<p>Notes:</p>
+<ul><li>Going forward each iter&#x27;s ship process should run <code>python scripts/generate_iteration_reports.py</code> after appending the summary; testing.html refreshes automatically. This was already established in iter-029 — iter-035 only adds the new output file, no workflow change.</li><li>The runtime chart will sparsen as more old iterations are considered (early iters had no seconds in the verification line). That&#x27;s fine — the chart explicitly notes this in its caption.</li><li>The &quot;+22 tests&quot; first-iter spike is real (iter-001 introduced the unit suite). It dominates the bar chart; that&#x27;s a faithful picture of the real growth.</li></ul><nav><a href="index.html">← Index</a><a href="iter-034.html">← iter-034</a><a href="testing.html">Testing →</a></nav>
+</div>
+</body>
+</html>
