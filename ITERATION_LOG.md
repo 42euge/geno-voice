@@ -2001,3 +2001,77 @@ Notes:
 - This is a refactor with zero behavioral change. The point is
   preventing a class of future bugs (drift between duplicated
   code), not fixing a current one.
+
+---
+
+## iter-025 — BargeInWatcher captures only post-detection frames
+
+**Branch:** `iter-025-watcher-frames` (merged ff to main, commit `3de5039`)
+**Date:** 2026-05-24
+
+Pre-iter-025 the watcher stored every frame from `.start()` to
+`.stop()`, including pre-detection silence/noise/feedback. When that
+buffer was fed into the next `record_utterance_streaming` as
+`primed_frames`, the recording loop's VAD would treat any high-RMS
+pre-detection content as user speech — so STT could end up
+transcribing the bot's acoustic feedback as the user's words. Only
+matters with speakers (not headphones), but real production use
+case.
+
+Fix: frames stores only:
+- the **trigger frame** (the chunk that actually crossed threshold;
+  this is the user's first audible syllable)
+- all subsequent frames until `stop()`
+- optionally, the most recent N pre-detection chunks if the caller
+  passes `lead_in_chunks > 0` (default 0)
+
+The `lead_in_chunks` kwarg is a ring buffer of the last N
+pre-detection frames. When detection fires, the buffer is flushed
+into `frames` in order, followed by the trigger frame.
+
+Implementation gotcha caught by failing test on first attempt: the
+trigger frame must NOT go into the ring buffer before the trigger
+check, otherwise the lead-in flush + the explicit append double-
+count it:
+
+```
+Frame 8 = TONE (trigger)
+Wrong: buffer=[s5,s6,s7,t8] → flush → [s5,s6,s7,t8] → append t8 → [s5,s6,s7,t8,t8]
+Right: trigger first → flush [s5,s6,s7] → append t8 → [s5,s6,s7,t8]
+```
+
+The order is now: `if detected → append; elif trigger → flush+append; else → ring buffer`.
+
+Tests (8 new in `tests/unit/test_watcher_frames.py`):
+
+Default `lead_in=0` (3):
+- Pure silence → no frames, no detection.
+- Silence + tone + silence → frames << total events.
+- Trigger frame is the first stored frame and has high RMS.
+
+Lead-in buffer (5):
+- `lead_in_chunks=3` → first 3 stored frames are silence, 4th
+  has signal.
+- `lead_in_chunks=0` explicit equivalent to omitting the kwarg.
+- Ring buffer caps at max size (1.0s silence + lead_in=2 yields
+  only 2 silence frames pre-trigger).
+- Negative `lead_in_chunks` raises `ValueError`.
+- Internal `_lead_in_buffer` cleared after flush.
+
+Verification: `python -m pytest tests/unit/` → **347 passed in 18s**
+(339 existing + 8 new).
+
+Notes:
+- Behavior change. Existing tests pass because they assert
+  `len(frames) > 0` not specific counts. External callers that
+  relied on full pre-detection capture can restore via
+  `lead_in_chunks=N`.
+- Bot acoustic feedback is fundamentally an AEC problem. iter-025
+  just stops *amplifying* it by feeding the bot audio back through
+  STT.
+- Ring buffer bounded at `lead_in_chunks × CHUNK` bytes — at
+  default 0, zero memory. Generous `lead_in=10` (~640ms), 20KB.
+- The first-attempt test caught the double-append bug cleanly.
+  Worth noting for future "small implementation" work: writing
+  the test before/while writing the code keeps these orderings
+  honest.
