@@ -12,6 +12,38 @@ from enum import Enum
 
 SENTENCE_END = re.compile(r'(?<=[.!?])\s+')
 
+# Common abbreviations that end with a period but should NOT terminate
+# a sentence in voice context. Lowercased; the splitter checks the
+# preceding word (also lowercased) against this set. iter-016.
+#
+# Coverage is single-word abbreviations only ("mr.", "dr.", "etc."),
+# which catches the vast majority of real cases. Multi-period
+# abbreviations like "i.e." and "U.S.A." are handled too because we
+# look at the substring of letters/dots immediately preceding the
+# period, so "I.e" and "U.S.A" both match against the lowercased
+# entries "i.e" and "u.s.a" in the set.
+NON_TERMINATING_ABBREVIATIONS = frozenset({
+    # Titles
+    "mr", "mrs", "ms", "dr", "prof", "rev", "fr", "sr", "jr", "st",
+    # Latin abbreviations
+    "etc", "i.e", "e.g", "vs", "cf", "viz",
+    # Business / legal
+    "inc", "ltd", "corp", "co", "llc", "lp",
+    # Academic / professional titles
+    "ph.d", "m.d", "b.a", "m.a", "b.s", "m.s", "esq",
+    # Geographic / address
+    "u.s", "u.k", "u.s.a", "ave", "blvd", "rd", "ln", "ct", "pl",
+    "mt", "mts", "ft", "n", "s", "e", "w", "ne", "nw", "se", "sw",
+    # Months / days
+    "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept",
+    "oct", "nov", "dec",
+    "mon", "tue", "tues", "wed", "thu", "thur", "thurs", "fri",
+    "sat", "sun",
+    # Misc
+    "no", "nos", "vol", "p", "pp", "fig", "figs", "approx", "incl",
+    "min", "mins", "max", "sec", "secs", "hr", "hrs",
+})
+
 
 class VadEvent(str, Enum):
     """One-frame outcome for the VAD state machine.
@@ -91,12 +123,36 @@ class VadState:
         self.silence_start = None
 
 
+def _word_before_period(buffer: str, period_idx: int) -> str:
+    """Return the lowercase substring of letters and inner periods
+    immediately before ``buffer[period_idx]`` (which must itself be
+    a period).
+
+    Used to detect non-terminating abbreviations. Walking back over
+    ``[a-zA-Z.]`` lets us recognize multi-period forms like
+    ``i.e.`` or ``U.S.A.`` where the relevant token is more than
+    just letters.
+    """
+    end = period_idx
+    start = end
+    while start > 0 and (buffer[start - 1].isalpha() or buffer[start - 1] == "."):
+        start -= 1
+    # Trim a stray leading dot if any (e.g. " .e.g." would otherwise
+    # produce a leading "." that doesn't match anything useful).
+    word = buffer[start:end].lower().lstrip(".")
+    return word
+
+
 def split_complete_sentences(buffer: str) -> tuple[list[str], str]:
     """Split a streaming token buffer into (complete_sentences, remainder).
 
-    A "complete" sentence is one terminated by . ! or ? followed by whitespace.
-    The remainder is whatever trails the last terminator (the in-progress
-    sentence that hasn't ended yet).
+    A "complete" sentence is one terminated by . ! or ? followed by
+    whitespace. The remainder is whatever trails the last terminator
+    (the in-progress sentence that hasn't ended yet).
+
+    Common abbreviations (Mr., Dr., etc., i.e., e.g., U.S.A., …) are
+    recognized via ``NON_TERMINATING_ABBREVIATIONS`` and do not split
+    the sentence. iter-016.
 
     Empty / whitespace-only sentences are dropped.
 
@@ -105,6 +161,8 @@ def split_complete_sentences(buffer: str) -> tuple[list[str], str]:
         (['Hello world.'], 'How are')
         >>> split_complete_sentences("One. Two! Three?")
         (['One.', 'Two!'], 'Three?')
+        >>> split_complete_sentences("Mr. Smith arrived. Hello.")
+        (['Mr. Smith arrived.'], 'Hello.')
         >>> split_complete_sentences("no terminator yet")
         ([], 'no terminator yet')
         >>> split_complete_sentences("")
@@ -112,11 +170,36 @@ def split_complete_sentences(buffer: str) -> tuple[list[str], str]:
     """
     if not buffer:
         return [], ""
-    parts = SENTENCE_END.split(buffer)
-    if len(parts) <= 1:
+
+    matches = list(SENTENCE_END.finditer(buffer))
+    if not matches:
         return [], buffer
-    complete = [p.strip() for p in parts[:-1] if p.strip()]
-    remainder = parts[-1]
+
+    real_splits = []
+    for m in matches:
+        # The terminator character is at m.start() - 1 (the regex
+        # uses lookbehind so the match itself is the whitespace).
+        # Only check abbreviation status if it's a period — `!` and
+        # `?` always terminate.
+        terminator_idx = m.start() - 1
+        if buffer[terminator_idx] == ".":
+            word = _word_before_period(buffer, terminator_idx)
+            if word in NON_TERMINATING_ABBREVIATIONS:
+                continue
+        real_splits.append(m)
+
+    if not real_splits:
+        return [], buffer
+
+    segments: list[str] = []
+    last_end = 0
+    for m in real_splits:
+        segments.append(buffer[last_end:m.start()])
+        last_end = m.end()
+    segments.append(buffer[last_end:])
+
+    complete = [s.strip() for s in segments[:-1] if s.strip()]
+    remainder = segments[-1]
     return complete, remainder
 
 

@@ -104,6 +104,74 @@ class TestSplitCompleteSentences:
             assert SENTENCE_END.search(f"a{term} b") is not None
         assert SENTENCE_END.search("a, b") is None
 
+    # ---- iter-016: abbreviation handling ------------------------------------
+
+    def test_mr_does_not_split(self):
+        complete, rest = split_complete_sentences("Mr. Smith arrived.")
+        assert complete == []
+        assert rest == "Mr. Smith arrived."
+
+    def test_mr_followed_by_real_terminator_splits_correctly(self):
+        complete, rest = split_complete_sentences("Mr. Smith arrived. Hello.")
+        assert complete == ["Mr. Smith arrived."]
+        assert rest == "Hello."
+
+    def test_dr_does_not_split(self):
+        complete, rest = split_complete_sentences("Dr. Strange said yes. Indeed.")
+        assert complete == ["Dr. Strange said yes."]
+        assert rest == "Indeed."
+
+    def test_etc_does_not_split(self):
+        complete, rest = split_complete_sentences("apples, pears, etc. are fruits.")
+        # "etc." is in the abbreviation set; "are fruits." is the
+        # actual sentence end (then no whitespace+content after, so
+        # it stays in the remainder).
+        assert complete == []
+        assert rest == "apples, pears, etc. are fruits."
+
+    def test_ie_multi_period_does_not_split(self):
+        # "i.e. " is a multi-period abbreviation. The walk-back
+        # logic captures "i.e" as the preceding word.
+        complete, rest = split_complete_sentences("Hi, i.e. this. Then.")
+        assert complete == ["Hi, i.e. this."]
+        assert rest == "Then."
+
+    def test_eg_multi_period_does_not_split(self):
+        complete, rest = split_complete_sentences("Some, e.g. fruit.")
+        assert complete == []
+        assert rest == "Some, e.g. fruit."
+
+    def test_usa_multi_period_does_not_split(self):
+        complete, rest = split_complete_sentences("The U.S.A. is large. Yes.")
+        assert complete == ["The U.S.A. is large."]
+        assert rest == "Yes."
+
+    def test_phd_does_not_split(self):
+        complete, rest = split_complete_sentences("Bob has a Ph.D. in math. He teaches.")
+        assert complete == ["Bob has a Ph.D. in math."]
+        assert rest == "He teaches."
+
+    def test_excl_and_question_terminators_unaffected_by_abbreviation_logic(self):
+        # The abbreviation check only applies to "." — "!" and "?"
+        # always terminate.
+        complete, rest = split_complete_sentences("Mr! What? Real.")
+        assert "Mr!" in complete
+        assert "What?" in complete
+
+    def test_abbreviation_at_start_of_buffer(self):
+        # Edge case: buffer starts with an abbreviation.
+        complete, rest = split_complete_sentences("Etc. is shorthand.")
+        assert complete == []
+        assert rest == "Etc. is shorthand."
+
+    def test_unknown_abbreviation_still_splits(self):
+        # If the word before the period isn't in the set, the
+        # splitter falls back to its old behavior. Worst case is
+        # one extra split — same as before iter-016, no regression.
+        complete, rest = split_complete_sentences("Foo. Bar.")
+        assert complete == ["Foo."]
+        assert rest == "Bar."
+
 
 class TestTrimHistory:
     def test_empty(self):
