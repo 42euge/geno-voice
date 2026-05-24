@@ -687,3 +687,100 @@ Next:
   the chat loop end-to-end on the actual PyAudio stack. Optional
   — closes the gap between virtual-audio tests and real
   hardware, but may not be worth the maintenance burden pre-1.0.
+
+---
+
+## iter-011 — filler-word generation in SentenceWorker
+
+**Branch:** `iter-011-fillers` (merged ff to main, commit `12b718b`)
+**Date:** 2026-05-24
+
+The third architecture goal from the original focus list. While the
+LLM is still spinning up its first token (typically 200-800ms), the
+chat loop sat silent. Now the worker can play a pre-rendered filler
+clip ("hmm", "let me think") to mask that latency.
+
+What changed:
+
+- `examples/_chat_pipeline.py`:
+  - `SentenceWorker.__init__` gained `fillers`, `idle_threshold`,
+    `filler_picker` kwargs.
+  - `_run` uses `queue.get(timeout=idle_threshold)` when fillers
+    are configured AND no sentence has played yet AND no filler
+    has played yet. On timeout, picks one filler and plays it.
+    After playing, reverts to blocking `get()` — exactly one
+    filler per worker run.
+  - Refactored play logic into a new `_play_clip()` helper so
+    both fillers and real sentences share the same bookkeeping
+    (`first_audio_at`, `playback_time`, `errors`,
+    `cancel_event` handling).
+  - New counter `fillers_played` (distinct from
+    `sentences_spoken`).
+  - TTFS works correctly: `first_audio_at` is captured the first
+    time `_play_clip` runs, which means a filler accurately
+    measures the user-perceived latency it's meant to mask.
+
+- `examples/mic_chat.py`:
+  - New `load_chat_config()` reads the optional `chat:` section
+    of `config.local.yaml` (empty if missing — no breaking
+    change for existing configs).
+  - `run_chat` pre-renders fillers via `synthesize_with_alignment`
+    using `chat.fillers` (list of strings); idle threshold from
+    `chat.fillers_idle_threshold` (default 0.6s).
+  - Bad filler entries are logged and skipped — never block the
+    caller.
+  - SentenceWorker construction passes the rendered list; if
+    empty (default), `idle_threshold` is forced to 0 so the
+    worker never times out.
+
+Tests (12 new in `tests/unit/test_fillers.py`):
+- Backward compat: no fillers / empty list = unchanged behavior.
+- Happy path: filler plays after idle, no filler if sentence
+  arrives early, exactly one filler per run.
+- Filler counts as the first audio output (`is_first_sentence=True`
+  for the "Bot:" prefix).
+- Counters: `first_audio_at` captured at filler start;
+  `fillers_played` starts at 0.
+- Robustness: empty filler audio consumes slot but `fillers_played`
+  stays 0; play raising during filler doesn't block real sentence;
+  `cancel()` during filler playback works (same cancel_event
+  path as real sentences).
+- Byte-stream order: filler bytes precede sentence bytes in
+  speaker's captured stream, with distinct amplitudes (0.3 vs 0.5
+  → int16 9830 vs 16383) to make the regions distinguishable.
+
+Verification: `python -m pytest tests/unit/` → **155 passed in 11s**
+(143 existing + 12 new).
+
+Notes:
+- The `_play_clip` extraction made the diff bigger but is the
+  right shape going forward — fillers, sentences, and any future
+  audio output (e.g. confirmation tones) all share the same path.
+- One filler per run is intentional. A tempting extension is
+  "play another filler if the LLM stalls mid-stream too," but
+  that adds a watchdog timer and a bunch of edge cases. Skipping
+  for now; the first-token-latency mask is where 90% of the win is.
+
+---
+
+# Status
+
+The architecture phase is **complete** for the user-specified focus
+list:
+
+  ✓ Streaming overlap        — iter-008
+  ✓ Barge-in                 — iter-009 + iter-010
+  ✓ Filler words             — iter-011
+
+Cumulative state: **155 unit tests passing in ~11s** on x86_64
+Linux without pyaudio or mlx-whisper. The chat-loop primitives
+(`record_utterance_streaming`, `play_aligned`, `SentenceWorker`,
+`BargeInWatcher`, `VadState`) are all testable in isolation, and
+the orchestration tests prove they compose correctly into a
+full bot-speaks → user-barges-in → record-replays cycle running
+deterministically in 0.2s.
+
+Remaining log items (iter-012 extended-watcher, iter-013 ALSA
+loopback CI) are stretch goals with diminishing returns for a
+pre-1.0 project. Could revisit if/when actual user feedback
+demands them.
