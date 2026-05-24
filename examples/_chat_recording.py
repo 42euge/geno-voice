@@ -51,6 +51,17 @@ CLEAR_LINE = "\033[2K"
 
 
 def rms(frame: np.ndarray) -> float:
+    """Root-mean-square level for a frame of audio samples.
+
+    Returns 0.0 for empty input — without the guard, ``np.mean`` of
+    an empty slice raises RuntimeWarning and returns NaN, which then
+    poisons every downstream comparison (``NaN > threshold`` is
+    always False, so the loop silently behaves as IDLE forever).
+    Empty buffers do happen in practice: a torn read from PyAudio,
+    a virtual mic flushed mid-iteration, etc.
+    """
+    if frame is None or len(frame) == 0:
+        return 0.0
     return float(np.sqrt(np.mean(frame ** 2)))
 
 

@@ -117,41 +117,9 @@ def load_llm_config() -> dict:
 from examples._chat_llm import stream_chat_completion as llm_stream  # noqa: E402,F401
 
 
-@dataclass
-class TurnMetrics:
-    speech_duration: float = 0.0
-    stt_time: float = 0.0
-    llm_first_token: float = 0.0
-    llm_total: float = 0.0
-    tts_time: float = 0.0
-    playback_time: float = 0.0
-    ttfs: float = 0.0
-    total_e2e: float = 0.0
-    sentences_spoken: int = 0
-    transcript: str = ""
-    response: str = ""
-    model: str = ""
-
-    def print(self, turn: int):
-        print()
-        print(f"  {DIM}{'─' * 56}{RESET}")
-        print(f"  {BOLD}Turn {turn}{RESET}")
-        print(f"  {DIM}You:{RESET} \"{self.transcript}\"")
-        print()
-        print(f"  {DIM}┌─ PIPELINE{RESET}")
-        print(f"  {DIM}│{RESET}  Speech:        {self.speech_duration*1000:>7.0f}ms")
-        print(f"  {DIM}│{RESET}  STT:           {self.stt_time*1000:>7.0f}ms")
-        print(f"  {DIM}│{RESET}  LLM 1st tok:   {self.llm_first_token*1000:>7.0f}ms")
-        print(f"  {DIM}│{RESET}  LLM total:     {self.llm_total*1000:>7.0f}ms  ({self.model})")
-        print(f"  {DIM}│{RESET}  TTS:           {self.tts_time*1000:>7.0f}ms  ({self.sentences_spoken} sentences)")
-        print(f"  {DIM}│{RESET}  Playback:      {self.playback_time*1000:>7.0f}ms")
-        print(f"  {DIM}│{RESET}")
-        ttfs_color = GREEN if self.ttfs < 3.0 else YELLOW
-        print(f"  {DIM}├─{RESET} {BOLD}TTFS:{RESET}            {ttfs_color}{self.ttfs*1000:>7.0f}ms{RESET}  (speech stop → speaker)")
-        total_color = GREEN if self.total_e2e < 6.0 else YELLOW
-        print(f"  {DIM}└─{RESET} {BOLD}Total turn:{RESET}      {total_color}{self.total_e2e*1000:>7.0f}ms{RESET}")
-        print(f"  {DIM}{'─' * 56}{RESET}")
-        print()
+# TurnMetrics moved to examples/_chat_metrics.py so it's importable
+# without pulling in mic_chat's top-level pyaudio dependency. iter-014.
+from examples._chat_metrics import TurnMetrics  # noqa: E402,F401
 
 
 def synthesize_with_alignment(tts_engine, text: str, voice: str, speed: float):
@@ -445,6 +413,8 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
                 metrics.tts_time = worker.tts_time
                 metrics.playback_time = worker.playback_time
                 metrics.sentences_spoken = worker.sentences_spoken
+                metrics.fillers_played = worker.fillers_played
+                metrics.barge_in = coord.is_set()
                 metrics.response = full_response.strip()
                 metrics.total_e2e = time.monotonic() - turn_start
 
@@ -460,6 +430,18 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
                 print(f"\n  {YELLOW}LLM error: {e}{RESET}")
                 messages.pop()
                 watcher.stop(timeout=2.0)
+                # iter-014: even on the LLM-error path, if the user
+                # was barging in we should carry their captured audio
+                # forward into the next record turn. Otherwise their
+                # speech gets dropped just because the LLM happened
+                # to fail at the same time.
+                if watcher.detected:
+                    primed_frames = list(watcher.frames)
+                    print(
+                        f"  {DIM}barge-in during failed LLM call: "
+                        f"replaying {len(primed_frames)} captured frames "
+                        f"({len(primed_frames) * CHUNK / RATE:.1f}s){RESET}"
+                    )
                 worker.stop(timeout=5.0)  # drop pending sentences, close speaker
                 # The mic stream has been silently buffering during the
                 # (possibly long) failed LLM call. Drain it so we don't
