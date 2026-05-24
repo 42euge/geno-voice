@@ -1951,3 +1951,53 @@ Notes:
   real failures. Worth remembering: `try/except` on a too-broad
   exception class is a code smell; introspect what you actually
   care about.
+
+---
+
+## iter-024 — consolidate inline RMS in BargeInWatcher
+
+**Branch:** `iter-024-rms-consolidate` (merged ff to main, commit `14943ef`)
+**Date:** 2026-05-24
+
+Maintenance hazard found by code review. `BargeInWatcher._run`
+had an inline RMS computation that duplicated the `rms()` helper
+in `_chat_recording`. Both had the iter-014 NaN-on-empty guard,
+but two implementations of the same logic means a future fix in
+one place could miss the other.
+
+Concrete near-miss: iter-014 *did* have to update both code paths.
+That happened to work out because they were both touched in the
+same commit. But future RMS-related fixes (clipping detection,
+DC offset removal, whatever) shouldn't depend on that luck.
+
+Fix: `BargeInWatcher.__init__` imports `rms` from
+`_chat_recording` and binds it as `self._rms`. `_run` calls
+`self._rms(audio)` per frame instead of inlining the expression.
+Lazy import keeps `_chat_pipeline` a leaf module at import time —
+`_chat_recording` is loaded only when a watcher is actually
+instantiated.
+
+Tests (7 new in `tests/unit/test_rms_consolidation.py`):
+
+Watcher uses consolidated rms (3):
+- `watcher._rms is rms` (identity, not equality — catches
+  future copy-paste regressions where someone inlines a "small
+  fix")
+- silence doesn't trigger (behavioral parity)
+- speech triggers (behavioral parity)
+
+Single source of truth (4):
+- identity assertion against `_chat_recording.rms`
+- parametrized rms values for canonical inputs (zero array,
+  constant array, empty array)
+
+Verification: `python -m pytest tests/unit/` → **339 passed in 17s**
+(332 existing + 7 new).
+
+Notes:
+- The `is`-identity test is the load-bearing assertion — equality
+  could be satisfied by an inlined re-implementation; identity
+  insists on the same function object.
+- This is a refactor with zero behavioral change. The point is
+  preventing a class of future bugs (drift between duplicated
+  code), not fixing a current one.
