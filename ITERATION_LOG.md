@@ -1273,3 +1273,71 @@ The codebase is at a strong stopping point. Future directions:
    test)
 3. Pivot to features outside the original focus list (multi-turn
    memory tuning, voice cloning, multi-language, etc.)
+
+---
+
+## iter-016 — abbreviation-aware sentence splitter
+
+**Branch:** `iter-016-splitter` (merged ff to main, commit `f475a12`)
+**Date:** 2026-05-24
+
+A small but real production bug. The simple `(?<=[.!?])\s+`
+regex broke common voice cases:
+
+```
+>>> split_complete_sentences("Mr. Smith arrived. Hi.")
+(['Mr.', 'Smith arrived.'], 'Hi.')   # WRONG
+```
+
+In production this would cause TTS to pause awkwardly between
+"Mr." and "Smith" — the bot would speak "Mister." as if it were
+a complete sentence, then start a new one with "Smith". Same for
+Dr., U.S.A., i.e., e.g., Ph.D., and friends.
+
+What changed:
+
+`examples/_chat_helpers.py`:
+- New `NON_TERMINATING_ABBREVIATIONS` frozenset (lowercased) with
+  ~70 common abbreviations across categories: titles, Latin,
+  business/legal, academic, geographic, calendar, numeric.
+- New `_word_before_period(buffer, period_idx)` helper that walks
+  back over `[a-zA-Z.]` to extract the relevant token, so
+  multi-period abbreviations like `i.e` and `u.s.a` match their
+  set entries.
+- `split_complete_sentences` rewritten to find all candidate
+  matches via `finditer`, post-filter via the abbreviation check,
+  and emit only the real splits.
+
+Behavior change is purely additive — splits that were previously
+correct stay correct. Splits in front of an abbreviation in the
+set now don't fire. Unknown abbreviations fall back to the old
+behavior (worst case: one extra split, same as before; no
+regression). `!` and `?` terminators are unchanged because the
+abbreviation check only applies to `.`.
+
+Tests (11 new in `TestSplitCompleteSentences`):
+- Mr. doesn't split when followed by more text
+- Mr. + real terminator splits correctly at the real one
+- Dr., etc., Ph.D. — single-word and multi-period cases
+- i.e., e.g., U.S.A. — multi-period abbreviations
+- "!" and "?" terminators unaffected by the abbreviation check
+- Abbreviation at start of buffer
+- Unknown abbreviation still splits (no regression)
+
+Verification: `python -m pytest tests/unit/` → **223 passed in 12s**
+(212 existing + 11 new).
+
+Notes:
+- The abbreviation set is intentionally conservative. Adding more
+  is cheap (just append to the frozenset). The current ~70 entries
+  cover the abbreviations a typical English-language LLM might
+  emit in voice context.
+- Multi-period abbreviations work because `_word_before_period`
+  walks back over both letters and periods, building "i.e",
+  "u.s.a", "ph.d", etc. — these match the set entries directly.
+- Limitation: an abbreviation inside a longer made-up word (e.g.
+  "etcaholic.") would still get matched as `etcaholic` not in the
+  set → splits normally. That's correct behavior; we only want to
+  match true abbreviations.
+- The implementation runs `finditer` once on the buffer instead
+  of `split` then post-process. Same work; cleaner code.
