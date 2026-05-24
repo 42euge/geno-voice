@@ -57,6 +57,10 @@ from examples._chat_playback import (
     play_aligned as _play_aligned_core,
 )
 
+# Streaming-overlap worker — runs synth + play on a background thread so
+# the LLM token stream isn't blocked by audio playback. iter-008.
+from examples._chat_pipeline import SentenceWorker
+
 DIM = "\033[2m"
 BOLD = "\033[1m"
 GREEN = "\033[32m"
@@ -288,10 +292,34 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
             first_token_at = None
             token_buffer = ""
             full_response = ""
-            sentences_spoken = 0
-            total_tts_time = 0.0
-            total_playback_time = 0.0
-            ttfs_recorded = False
+
+            # Spin up a background SentenceWorker that owns one persistent
+            # speaker stream and processes complete sentences off a queue.
+            # While it synthesizes + plays, the main thread stays in the
+            # for-token loop so LLM receipt is no longer blocked. iter-008.
+            def _speaker_factory():
+                return pa.open(
+                    format=pyaudio.paInt16, channels=1,
+                    rate=TTS_RATE, output=True,
+                    frames_per_buffer=1024,
+                )
+
+            def _synth(sentence: str):
+                return synthesize_with_alignment(tts_engine, sentence, voice, speed)
+
+            def _play(speaker, audio_np, tokens, *, is_first_sentence=False):
+                return _play_aligned_core(
+                    speaker, audio_np, tokens,
+                    is_first_sentence=is_first_sentence,
+                    rate=TTS_RATE,
+                )
+
+            worker = SentenceWorker(
+                speaker_factory=_speaker_factory,
+                synth_fn=_synth,
+                play_fn=_play,
+            )
+            worker.start()
 
             llm_stream_done_at = None
             try:
@@ -301,80 +329,48 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
                     token_buffer += token
                     full_response += token
 
-                    # Check if we have a complete sentence
-                    complete, token_buffer_next = split_complete_sentences(token_buffer)
-                    if complete:
-                        for sentence in complete:
-                            # Synthesize with word-level timing
-                            t = time.monotonic()
-                            audio_np, tokens = synthesize_with_alignment(
-                                tts_engine, sentence, voice, speed
-                            )
-                            total_tts_time += time.monotonic() - t
+                    complete, token_buffer = split_complete_sentences(token_buffer)
+                    for sentence in complete:
+                        worker.submit(sentence)
 
-                            if len(audio_np) == 0:
-                                continue
-
-                            # Record TTFS on first sentence
-                            if not ttfs_recorded:
-                                metrics.ttfs = time.monotonic() - speech_ended_at
-                                ttfs_recorded = True
-
-                            # Play with word-aligned text reveal
-                            is_first = sentences_spoken == 0
-                            elapsed = play_aligned(
-                                pa, audio_np, tokens, is_first_sentence=is_first
-                            )
-                            total_playback_time += elapsed
-                            sentences_spoken += 1
-
-                        token_buffer = token_buffer_next
-
-                # Stamp end-of-stream BEFORE any trailing synth/playback so
-                # llm_total measures only the LLM streaming window, not the
-                # follow-on TTS/playback work (bug #2).
+                # Stamp end-of-stream BEFORE waiting on TTS/playback so
+                # llm_total measures only the LLM streaming window
+                # (bug #2 from iter-001 still applies in this code path).
                 llm_stream_done_at = time.monotonic()
 
-                # Handle remaining text after stream ends
                 remaining = token_buffer.strip()
                 if remaining:
-                    t = time.monotonic()
-                    audio_np, tokens = synthesize_with_alignment(
-                        tts_engine, remaining, voice, speed
-                    )
-                    total_tts_time += time.monotonic() - t
+                    worker.submit(remaining)
 
-                    if len(audio_np) > 0:
-                        if not ttfs_recorded:
-                            metrics.ttfs = time.monotonic() - speech_ended_at
-                            ttfs_recorded = True
+                worker.submit_done()
+                worker.wait_done(timeout=120.0)
+                print()  # newline after the streamed bot text
 
-                        is_first = sentences_spoken == 0
-                        elapsed = play_aligned(
-                            pa, audio_np, tokens, is_first_sentence=is_first
-                        )
-                        total_playback_time += elapsed
-                        sentences_spoken += 1
-
-                print()  # newline after streamed text
-
+                # Pull TTFS / metrics from the worker.
+                if worker.first_audio_at is not None:
+                    metrics.ttfs = worker.first_audio_at - speech_ended_at
                 metrics.llm_first_token = (first_token_at - llm_start) if first_token_at else 0
-                # Use the stamped end-of-stream time, not "now" — "now" includes
-                # all the trailing TTS/playback work and produces absurd values.
                 metrics.llm_total = (
                     (llm_stream_done_at - llm_start) if llm_stream_done_at else 0
                 )
-                metrics.tts_time = total_tts_time
-                metrics.playback_time = total_playback_time
-                metrics.sentences_spoken = sentences_spoken
+                metrics.tts_time = worker.tts_time
+                metrics.playback_time = worker.playback_time
+                metrics.sentences_spoken = worker.sentences_spoken
                 metrics.response = full_response.strip()
                 metrics.total_e2e = time.monotonic() - turn_start
 
                 messages.append({"role": "assistant", "content": metrics.response})
 
+                if worker.errors:
+                    # Surface any synth/play errors that occurred in the
+                    # background but didn't take down the worker.
+                    for err in worker.errors:
+                        print(f"  {YELLOW}worker error: {err}{RESET}")
+
             except Exception as e:
                 print(f"\n  {YELLOW}LLM error: {e}{RESET}")
                 messages.pop()
+                worker.stop(timeout=5.0)  # drop pending sentences, close speaker
                 # The mic stream has been silently buffering during the
                 # (possibly long) failed LLM call. Drain it so we don't
                 # immediately trigger STT on stale audio. Bug #3.
