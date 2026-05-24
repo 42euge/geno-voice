@@ -229,11 +229,24 @@ class ChatLoop:
 
         llm_gen = self._llm_stream_fn(messages, self._llm_config)
         coord = BargeInCoordinator(worker=worker)
+        # iter-028: build the watcher's VadState from the same VAD
+        # config that record_utterance_streaming uses, so a user who
+        # tunes ``chat.vad.silence_threshold`` for a noisy room gets
+        # the threshold applied to barge-in detection too. Without
+        # this, the watcher kept defaults — false barge-ins from
+        # background noise even when the recorder was tuned to ignore
+        # it.
+        from examples._chat_helpers import VadState
         watcher = BargeInWatcher(
             mic=self._mic,
             on_speech_detected=coord.trigger,
             chunk_size=self._chunk,
             rate=self._rate,
+            vad=VadState(
+                silence_threshold=self._silence_threshold,
+                silence_duration=self._silence_duration,
+                min_speech_duration=self._min_speech_duration,
+            ),
         )
         watcher.start()
 
