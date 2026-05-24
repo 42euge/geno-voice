@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-047 — barge-in phase metric (taxonomy 2.11)</title>
+<title>iter-048 — VAD false-trigger rate metric (taxonomy 1.4)</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,23 +168,21 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-046.html">← iter-046</a><a href="iter-048.html">iter-048 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-047 — barge-in phase metric (taxonomy 2.11)</h1>
-<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-047-barge-phase</code></span> · <span>commit: <code>ff7c43f</code></span> · <span>tests: <code>+10</code> (total 630)</span></div>
-</header><p><strong>Branch:</strong> <code>iter-047-barge-phase</code> (merged ff to main, commit <code>ff7c43f</code>) <strong>Date:</strong> 2026-05-24</p>
-<p>Ninth metric pulled from <code>docs/perf-metrics-taxonomy.md</code>. <strong>Metric 2.11 — Barge-in phase distribution</strong>.</p>
-<p>The phase string was already computed in <code>_chat_loop</code> for the diagnostic print. iter-047 lifts it to a structured metric so the session summary can show the distribution — which is the actually useful operational view.</p>
-<p>The two phases tell different stories:</p>
-<ul><li><strong><code>llm_stream</code></strong>: user interrupted while the LLM was still streaming tokens. The bot hadn&#x27;t started speaking yet. User was impatient with TTFS. <strong>Root cause: LLM TTFT.</strong></li><li><strong><code>playback</code></strong>: user interrupted while the bot was speaking. Verbose / wrong response. **Root cause: system prompt / response quality.**</li></ul>
-<p>A session full of llm_stream barges and another full of playback barges have orthogonal fixes. iter-047 makes that distinction visible at session-summary glance.</p>
+<nav><a href="index.html">← Index</a><a href="iter-047.html">← iter-047</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-048 — VAD false-trigger rate metric (taxonomy 1.4)</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-048-vad-false</code></span> · <span>commit: <code>9e8579d</code></span> · <span>tests: <code>+7</code> (total 637)</span></div>
+</header><p><strong>Branch:</strong> <code>iter-048-vad-false</code> (merged ff to main, commit <code>9e8579d</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>Tenth metric pulled from <code>docs/perf-metrics-taxonomy.md</code>. <strong>Metric 1.4 — VAD false-trigger rate</strong>.</p>
+<p>Counts turns where <code>ChatLoop.run_one_turn</code> returned <code>metrics=None</code> AND <code>had_error=False</code> — VAD fired ACTIVE but the utterance was too short (<code>DONE_TOO_SHORT</code>) or the transcription came back empty. High rate = silence_threshold too low or min_speech_duration too short; the bot &quot;thinks&quot; the user spoke when they didn&#x27;t and wastes a turn.</p>
+<p>This is the first <strong>session-level</strong> metric — different shape from the per-turn TurnMetrics fields. Distinguished cleanly from LLM errors (which also yield metrics=None but with had_error=True).</p>
 <p>Implementation:</p>
-<ul><li><code>TurnMetrics.barge_in_phase: str = &quot;&quot;</code> (new field).</li><li>ChatLoop assigns <code>&quot;llm_stream&quot;</code> or <code>&quot;playback&quot;</code> alongside the existing diagnostic print — single source of truth, refactored the inline string-construction to use the same key.</li><li>Per-turn Barge-in line gains <code>(during LLM stream)</code> / <code>(during playback)</code> suffix after the existing cancel note.</li><li>Session summary: <code>Barge phases: N LLM-stream, M playback</code> emitted when at least one phase was recorded.</li><li><code>ScenarioResult.barge_in_phase</code> on perf snapshots — the new field flows into the time-series automatically.</li></ul>
-<p>Tests (10 in <code>tests/unit/test_barge_phase.py</code>):</p>
-<ul><li>Default empty string.</li><li>Per-turn print: no-barge omits, llm_stream and playback both shown with distinct suffixes, empty-phase-with-barge omits cleanly (forward-compat).</li><li>Session aggregate: no-data omits, mixed shows counts, single phase shows zero for the absent phase.</li><li>ChatLoop wires: deterministic barge scenario (perf-suite shape) populates one of the two values; no-barge keeps &quot;&quot;.</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>630 passed, 1 skipped in 23s</strong> (620 existing + 10 new).</p>
+<ul><li><code>print_session_summary</code> gains <code>false_triggers: int = 0</code> kwarg (back-compat default). Emits &quot;VAD false-trig: N/M (P%) — tune silence_threshold or min_speech_duration&quot; when &gt;0.</li><li><code>mic_chat.run_chat</code> counts false triggers across the chat loop: the existing <code>if result.metrics is None: continue</code> branch now bumps <code>false_triggers</code> when <code>had_error</code> is False. Passes total to print_session_summary.</li></ul>
+<p>Documented limitation: when <code>metrics_list</code> is empty (session ended before any successful turn), the existing early-return placeholder (&quot;Session ended (no completed turns)&quot;) fires before the false- trigger line would emit. Future iter could lift the false-trigger reporting above the early return — for now, callers see the placeholder and ignore the suppressed metric. Edge case isn&#x27;t critical because in practice if every turn is a false trigger, the user will notice anyway and tune their config.</p>
+<p>Tests (7 in <code>tests/unit/test_vad_false_trigger.py</code>):</p>
+<ul><li><code>print_session_summary</code> kwarg behavior: default zero omits, explicit zero omits, one trigger shows &quot;N/M (P%)&quot; with tuning text, high rate shown correctly, empty-metrics-list edge case documented.</li><li><code>mic_chat</code> loop pattern: simulated TurnResult sequence increments counter on <code>metrics=None &amp;&amp; !had_error</code>; does NOT increment on <code>metrics=None &amp;&amp; had_error</code> (LLM error path is not a false trigger).</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>637 passed, 1 skipped in 20s</strong> (630 existing + 7 new).</p>
 <p>Notes:</p>
-<ul><li>Nine metrics from the taxonomy now live (2.19 / 1.10 / 2.18 / 2.10 / 2.1 / 2.16 / 2.6 / 1.13 / 2.11). Per-turn print + session summary together render a fairly complete operational dashboard: TTFS, sub-budgets, fragmentation, parallelism, cancel quality, barge shape + phase + latency, mic stale frames, bot WPM.</li><li>Refactor opportunity noted: the per-turn Barge-in line is getting long (&quot;yes (user interrupted) (1 cut mid-stream) (during LLM stream)&quot;). Future iter could split into multiple fields or compress to symbols. Out of scope here — the message is accurate, just verbose.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-046.html">← iter-046</a><a href="iter-048.html">iter-048 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li>Ten metrics from the taxonomy now live (2.19 / 1.10 / 2.18 / 2.10 / 2.1 / 2.16 / 2.6 / 1.13 / 2.11 / 1.4). Hit a milestone: 10/46 — 22% of the taxonomy is instrumented.</li><li>Remaining high-value candidates: 1.5 (VAD missed-speech rate), 2.4 (filler false-positive rate), 1.7 (STT real-time factor), 3.1 (naturalness gap).</li><li>Session-level metric pattern works well — passing as kwarg to print_session_summary keeps the data flow explicit. Future session metrics (1.5, 2.4) can use the same shape.</li></ul><nav><a href="index.html">← Index</a><a href="iter-047.html">← iter-047</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>
