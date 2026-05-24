@@ -8,8 +8,87 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from enum import Enum
 
 SENTENCE_END = re.compile(r'(?<=[.!?])\s+')
+
+
+class VadEvent(str, Enum):
+    """One-frame outcome for the VAD state machine.
+
+    IDLE — still waiting for speech to start; caller can drop the frame.
+    ACTIVE — actively recording; caller should append the frame to its buffer.
+    DONE_OK — utterance ended with enough speech; caller should return frames.
+    DONE_TOO_SHORT — utterance ended but speech was below min_speech_duration;
+        caller should reset and keep listening (often a cough or click).
+    """
+
+    IDLE = "idle"
+    ACTIVE = "active"
+    DONE_OK = "done_ok"
+    DONE_TOO_SHORT = "done_too_short"
+
+
+@dataclass
+class VadState:
+    """Pure VAD state machine — RMS in, event out, no I/O.
+
+    Mirrors the speaking/silence tracking that used to be inlined in
+    record_utterance_streaming() but is now testable without pyaudio.
+
+    Behavior:
+      - level > silence_threshold → ACTIVE (and starts speech timer if new)
+      - level <= threshold while speaking:
+        - first such frame starts the silence timer
+        - if silence persists ≥ silence_duration:
+            * total speech_duration ≥ min_speech_duration → DONE_OK
+            * otherwise → DONE_TOO_SHORT
+      - level <= threshold while not speaking → IDLE (do nothing)
+
+    speech_duration excludes the trailing silence_duration window, matching
+    the original calculation in mic_chat.py.
+    """
+
+    silence_threshold: float = 0.02
+    silence_duration: float = 0.8
+    min_speech_duration: float = 0.3
+
+    speaking: bool = False
+    speech_start: float | None = None
+    silence_start: float | None = None
+    last_speech_duration: float = 0.0
+
+    def feed(self, level: float, now: float) -> VadEvent:
+        if level > self.silence_threshold:
+            if not self.speaking:
+                self.speaking = True
+                self.speech_start = now
+            self.silence_start = None
+            return VadEvent.ACTIVE
+        # Below threshold below this point.
+        if not self.speaking:
+            return VadEvent.IDLE
+        # Speaking but quiet → trailing silence.
+        if self.silence_start is None:
+            self.silence_start = now
+            return VadEvent.ACTIVE
+        if now - self.silence_start >= self.silence_duration:
+            assert self.speech_start is not None  # set when speaking flipped on
+            total = now - self.speech_start - self.silence_duration
+            self.last_speech_duration = max(0.0, total)
+            event = (
+                VadEvent.DONE_OK
+                if total >= self.min_speech_duration
+                else VadEvent.DONE_TOO_SHORT
+            )
+            self.reset()
+            return event
+        return VadEvent.ACTIVE
+
+    def reset(self) -> None:
+        self.speaking = False
+        self.speech_start = None
+        self.silence_start = None
 
 
 def split_complete_sentences(buffer: str) -> tuple[list[str], str]:

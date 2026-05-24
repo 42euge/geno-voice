@@ -18,6 +18,8 @@ sys.path.insert(0, str(ROOT))
 from examples._chat_helpers import (  # noqa: E402
     SENTENCE_END,
     TurnTimings,
+    VadEvent,
+    VadState,
     flush_pending_audio,
     format_preview_line,
     render_preview,
@@ -338,3 +340,117 @@ class TestRenderPreview:
         render_preview("hello world", max_width=80, file=buf)
         # Second \r in the buffer means we performed a rewrite-on-line.
         assert buf.getvalue().count("\r") == 2
+
+
+class TestVadState:
+    """Cover the VAD state machine without ever touching audio.
+
+    The "audio" is a sequence of (rms, timestamp) pairs that we feed in.
+    Test parameters use the same defaults as mic_chat.py so the tests
+    document real behavior, not a synthetic config.
+    """
+
+    def _vad(self, **kw):
+        return VadState(
+            silence_threshold=0.02,
+            silence_duration=0.8,
+            min_speech_duration=0.3,
+            **kw,
+        )
+
+    def test_initial_state_idle(self):
+        v = self._vad()
+        assert v.feed(0.001, 0.0) is VadEvent.IDLE
+        assert v.feed(0.0, 0.05) is VadEvent.IDLE
+        assert not v.speaking
+
+    def test_first_loud_frame_flips_to_active(self):
+        v = self._vad()
+        assert v.feed(0.1, 1.0) is VadEvent.ACTIVE
+        assert v.speaking
+        assert v.speech_start == 1.0
+
+    def test_continuous_speech_keeps_active(self):
+        v = self._vad()
+        for i in range(20):
+            level = 0.1
+            t = i * 0.05
+            assert v.feed(level, t) is VadEvent.ACTIVE
+
+    def test_quiet_frame_after_speech_starts_silence_timer(self):
+        v = self._vad()
+        v.feed(0.1, 0.0)
+        assert v.feed(0.001, 0.1) is VadEvent.ACTIVE
+        assert v.silence_start == 0.1
+
+    def test_brief_silence_does_not_end_utterance(self):
+        v = self._vad()
+        v.feed(0.1, 0.0)
+        v.feed(0.001, 0.1)
+        # Below silence_duration; should still be ACTIVE.
+        assert v.feed(0.001, 0.5) is VadEvent.ACTIVE
+        # And then a loud frame resumes — silence_start clears.
+        assert v.feed(0.1, 0.6) is VadEvent.ACTIVE
+        assert v.silence_start is None
+
+    def test_full_silence_window_ends_utterance_done_ok(self):
+        v = self._vad()
+        # 1 second of speech → well above 0.3s min.
+        v.feed(0.1, 0.0)
+        v.feed(0.1, 1.0)
+        # Silence begins at t=1.05.
+        v.feed(0.001, 1.05)
+        # At t=1.85 we've had >= 0.8s of silence → DONE_OK
+        assert v.feed(0.001, 1.85) is VadEvent.DONE_OK
+        # State resets after a DONE event.
+        assert not v.speaking
+
+    def test_too_short_speech_yields_done_too_short(self):
+        v = self._vad()
+        v.feed(0.1, 0.0)
+        # Only 0.1s of speech (well below 0.3 min), then 0.8s silence.
+        v.feed(0.001, 0.1)
+        assert v.feed(0.001, 0.9) is VadEvent.DONE_TOO_SHORT
+        # Even a TOO_SHORT outcome resets so listening resumes.
+        assert not v.speaking
+        assert v.last_speech_duration < 0.3
+
+    def test_state_resets_so_next_utterance_works(self):
+        v = self._vad()
+        # First utterance — too short.
+        v.feed(0.1, 0.0)
+        v.feed(0.001, 0.1)
+        assert v.feed(0.001, 0.9) is VadEvent.DONE_TOO_SHORT
+
+        # Second utterance — long enough.
+        v.feed(0.1, 1.0)
+        v.feed(0.1, 1.5)
+        v.feed(0.001, 1.55)
+        assert v.feed(0.001, 2.4) is VadEvent.DONE_OK
+
+    def test_threshold_boundary_is_strictly_greater(self):
+        # `level > threshold` so exact equality should NOT count as speech.
+        v = self._vad()
+        assert v.feed(0.02, 0.0) is VadEvent.IDLE
+        assert v.feed(0.0201, 0.05) is VadEvent.ACTIVE
+
+    def test_speech_duration_recorded_on_done(self):
+        v = self._vad()
+        v.feed(0.1, 0.0)
+        v.feed(0.1, 0.5)
+        v.feed(0.001, 0.6)
+        # 1.5 - 0.6 = 0.9 ≥ 0.8 silence_duration → DONE_OK (avoids
+        # 1.4 - 0.6 = 0.7999... float-precision pitfall).
+        ev = v.feed(0.001, 1.5)
+        assert ev is VadEvent.DONE_OK
+        # speech_duration = (now - speech_start - silence_duration)
+        #                 = (1.5 - 0.0 - 0.8) = 0.7
+        assert abs(v.last_speech_duration - 0.7) < 0.01
+
+    def test_idle_after_brief_blip_below_threshold(self):
+        v = self._vad()
+        # A single quiet frame and we never enter speaking.
+        for i in range(5):
+            assert v.feed(0.005, i * 0.1) is VadEvent.IDLE
+        assert not v.speaking
+        assert v.silence_start is None

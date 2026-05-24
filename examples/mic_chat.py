@@ -29,6 +29,8 @@ from tts import get_engine as get_tts_engine
 # Pure helpers — extracted for testability, see examples/_chat_helpers.py.
 from examples._chat_helpers import (
     SENTENCE_END,
+    VadEvent,
+    VadState,
     flush_pending_audio,
     render_preview,
     split_complete_sentences,
@@ -188,35 +190,42 @@ def record_utterance_streaming(stream, stt_engine) -> tuple[bytes, float, float]
 
     Shows dim speculative text while recording, then finalizes on silence.
     """
-    frames = []
-    speaking = False
-    speech_start = None
-    silence_start = None
+    frames: list[bytes] = []
     last_inference_at = 0.0
     preview_text = ""
+    vad = VadState(
+        silence_threshold=SILENCE_THRESHOLD,
+        silence_duration=SILENCE_DURATION,
+        min_speech_duration=MIN_SPEECH_DURATION,
+    )
+    too_short = False
 
     while True:
         data = stream.read(CHUNK, exception_on_overflow=False)
         audio = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
         level = rms(audio)
+        now = time.monotonic()
 
-        if level > SILENCE_THRESHOLD:
-            if not speaking:
-                speaking = True
-                speech_start = time.monotonic()
-                last_inference_at = time.monotonic()
-            silence_start = None
-            frames.append(data)
-        elif speaking:
-            frames.append(data)
-            if silence_start is None:
-                silence_start = time.monotonic()
-            elif time.monotonic() - silence_start >= SILENCE_DURATION:
-                break
+        event = vad.feed(level, now)
 
-        # Periodic STT preview while speaking
-        if speaking and frames and (time.monotonic() - last_inference_at) >= INFERENCE_INTERVAL:
-            last_inference_at = time.monotonic()
+        if event is VadEvent.IDLE:
+            continue
+
+        # ACTIVE / DONE_OK / DONE_TOO_SHORT all include this frame in the
+        # buffer (original mic_chat.py appended before its break check).
+        frames.append(data)
+        if last_inference_at == 0.0:
+            last_inference_at = now
+
+        if event is VadEvent.DONE_OK:
+            break
+        if event is VadEvent.DONE_TOO_SHORT:
+            too_short = True
+            break
+
+        # Periodic STT preview while speaking.
+        if frames and (now - last_inference_at) >= INFERENCE_INTERVAL:
+            last_inference_at = now
             wav = _buffer_to_wav(frames)
             text = _transcribe_quick(stt_engine, wav)
             if text and text != preview_text:
@@ -227,11 +236,12 @@ def record_utterance_streaming(stream, stt_engine) -> tuple[bytes, float, float]
                 term_cols = shutil.get_terminal_size(fallback=(80, 24)).columns
                 render_preview(preview_text, max_width=term_cols, prefix="  You: ")
 
-    speech_duration = time.monotonic() - speech_start - SILENCE_DURATION
-    if speech_duration < MIN_SPEECH_DURATION:
+    if too_short:
         sys.stdout.write(f"\r{CLEAR_LINE}")
         sys.stdout.flush()
         return b"", 0.0, 0.0
+
+    speech_duration = vad.last_speech_duration
 
     # Final transcription on full audio
     wav_bytes = _buffer_to_wav(frames)
