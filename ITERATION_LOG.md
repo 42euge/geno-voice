@@ -513,3 +513,87 @@ Next:
   short audio clips ("hmm…", "let me think…") and have the worker
   play them if the queue stays empty for more than ~600ms. Hide
   behind a config flag so it's opt-in.
+
+---
+
+## iter-009 — barge-in primitives: cancel_event + cancel + BargeInWatcher
+
+**Branch:** `iter-009-bargein` (merged ff to main, commit `c4b34d5`)
+**Date:** 2026-05-24
+
+What changed:
+
+1. **`play_aligned` cancel_event** — `examples/_chat_playback.play_aligned`
+   gained an optional `cancel_event` kwarg. The chunked-write loop
+   checks it between chunks; on set, breaks early and returns
+   elapsed time so far. Backward compat: omit the kwarg and behavior
+   is unchanged.
+
+2. **`SentenceWorker.cancel()`** — hard-stop method that:
+   - Sets the worker's internal `_cancel_event` (forwarded into
+     `play_fn` so the in-flight sentence breaks mid-stream).
+   - Drains the queue and joins the thread.
+   - Sets `self.cancelled = True` for the caller to inspect.
+   - Idempotent.
+   The play_fn signature now optionally accepts `cancel_event` —
+   a `try/except TypeError` fallback preserves the iter-008
+   contract for play_fns that don't accept the new kwarg.
+
+3. **`BargeInWatcher`** — new class in `examples/_chat_pipeline.py`.
+   Background thread that reads from a mic stream, runs `VadState`,
+   fires a callback on the configured trigger event. Configurable:
+   - `trigger_on="active"` (default) — fires the instant level
+     crosses threshold. Fastest reaction.
+   - `trigger_on="done_ok"` — fires only after a complete utterance
+     (waits for the silence window). Useful when you don't want
+     to interrupt on every cough.
+   Captures all consumed frames in `self.frames` so the orchestrator
+   can replay the user's first syllables into the next record loop.
+   Uses `get_read_available()` to avoid feeding silent zero-pad to
+   the VAD when the mic is empty.
+
+Tests (17 new in `tests/unit/test_bargein.py`):
+- play_aligned cancel_event: pre-set breaks immediately, mid-loop
+  set breaks between chunks, unset completes, omission works.
+- SentenceWorker.cancel: interrupts in-flight sentence (verified
+  by side-effect Event in play_fn), idempotent, before-start
+  no-op, iter-008 play_fns without cancel_event still work.
+- BargeInWatcher: silence stays idle, speech burst triggers
+  callback < 2s, callback fires once during long speech,
+  `done_ok` trigger waits for silence window (uses injected
+  frame-clock for virtual time), invalid trigger raises,
+  double-start raises, frames captured.
+- **Integration**: 3 sentences submitted, watcher detects user
+  speech on virtual mic, fires `worker.cancel`, worker breaks
+  mid-sentence, byte-count math proves partial write, dropped
+  sentences confirmed via `sentences_spoken <= 1`.
+
+Verification: `python -m pytest tests/unit/` → **134 passed in 9s**
+(117 existing + 17 new).
+
+Notes:
+- DONE_OK trigger test exposed a real subtlety: `time.monotonic()`
+  doesn't work for `VirtualMicStream` tests because pre-pushed audio
+  is served in milliseconds. The VAD's 0.8s silence window never
+  elapses by wall clock. Solution: inject a frame-aligned clock —
+  same `FrameClock` pattern as iter-006. In production this is a
+  non-issue since real PyAudio serves frames at audio rate.
+- A play_fn that respects `cancel_event` must yield between chunks
+  (sleep, blocking I/O, anything). Otherwise the worker thread
+  races through the play loop before the test can set the flag.
+  The test fixture uses `time.sleep(0.005)`; real audio playback
+  blocks at audio rate so this happens naturally.
+
+Next:
+- iter-010: wire barge-in into `mic_chat.run_chat`. Plumbing:
+  during `worker.wait_done()`, run a `BargeInWatcher` on `mic`
+  with `worker.cancel` as the callback. After `wait_done` returns,
+  if `watcher.detected`, feed `watcher.frames` into the next
+  `record_utterance_streaming` call (needs a small extension to
+  the recording function to accept "primed" frames). Without this,
+  the user's first syllables are dropped.
+- iter-011: filler-word generation. Pre-render short audio clips
+  ("hmm", "let me think") at startup. The worker grows an idle-
+  watchdog timer: if the queue has been empty for >600ms while
+  `submit_done` hasn't been called, play one filler clip. Hide
+  behind `config.local.yaml` flag.
