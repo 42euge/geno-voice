@@ -2559,3 +2559,76 @@ Notes:
   rarely uses it as a closing-after-terminator and it'd risk
   false positives in HTML-flavored content. Same reasoning for
   `>>` and `}}`.
+
+---
+
+## iter-034 — tolerant parse_filler_config
+
+**Branch:** `iter-034-filler-config` (merged ff to main, commit `fd5eda6`)
+**Date:** 2026-05-24
+
+iter-011 introduced filler words but the parsing lived inline in
+`mic_chat.run_chat`:
+
+    filler_texts = list(chat_cfg.get("fillers") or [])
+    filler_idle_threshold = float(chat_cfg.get("fillers_idle_threshold", 0.6))
+
+Two real failure modes verified before fixing:
+
+1. `chat.fillers: "hi"` (string instead of list). `list("hi")`
+   iterates the string and yields `["h", "i"]`. The user's typo
+   became two two-character "fillers" passed to TTS, producing
+   nonsense audio.
+2. `chat.fillers_idle_threshold: "abc"`. `float("abc")` raises
+   ValueError, killing chat startup before any STT / LLM / TTS
+   load — and the user only sees a stack trace.
+
+iter-020 already established the tolerant-parser pattern via
+`parse_vad_config`: typo'd values silently fall back to defaults
+rather than crashing. iter-034 applies it to fillers.
+
+Add `parse_filler_config(chat_cfg)` to `_chat_config.py`:
+- Returns `{"texts": list[str], "idle_threshold": float}`.
+- Non-list `fillers` → empty list (drops the string-as-iter bug).
+- Non-string items → silently dropped.
+- Empty / whitespace-only strings → dropped + stripped.
+- Non-positive `fillers_idle_threshold` → default 0.6.
+
+`mic_chat.run_chat` now calls the new parser. Removed the inline
+brittle code; behavior on well-formed config is unchanged.
+
+Tests (23 in `tests/unit/test_filler_config.py`):
+- `TestEmptyOrMissing` — defaults for empty / None / non-mapping;
+  result list is independent of `FILLER_DEFAULTS` (no shared
+  reference that future callers could corrupt).
+- `TestHappyPath` — well-formed input passes through; int
+  threshold coerced to float.
+- `TestFillersListInputForms` — `fillers` as string / dict / int
+  / None / empty list all return empty texts list.
+- `TestNonStringItemsDropped` — list with mixed types drops
+  non-strings; empty / whitespace-only strings dropped; whitespace
+  stripped from valid items.
+- `TestIdleThresholdInputForms` — string / negative / zero / None
+  all fall back to default 0.6.
+- `TestPartialConfig` — partial configs with only one key; combined
+  with unrelated chat keys (`vad`, etc.) — no interference.
+
+Verification: `python -m pytest tests/unit/` → **457 passed in 18.3s**
+(434 existing + 23 new).
+
+Notes:
+- Pattern: tolerant config parsing (iter-020 + iter-034). When
+  user-supplied YAML touches a config field, the parser should
+  fall back to a sensible default rather than crash. The user
+  finds the misbehavior fast enough to debug. Crashing during
+  `__init__` blocks the entire app, including the parts that
+  *don't* depend on this config.
+- One could argue `chat.fillers: "hi"` should warn the user to
+  fix their config. Accepted trade-off for now: silence trumps
+  noise. If a user complains "fillers don't work", the misconfig
+  is easy to spot in the YAML.
+- iter-034 doesn't touch `parse_vad_config` since it already
+  works the same way. Could in future: a `parse_chat_section`
+  umbrella that delegates to per-section parsers, then `mic_chat`
+  just unpacks one structured result. For now two parsers in
+  sequence is fine.

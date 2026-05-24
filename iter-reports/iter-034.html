@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-034 — tolerant parse_filler_config</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-033.html">← iter-033</a></nav><header>
+<h1>iter-034 — tolerant parse_filler_config</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-034-filler-config</code></span> · <span>commit: <code>fd5eda6</code></span></div>
+</header><p><strong>Branch:</strong> <code>iter-034-filler-config</code> (merged ff to main, commit <code>fd5eda6</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>iter-011 introduced filler words but the parsing lived inline in <code>mic_chat.run_chat</code>:</p>
+<p>filler_texts = list(chat_cfg.get(&quot;fillers&quot;) or []) filler_idle_threshold = float(chat_cfg.get(&quot;fillers_idle_threshold&quot;, 0.6))</p>
+<p>Two real failure modes verified before fixing:</p>
+<p>1. <code>chat.fillers: &quot;hi&quot;</code> (string instead of list). <code>list(&quot;hi&quot;)</code> iterates the string and yields <code>[&quot;h&quot;, &quot;i&quot;]</code>. The user&#x27;s typo became two two-character &quot;fillers&quot; passed to TTS, producing nonsense audio. 2. <code>chat.fillers_idle_threshold: &quot;abc&quot;</code>. <code>float(&quot;abc&quot;)</code> raises ValueError, killing chat startup before any STT / LLM / TTS load — and the user only sees a stack trace.</p>
+<p>iter-020 already established the tolerant-parser pattern via <code>parse_vad_config</code>: typo&#x27;d values silently fall back to defaults rather than crashing. iter-034 applies it to fillers.</p>
+<p>Add <code>parse_filler_config(chat_cfg)</code> to <code>_chat_config.py</code>:</p>
+<ul><li>Returns <code>{&quot;texts&quot;: list[str], &quot;idle_threshold&quot;: float}</code>.</li><li>Non-list <code>fillers</code> → empty list (drops the string-as-iter bug).</li><li>Non-string items → silently dropped.</li><li>Empty / whitespace-only strings → dropped + stripped.</li><li>Non-positive <code>fillers_idle_threshold</code> → default 0.6.</li></ul>
+<p><code>mic_chat.run_chat</code> now calls the new parser. Removed the inline brittle code; behavior on well-formed config is unchanged.</p>
+<p>Tests (23 in <code>tests/unit/test_filler_config.py</code>):</p>
+<ul><li><code>TestEmptyOrMissing</code> — defaults for empty / None / non-mapping; result list is independent of <code>FILLER_DEFAULTS</code> (no shared reference that future callers could corrupt).</li><li><code>TestHappyPath</code> — well-formed input passes through; int threshold coerced to float.</li><li><code>TestFillersListInputForms</code> — <code>fillers</code> as string / dict / int / None / empty list all return empty texts list.</li><li><code>TestNonStringItemsDropped</code> — list with mixed types drops non-strings; empty / whitespace-only strings dropped; whitespace stripped from valid items.</li><li><code>TestIdleThresholdInputForms</code> — string / negative / zero / None all fall back to default 0.6.</li><li><code>TestPartialConfig</code> — partial configs with only one key; combined with unrelated chat keys (<code>vad</code>, etc.) — no interference.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/</code> → <strong>457 passed in 18.3s</strong> (434 existing + 23 new).</p>
+<p>Notes:</p>
+<ul><li>Pattern: tolerant config parsing (iter-020 + iter-034). When user-supplied YAML touches a config field, the parser should fall back to a sensible default rather than crash. The user finds the misbehavior fast enough to debug. Crashing during <code>__init__</code> blocks the entire app, including the parts that <em>don&#x27;t</em> depend on this config.</li><li>One could argue <code>chat.fillers: &quot;hi&quot;</code> should warn the user to fix their config. Accepted trade-off for now: silence trumps noise. If a user complains &quot;fillers don&#x27;t work&quot;, the misconfig is easy to spot in the YAML.</li><li>iter-034 doesn&#x27;t touch <code>parse_vad_config</code> since it already works the same way. Could in future: a <code>parse_chat_section</code> umbrella that delegates to per-section parsers, then <code>mic_chat</code> just unpacks one structured result. For now two parsers in sequence is fine.</li></ul><nav><a href="index.html">← Index</a><a href="iter-033.html">← iter-033</a></nav>
+</div>
+</body>
+</html>

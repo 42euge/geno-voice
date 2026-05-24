@@ -104,7 +104,7 @@ table.iter-table th { background: var(--panel); }
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-032.html">← iter-032</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-032.html">← iter-032</a><a href="iter-034.html">iter-034 →</a></nav><header>
 <h1>iter-033 — split sentences after terminator+closing-paren / bracket</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-033-closing-parens</code></span> · <span>commit: <code>298bac2</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-033-closing-parens</code> (merged ff to main, commit <code>298bac2</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -121,7 +121,8 @@ table.iter-table th { background: var(--panel); }
 <ul><li><code>TestClosingParens</code> — period/exclamation/question + ); paren at very end (no whitespace, no split); multi-sentence chain.</li><li><code>TestClosingBrackets</code> — <code>.]</code> and <code>.}</code>.</li><li><code>TestRegressionsFromIter022</code> — all four quote variants still split (straight + smart, double + single).</li><li><code>TestPlainSentencesUnaffected</code> — non-quoted, non-parenthesized sentences split exactly as before.</li><li><code>TestAbbreviationInsideParens</code> — <code>(etc.)</code> and <code>(i.e.)</code> still don&#x27;t split; <code>(Mr. Smith.)</code> does.</li><li><code>TestConstantAndRegex</code> — <code>)</code>, <code>]</code>, <code>}</code> all in the set; quotes still in the set; backwards-compat alias preserved; regex matches every closing variant.</li></ul>
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>434 passed in 17.5s</strong> (413 existing + 21 new).</p>
 <p>Notes:</p>
-<ul><li>Pattern reused from iter-022: when a sentence-boundary feature has multiple natural variants (quotes, parens, brackets), the cleanest approach is one constant + re.escape so each variant is data, not code.</li><li>Did NOT add <code>&gt;</code> (closing angle / blockquote marker). LLM output rarely uses it as a closing-after-terminator and it&#x27;d risk false positives in HTML-flavored content. Same reasoning for <code>&gt;&gt;</code> and <code>}}</code>.</li></ul><nav><a href="index.html">← Index</a><a href="iter-032.html">← iter-032</a></nav>
+<ul><li>Pattern reused from iter-022: when a sentence-boundary feature has multiple natural variants (quotes, parens, brackets), the cleanest approach is one constant + re.escape so each variant is data, not code.</li><li>Did NOT add <code>&gt;</code> (closing angle / blockquote marker). LLM output rarely uses it as a closing-after-terminator and it&#x27;d risk false positives in HTML-flavored content. Same reasoning for <code>&gt;&gt;</code> and <code>}}</code>.</li></ul>
+<hr><nav><a href="index.html">← Index</a><a href="iter-032.html">← iter-032</a><a href="iter-034.html">iter-034 →</a></nav>
 </div>
 </body>
 </html>
