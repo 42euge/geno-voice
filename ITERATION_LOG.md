@@ -1341,3 +1341,93 @@ Notes:
   match true abbreviations.
 - The implementation runs `finditer` once on the buffer instead
   of `split` then post-process. Same work; cleaner code.
+
+---
+
+## iter-017 — extract print_session_summary, fix median, add a.m./p.m.
+
+**Branch:** `iter-017-session-summary` (merged ff to main, commit `f4c04cb`)
+**Date:** 2026-05-24
+
+Two small polish items bundled into one iteration.
+
+### 1. print_session_summary
+
+The KeyboardInterrupt summary in `mic_chat.run_chat` had two
+issues:
+
+- **Inlined** inside the `except KeyboardInterrupt` clause →
+  untestable without spinning up the full chat loop.
+- **Wrong median**: `sorted(times)[len(times)//2]` returns the
+  *upper* median for even-length lists. A 2-turn session with
+  STTs `[50ms, 200ms]` reported "median 200ms" — biased toward
+  the slower outlier. With `statistics.median` it's 125ms.
+
+Fix:
+- `examples/_chat_metrics.py` grew `print_session_summary(
+  metrics_list, llm_config, *, file=None)`. Computes medians via
+  `_median_ms` (statistics-based), handles empty / single-turn /
+  pluralization, surfaces `fillers_played` and `barge_in` totals
+  when nonzero.
+- `mic_chat.run_chat` KeyboardInterrupt handler is now a one-line
+  delegate.
+
+### 2. a.m. / p.m. abbreviations
+
+Time-of-day formats were missing from the iter-016 set:
+
+```
+"It is 9:30 a.m. Time to wake."
+  -> ['It is 9:30 a.m.'], 'Time to wake.'   # before iter-017
+  -> [], 'It is 9:30 a.m. Time to wake.'    # after
+```
+
+Same UX hit as iter-016: TTS would have paused at "a.m." treating
+it as a sentence end. Fix: added `"a.m"` and `"p.m"` to
+`NON_TERMINATING_ABBREVIATIONS`. Capitalized forms (`A.M.`) work
+because the lookup is lowercased.
+
+Tests (19 new in `tests/unit/test_session_summary.py`):
+
+`_median_ms` (5):
+- empty → 0; single value; odd-length; **even-length averages
+  middle two** (regression cover for the `sorted[len//2]` bug);
+  unsorted input.
+
+`print_session_summary` (10):
+- empty list → "no completed turns"; single turn shows all
+  lines; 3 turns pluralized; even-length `[50,100,150,200]`
+  reports 125ms not 150ms; best TTFS = min; fillers line only
+  when any played; barge-ins line only when any fired; missing
+  model → "unknown"; default file writes to stdout.
+
+a.m. / p.m. (4):
+- `a.m.` doesn't split; `p.m.` doesn't split; capitalized `P.M.`
+  doesn't split (lowercased lookup); two full sentences with
+  a.m./p.m. each split correctly at real terminators only.
+
+Verification: `python -m pytest tests/unit/` → **242 passed in 12s**
+(223 existing + 19 new).
+
+Notes:
+- The first attempt at the 4-sentence test had wrong expectations
+  for the trailing "Yes." (no whitespace after → stays in
+  remainder). Fixed in place; added a parallel test with trailing
+  space that DOES split both. Both behaviors documented.
+- `_median_ms` returns ms (not seconds) so it composes naturally
+  with the f-string formatters used by callers.
+
+---
+
+# Status (17 iterations)
+
+**242 unit tests passing in 12s** on x86_64 Linux. The codebase
+remains at a strong stopping point. Real polish items still
+available include: more abbreviation entries (PhD variants,
+European number formatting like `3,14`), session-summary CSV
+output for benchmarking, and config validation. Each is small.
+
+Stretch goals (real-mic CI, end-to-end with kokoro as token
+source) remain unaddressed. They're substantial infra work with
+diminishing returns; consider them when actual user feedback
+demands.
