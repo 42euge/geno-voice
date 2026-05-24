@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-037 — mic stale-frame count on TurnMetrics (taxonomy 2.19)</title>
+<title>iter-038 — LLM time-to-first-sentence metric (taxonomy 1.10)</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -167,21 +167,20 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-036.html">← iter-036</a><a href="iter-038.html">iter-038 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-037 — mic stale-frame count on TurnMetrics (taxonomy 2.19)</h1>
-<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-037-stale-frames</code></span> · <span>commit: <code>1ff0064</code></span> · <span>tests: <code>+10</code> (total 515)</span></div>
-</header><p><strong>Branch:</strong> <code>iter-037-stale-frames</code> (merged ff to main, commit <code>1ff0064</code>) <strong>Date:</strong> 2026-05-24</p>
-<p>First instrumentation pulled from <code>docs/perf-metrics-taxonomy.md</code>. Metric <strong>2.19 — Mic flush stale-frame count</strong>, in the &quot;Architecture-specific&quot; bucket. The data was already there: <code>flush_pending_audio</code> has returned a <code>drained</code> int since iter-002, but ChatLoop dropped it on the floor.</p>
-<p>Why this metric matters: many stale frames each turn means the mic accumulated bot audio between turns — acoustic echo, OS loopback, or Bluetooth duplex. A small consistent value is harmless (trailing silence the recorder didn&#x27;t consume before VAD&#x27;s DONE_OK). A large value is the signal &quot;your setup needs echo cancellation.&quot;</p>
+<nav><a href="index.html">← Index</a><a href="iter-037.html">← iter-037</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-038 — LLM time-to-first-sentence metric (taxonomy 1.10)</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-038-ttfsent</code></span> · <span>commit: <code>e7bd3f5</code></span> · <span>tests: <code>+10</code> (total 525)</span></div>
+</header><p><strong>Branch:</strong> <code>iter-038-ttfsent</code> (merged ff to main, commit <code>e7bd3f5</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>Second metric pulled from <code>docs/perf-metrics-taxonomy.md</code>. <strong>Metric 1.10 — LLM time-to-first-sentence (TTFsent)</strong>, in the &quot;Standard&quot; bucket.</p>
+<p>The existing <code>llm_first_token</code> records when the first token arrived from the LLM. But TTS can&#x27;t actually run until a complete <em>sentence</em> reaches the worker — and the splitter only emits one when a terminator (<code>.</code>, <code>!</code>, <code>?</code>) followed by whitespace appears. The LLM may stream chatty preamble (no terminator) for a while between first-token and first-sentence, and that gap is invisible in the current metrics.</p>
+<p>Two scenarios with identical first-token times can have very different TTFS depending on how the LLM phrases its response. A system prompt nudge like &quot;respond in short sentences&quot; would compress TTFsent without changing first-token. With this metric, the impact is measurable.</p>
 <p>Changes:</p>
-<ul><li><code>TurnMetrics.mic_stale_frames: int = 0</code> (new field).</li><li><code>ChatLoop.run_one_turn</code> captures <code>flush_pending_audio</code>&#x27;s return and stashes on metrics.</li><li><code>TurnMetrics.print</code> emits &quot;Mic stale: N frames (Ns)&quot; only when N &gt; 0; yellow if &gt; 0.5s, dim otherwise (don&#x27;t crowd the print with a clean turn).</li><li><code>print_session_summary</code> aggregates totals; emits only when total is non-zero, with &quot;check echo cancellation&quot; suggestion.</li></ul>
-<p>Honest limitation documented in the iteration log: the count includes trailing silence the recorder didn&#x27;t consume before VAD&#x27;s DONE_OK fired. So a clean turn still shows ~0.5s of &quot;stale&quot; because the recorder&#x27;s silence_duration window left unconsumed silent bytes in the buffer. Future iter could distinguish silent stale (harmless) from voiced stale (real echo) via RMS on the flushed bytes — iter-037 keeps the metric simple and exposes the raw count.</p>
-<p>Tests (10 in <code>tests/unit/test_mic_stale_frames.py</code>):</p>
-<ul><li><code>TestDefault</code> — TurnMetrics defaults to 0.</li><li><code>TestPerTurnPrint</code> — zero omits the line, non-zero emits with frames + seconds.</li><li><code>TestSessionSummary</code> — zero total omits, non-zero emits with aggregate + seconds + suggestion.</li><li><code>TestChatLoopCapturesStaleFrames</code> — field is populated on metrics; extra audio beyond utterance is counted; extra-burst strictly greater than baseline.</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>515 passed, 1 skipped in 32s</strong> (505 existing + 10 new).</p>
+<ul><li><code>TurnMetrics.llm_first_sentence: float = 0.0</code> (new field).</li><li><code>ChatLoop.run_one_turn</code> stamps <code>first_sentence_at</code> the first time <code>split_complete_sentences</code> yields a non-empty list. Field set to <code>first_sentence_at - llm_start</code> after the LLM stream completes; 0 if no terminator ever arrived.</li><li><code>TurnMetrics.print</code> emits &quot;LLM 1st sent: Nms (+Mms preamble)&quot; only when &gt; 0. The parenthetical shows the gap from first-token so the reader sees splitter-wait at a glance.</li><li><code>print_session_summary</code> shows median TTFsent over turns where it&#x27;s &gt; 0 (parallel to iter-031&#x27;s TTFS filter).</li></ul>
+<p>Tests (10 in <code>tests/unit/test_llm_first_sentence.py</code>):</p>
+<ul><li><code>TestDefault</code> — TurnMetrics defaults to 0.</li><li><code>TestPerTurnPrint</code> — zero omits the line; non-zero shows preamble gap; zero-gap edge case (first token IS the terminator) shows &quot;+0ms preamble&quot;.</li><li><code>TestSessionSummary</code> — no turns omits the median line; multi-turn emits median in ms; zero turns filtered from the median.</li><li><code>TestChatLoopCapturesFirstSentence</code> — terminator triggers the stamp; no-terminator stream leaves it at 0; long-preamble stream shows gap &gt;= preamble sleep.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>525 passed, 1 skipped in 31s</strong> (515 existing + 10 new).</p>
 <p>Notes:</p>
-<ul><li>Pattern: pulling metrics from the taxonomy doc one at a time is the right cadence. Each instrumentation should be a small, testable unit. iter-037 took two file edits + one new test file — appropriate scope.</li><li>Next candidates from the taxonomy: 2.10 (barge-in latency — triggered_at exists since iter-030, just need playback_stopped_at), 2.18 (cancel-event correctness), 1.10 (LLM time-to-first-sentence).</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-036.html">← iter-036</a><a href="iter-038.html">iter-038 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li>Two metrics from the taxonomy now live (2.19 + 1.10). The cadence is one metric per iteration; that&#x27;s the right rhythm — small testable additions, each with its own diagnostic value.</li><li>Next candidates: 2.10 (barge-in latency — needs a <code>playback_stopped_at</code> hook in the worker), 2.18 (cancel-event correctness — <code>play_aligned</code> should report HOW it exited, not just elapsed seconds).</li><li>The &quot;preamble lag&quot; insight is only as good as the splitter&#x27;s terminator detection. iter-016 / iter-021 / iter-022 / iter-033 hardened the splitter for abbreviations, ordinals, quoted speech, and parens — without those fixes, TTFsent would be misleadingly high on text containing &quot;Mr. Smith&quot; or &quot;1st place&quot; or <code>(...).</code>.</li></ul><nav><a href="index.html">← Index</a><a href="iter-037.html">← iter-037</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

@@ -2889,3 +2889,68 @@ Notes:
 - Next candidates from the taxonomy: 2.10 (barge-in latency —
   triggered_at exists since iter-030, just need playback_stopped_at),
   2.18 (cancel-event correctness), 1.10 (LLM time-to-first-sentence).
+
+---
+
+## iter-038 — LLM time-to-first-sentence metric (taxonomy 1.10)
+
+**Branch:** `iter-038-ttfsent` (merged ff to main, commit `e7bd3f5`)
+**Date:** 2026-05-24
+
+Second metric pulled from `docs/perf-metrics-taxonomy.md`. **Metric
+1.10 — LLM time-to-first-sentence (TTFsent)**, in the "Standard"
+bucket.
+
+The existing `llm_first_token` records when the first token arrived
+from the LLM. But TTS can't actually run until a complete *sentence*
+reaches the worker — and the splitter only emits one when a
+terminator (`.`, `!`, `?`) followed by whitespace appears. The LLM
+may stream chatty preamble (no terminator) for a while between
+first-token and first-sentence, and that gap is invisible in the
+current metrics.
+
+Two scenarios with identical first-token times can have very
+different TTFS depending on how the LLM phrases its response. A
+system prompt nudge like "respond in short sentences" would compress
+TTFsent without changing first-token. With this metric, the impact
+is measurable.
+
+Changes:
+- `TurnMetrics.llm_first_sentence: float = 0.0` (new field).
+- `ChatLoop.run_one_turn` stamps `first_sentence_at` the first
+  time `split_complete_sentences` yields a non-empty list. Field
+  set to `first_sentence_at - llm_start` after the LLM stream
+  completes; 0 if no terminator ever arrived.
+- `TurnMetrics.print` emits "LLM 1st sent: Nms (+Mms preamble)"
+  only when > 0. The parenthetical shows the gap from first-token
+  so the reader sees splitter-wait at a glance.
+- `print_session_summary` shows median TTFsent over turns where
+  it's > 0 (parallel to iter-031's TTFS filter).
+
+Tests (10 in `tests/unit/test_llm_first_sentence.py`):
+- `TestDefault` — TurnMetrics defaults to 0.
+- `TestPerTurnPrint` — zero omits the line; non-zero shows preamble
+  gap; zero-gap edge case (first token IS the terminator) shows
+  "+0ms preamble".
+- `TestSessionSummary` — no turns omits the median line; multi-turn
+  emits median in ms; zero turns filtered from the median.
+- `TestChatLoopCapturesFirstSentence` — terminator triggers the
+  stamp; no-terminator stream leaves it at 0; long-preamble stream
+  shows gap >= preamble sleep.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **525 passed, 1 skipped in 31s** (515 existing
++ 10 new).
+
+Notes:
+- Two metrics from the taxonomy now live (2.19 + 1.10). The
+  cadence is one metric per iteration; that's the right rhythm —
+  small testable additions, each with its own diagnostic value.
+- Next candidates: 2.10 (barge-in latency — needs a `playback_stopped_at`
+  hook in the worker), 2.18 (cancel-event correctness — `play_aligned`
+  should report HOW it exited, not just elapsed seconds).
+- The "preamble lag" insight is only as good as the splitter's
+  terminator detection. iter-016 / iter-021 / iter-022 / iter-033
+  hardened the splitter for abbreviations, ordinals, quoted speech,
+  and parens — without those fixes, TTFsent would be misleadingly
+  high on text containing "Mr. Smith" or "1st place" or `(...).`.
