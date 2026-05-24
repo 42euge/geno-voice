@@ -100,6 +100,7 @@ def record_utterance_streaming(
     transcribe_fn: Callable[[bytes], str | None] | None = None,
     clock: Callable[[], float] = time.monotonic,
     output=None,
+    primed_frames: list[bytes] | None = None,
 ) -> tuple[bytes, float, float]:
     """Record one utterance with live STT preview.
 
@@ -122,6 +123,15 @@ def record_utterance_streaming(
         the loop doesn't depend on real wall time.
       ``output`` — file-like object for the preview line. Defaults to
         ``sys.stdout``. Tests can pass an ``io.StringIO``.
+      ``primed_frames`` — optional list of pre-captured byte chunks
+        that get fed through the VAD before any live mic reads. The
+        iter-009 ``BargeInWatcher`` produces these; passing them here
+        keeps the user's first syllables in the recorded wav instead
+        of dropping them. Each chunk must be ``CHUNK * 2`` bytes
+        (int16 mono at ``RATE``). During the priming phase, the VAD
+        is fed virtual timestamps that advance at audio rate so its
+        time-based logic (silence-window) matches what would happen
+        with live mic reads.
     """
     if transcribe_fn is None:
         transcribe_fn = lambda wav: _transcribe_quick(stt_engine, wav)
@@ -138,11 +148,38 @@ def record_utterance_streaming(
     )
     too_short = False
 
+    primed = list(primed_frames or [])
+    primed_idx = 0
+    # Use one frame-aligned virtual clock for ALL frames (primed and
+    # live). The naive approach — clock() per frame — has two
+    # failure modes:
+    #   1. With a real ``time.monotonic`` and primed frames served
+    #      in microseconds, the silence window appears to close
+    #      almost instantly because per-frame deltas are tiny.
+    #   2. With a per-call test FrameClock, the first live read's
+    #      timestamp can land BEFORE the last primed timestamp
+    #      (clock advances per call, but virtual primed time
+    #      advances per frame), corrupting ``last_speech_duration``.
+    # Capturing ``t_origin`` once and computing
+    # ``now = t_origin + frame_idx * dt`` keeps time monotonic and
+    # at audio rate regardless of how the underlying clock behaves.
+    # In production this matches real wall time because PyAudio
+    # blocks at audio rate; in tests it matches whatever virtual
+    # cadence the test wants.
+    t_origin = clock()
+    frame_dt = CHUNK / RATE
+    frame_idx = 0
+
     while True:
-        data = stream.read(CHUNK, exception_on_overflow=False)
+        if primed_idx < len(primed):
+            data = primed[primed_idx]
+            primed_idx += 1
+        else:
+            data = stream.read(CHUNK, exception_on_overflow=False)
+        now = t_origin + frame_idx * frame_dt
+        frame_idx += 1
         audio = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
         level = rms(audio)
-        now = clock()
 
         event = vad.feed(level, now)
 

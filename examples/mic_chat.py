@@ -57,9 +57,10 @@ from examples._chat_playback import (
     play_aligned as _play_aligned_core,
 )
 
-# Streaming-overlap worker — runs synth + play on a background thread so
-# the LLM token stream isn't blocked by audio playback. iter-008.
-from examples._chat_pipeline import SentenceWorker
+# Streaming-overlap worker + barge-in primitives — runs synth + play
+# on a background thread (iter-008) and lets a mic-side watcher
+# cancel mid-sentence when the user starts speaking (iter-009/010).
+from examples._chat_pipeline import BargeInWatcher, SentenceWorker
 
 DIM = "\033[2m"
 BOLD = "\033[1m"
@@ -265,11 +266,19 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
     messages = [{"role": "system", "content": system_prompt}]
     all_metrics = []
 
+    # Frames captured by a BargeInWatcher during the previous bot
+    # response, if any. Fed into the next record_utterance_streaming
+    # call so the user's first syllables aren't dropped. iter-010.
+    primed_frames: list[bytes] | None = None
+
     try:
         turn = 0
         while True:
             print(f"  {DIM}[{turn + 1}] waiting...{RESET}", end="", flush=True)
-            wav_bytes, speech_dur, stt_time = record_utterance_streaming(mic, stt_engine)
+            wav_bytes, speech_dur, stt_time = record_utterance_streaming(
+                mic, stt_engine, primed_frames=primed_frames,
+            )
+            primed_frames = None  # consumed
             if not wav_bytes:
                 continue
 
@@ -321,6 +330,24 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
             )
             worker.start()
 
+            # Drop any audio the mic has buffered during the LLM
+            # round-trip — otherwise the watcher would interpret it
+            # as fresh user speech the moment we start it.
+            flush_pending_audio(mic, chunk_size=CHUNK)
+
+            # Watch the mic for user barge-in while the bot is
+            # speaking. On detection, fire worker.cancel so the
+            # current sentence breaks mid-stream and pending ones
+            # are dropped. Captured frames feed the next record loop
+            # so the user's first syllables aren't lost. iter-010.
+            watcher = BargeInWatcher(
+                mic=mic,
+                on_speech_detected=lambda: worker.cancel(timeout=5.0),
+                chunk_size=CHUNK,
+                rate=RATE,
+            )
+            watcher.start()
+
             llm_stream_done_at = None
             try:
                 for token in llm_stream(messages, llm_config):
@@ -344,6 +371,18 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
 
                 worker.submit_done()
                 worker.wait_done(timeout=120.0)
+                # Stop the watcher; if it detected user speech, save
+                # its captured frames so the next record_utterance
+                # call can replay them and not lose the user's
+                # first syllables.
+                watcher.stop(timeout=2.0)
+                if watcher.detected:
+                    primed_frames = list(watcher.frames)
+                    print(
+                        f"\n  {DIM}barge-in: replaying "
+                        f"{len(primed_frames)} captured frames "
+                        f"({len(primed_frames) * CHUNK / RATE:.1f}s){RESET}"
+                    )
                 print()  # newline after the streamed bot text
 
                 # Pull TTFS / metrics from the worker.
@@ -370,6 +409,7 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
             except Exception as e:
                 print(f"\n  {YELLOW}LLM error: {e}{RESET}")
                 messages.pop()
+                watcher.stop(timeout=2.0)
                 worker.stop(timeout=5.0)  # drop pending sentences, close speaker
                 # The mic stream has been silently buffering during the
                 # (possibly long) failed LLM call. Drain it so we don't
