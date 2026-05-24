@@ -62,6 +62,14 @@ class TurnMetrics:
     ttfs: float = 0.0
     total_e2e: float = 0.0
     sentences_spoken: int = 0
+    # iter-045: mean character length of sentences submitted to the
+    # worker this turn. Diagnostic for splitter fragmentation:
+    # mean ≪ ~30 means lots of short fragments ("Yes.", "I see.")
+    # which synth fast but defeat streaming-overlap; mean ≫ ~150
+    # means run-on sentences that delay TTFS. Healthy LLM output
+    # in voice context lands ~50-100 chars / sentence. Metric 2.6
+    # in the perf-metrics taxonomy.
+    mean_sentence_chars: float = 0.0
     # iter-040: count of sentences cut mid-stream by cancel_event
     # (vs completed naturally before barge-in fired). Only non-zero
     # on barge-in turns where the cancel landed during a sentence's
@@ -121,6 +129,12 @@ class TurnMetrics:
             tts_suffix += f" + {self.fillers_played} filler"
             if self.fillers_played > 1:
                 tts_suffix += "s"
+        # iter-045: append mean sentence length as fragmentation
+        # diagnostic. Yellow flag if <30 chars (over-fragmenting,
+        # losing overlap) or >150 chars (under-fragmenting,
+        # delaying TTFS).
+        if self.mean_sentence_chars > 0:
+            tts_suffix += f", avg {self.mean_sentence_chars:.0f} chars"
         tts_suffix += ")"
         print(f"  {_DIM}│{_RESET}  TTS:           {self.tts_time*1000:>7.0f}ms  {tts_suffix}")
         print(f"  {_DIM}│{_RESET}  Playback:      {self.playback_time*1000:>7.0f}ms")
@@ -291,6 +305,15 @@ def print_session_summary(metrics_list: list[TurnMetrics], llm_config: dict, *, 
         for m in metrics_list
         if m.streaming_overlap_ratio > 0
     ]
+    # iter-045: mean sentence-length over turns where any sentence
+    # was actually submitted (>0). Operator can spot a fragmentation
+    # regression at session-summary glance — e.g. a system-prompt
+    # nudge that crashes the avg from 70 → 25 chars.
+    sentence_lens = [
+        m.mean_sentence_chars
+        for m in metrics_list
+        if m.mean_sentence_chars > 0
+    ]
 
     _emit(f"{_BOLD}  Session Summary ({n} turn{'' if n == 1 else 's'}){_RESET}")
     _emit(f"    Median STT:       {_median_ms(stt_times):.0f}ms")
@@ -351,5 +374,9 @@ def print_session_summary(metrics_list: list[TurnMetrics], llm_config: dict, *, 
         # first-sentence latency (iter-038's TTFsent) and synth time.
         median_pct = statistics.median(overlap_ratios) * 100
         _emit(f"    Median overlap:   {median_pct:.0f}%")
+    if sentence_lens:
+        # iter-045: mean across the per-turn means.
+        avg_chars = sum(sentence_lens) / len(sentence_lens)
+        _emit(f"    Mean sentence:    {avg_chars:.0f} chars")
     _emit(f"    Model:            {llm_config.get('model', 'unknown')}")
     _emit()

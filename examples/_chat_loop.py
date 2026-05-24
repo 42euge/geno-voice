@@ -273,6 +273,11 @@ class ChatLoop:
         llm_stream_done_at: Optional[float] = None
         next_primed: Optional[list] = None
         had_error = False
+        # iter-045: accumulate sentence character lengths so we can
+        # report the mean as a fragmentation diagnostic. Track total
+        # + count separately so the average is computed once at end.
+        sentence_chars_total = 0
+        sentence_chars_count = 0
 
         try:
             for token in llm_gen:
@@ -287,6 +292,8 @@ class ChatLoop:
                 if complete and first_sentence_at is None:
                     first_sentence_at = self._clock()
                 for sentence in complete:
+                    sentence_chars_total += len(sentence)
+                    sentence_chars_count += 1
                     worker.submit(sentence)
 
             llm_stream_done_at = self._clock()
@@ -294,6 +301,8 @@ class ChatLoop:
             if not coord.is_set():
                 remaining = token_buffer.strip()
                 if remaining:
+                    sentence_chars_total += len(remaining)
+                    sentence_chars_count += 1
                     worker.submit(remaining)
                 worker.submit_done()
                 worker.wait_done(timeout=self._wait_done_timeout)
@@ -357,6 +366,11 @@ class ChatLoop:
                 )
             # iter-044: cumulative between-sentence idle gap.
             metrics.worker_idle_gap_total = worker.idle_gap_total
+            # iter-045: mean character length of sentences submitted.
+            if sentence_chars_count > 0:
+                metrics.mean_sentence_chars = (
+                    sentence_chars_total / sentence_chars_count
+                )
             metrics.tts_time = worker.tts_time
             metrics.playback_time = worker.playback_time
             metrics.sentences_spoken = worker.sentences_spoken

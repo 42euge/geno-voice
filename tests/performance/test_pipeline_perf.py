@@ -111,6 +111,8 @@ class ScenarioResult:
     streaming_overlap_ratio: float = 0.0
     # iter-044: cumulative between-sentence worker idle gap.
     worker_idle_gap_ms: float = 0.0
+    # iter-045: mean character length of sentences submitted.
+    mean_sentence_chars: float = 0.0
     wall_ms: float = 0.0          # full run_one_turn wall-clock
     barge_in: bool = False
     # iter-041: time from barge-in detect to playback halt. 0 if
@@ -279,6 +281,7 @@ def _run_scenario(
         sentences_cancelled=m.sentences_cancelled,
         streaming_overlap_ratio=m.streaming_overlap_ratio,
         worker_idle_gap_ms=m.worker_idle_gap_total * 1000,
+        mean_sentence_chars=m.mean_sentence_chars,
         wall_ms=wall * 1000,
         barge_in=m.barge_in,
         barge_in_latency_ms=m.barge_in_latency * 1000,
@@ -443,6 +446,7 @@ class TestPerfScenarios:
             sentences_cancelled=m.sentences_cancelled,
         streaming_overlap_ratio=m.streaming_overlap_ratio,
         worker_idle_gap_ms=m.worker_idle_gap_total * 1000,
+        mean_sentence_chars=m.mean_sentence_chars,
             wall_ms=wall * 1000,
             barge_in=m.barge_in,
             barge_in_latency_ms=m.barge_in_latency * 1000,
