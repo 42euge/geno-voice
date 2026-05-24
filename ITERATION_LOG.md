@@ -279,3 +279,75 @@ Next:
   loop can be smoke-tested in CI with a fixed prompt + a stubbed
   LLM. This is the foundation for benchmarking pipeline latency
   changes deterministically.
+
+---
+
+## iter-006 — extract record_utterance_streaming to pyaudio-free module
+
+**Branch:** `iter-006-recording-extract` (merged ff to main, commit `9cf4631`)
+**Date:** 2026-05-23
+
+What changed:
+- New module `examples/_chat_recording.py` hosts the recording loop +
+  its audio/VAD constants (RATE, CHUNK, SILENCE_THRESHOLD, etc.),
+  `rms`, `_buffer_to_wav`, `_transcribe_quick`, and
+  `record_utterance_streaming`. No top-level pyaudio import — the
+  module is importable on x86_64 Linux without ALSA.
+- `record_utterance_streaming` gained three injection points:
+    `transcribe_fn` — `callable(wav) -> str | None`. Tests stub this.
+    `clock` — `callable() -> float`. Tests pass a `FrameClock` that
+        advances exactly one chunk per call, removing wall-time
+        dependency from the test loop.
+    `output` — file-like for the live preview. Tests pass `StringIO`.
+- `mic_chat.py` re-imports the constants and function from the new
+  module. Live behavior unchanged.
+- Side fix: the too-short branch now explicitly sets
+  `stt_engine._last_text = None` so a stale value from a previous
+  turn can't leak through.
+
+Tests (8 new in `tests/unit/test_chat_recording.py`):
+- Three-tuple with plausible values for a 1s tone burst.
+- Transcript stashed on `engine._last_text`.
+- Returned bytes parse as a valid 16kHz mono int16 WAV.
+- Too-short blip returns `(b'', 0.0, 0.0)` and skips transcribe_fn.
+- `transcribe_fn` receives strictly-growing wav buffers across
+  multiple preview intervals (regression cover for streaming preview).
+- Preview only re-renders when text changes (prevents flicker).
+- Default `transcribe_fn` falls back to `_transcribe_quick` and
+  returns None on Linux without crashing.
+- **TTS-fed smoke test (opt-in)**: real kokoro renders "Hello, this
+  is a recording test.", virtual mic receives it, the full
+  `record_utterance_streaming` runs with a stub transcriber, and
+  asserts a well-formed wav of plausible duration.
+
+Verification: `python -m pytest tests/unit/` → **81 passed in ~9s**
+(73 existing + 8 new).
+
+Notes:
+- The `FrameClock` test helper turned out to be the unlock: by
+  advancing time exactly `chunk/rate` per `clock()` call, the VAD
+  state machine sees the same time progression it would with real
+  audio, but the test runs as fast as numpy can crunch the buffer.
+- One subtle thing learned writing the tests: `transcribe_fn` is
+  called twice during the typical happy path — once at each
+  `INFERENCE_INTERVAL` cross during speech (preview), and once at
+  the very end on the final wav. The "growing buffer" test
+  documents that contract.
+
+Next:
+- iter-007: extract `play_aligned` to a pyaudio-free module the same
+  way. Accept any speaker-shaped object (write/stop_stream/close),
+  test against `VirtualSpeakerStream`. After this, every primitive
+  the chat loop touches is testable.
+- iter-008: build streaming overlap — a `SentenceWorker` thread that
+  consumes from a `Queue` of complete sentences, synthesizes via
+  `tts_engine`, plays via the speaker stream, and reports playback
+  duration. The LLM stream feeds the queue. Test using
+  `VirtualSpeakerStream` to assert that playback starts before the
+  LLM stream is done.
+- iter-009: barge-in. Run `VadState` on the mic input *during*
+  speaker writes (loopback mode means mic and speaker share a
+  buffer; we'd disable loopback for this and use a separate mic
+  feeder for "user starts speaking" injection). When the worker
+  detects speech, drain the sentence queue, stop the speaker,
+  return control.
