@@ -3266,3 +3266,74 @@ Notes:
   REGRESS when something gets slower (e.g. a wider VAD poll
   interval). The perf charts are ready; the regression detection
   isn't built yet.
+
+---
+
+## iter-043 — streaming overlap ratio metric (taxonomy 2.1)
+
+**Branch:** `iter-043-overlap-ratio` (merged ff to main, commit `c6d684d`)
+**Date:** 2026-05-24
+
+Fifth metric pulled from `docs/perf-metrics-taxonomy.md`. **Metric
+2.1 — Streaming overlap ratio**, in the "Architecture-specific"
+bucket. The taxonomy is direct: "the whole point of `SentenceWorker`
+is to run TTS in parallel with token receipt. If overlap is 0,
+the worker is just adding latency."
+
+Definition adopted (a simple proxy):
+
+    overlap_ratio = max(0, llm_stream_done_at - first_audio_at) / llm_total
+
+- 1.0 (capped) — audio started before LLM finished and stayed
+  through end-of-stream.
+- 0.5 — audio overlapped half the stream.
+- 0 — audio only started AFTER LLM finished, or didn't play at
+  all. Sequential. iter-008 streaming-overlap not paying off
+  this turn.
+
+Skipped a more elaborate "union of synth + play intervals
+intersected with LLM window" definition because (a) it requires
+new instrumentation in the worker (synth_at, play_at lists), (b)
+the simple proxy already answers the operational question
+("does my pipeline benefit from streaming?").
+
+Surfaced at three layers:
+
+1. `TurnMetrics.streaming_overlap_ratio: float = 0.0` (new field).
+2. ChatLoop computes it after `llm_stream_done_at` is set.
+3. Per-turn print: "Overlap: NN% (LLM↔TTS concurrency)" only on
+   turns where >0. Green ≥50%, yellow <50%.
+4. Session summary: "Median overlap: NN%" over turns where >0
+   (parallel to iter-031's TTFS filter).
+5. `ScenarioResult.streaming_overlap_ratio` on perf rows.
+
+Empirical results from the perf suite (stub LLM is too fast for
+most scenarios to show overlap):
+- short_short / short_long / long_short / tts / stt / slow_llm: 0%.
+- fillers_on: 70% (filler clip starts immediately, LLM is slow).
+- barge_in: 50% (barge cuts mid-stream during LLM).
+
+Real-LLM perf with 200-500ms TTFT would show meaningful overlap
+on every multi-sentence scenario. The metric is calibrated for
+that reality.
+
+Tests (9 in `tests/unit/test_streaming_overlap.py`):
+- Default 0.
+- Per-turn print — zero omits, non-zero shows pct + explainer,
+  100% renders correctly.
+- Session aggregate — no-data omits, some-data shows median,
+  zero turns filtered.
+- ChatLoop arithmetic — real audio play yields >0 ratio bounded
+  ≤1; no-audio (LLM yields fragments only) yields 0.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **589 passed, 1 skipped in 21s** (580 existing
++ 9 new).
+
+Notes:
+- Five metrics from the taxonomy now live (2.19 / 1.10 / 2.18 /
+  2.10 / 2.1). Iterating one per loop has worked; we have ~40
+  more on the wishlist.
+- The "fillers_on" 70% number is itself a useful signal —
+  validates that iter-011's filler design actually overlaps the
+  filler with the LLM stream.

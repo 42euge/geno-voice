@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-042 — perf-suite barge-in scenario + barge-in latency on perf snapshot</title>
+<title>iter-043 — streaming overlap ratio metric (taxonomy 2.1)</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,25 +168,25 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-041.html">← iter-041</a><a href="iter-043.html">iter-043 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-042 — perf-suite barge-in scenario + barge-in latency on perf snapshot</h1>
-<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-042-perf-barge</code></span> · <span>commit: <code>345ad7c</code></span></div>
-</header><p><strong>Branch:</strong> <code>iter-042-perf-barge</code> (merged ff to main, commit <code>345ad7c</code>) <strong>Date:</strong> 2026-05-24</p>
-<p>iter-041 instrumented barge-in latency on <code>TurnMetrics</code>. iter-042 wires it into the perf-snapshot row, adds a deterministic perf scenario that actually triggers a barge-in, and renders the metric on <code>performance.html</code> (latest-snapshot bar chart + time-series across iterations).</p>
-<p><strong>The deterministic-barge workaround.</strong> The naive &quot;push barge audio in the mic up front&quot; approach fails because iter-002&#x27;s <code>flush_pending_audio</code> drains the mic between phases and eats the barge tone before the watcher starts. The fix: push the barge from a daemon thread that fires 50ms after <code>run_one_turn</code> starts — by which point the flush has run and the watcher is active.</p>
-<p>This is much more reliable than iter-035&#x27;s <code>TestBargeInDuringPlayback</code> (which is marked <code>pytest.skip</code> when timing-flaky). The perf scenario has run cleanly on every loop iteration since landing.</p>
-<p><strong>ScenarioResult schema additions.</strong> Five new fields (mostly catch-up from earlier iterations whose metrics weren&#x27;t yet on the perf rows):</p>
-<ul><li><code>llm_first_sentence_ms</code> (iter-038, taxonomy 1.10)</li><li><code>sentences_cancelled</code> (iter-040, taxonomy 2.18)</li><li><code>barge_in_latency_ms</code> (iter-041, taxonomy 2.10)</li><li><code>mic_stale_frames</code> (iter-037, taxonomy 2.19)</li></ul>
-<p><strong>Generator chart additions.</strong> Two new chart sites:</p>
-<ul><li>&quot;Barge-in latency by scenario&quot; in the latest-snapshot section (horizontal bar chart, yellow palette).</li><li>&quot;Barge-in latency over iterations&quot; in the time-series section (multi-line chart, one line per scenario).</li></ul>
-<p>Both charts use an emit-only-with-data rule: if no scenario row in the relevant data has a non-zero measurement, the chart is suppressed (don&#x27;t show all-zero bars or empty lines).</p>
-<p>Tests (8 in <code>tests/unit/test_perf_barge_chart.py</code>):</p>
-<ul><li><code>TestLatestSnapshotBargeChart</code> — no-barge-data omits the chart, at-least-one emits with the value visible, palette color check.</li><li><code>TestHistoryBargeChart</code> — no-barge-history omits, with-barge emits with legend label, scenario name shows up in time-series.</li><li><code>TestScenarioSchemaSurfacedInTable</code> — table reflects barge_in flag (yes/no cells).</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>580 passed, 1 skipped in 21s</strong> (571 existing + 8 new + 1 new perf scenario).</p>
-<p>The new perf scenario records: <code>barge_in=True</code>, <code>barge_in_latency_ms ~5ms</code> (virtual audio is instant), <code>sentences_cancelled=1</code>. Real-world latency on PyAudio + kokoro will be 20-100ms — the chart is calibrated for that range.</p>
+<nav><a href="index.html">← Index</a><a href="iter-042.html">← iter-042</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-043 — streaming overlap ratio metric (taxonomy 2.1)</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-043-overlap-ratio</code></span> · <span>commit: <code>c6d684d</code></span> · <span>tests: <code>+9</code> (total 589)</span></div>
+</header><p><strong>Branch:</strong> <code>iter-043-overlap-ratio</code> (merged ff to main, commit <code>c6d684d</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>Fifth metric pulled from <code>docs/perf-metrics-taxonomy.md</code>. <strong>Metric 2.1 — Streaming overlap ratio</strong>, in the &quot;Architecture-specific&quot; bucket. The taxonomy is direct: &quot;the whole point of <code>SentenceWorker</code> is to run TTS in parallel with token receipt. If overlap is 0, the worker is just adding latency.&quot;</p>
+<p>Definition adopted (a simple proxy):</p>
+<p>overlap_ratio = max(0, llm_stream_done_at - first_audio_at) / llm_total</p>
+<ul><li>1.0 (capped) — audio started before LLM finished and stayed through end-of-stream.</li><li>0.5 — audio overlapped half the stream.</li><li>0 — audio only started AFTER LLM finished, or didn&#x27;t play at all. Sequential. iter-008 streaming-overlap not paying off this turn.</li></ul>
+<p>Skipped a more elaborate &quot;union of synth + play intervals intersected with LLM window&quot; definition because (a) it requires new instrumentation in the worker (synth_at, play_at lists), (b) the simple proxy already answers the operational question (&quot;does my pipeline benefit from streaming?&quot;).</p>
+<p>Surfaced at three layers:</p>
+<p>1. <code>TurnMetrics.streaming_overlap_ratio: float = 0.0</code> (new field). 2. ChatLoop computes it after <code>llm_stream_done_at</code> is set. 3. Per-turn print: &quot;Overlap: NN% (LLM↔TTS concurrency)&quot; only on turns where &gt;0. Green ≥50%, yellow &lt;50%. 4. Session summary: &quot;Median overlap: NN%&quot; over turns where &gt;0 (parallel to iter-031&#x27;s TTFS filter). 5. <code>ScenarioResult.streaming_overlap_ratio</code> on perf rows.</p>
+<p>Empirical results from the perf suite (stub LLM is too fast for most scenarios to show overlap):</p>
+<ul><li>short_short / short_long / long_short / tts / stt / slow_llm: 0%.</li><li>fillers_on: 70% (filler clip starts immediately, LLM is slow).</li><li>barge_in: 50% (barge cuts mid-stream during LLM).</li></ul>
+<p>Real-LLM perf with 200-500ms TTFT would show meaningful overlap on every multi-sentence scenario. The metric is calibrated for that reality.</p>
+<p>Tests (9 in <code>tests/unit/test_streaming_overlap.py</code>):</p>
+<ul><li>Default 0.</li><li>Per-turn print — zero omits, non-zero shows pct + explainer, 100% renders correctly.</li><li>Session aggregate — no-data omits, some-data shows median, zero turns filtered.</li><li>ChatLoop arithmetic — real audio play yields &gt;0 ratio bounded ≤1; no-audio (LLM yields fragments only) yields 0.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>589 passed, 1 skipped in 21s</strong> (580 existing + 9 new).</p>
 <p>Notes:</p>
-<ul><li>iter-040 / iter-041 / iter-042 form a tight trio: instrument cancel correctness, instrument barge latency, wire both into the perf scenario. The full barge-in observability story is now: &quot;a barge fired, here&#x27;s how fast, and here&#x27;s whether it cut a sentence mid-stream.&quot;</li><li>Future barge work would need to drive perf scenarios that REGRESS when something gets slower (e.g. a wider VAD poll interval). The perf charts are ready; the regression detection isn&#x27;t built yet.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-041.html">← iter-041</a><a href="iter-043.html">iter-043 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li>Five metrics from the taxonomy now live (2.19 / 1.10 / 2.18 / 2.10 / 2.1). Iterating one per loop has worked; we have ~40 more on the wishlist.</li><li>The &quot;fillers_on&quot; 70% number is itself a useful signal — validates that iter-011&#x27;s filler design actually overlaps the filler with the LLM stream.</li></ul><nav><a href="index.html">← Index</a><a href="iter-042.html">← iter-042</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>
