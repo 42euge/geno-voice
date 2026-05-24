@@ -60,3 +60,44 @@ Next:
   that it consumes available chunks without blocking.
 - iter-003: bug #4 (preview wrap) — wire `format_preview_line` into
   `record_utterance_streaming` and verify with a fake stdout test.
+
+---
+
+## iter-002 — fix bug #3 (mic buffer not flushed after LLM error)
+
+**Branch:** `iter-002-bug-3` (merged ff to main, commit `795a3aa`)
+**Date:** 2026-05-23
+
+What changed:
+- Added `flush_pending_audio(stream, chunk_size, max_iterations)` in
+  `examples/_chat_helpers.py`. Non-blocking drain via
+  `get_read_available()` + `read(exception_on_overflow=False)`. Hard
+  cap on iteration count guards against a misbehaving stream that
+  always reports "data available." Catches exceptions from either
+  call so a stream hiccup mid-drain doesn't crash the chat loop.
+- Wired the flush into the LLM-error handler in `mic_chat.py`. After a
+  DNS failure / timeout / 5xx, we now drop whatever audio piled up
+  during the failed call and print a dim notice with how many seconds
+  were discarded so the user understands their next utterance starts
+  clean.
+- 7 new tests using a `FakeStream` test double: empty stream → 0 reads;
+  full chunks only with partial remainder retained; max-iterations cap
+  on a lying stream; both `get_read_available` and `read` raising
+  cleanly.
+
+Verification: `python -m pytest tests/unit/` → **29 passed in 0.02s**.
+
+Notes:
+- Cannot end-to-end test the actual pyaudio path on x86_64 Linux
+  without hardware. The FakeStream contract matches pyaudio's two
+  methods exactly, so the unit tests give us solid coverage of the
+  drain logic. A future on-device smoke test would close the gap.
+
+Next:
+- iter-003: bug #4 (preview reprint wraps when text exceeds terminal
+  width). Wire `format_preview_line` into `record_utterance_streaming`,
+  use `shutil.get_terminal_size()` to pick the width, and add a test
+  with a fake stdout that asserts no wraparound.
+- iter-004: split `record_utterance_streaming` into pure VAD logic
+  (testable) + thin pyaudio glue. The VAD state machine is the most
+  fragile part of the loop and currently has zero tests.
