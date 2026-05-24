@@ -134,11 +134,25 @@ def _word_before_period(buffer: str, period_idx: int) -> str:
     ``[a-zA-Z.]`` lets us recognize multi-period forms like
     ``i.e.`` or ``U.S.A.`` where the relevant token is more than
     just letters.
+
+    iter-021: numeric ordinals get special-cased to empty string.
+    Without this, ``1st.`` walks back over ``st`` (skipping the
+    digit) and matches ``st`` in the abbreviation set (which is
+    the Street abbreviation), so ``"He came 1st. Then we go."``
+    wouldn't split. ``3rd.`` has the same problem (rd = Road).
+    Detecting "digit immediately precedes the alpha sequence"
+    catches all ordinals (1st/2nd/3rd/4th/...) without needing a
+    separate ordinal regex.
     """
     end = period_idx
     start = end
     while start > 0 and (buffer[start - 1].isalpha() or buffer[start - 1] == "."):
         start -= 1
+    # If a digit immediately precedes the alpha sequence we just
+    # walked over, this is a numeric ordinal (1st, 2nd, ...) or
+    # similar digit-prefixed form — NOT an abbreviation.
+    if start < end and start > 0 and buffer[start - 1].isdigit():
+        return ""
     # Trim a stray leading dot if any (e.g. " .e.g." would otherwise
     # produce a leading "." that doesn't match anything useful).
     word = buffer[start:end].lower().lstrip(".")

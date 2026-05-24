@@ -172,6 +172,68 @@ class TestSplitCompleteSentences:
         assert complete == ["Foo."]
         assert rest == "Bar."
 
+    # ---- iter-021: digit-prefixed ordinals split correctly -----------------
+
+    def test_1st_splits_despite_st_being_in_abbreviations(self):
+        # Regression: "st" is in abbrevs (Street). Without the
+        # iter-021 digit-prefix check, "He came 1st." would not
+        # split because the walk-back extracted "st".
+        complete, rest = split_complete_sentences("He came 1st. Then we go.")
+        assert complete == ["He came 1st."]
+        assert rest == "Then we go."
+
+    def test_3rd_splits_despite_rd_being_in_abbreviations(self):
+        # "rd" is in abbrevs (Road). Same case as 1st./st.
+        complete, rest = split_complete_sentences("On 3rd. floor. Yes.")
+        # Both "3rd." and "floor." split.
+        assert complete == ["On 3rd.", "floor."]
+        assert rest == "Yes."
+
+    def test_2nd_splits_normally(self):
+        # "nd" is NOT in abbrevs, so this case worked before
+        # iter-021 too. Confirm it still works.
+        complete, rest = split_complete_sentences("Win 2nd. place.")
+        assert complete == ["Win 2nd."]
+        assert rest == "place."
+
+    def test_4th_splits_normally(self):
+        # "th" not in abbrevs. Pre-iter-021 worked; confirm.
+        complete, rest = split_complete_sentences("On the 4th. day.")
+        assert complete == ["On the 4th."]
+        assert rest == "day."
+
+    def test_100th_splits(self):
+        # Multi-digit prefix.
+        complete, rest = split_complete_sentences("The 100th. anniversary. Wow.")
+        assert complete == ["The 100th.", "anniversary."]
+        assert rest == "Wow."
+
+    def test_numbered_list_items_still_split(self):
+        # "Step 1." has nothing alpha before the period — the
+        # iter-021 fix is for the case where alpha walk-back
+        # actually happens. Either way, this should split.
+        complete, rest = split_complete_sentences("Step 1. Boil water. Done.")
+        assert complete == ["Step 1.", "Boil water."]
+        assert rest == "Done."
+
+    def test_abbreviation_after_word_still_doesnt_split(self):
+        # iter-016 control: "Mr." after a word boundary still
+        # treated as abbreviation. The iter-021 digit-prefix
+        # check shouldn't false-positive on this.
+        complete, rest = split_complete_sentences("Mr. Smith arrived. Hi.")
+        assert complete == ["Mr. Smith arrived."]
+        assert rest == "Hi."
+
+    def test_time_abbreviation_after_digit_still_doesnt_split(self):
+        # iter-017 control: "9 a.m." has a digit before the
+        # space, but the alpha-dot walk recovers "a.m" as the
+        # word. The iter-021 fix only triggers when the digit
+        # is IMMEDIATELY adjacent to the alpha sequence (no
+        # space). So "9 a.m." should still match.
+        complete, rest = split_complete_sentences("It is 9 a.m. Time to wake. Yes.")
+        assert complete == ["It is 9 a.m. Time to wake."]
+        assert rest == "Yes."
+
 
 class TestTrimHistory:
     def test_empty(self):
