@@ -1727,3 +1727,73 @@ Notes:
 - `VAD_DEFAULTS` is exposed as a module attribute so tests can
   assert against it directly (rather than the recording-module
   constants we want callers to be insulated from).
+
+---
+
+## iter-021 — digit-prefixed ordinals don't trigger abbreviation match
+
+**Branch:** `iter-021-ordinals` (merged ff to main, commit `c501d91`)
+**Date:** 2026-05-24
+
+Subtle iter-016 collision: the abbreviation set contains `"st"`
+(Street) and `"rd"` (Road) for postal-address contexts. But
+those also happen to be the suffix letters of the ordinal forms
+`1st` and `3rd`. The `_word_before_period` walk-back skipped
+the leading digit and extracted just `"st"` / `"rd"`, which then
+matched the abbreviation set, which then prevented the splitter
+from firing.
+
+Concrete failure:
+
+```
+>>> split_complete_sentences("He came 1st. Then we go.")
+([], 'He came 1st. Then we go.')   # WRONG — should split
+```
+
+In production, the bot voicing "He came in 1st. Then we
+celebrated." would have run the two sentences together as one
+TTS chunk, with no pause where the listener's ear expected one.
+
+Fix in `_word_before_period`: after walking back over
+`[a-zA-Z.]`, check one position further. If it's a digit, this
+is a numeric ordinal (1st, 2nd, 3rd, 4th, 100th, ...) — not an
+abbreviation. Return empty so the splitter falls through to
+default split behavior.
+
+Coverage matrix:
+
+| Input | Suffix | In abbrevs? | Before iter-021 | After iter-021 |
+|-------|--------|-------------|------------------|----------------|
+| `1st.` | `st` | yes (Street) | doesn't split (BUG) | splits |
+| `2nd.` | `nd` | no | splits | splits |
+| `3rd.` | `rd` | yes (Road) | doesn't split (BUG) | splits |
+| `4th.` | `th` | no | splits | splits |
+| `100th.` | `th` | no | splits | splits |
+| `Mr.` | `mr` | yes (Mister) | doesn't split | doesn't split |
+| `9 a.m.` | `a.m` | yes | doesn't split | doesn't split |
+
+The "9 a.m." control case is what makes the fix surgical: the
+digit `9` is separated from `a.m` by a space, so the walk-back's
+`start` lands on the position after the space, and
+`buffer[start-1]` is the space (not the digit). Fix doesn't
+trigger; abbreviation match still works.
+
+Tests (8 new in `TestSplitCompleteSentences`):
+- `1st` regression; `3rd` regression
+- `2nd` / `4th` / `100th` working
+- numbered list items still split
+- `"Mr. Smith"` still doesn't split (control)
+- `"9 a.m. Time"` still doesn't split (control)
+
+Verification: `python -m pytest tests/unit/` → **313 passed in 17s**
+(305 existing + 8 new).
+
+Notes:
+- Guard is `start < end and start > 0` — both edges. Without
+  the `start < end` clause, a period at index 0 with no walk
+  would read `buffer[-1]` (Python's wrap-around to last char),
+  which would be wrong. Without the `start > 0` clause, we'd
+  index out of bounds.
+- This bug was hidden under iter-016's acceptance testing
+  because the test corpus didn't include ordinals. The iter-021
+  tests fill that gap explicitly.
