@@ -142,38 +142,9 @@ from examples._chat_llm import stream_chat_completion as llm_stream  # noqa: E40
 from examples._chat_metrics import TurnMetrics  # noqa: E402,F401
 
 
-def synthesize_with_alignment(tts_engine, text: str, voice: str, speed: float):
-    """Synthesize text and return (audio_np, tokens_with_timing).
-
-    Each token has .text, .start_ts, .end_ts.
-    Audio is float32 numpy array at 24kHz.
-    """
-    import torch
-    tts_engine._load()
-    all_audio = []
-    all_tokens = []
-    offset = 0.0
-
-    for result in tts_engine._pipeline(text, voice=voice, speed=speed):
-        audio = result.audio
-        if isinstance(audio, torch.Tensor):
-            audio = audio.numpy()
-        duration = len(audio) / TTS_RATE
-
-        for tok in result.tokens:
-            all_tokens.append({
-                "text": tok.text,
-                "start": tok.start_ts + offset,
-                "end": tok.end_ts + offset,
-            })
-        all_audio.append(audio)
-        offset += duration
-
-    if not all_audio:
-        return np.array([], dtype=np.float32), []
-
-    combined = np.concatenate(all_audio)
-    return combined, all_tokens
+# synthesize_with_alignment moved to examples/_chat_tts.py so it's
+# importable + testable without pyaudio at module scope. iter-019.
+from examples._chat_tts import synthesize_with_alignment  # noqa: E402,F401
 
 
 def play_aligned(pa, audio_np, tokens, is_first_sentence=False):

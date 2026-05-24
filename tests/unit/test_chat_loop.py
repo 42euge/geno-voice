@@ -410,3 +410,97 @@ class TestFillerIntegration:
         assert result.metrics.sentences_spoken >= 1
         # Speaker captured filler+sentence audio.
         assert len(spk_holder["spk"].captured) > 0
+
+
+# ---- iter-019: end-to-end ChatLoop with real kokoro --------------------------
+
+
+def _kokoro_loadable() -> bool:
+    try:
+        from examples.virtual_audio import _import_kokoro_engine
+        _import_kokoro_engine()
+        return True
+    except Exception:
+        return False
+
+
+@pytest.mark.skipif(not _kokoro_loadable(), reason="kokoro TTS not loadable")
+class TestChatLoopWithRealKokoro:
+    """The closest test we have to "the real production chat loop
+    is working." Uses real kokoro for synth, real
+    examples._chat_playback.play_aligned for play, virtual mic +
+    speaker for I/O, stub STT + stub LLM. Validates that
+    synthesize_with_alignment composes correctly with
+    SentenceWorker, BargeInWatcher, and the rest of ChatLoop.
+
+    ~3-6s per test on first run (kokoro model load), faster after.
+    Skipped on hosts where kokoro doesn't load.
+    """
+
+    def test_full_turn_with_real_synth_produces_real_audio(self):
+        from examples._chat_playback import (
+            TTS_RATE as PLAYBACK_RATE,
+            play_aligned as _play_core,
+        )
+        from examples._chat_tts import synthesize_with_alignment
+        from examples.virtual_audio import _import_kokoro_engine
+
+        # Real kokoro engine.
+        tts_engine = _import_kokoro_engine()
+
+        # User input: virtual mic with iter-005's standard tone-burst
+        # utterance fixture. Stub STT will pretend it transcribed
+        # to "hi".
+        mic = VirtualMicStream(rate=RATE, chunk_size=CHUNK)
+        mic.push(_utterance_audio())
+
+        spk_holder = {"spk": None}
+
+        def factory():
+            spk_holder["spk"] = VirtualSpeakerStream(rate=PLAYBACK_RATE)
+            return spk_holder["spk"]
+
+        def real_synth(sentence: str):
+            return synthesize_with_alignment(
+                tts_engine, sentence, "af_heart", 1.0,
+            )
+
+        def real_play(speaker, audio_np, tokens, *,
+                      is_first_sentence=False, cancel_event=None):
+            return _play_core(
+                speaker, audio_np, tokens,
+                is_first_sentence=is_first_sentence,
+                cancel_event=cancel_event,
+                rate=PLAYBACK_RATE,
+            )
+
+        engine, transcribe = _stt_engine_stub(transcript="hi")
+
+        loop = ChatLoop(
+            mic=mic,
+            speaker_factory=factory,
+            rate=RATE,
+            chunk=CHUNK,
+            stt_engine=engine,
+            transcribe_fn=transcribe,
+            llm_stream_fn=_llm_stream_yielding("Hello there."),
+            llm_config={"model": "stub-model"},
+            synth_fn=real_synth,
+            play_fn=real_play,
+        )
+        result = loop.run_one_turn([])
+
+        assert result.metrics is not None
+        assert result.had_error is False
+        assert result.metrics.transcript == "hi"
+        assert "Hello" in result.metrics.response
+        assert result.metrics.sentences_spoken >= 1
+
+        # Speaker received real synthesized audio. At 24kHz mono int16,
+        # a "Hello there." utterance is ~0.5-1.5s = 24k-72k samples =
+        # 48k-144k bytes. Bound loosely.
+        captured = spk_holder["spk"].captured
+        assert 20_000 < len(captured) < 200_000
+        # Verify the audio has actual signal (RMS > 0.001 in float32).
+        decoded = spk_holder["spk"].captured_float32
+        assert float(np.sqrt(np.mean(decoded ** 2))) > 0.001
