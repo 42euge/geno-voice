@@ -286,6 +286,113 @@ class TestPlayAlignedTokenReveal:
         assert "trailing " in rendered
 
 
+class TestPlayAlignedCancelSuppressesTrailingTokens:
+    """iter-026: when the play loop exits via cancel_event, the
+    post-loop "flush trailing tokens" branch should be skipped.
+    Otherwise the bot's voice gets cut (good) but the rest of the
+    bot's text keeps printing to the terminal (bad UX, especially
+    when the user is interrupting to redirect the conversation).
+    """
+
+    def test_cancel_during_play_suppresses_trailing_token(self):
+        import threading
+        spk = VirtualSpeakerStream(rate=TTS_RATE)
+        out = io.StringIO()
+        ev = threading.Event()
+
+        # Set cancel_event after the first chunk is written (mimics
+        # a barge-in watcher firing mid-sentence).
+        original_write = spk.write
+        write_count = {"n": 0}
+
+        def hook(data):
+            original_write(data)
+            write_count["n"] += 1
+            if write_count["n"] == 1:
+                ev.set()
+
+        spk.write = hook  # type: ignore[method-assign]
+
+        play_aligned(
+            spk,
+            _tone_audio(seconds=0.5),
+            tokens=[
+                {"text": "first", "start": 0.0},
+                {"text": "TRAILING", "start": 1.5},  # past audio duration
+            ],
+            output=out,
+            cancel_event=ev,
+            play_chunk=512,
+            clock=StepClock(),
+        )
+        visible = _strip_ansi(out.getvalue())
+        # "first" already appeared in the play loop (at start=0).
+        assert "first" in visible
+        # "TRAILING" was scheduled for the post-loop flush. Since
+        # we cancelled, it should NOT have been emitted.
+        assert "TRAILING" not in visible
+
+    def test_cancel_set_pre_play_suppresses_all_trailing_tokens(self):
+        # cancel_event already set at call time → play loop breaks
+        # immediately, AND the trailing-flush is also skipped.
+        import threading
+        spk = VirtualSpeakerStream(rate=TTS_RATE)
+        out = io.StringIO()
+        ev = threading.Event()
+        ev.set()
+
+        play_aligned(
+            spk,
+            _tone_audio(seconds=0.1),
+            tokens=[
+                {"text": "TRAILING_ONE", "start": 0.0},
+                {"text": "TRAILING_TWO", "start": 1.0},
+            ],
+            output=out,
+            cancel_event=ev,
+            clock=StepClock(),
+        )
+        visible = _strip_ansi(out.getvalue())
+        # Neither token should be emitted — play loop broke before
+        # writing any chunks, post-loop flush skipped.
+        assert "TRAILING_ONE" not in visible
+        assert "TRAILING_TWO" not in visible
+
+    def test_no_cancel_event_still_flushes_trailing_tokens(self):
+        # Control: without cancel_event, the existing iter-007
+        # behavior is preserved — trailing tokens are flushed.
+        spk = VirtualSpeakerStream(rate=TTS_RATE)
+        out = io.StringIO()
+        play_aligned(
+            spk,
+            _tone_audio(seconds=0.1),
+            tokens=[{"text": "TRAILING", "start": 1.5}],
+            output=out,
+            clock=StepClock(),
+        )
+        visible = _strip_ansi(out.getvalue())
+        assert "TRAILING" in visible
+
+    def test_unset_cancel_event_still_flushes_trailing_tokens(self):
+        # Control: cancel_event passed but NOT set → behaves like
+        # no cancel_event.
+        import threading
+        spk = VirtualSpeakerStream(rate=TTS_RATE)
+        out = io.StringIO()
+        ev = threading.Event()
+        # ev is NOT set
+        play_aligned(
+            spk,
+            _tone_audio(seconds=0.1),
+            tokens=[{"text": "TRAILING", "start": 1.5}],
+            output=out,
+            cancel_event=ev,
+            clock=StepClock(),
+        )
+        visible = _strip_ansi(out.getvalue())
+        assert "TRAILING" in visible
+
+
 class TestPlayAlignedClockInjection:
     def test_clock_used_for_elapsed_measurement(self):
         spk = VirtualSpeakerStream(rate=TTS_RATE)

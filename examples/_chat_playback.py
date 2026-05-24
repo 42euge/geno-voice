@@ -147,9 +147,17 @@ def play_aligned(
     # Flush tokens whose start_ts was beyond the audio duration. The
     # original code emitted these without bold codes — preserve that
     # quirk via bold=False so test snapshots stay stable.
-    while token_idx < len(tokens):
-        _emit_token(output, tokens[token_idx]["text"], bold=False, flush=False)
-        token_idx += 1
-    output.flush()
+    #
+    # iter-026: skip the trailing-token flush when the loop exited
+    # via cancel_event. The user has barged in; the bot's voice has
+    # been cut. Continuing to print the rest of the bot's text to
+    # the terminal (when the user is talking, possibly to interrupt)
+    # is jarring UX. Match the audio: when audio stops, text stops.
+    cancelled = cancel_event is not None and cancel_event.is_set()
+    if not cancelled:
+        while token_idx < len(tokens):
+            _emit_token(output, tokens[token_idx]["text"], bold=False, flush=False)
+            token_idx += 1
+        output.flush()
 
     return elapsed
