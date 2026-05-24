@@ -1535,3 +1535,118 @@ Genuine remaining options:
 
 The codebase has reached a stable, well-tested state. Each
 remaining iteration adds polish rather than capability.
+
+---
+
+## iter-019 — extract synthesize_with_alignment, real-kokoro e2e test
+
+**Branch:** `iter-019-tts-extract` (merged ff to main, commit `203e251`)
+**Date:** 2026-05-24
+
+Last function in `mic_chat.py` reachable only via pyaudio-tainted
+imports — pulled into `examples/_chat_tts.py` so it composes with
+the iter-005 virtual audio + iter-015 ChatLoop without dragging
+real pyaudio along.
+
+Side benefit: closes the "real production synth path" testing
+gap. Until iter-019 the orchestration tests stubbed `synth_fn`
+with a constant-audio function. We trusted the real
+`synthesize_with_alignment` composed correctly because contracts
+matched; we couldn't prove it.
+
+What changed:
+
+- **`examples/_chat_tts.py`** (new):
+  - `synthesize_with_alignment` relocated, semantics unchanged.
+  - Refactor: torch.Tensor detection switched from
+    `isinstance(audio, torch.Tensor)` (which required importing
+    torch for the numpy fast path) to a duck-type check via
+    `hasattr(audio, "numpy") and not isinstance(audio, np.ndarray)`.
+    Tests can pass fake "tensor" objects without depending on
+    torch.
+  - `TTS_RATE = 24000` lives here (and remains in
+    `_chat_playback.py`; both modules need it for their own
+    purposes — not worth a cross-module import for a 4-char
+    constant).
+
+- **`examples/mic_chat.py`**:
+  - Now re-exports `synthesize_with_alignment` from `_chat_tts`
+    so external imports keep working.
+
+Tests (12 new):
+
+`tests/unit/test_chat_tts.py` — 9 unit + 2 kokoro integration:
+- Empty pipeline returns `(empty, empty)`.
+- Single chunk round-trips audio + tokens.
+- **Multi-chunk OFFSETS tokens by accumulated duration** — the
+  load-bearing piece of the function. Without this, iter-007's
+  playback alignment would re-start at 0 for every chunk after
+  the first, breaking word-by-word reveal.
+- Three chunks: offset accumulation works for >2.
+- Concatenated audio preserves chunk values byte-for-byte.
+- Tensor audio with `.numpy()` converts (fake tensor — no torch
+  import needed).
+- Numpy audio passes through unchanged.
+- `_load` called on every invocation.
+- Results with no tokens still contribute audio.
+- Real kokoro: short sentence produces plausible output (audio
+  length, token shape, timings within audio duration).
+- Real kokoro: amplitude in `[-1, 1]` with non-zero RMS.
+
+`tests/unit/test_chat_loop.py` — 1 kokoro e2e:
+- `ChatLoop.run_one_turn` driven with real kokoro synth + real
+  `play_aligned` + virtual mic/speaker + stub STT/LLM. Verifies
+  metrics, history, and that the speaker received real audio
+  signal (RMS > 0.001 over a realistic byte-count window). The
+  closest test to "the real production chat loop is working" —
+  ~3-6s on first run for kokoro load, faster after.
+
+Verification: `python -m pytest tests/unit/` → **289 passed in 18s**
+(277 existing + 12 new).
+
+Notes:
+- Suite went from 11s → 18s. Three new kokoro integration tests
+  cost ~1-2s each. Could mark them `@pytest.mark.slow` if this
+  becomes painful, but <20s is still tight enough for fast
+  iteration.
+- `_chat_loop.py` was unchanged this iteration — `synth_fn` is
+  already injectable, so swapping in real kokoro just means
+  passing the right callable. That's the iter-015 architecture
+  paying off.
+- The duck-type tensor check (`hasattr(audio, "numpy")`) is
+  cleaner than the original `isinstance(audio, torch.Tensor)`
+  because it doesn't require importing torch when the engine
+  already returns numpy. Real kokoro returns tensors; the
+  conversion still works.
+
+---
+
+# Status (19 iterations)
+
+**289 unit tests passing in 18s.** Every function in `examples/`
+that's not directly tied to a runtime resource (PyAudio, the
+LiteLLM HTTP server) is now covered by unit tests. The tests
+that ARE tied to runtime resources (real kokoro, virtual mic
++ speaker as PyAudio surrogates) compose them through the
+production code path itself.
+
+The chat pipeline `examples/` directory layout:
+
+| Module | Purpose | Tests |
+|--------|---------|-------|
+| `_chat_helpers.py` | VAD, sentence splitter, history trim, etc. | test_chat_helpers.py (49) |
+| `_chat_recording.py` | record_utterance_streaming | test_chat_recording.py (14) |
+| `_chat_playback.py` | play_aligned token-aligned playback | test_chat_playback.py (18) |
+| `_chat_pipeline.py` | SentenceWorker + watcher + coordinator | test_chat_pipeline.py + test_bargein.py + test_bargein_coordinator.py + test_fillers.py (75) |
+| `_chat_metrics.py` | TurnMetrics + session summary | test_session_summary.py (19) + test_hardening.py (6) |
+| `_chat_config.py` | parse_llm_config + parse_chat_config | test_chat_config.py (35) |
+| `_chat_llm.py` | SSE parser + stream_chat_completion | test_chat_llm.py (18) |
+| `_chat_tts.py` | synthesize_with_alignment | test_chat_tts.py (11) |
+| `_chat_loop.py` | ChatLoop.run_one_turn orchestration | test_chat_loop.py (9) |
+| `virtual_audio.py` | VirtualMicStream/SpeakerStream + fixtures | test_virtual_audio.py (26) |
+| `mic_chat.py` | thin pyaudio shim that wires everything | (covered transitively) |
+
+The codebase has reached its design endpoint. Further
+iterations would be: pick up real-mic CI infra (high cost,
+diminishing returns), add new features (multi-language voice,
+voice cloning), or call it done.
