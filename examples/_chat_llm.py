@@ -37,8 +37,9 @@ def parse_sse_token_stream(lines: Iterable) -> Iterator[str]:
         comment lines starting with ``":"``, event-type markers).
       - The ``"[DONE]"`` sentinel ends iteration cleanly.
       - Malformed JSON, missing ``choices``/``delta``/``content``
-        fields, and other parser hiccups are silently skipped so a
-        single bad chunk doesn't kill the whole stream.
+        fields, ``choices[0]`` being a non-dict (None / string /
+        number), and other parser hiccups are silently skipped so
+        a single bad chunk doesn't kill the whole stream.
       - Bytes input is UTF-8-decoded with ``errors="replace"`` to
         avoid raising on the rare malformed multibyte sequence.
       - Empty content (``""``) is also skipped — only non-empty
@@ -61,7 +62,18 @@ def parse_sse_token_stream(lines: Iterable) -> Iterator[str]:
             chunk = json.loads(data)
             delta = chunk["choices"][0].get("delta", {})
             token = delta.get("content", "")
-        except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+        except (
+            json.JSONDecodeError,
+            KeyError,
+            IndexError,
+            TypeError,
+            # iter-032: a malformed chunk where ``choices[0]`` is None
+            # or a non-dict (e.g. a string) makes ``.get("delta", {})``
+            # raise AttributeError. Pre-iter-032 that uncaught error
+            # killed the entire stream — every subsequent valid token
+            # was lost. Skip the chunk and keep parsing.
+            AttributeError,
+        ):
             continue
         if token:
             yield token
