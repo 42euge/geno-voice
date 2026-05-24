@@ -111,46 +111,10 @@ def load_llm_config() -> dict:
     return llm
 
 
-def llm_stream(messages: list[dict], config: dict):
-    """Stream LLM tokens. Yields (token, is_done)."""
-    import requests
-
-    headers = {
-        "Authorization": f"Bearer {config['api_key']}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": config["model"],
-        "messages": messages,
-        "max_tokens": config.get("max_tokens", 150),
-        "stream": True,
-    }
-    resp = requests.post(
-        f"{config['base_url']}/chat/completions",
-        headers=headers,
-        json=payload,
-        timeout=30,
-        stream=True,
-    )
-    resp.raise_for_status()
-
-    for line in resp.iter_lines():
-        if not line:
-            continue
-        line = line.decode("utf-8")
-        if not line.startswith("data: "):
-            continue
-        data = line[6:]
-        if data == "[DONE]":
-            return
-        try:
-            chunk = json.loads(data)
-            delta = chunk["choices"][0].get("delta", {})
-            token = delta.get("content", "")
-            if token:
-                yield token
-        except (json.JSONDecodeError, KeyError, IndexError):
-            continue
+# llm_stream now lives in examples/_chat_llm.py. Re-exported here so
+# any external callers / tests that import it from mic_chat keep
+# working.
+from examples._chat_llm import stream_chat_completion as llm_stream  # noqa: E402,F401
 
 
 @dataclass
@@ -392,6 +356,18 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
             # play; iter-012 extends it across LLM streaming via a
             # BargeInCoordinator that bundles the worker.cancel
             # with a threading.Event the for-token loop checks.
+            # Open the LLM stream up front so we can hold a handle to
+            # the generator and explicitly close it once the consumer
+            # loop exits. Without this, a barge-in break leaves the
+            # generator (and its HTTP response) alive until garbage
+            # collection eventually runs the finally block. iter-013.
+            #
+            # NOTE: gen.close() is NOT wired into coord.on_trigger
+            # because cross-thread generator close raises
+            # ValueError("generator already executing") if the
+            # consumer is mid-next(). The same-thread try/finally
+            # pattern below is the safe one.
+            llm_gen = llm_stream(messages, llm_config)
             coord = BargeInCoordinator(worker=worker)
             watcher = BargeInWatcher(
                 mic=mic,
@@ -403,7 +379,7 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
 
             llm_stream_done_at = None
             try:
-                for token in llm_stream(messages, llm_config):
+                for token in llm_gen:
                     if coord.is_set():
                         # User barge-in during LLM streaming —
                         # stop pulling tokens immediately. The
@@ -495,6 +471,16 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
                         f"({drained / RATE:.1f}s){RESET}"
                     )
                 continue
+            finally:
+                # iter-013: ensure the LLM generator's finally block
+                # runs (which closes the upstream HTTP response). On
+                # the happy path this is a no-op since the generator
+                # already exhausted naturally; on barge-in or LLM
+                # error this releases the connection promptly.
+                try:
+                    llm_gen.close()
+                except Exception:
+                    pass
 
             metrics.print(turn + 1)
             all_metrics.append(metrics)
