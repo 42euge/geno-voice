@@ -282,6 +282,10 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
     system_prompt = llm_config.get("system_prompt", "You are a concise voice assistant.")
     messages = [{"role": "system", "content": system_prompt}]
     all_metrics = []
+    # iter-048: count VAD false triggers (no transcription, no
+    # error). High count → tune silence_threshold up or
+    # min_speech_duration up.
+    false_triggers = 0
     primed_frames: list[bytes] | None = None
 
     try:
@@ -293,6 +297,8 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
             if result.had_error:
                 continue
             if result.metrics is None:
+                # iter-048: no metrics + no error = false trigger.
+                false_triggers += 1
                 continue
             print()  # newline after the streamed bot text
             result.metrics.print(turn + 1)
@@ -305,7 +311,9 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
         # so it's testable and uses statistics.median (proper
         # even-length handling).
         from examples._chat_metrics import print_session_summary
-        print_session_summary(all_metrics, llm_config)
+        print_session_summary(
+            all_metrics, llm_config, false_triggers=false_triggers,
+        )
     finally:
         mic.stop_stream()
         mic.close()

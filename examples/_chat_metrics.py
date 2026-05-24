@@ -270,7 +270,13 @@ def _median_ms(values: list[float]) -> float:
     return statistics.median(values) * 1000
 
 
-def print_session_summary(metrics_list: list[TurnMetrics], llm_config: dict, *, file=None) -> None:
+def print_session_summary(
+    metrics_list: list[TurnMetrics],
+    llm_config: dict,
+    *,
+    file=None,
+    false_triggers: int = 0,
+) -> None:
     """Print a multi-line session summary on KeyboardInterrupt.
 
     Was inlined inside ``mic_chat.run_chat``'s KeyboardInterrupt
@@ -281,6 +287,14 @@ def print_session_summary(metrics_list: list[TurnMetrics], llm_config: dict, *, 
 
     `file` defaults to ``sys.stdout`` (via ``print``); tests pass
     a ``StringIO`` to inspect the output.
+
+    iter-048: ``false_triggers`` counts turns where
+    ``ChatLoop.run_one_turn`` returned ``metrics=None`` WITHOUT
+    ``had_error`` — i.e. VAD fired ACTIVE but the utterance was
+    too short or transcription came back empty. Caller (mic_chat)
+    tracks these and passes the total. Defaults to 0 for back-
+    compat with callers that don't track yet. Metric 1.4 in the
+    perf-metrics taxonomy.
     """
     def _emit(line: str = "") -> None:
         if file is None:
@@ -420,6 +434,15 @@ def print_session_summary(metrics_list: list[TurnMetrics], llm_config: dict, *, 
         _emit(
             f"    Mic stale:        {stale_total} frames "
             f"({stale_seconds_total:.1f}s) — check echo cancellation"
+        )
+    # iter-048: VAD false-trigger rate. Only emit when at least one
+    # false trigger happened — clean sessions don't need the line.
+    if false_triggers > 0:
+        attempts = false_triggers + n
+        pct = (false_triggers / attempts) * 100
+        _emit(
+            f"    VAD false-trig:   {false_triggers}/{attempts} "
+            f"({pct:.0f}%) — tune silence_threshold or min_speech_duration"
         )
     if overlap_ratios:
         # iter-043: median streaming overlap across measurable turns.
