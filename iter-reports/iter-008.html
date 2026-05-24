@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-008 — streaming LLM → TTS overlap via SentenceWorker</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-007.html">← iter-007</a><a href="iter-009.html">iter-009 →</a></nav><header>
+<h1>iter-008 — streaming LLM → TTS overlap via SentenceWorker</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-008-streaming-overlap</code></span> · <span>commit: <code>ad4d946</code></span></div>
+</header><p><strong>Branch:</strong> <code>iter-008-streaming-overlap</code> (merged ff to main, commit <code>ad4d946</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>The headline architecture change. Previously the chat for-loop synthesized + played each sentence synchronously <em>inside</em> the token-receipt loop, so every byte of audio playback was a byte of LLM stream latency the network connection was otherwise wasting. Multi-sentence replies stacked the cost linearly.</p>
+<p>Now: a background <code>SentenceWorker</code> thread consumes complete sentences off a <code>Queue</code>, runs synth + play, and reports metrics. The main thread submits and keeps consuming tokens.</p>
+<p>What changed:</p>
+<ul><li>New module <code>examples/_chat_pipeline.py</code> with <code>SentenceWorker</code>. <code>clock</code> and <code>output</code> (all dependency-injected). <code>wait_done(timeout=...)</code>. Or <code>stop(timeout=...)</code> for early termination (LLM error / Ctrl+C). <code>playback_time</code>, <code>first_audio_at</code>, <code>errors</code>. in <code>_run</code>, closes (<code>stop_stream</code> + <code>close</code>) in the <code>finally</code> block. No more open-per-sentence overhead.<ul><li>Constructor: <code>speaker_factory</code>, <code>synth_fn</code>, <code>play_fn</code>, optional</li><li>Lifecycle: <code>start</code> → <code>submit</code> × N → <code>submit_done</code> →</li><li>Metrics tracked: <code>sentences_spoken</code>, <code>tts_time</code>,</li><li>Owns one persistent speaker stream — opens via <code>speaker_factory</code></li></ul></li><li><code>mic_chat.run_chat</code> rewired: <code>worker.submit(sentence)</code>. sentences still queued when LLM stream ends. accurate — captured just before first audio is written, rather than before synth begins). bug-3 mic flush.<ul><li>Replaces the in-loop synth + <code>play_aligned</code> calls with</li><li><code>wait_done(timeout=120)</code> after <code>submit_done</code> to drain any</li><li>TTFS now derives from <code>worker.first_audio_at</code> (slightly more</li><li>Error path calls <code>worker.stop()</code> for clean teardown before the</li></ul></li></ul>
+<p>Tests (18 new in <code>tests/unit/test_chat_pipeline.py</code>):</p>
+<ul><li>Lifecycle: submit + done + wait runs clean; double start raises; wait_done without start raises; submit after submit_done dropped.</li><li>Ordering: sentences play in submission order (proven via growing-sample-count synth); <code>is_first_sentence</code> only True on first; metrics accumulate; <code>first_audio_at</code> set exactly once.</li><li>Skipping: empty/whitespace sentences and empty audio from synth both skipped without incrementing count.</li><li>Error handling: synth raising captured in <code>errors</code>, loop continues; play raising same; speaker_factory raising exits cleanly without hang.</li><li>Stop: pending dropped + thread joined; before-start is a no-op; submit_done immediately followed by stop doesn&#x27;t hang.</li><li>Speaker wiring: <code>speaker._closed is True</code> after worker exit; loopback to <code>VirtualMicStream</code> round-trips audio (seed for iter-009 barge-in).</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/</code> → <strong>117 passed in 9s</strong> (99 existing + 18 new).</p>
+<p>Notes:</p>
+<ul><li>The threaded <code>stop</code> test uses a <code>synth_started</code> Event + <code>proceed</code> Event to deterministically place the worker in &quot;currently synthesizing, two more queued&quot; state before calling <code>stop()</code>. The assertion is &quot;exactly one sentence got spoken&quot; — the in-flight one finishes, the queued ones are dropped. This was the most likely-to-be-flaky test; it consistently runs in &lt;50ms.</li><li><code>worker.errors</code> exists so production code can surface background failures without taking down the chat loop. <code>mic_chat.run_chat</code> prints any worker errors after <code>wait_done</code> returns.</li><li>Single-sentence replies see no behavior change. Multi-sentence replies should show lower TTFS for sentence 2+ because the LLM stream now overlaps with playback.</li></ul>
+<p>Next:</p>
+<ul><li>iter-009: barge-in. Run <code>VadState</code> on the mic stream <em>during</em> speaker writes. When the user starts speaking, signal the worker to drop pending sentences and stop the speaker mid-sentence. Requires a &quot;hard cancel&quot; path on the worker (the current <code>stop</code> is &quot;drain + finish current&quot;); add <code>cancel()</code> that sets a flag the play_fn checks per audio chunk. Test using loopback paired with a &quot;user injection&quot; feeder that pushes user-speech into the mic the worker is also watching.</li><li>iter-010: filler words during LLM first-token wait. Pre-render short audio clips (&quot;hmm…&quot;, &quot;let me think…&quot;) and have the worker play them if the queue stays empty for more than ~600ms. Hide behind a config flag so it&#x27;s opt-in.</li></ul>
+<hr><nav><a href="index.html">← Index</a><a href="iter-007.html">← iter-007</a><a href="iter-009.html">iter-009 →</a></nav>
+</div>
+</body>
+</html>

@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-020 — configurable VAD via chat.vad config section</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-019.html">← iter-019</a><a href="iter-021.html">iter-021 →</a></nav><header>
+<h1>iter-020 — configurable VAD via chat.vad config section</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-020-vad-config</code></span> · <span>commit: <code>75ba389</code></span></div>
+</header><p><strong>Branch:</strong> <code>iter-020-vad-config</code> (merged ff to main, commit <code>75ba389</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>The VAD parameters had been hardcoded module constants since iter-006. Real users have noisier mics, busier rooms, and different turn-taking preferences than the desk-mic defaults assume. They&#x27;ve had no way to tune except by editing source. This iteration exposes them via config.local.yaml:</p>
+<pre class="code-block"><code>chat:
+  vad:
+    silence_threshold: 0.05      # noisier room
+    silence_duration: 0.5         # faster turn-taking
+    min_speech_duration: 0.5      # ignore brief blips</code></pre>
+<p>What changed:</p>
+<ul><li><strong><code>examples/_chat_recording.py</code></strong>: <code>record_utterance_streaming</code> gained <code>silence_threshold</code>, <code>silence_duration</code>, <code>min_speech_duration</code> kwargs (default to the existing module constants).</li></ul>
+<ul><li><strong><code>examples/_chat_loop.py</code></strong>: <code>ChatLoop</code> constructor accepts the same three kwargs, forwards them to record_utterance per turn.</li></ul>
+<ul><li><strong><code>examples/_chat_config.py</code></strong>: <code>VAD_DEFAULTS</code> dict + <code>parse_vad_config(chat_cfg)</code> extractor. Tolerant — bad types, non-positive numbers, missing keys all fall through to defaults so a typo&#x27;d VAD config doesn&#x27;t kill the chat loop.</li></ul>
+<ul><li><strong><code>examples/mic_chat.py</code></strong>: reads <code>chat.vad</code> via <code>parse_vad_config</code>, passes to ChatLoop.</li></ul>
+<p>Tests (16 new in <code>tests/unit/test_vad_config.py</code>):</p>
+<p><code>parse_vad_config</code> (10):</p>
+<ul><li>no chat / no vad section → defaults</li><li>partial vad backfills; full vad overrides</li><li>int values coerced to float</li><li>non-Mapping chat / vad → defaults (tolerant)</li><li>string values for numeric fields fall back per-key</li><li>zero / negative values fall back per-key</li><li>returns a new dict</li></ul>
+<p><code>record_utterance_streaming</code> with overridden VAD (5):</p>
+<ul><li>High threshold rejects quiet speech that the default detects.</li><li>Low threshold catches sub-default audio (RMS ≈ 0.0035).</li><li>Short <code>silence_duration</code> produces shorter wav (parallel-mic comparison vs default 0.8s window on the same audio).</li><li>Strict <code>min_speech_duration</code> → DONE_TOO_SHORT → empty wav.</li><li>Default kwargs match module constants (regression cover).</li></ul>
+<p>ChatLoop forwarding (1):</p>
+<ul><li>End-to-end: ChatLoop with <code>min_speech_duration=1.0</code> rejects a 0.5s utterance via DONE_TOO_SHORT → <code>result.metrics is None</code>.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/</code> → <strong>305 passed in 18s</strong> (289 existing + 16 new).</p>
+<p>Notes:</p>
+<ul><li>Tolerant validation pattern matches <code>parse_chat_config</code> from iter-018: never raise on bad input, just fall back. The chat loop is more useful with bad VAD config than dead.</li><li>The &quot;compared to default 0.8s window&quot; test uses two parallel mic streams pushing the same audio — clean way to verify behavioral difference without timing assertions.</li><li><code>VAD_DEFAULTS</code> is exposed as a module attribute so tests can assert against it directly (rather than the recording-module constants we want callers to be insulated from).</li></ul>
+<hr><nav><a href="index.html">← Index</a><a href="iter-019.html">← iter-019</a><a href="iter-021.html">iter-021 →</a></nav>
+</div>
+</body>
+</html>

@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-002 — fix bug #3 (mic buffer not flushed after LLM error)</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-001.html">← iter-001</a><a href="iter-003.html">iter-003 →</a></nav><header>
+<h1>iter-002 — fix bug #3 (mic buffer not flushed after LLM error)</h1>
+<div class="meta"><span>2026-05-23</span> · <span>branch: <code>iter-002-bug-3</code></span> · <span>commit: <code>795a3aa</code></span></div>
+</header><p><strong>Branch:</strong> <code>iter-002-bug-3</code> (merged ff to main, commit <code>795a3aa</code>) <strong>Date:</strong> 2026-05-23</p>
+<p>What changed:</p>
+<ul><li>Added <code>flush_pending_audio(stream, chunk_size, max_iterations)</code> in <code>examples/_chat_helpers.py</code>. Non-blocking drain via <code>get_read_available()</code> + <code>read(exception_on_overflow=False)</code>. Hard cap on iteration count guards against a misbehaving stream that always reports &quot;data available.&quot; Catches exceptions from either call so a stream hiccup mid-drain doesn&#x27;t crash the chat loop.</li><li>Wired the flush into the LLM-error handler in <code>mic_chat.py</code>. After a DNS failure / timeout / 5xx, we now drop whatever audio piled up during the failed call and print a dim notice with how many seconds were discarded so the user understands their next utterance starts clean.</li><li>7 new tests using a <code>FakeStream</code> test double: empty stream → 0 reads; full chunks only with partial remainder retained; max-iterations cap on a lying stream; both <code>get_read_available</code> and <code>read</code> raising cleanly.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/</code> → <strong>29 passed in 0.02s</strong>.</p>
+<p>Notes:</p>
+<ul><li>Cannot end-to-end test the actual pyaudio path on x86_64 Linux without hardware. The FakeStream contract matches pyaudio&#x27;s two methods exactly, so the unit tests give us solid coverage of the drain logic. A future on-device smoke test would close the gap.</li></ul>
+<p>Next:</p>
+<ul><li>iter-003: bug #4 (preview reprint wraps when text exceeds terminal width). Wire <code>format_preview_line</code> into <code>record_utterance_streaming</code>, use <code>shutil.get_terminal_size()</code> to pick the width, and add a test with a fake stdout that asserts no wraparound.</li><li>iter-004: split <code>record_utterance_streaming</code> into pure VAD logic (testable) + thin pyaudio glue. The VAD state machine is the most fragile part of the loop and currently has zero tests.</li></ul>
+<hr><nav><a href="index.html">← Index</a><a href="iter-001.html">← iter-001</a><a href="iter-003.html">iter-003 →</a></nav>
+</div>
+</body>
+</html>

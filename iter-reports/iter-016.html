@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-016 — abbreviation-aware sentence splitter</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-015.html">← iter-015</a><a href="iter-017.html">iter-017 →</a></nav><header>
+<h1>iter-016 — abbreviation-aware sentence splitter</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-016-splitter</code></span> · <span>commit: <code>f475a12</code></span></div>
+</header><p><strong>Branch:</strong> <code>iter-016-splitter</code> (merged ff to main, commit <code>f475a12</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>A small but real production bug. The simple <code>(?&lt;=[.!?])\s+</code> regex broke common voice cases:</p>
+<pre class="code-block"><code>&gt;&gt;&gt; split_complete_sentences(&quot;Mr. Smith arrived. Hi.&quot;)
+([&#x27;Mr.&#x27;, &#x27;Smith arrived.&#x27;], &#x27;Hi.&#x27;)   # WRONG</code></pre>
+<p>In production this would cause TTS to pause awkwardly between &quot;Mr.&quot; and &quot;Smith&quot; — the bot would speak &quot;Mister.&quot; as if it were a complete sentence, then start a new one with &quot;Smith&quot;. Same for Dr., U.S.A., i.e., e.g., Ph.D., and friends.</p>
+<p>What changed:</p>
+<p><code>examples/_chat_helpers.py</code>:</p>
+<ul><li>New <code>NON_TERMINATING_ABBREVIATIONS</code> frozenset (lowercased) with ~70 common abbreviations across categories: titles, Latin, business/legal, academic, geographic, calendar, numeric.</li><li>New <code>_word_before_period(buffer, period_idx)</code> helper that walks back over <code>[a-zA-Z.]</code> to extract the relevant token, so multi-period abbreviations like <code>i.e</code> and <code>u.s.a</code> match their set entries.</li><li><code>split_complete_sentences</code> rewritten to find all candidate matches via <code>finditer</code>, post-filter via the abbreviation check, and emit only the real splits.</li></ul>
+<p>Behavior change is purely additive — splits that were previously correct stay correct. Splits in front of an abbreviation in the set now don&#x27;t fire. Unknown abbreviations fall back to the old behavior (worst case: one extra split, same as before; no regression). <code>!</code> and <code>?</code> terminators are unchanged because the abbreviation check only applies to <code>.</code>.</p>
+<p>Tests (11 new in <code>TestSplitCompleteSentences</code>):</p>
+<ul><li>Mr. doesn&#x27;t split when followed by more text</li><li>Mr. + real terminator splits correctly at the real one</li><li>Dr., etc., Ph.D. — single-word and multi-period cases</li><li>i.e., e.g., U.S.A. — multi-period abbreviations</li><li>&quot;!&quot; and &quot;?&quot; terminators unaffected by the abbreviation check</li><li>Abbreviation at start of buffer</li><li>Unknown abbreviation still splits (no regression)</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/</code> → <strong>223 passed in 12s</strong> (212 existing + 11 new).</p>
+<p>Notes:</p>
+<ul><li>The abbreviation set is intentionally conservative. Adding more is cheap (just append to the frozenset). The current ~70 entries cover the abbreviations a typical English-language LLM might emit in voice context.</li><li>Multi-period abbreviations work because <code>_word_before_period</code> walks back over both letters and periods, building &quot;i.e&quot;, &quot;u.s.a&quot;, &quot;ph.d&quot;, etc. — these match the set entries directly.</li><li>Limitation: an abbreviation inside a longer made-up word (e.g. &quot;etcaholic.&quot;) would still get matched as <code>etcaholic</code> not in the set → splits normally. That&#x27;s correct behavior; we only want to match true abbreviations.</li><li>The implementation runs <code>finditer</code> once on the buffer instead of <code>split</code> then post-process. Same work; cleaner code.</li></ul>
+<hr><nav><a href="index.html">← Index</a><a href="iter-015.html">← iter-015</a><a href="iter-017.html">iter-017 →</a></nav>
+</div>
+</body>
+</html>

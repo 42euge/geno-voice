@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-015 — extract ChatLoop class, real production path now tested</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-014.html">← iter-014</a><a href="iter-016.html">iter-016 →</a></nav><header>
+<h1>iter-015 — extract ChatLoop class, real production path now tested</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-015-chat-loop</code></span> · <span>commit: <code>82a8e7b</code></span></div>
+</header><p><strong>Branch:</strong> <code>iter-015-chat-loop</code> (merged ff to main, commit <code>82a8e7b</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>The orchestration tests in iter-009 / iter-010 / iter-012 <em>approximated</em> the structure of <code>run_chat</code>&#x27;s per-turn body. They proved the components compose correctly when wired the way <code>mic_chat.run_chat</code> wires them, but the actual function was untested. A refactor that accidentally changed the wiring would still pass the orchestration tests — they tested their own helper, not <code>run_chat</code>.</p>
+<p>This iteration extracts the per-turn body into a <code>ChatLoop</code> class with every dependency injected. The same code path that the production chat loop runs is now driven directly by tests using <code>VirtualMicStream</code> + <code>VirtualSpeakerStream</code> + stub STT + stub LLM.</p>
+<p>What changed:</p>
+<ul><li><code>examples/_chat_loop.py</code> (new): <code>silence_duration</code>. where <code>TurnResult</code> has <code>metrics</code>, <code>next_primed_frames</code>, <code>had_error</code>. including iter-013 LLM cleanup and iter-014 hardening.<ul><li><code>ChatLoop</code> class. Constructor accepts:<ul><li>Audio: <code>mic</code>, <code>speaker_factory</code>, <code>rate</code>, <code>chunk</code>,</li><li>STT: <code>stt_engine</code>, optional <code>transcribe_fn</code>.</li><li>LLM: <code>llm_stream_fn</code> (callable), <code>llm_config</code>.</li><li>TTS: <code>synth_fn</code>, <code>play_fn</code>.</li><li>Filler config: <code>fillers</code>, <code>idle_threshold</code>.</li><li>Tunables: <code>clock</code>, <code>output</code>, timeouts.</li></ul></li><li><code>run_one_turn(messages, primed_frames=None) -&gt; TurnResult</code></li><li>Same observable behavior as the inline <code>run_chat</code> body,</li></ul></li></ul>
+<ul><li><code>examples/mic_chat.py</code>: builds three closures (<code>_speaker_factory</code>, <code>_synth</code>, <code>_play</code>) that bind the runtime types, instantiates <code>ChatLoop</code>, and drives it in a thin while-True with <code>primed_frames</code> threading.<ul><li>Per-turn body shrunk from ~200 lines to ~15. <code>run_chat</code> now</li></ul></li></ul>
+<p>Tests (8 new in <code>tests/unit/test_chat_loop.py</code>):</p>
+<p>NoTranscription (2):</p>
+<ul><li>Too-short utterance → metrics=None, no primed, no error.</li><li>Empty transcript → &quot;(no transcription)&quot; path → metrics=None.</li></ul>
+<p>NormalTurn (2):</p>
+<ul><li>Full turn: stub STT=&quot;how are you&quot;, stub LLM=&quot;I am well. Thanks for asking.&quot;, virtual mic+speaker. Verifies metrics populated, history updated (user + assistant), speaker received audio.</li><li>Sentence count: LLM yielding &quot;One. Two. Three.&quot; → at least three sentences played.</li></ul>
+<p>BargeInDuringLlmStream (1):</p>
+<ul><li>Background thread schedules user speech mid-LLM-stream. Verifies <code>barge_in</code> flag, <code>next_primed_frames</code> non-None, no error.</li></ul>
+<p>LlmErrorPath (2):</p>
+<ul><li>LLM raises → <code>had_error=True</code>, metrics=None, user message popped from history.</li><li>LLM raises with no user audio → <code>next_primed=None</code>. (The race &quot;LLM raises AND watcher fires&quot; is covered in isolation by <code>test_hardening.py::TestErrorPathFrameCarryover</code> — can&#x27;t engineer it deterministically here because the for-loop&#x27;s <code>coord.is_set()</code> check makes the watcher win the race; if it fires first the loop exits cleanly and no exception reaches the except block.)</li></ul>
+<p>FillerIntegration (1):</p>
+<ul><li>Slow LLM (200ms before first token), 50ms idle threshold. Filler plays once, real sentences after. <code>fillers_played==1</code>, <code>sentences_spoken&gt;=1</code>. Validates the iter-011 wiring through ChatLoop end to end.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/</code> → <strong>212 passed in 11s</strong> (204 existing + 8 new).</p>
+<p>Notes:</p>
+<ul><li>The first attempt at the LLM-error-with-barge-in test failed for an instructive reason: the watcher fires <code>coord.trigger</code> before the LLM raises, so the for-loop&#x27;s <code>if coord.is_set(): break</code> exits cleanly without ever raising. The test&#x27;s premise (both error path AND watcher detection observable in the result) is impossible to engineer deterministically. Documented in the replacement test&#x27;s comment so future contributors don&#x27;t try the same dead end.</li><li>The extraction reduced <code>mic_chat.py</code> from a ~280-line per-turn block to a ~15-line caller. Almost everything moved into <code>_chat_loop.py</code>. The trade-off: one more module to navigate, but every other module in the project now imports cleanly without pyaudio at module scope. Test reach is the big win.</li></ul>
+<hr><nav><a href="index.html">← Index</a><a href="iter-014.html">← iter-014</a><a href="iter-016.html">iter-016 →</a></nav>
+</div>
+</body>
+</html>

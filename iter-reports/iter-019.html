@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-019 — extract synthesize_with_alignment, real-kokoro e2e test</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-018.html">← iter-018</a><a href="iter-020.html">iter-020 →</a></nav><header>
+<h1>iter-019 — extract synthesize_with_alignment, real-kokoro e2e test</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-019-tts-extract</code></span> · <span>commit: <code>203e251</code></span></div>
+</header><p><strong>Branch:</strong> <code>iter-019-tts-extract</code> (merged ff to main, commit <code>203e251</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>Last function in <code>mic_chat.py</code> reachable only via pyaudio-tainted imports — pulled into <code>examples/_chat_tts.py</code> so it composes with the iter-005 virtual audio + iter-015 ChatLoop without dragging real pyaudio along.</p>
+<p>Side benefit: closes the &quot;real production synth path&quot; testing gap. Until iter-019 the orchestration tests stubbed <code>synth_fn</code> with a constant-audio function. We trusted the real <code>synthesize_with_alignment</code> composed correctly because contracts matched; we couldn&#x27;t prove it.</p>
+<p>What changed:</p>
+<ul><li><strong><code>examples/_chat_tts.py</code></strong> (new): <code>isinstance(audio, torch.Tensor)</code> (which required importing torch for the numpy fast path) to a duck-type check via <code>hasattr(audio, &quot;numpy&quot;) and not isinstance(audio, np.ndarray)</code>. Tests can pass fake &quot;tensor&quot; objects without depending on torch. <code>_chat_playback.py</code>; both modules need it for their own purposes — not worth a cross-module import for a 4-char constant).<ul><li><code>synthesize_with_alignment</code> relocated, semantics unchanged.</li><li>Refactor: torch.Tensor detection switched from</li><li><code>TTS_RATE = 24000</code> lives here (and remains in</li></ul></li></ul>
+<ul><li><strong><code>examples/mic_chat.py</code></strong>: so external imports keep working.<ul><li>Now re-exports <code>synthesize_with_alignment</code> from <code>_chat_tts</code></li></ul></li></ul>
+<p>Tests (12 new):</p>
+<p><code>tests/unit/test_chat_tts.py</code> — 9 unit + 2 kokoro integration:</p>
+<ul><li>Empty pipeline returns <code>(empty, empty)</code>.</li><li>Single chunk round-trips audio + tokens.</li><li><strong>Multi-chunk OFFSETS tokens by accumulated duration</strong> — the load-bearing piece of the function. Without this, iter-007&#x27;s playback alignment would re-start at 0 for every chunk after the first, breaking word-by-word reveal.</li><li>Three chunks: offset accumulation works for &gt;2.</li><li>Concatenated audio preserves chunk values byte-for-byte.</li><li>Tensor audio with <code>.numpy()</code> converts (fake tensor — no torch import needed).</li><li>Numpy audio passes through unchanged.</li><li><code>_load</code> called on every invocation.</li><li>Results with no tokens still contribute audio.</li><li>Real kokoro: short sentence produces plausible output (audio length, token shape, timings within audio duration).</li><li>Real kokoro: amplitude in <code>[-1, 1]</code> with non-zero RMS.</li></ul>
+<p><code>tests/unit/test_chat_loop.py</code> — 1 kokoro e2e:</p>
+<ul><li><code>ChatLoop.run_one_turn</code> driven with real kokoro synth + real <code>play_aligned</code> + virtual mic/speaker + stub STT/LLM. Verifies metrics, history, and that the speaker received real audio signal (RMS &gt; 0.001 over a realistic byte-count window). The closest test to &quot;the real production chat loop is working&quot; — ~3-6s on first run for kokoro load, faster after.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/</code> → <strong>289 passed in 18s</strong> (277 existing + 12 new).</p>
+<p>Notes:</p>
+<ul><li>Suite went from 11s → 18s. Three new kokoro integration tests cost ~1-2s each. Could mark them <code>@pytest.mark.slow</code> if this becomes painful, but &lt;20s is still tight enough for fast iteration.</li><li><code>_chat_loop.py</code> was unchanged this iteration — <code>synth_fn</code> is already injectable, so swapping in real kokoro just means passing the right callable. That&#x27;s the iter-015 architecture paying off.</li><li>The duck-type tensor check (<code>hasattr(audio, &quot;numpy&quot;)</code>) is cleaner than the original <code>isinstance(audio, torch.Tensor)</code> because it doesn&#x27;t require importing torch when the engine already returns numpy. Real kokoro returns tensors; the conversion still works.</li></ul>
+<hr><nav><a href="index.html">← Index</a><a href="iter-018.html">← iter-018</a><a href="iter-020.html">iter-020 →</a></nav>
+</div>
+</body>
+</html>

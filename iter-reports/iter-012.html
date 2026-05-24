@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-012 — extend barge-in across the LLM-streaming phase</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-011.html">← iter-011</a><a href="iter-013.html">iter-013 →</a></nav><header>
+<h1>iter-012 — extend barge-in across the LLM-streaming phase</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-012-llm-stream-barge</code></span> · <span>commit: <code>f1e7a4e</code></span></div>
+</header><p><strong>Branch:</strong> <code>iter-012-llm-stream-barge</code> (merged ff to main, commit <code>f1e7a4e</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>iter-009/010 covered barge-in during worker playback. The remaining gap: a user who started talking while the LLM was still emitting its first token would be detected by the watcher and the worker would be cancelled, but the for-token loop would keep consuming tokens for sentences that would never be played (silently swallowed by the now-cancelled worker). Wasted compute, wasted bandwidth, no early exit.</p>
+<p>What changed:</p>
+<ul><li><code>examples/_chat_pipeline.py</code>: bundles together the actions barge-in needs to cascade through: 1. A <code>threading.Event</code> the for-token loop checks each iteration. 2. <code>SentenceWorker.cancel()</code> — playback stops mid-stream. 3. Optional <code>on_trigger</code> hook (intended for closing HTTP requests streams in production; not wired yet). cascades. Lock-protected event-set; the cancel cascade runs outside the lock so a long join doesn&#x27;t block other callers checking <code>is_set()</code>. are swallowed so they can&#x27;t leave the event un-set.<ul><li>New <code>BargeInCoordinator</code> class. Single-shot signal that</li><li>Idempotent — multiple triggers are safe, only the first</li><li>Robust — exceptions in <code>worker.cancel</code> or <code>on_trigger</code></li></ul></li></ul>
+<ul><li><code>examples/mic_chat.py</code>: primitives. (<code>on_speech_detected = coord.trigger</code>) and into the for-token loop (<code>if coord.is_set(): break</code>). + <code>submit_done</code> + <code>wait_done</code>; on barge-in, just wait for the (already-cancelled) worker thread. phase&quot; vs &quot;playback phase&quot; by comparing <code>coord.triggered_at</code> to <code>llm_stream_done_at</code>.<ul><li>Imports <code>BargeInCoordinator</code> alongside the existing</li><li>Per-turn coordinator wired into the watcher</li><li>Post-stream path split: on clean completion, drain buffer</li><li>Status print now distinguishes &quot;barge-in during LLM-stream</li></ul></li></ul>
+<p>Tests (17 new):</p>
+<ul><li><code>tests/unit/test_bargein_coordinator.py</code> — 12 tests: timestamp; <code>event</code> property exposes the underlying <code>threading.Event</code>. <code>triggered_at</code> doesn&#x27;t update on the second call. <code>on_trigger</code> hook fires; event set BEFORE <code>worker.cancel</code> returns (proven via concurrent reader thread). trigger; <code>on_trigger</code> exception doesn&#x27;t break trigger. <code>SentenceWorker</code> for real, less-than-full audio reaches the speaker.<ul><li>Basic: <code>is_set</code> starts False; trigger sets event +</li><li>Idempotent: double-trigger fires once;</li><li>Wiring: <code>worker.cancel</code> called; no-worker case OK;</li><li>Robustness: <code>worker.cancel</code> exception doesn&#x27;t break</li><li>Real-worker integration: trigger cancels a</li></ul></li></ul>
+<ul><li><code>tests/unit/test_llm_stream_barge.py</code> — 5 tests: pre-set coord yields zero tokens; mid-stream trigger breaks with at most one sentence submitted. a per-token delay, user speech pushed to a <code>VirtualMicStream</code> mid-stream, watcher fires <code>coord</code>, consumer loop breaks, worker cancelled, watcher captures user audio for replay. End-to-end barge-in during LLM streaming verified. worker plays all sentences.<ul><li>For-token early exit: no barge-in consumes all tokens;</li><li><strong>Full integration</strong>: faked LLM stream emits tokens with</li><li>Clean completion: no user audio, full stream consumed,</li></ul></li></ul>
+<p>Verification: <code>python -m pytest tests/unit/</code> → <strong>172 passed in 11s</strong> (155 existing + 17 new).</p>
+<p>Notes:</p>
+<ul><li>The faked-LLM orchestration test runs in 150ms. Production behavior is identical because the same components compose the same way — the test just stubs out the HTTP transport.</li><li>The &quot;event set before cancel returns&quot; test was tricky to write deterministically. The current approach uses a concurrent reader thread that polls <code>is_set()</code> while the trigger runs; the assertion fails if the worker.cancel blocks the event-set call. Real production cancel paths do their own join, so this guards against accidentally reordering the cascade.</li></ul>
+<hr><nav><a href="index.html">← Index</a><a href="iter-011.html">← iter-011</a><a href="iter-013.html">iter-013 →</a></nav>
+</div>
+</body>
+</html>

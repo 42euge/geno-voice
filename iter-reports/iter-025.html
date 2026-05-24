@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-025 — BargeInWatcher captures only post-detection frames</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-024.html">← iter-024</a><a href="iter-026.html">iter-026 →</a></nav><header>
+<h1>iter-025 — BargeInWatcher captures only post-detection frames</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-025-watcher-frames</code></span> · <span>commit: <code>3de5039</code></span></div>
+</header><p><strong>Branch:</strong> <code>iter-025-watcher-frames</code> (merged ff to main, commit <code>3de5039</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>Pre-iter-025 the watcher stored every frame from <code>.start()</code> to <code>.stop()</code>, including pre-detection silence/noise/feedback. When that buffer was fed into the next <code>record_utterance_streaming</code> as <code>primed_frames</code>, the recording loop&#x27;s VAD would treat any high-RMS pre-detection content as user speech — so STT could end up transcribing the bot&#x27;s acoustic feedback as the user&#x27;s words. Only matters with speakers (not headphones), but real production use case.</p>
+<p>Fix: frames stores only:</p>
+<ul><li>the <strong>trigger frame</strong> (the chunk that actually crossed threshold; this is the user&#x27;s first audible syllable)</li><li>all subsequent frames until <code>stop()</code></li><li>optionally, the most recent N pre-detection chunks if the caller passes <code>lead_in_chunks &gt; 0</code> (default 0)</li></ul>
+<p>The <code>lead_in_chunks</code> kwarg is a ring buffer of the last N pre-detection frames. When detection fires, the buffer is flushed into <code>frames</code> in order, followed by the trigger frame.</p>
+<p>Implementation gotcha caught by failing test on first attempt: the trigger frame must NOT go into the ring buffer before the trigger check, otherwise the lead-in flush + the explicit append double- count it:</p>
+<pre class="code-block"><code>Frame 8 = TONE (trigger)
+Wrong: buffer=[s5,s6,s7,t8] → flush → [s5,s6,s7,t8] → append t8 → [s5,s6,s7,t8,t8]
+Right: trigger first → flush [s5,s6,s7] → append t8 → [s5,s6,s7,t8]</code></pre>
+<p>The order is now: <code>if detected → append; elif trigger → flush+append; else → ring buffer</code>.</p>
+<p>Tests (8 new in <code>tests/unit/test_watcher_frames.py</code>):</p>
+<p>Default <code>lead_in=0</code> (3):</p>
+<ul><li>Pure silence → no frames, no detection.</li><li>Silence + tone + silence → frames &lt;&lt; total events.</li><li>Trigger frame is the first stored frame and has high RMS.</li></ul>
+<p>Lead-in buffer (5):</p>
+<ul><li><code>lead_in_chunks=3</code> → first 3 stored frames are silence, 4th has signal.</li><li><code>lead_in_chunks=0</code> explicit equivalent to omitting the kwarg.</li><li>Ring buffer caps at max size (1.0s silence + lead_in=2 yields only 2 silence frames pre-trigger).</li><li>Negative <code>lead_in_chunks</code> raises <code>ValueError</code>.</li><li>Internal <code>_lead_in_buffer</code> cleared after flush.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/</code> → <strong>347 passed in 18s</strong> (339 existing + 8 new).</p>
+<p>Notes:</p>
+<ul><li>Behavior change. Existing tests pass because they assert <code>len(frames) &gt; 0</code> not specific counts. External callers that relied on full pre-detection capture can restore via <code>lead_in_chunks=N</code>.</li><li>Bot acoustic feedback is fundamentally an AEC problem. iter-025 just stops <em>amplifying</em> it by feeding the bot audio back through STT.</li><li>Ring buffer bounded at <code>lead_in_chunks × CHUNK</code> bytes — at default 0, zero memory. Generous <code>lead_in=10</code> (~640ms), 20KB.</li><li>The first-attempt test caught the double-append bug cleanly. Worth noting for future &quot;small implementation&quot; work: writing the test before/while writing the code keeps these orderings honest.</li></ul>
+<hr><nav><a href="index.html">← Index</a><a href="iter-024.html">← iter-024</a><a href="iter-026.html">iter-026 →</a></nav>
+</div>
+</body>
+</html>

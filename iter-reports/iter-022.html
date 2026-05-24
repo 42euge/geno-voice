@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-022 — split when terminator is followed by closing quote</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-021.html">← iter-021</a><a href="iter-023.html">iter-023 →</a></nav><header>
+<h1>iter-022 — split when terminator is followed by closing quote</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-022-quoted-speech</code></span> · <span>commit: <code>390978e</code></span></div>
+</header><p><strong>Branch:</strong> <code>iter-022-quoted-speech</code> (merged ff to main, commit <code>390978e</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>The original <code>(?&lt;=[.!?])\s+</code> lookbehind only matched when whitespace immediately followed a sentence terminator. With US-style quoted speech where the period sits <em>inside</em> the closing quote (<code>&quot;hello.&quot;</code> vs UK-style <code>&quot;hello&quot;.</code>), the char before the whitespace is <code>&quot;</code>, not a terminator. The splitter never fired, so the bot would speak the quoted sentence and the next sentence as one long TTS chunk.</p>
+<p>Concrete failure (3 cases, all fixed):</p>
+<pre class="code-block"><code>&quot;He said \&quot;hello.\&quot; Then he left.&quot;
+  Before: ([], &#x27;...&#x27;)                            # no split
+  After:  ([&#x27;He said &quot;hello.&quot;&#x27;], &#x27;Then he left.&#x27;)
+
+&quot;She asked \&quot;why?\&quot; Then waited.&quot;
+  Before: ([], &#x27;...&#x27;)
+  After:  ([&#x27;She asked &quot;why?&quot;&#x27;], &#x27;Then waited.&#x27;)
+
+&quot;She said ‘hi.’ Done.&quot;   (smart quotes)
+  Before: ([], &#x27;...&#x27;)
+  After:  ([&quot;She said ‘hi.’&quot;], &quot;Done.&quot;)</code></pre>
+<p>Fix uses Python regex alternation (variable-length lookbehind isn&#x27;t supported, but two fixed-length alternatives can be OR&#x27;d):</p>
+<pre class="code-block"><code>SENTENCE_END = re.compile(
+    r&#x27;(?&lt;=[.!?])\s+|(?&lt;=[.!?][\&quot;\&#x27;”’])\s+&#x27;
+)</code></pre>
+<p>Quote characters covered: straight double <code>&quot;</code>, straight single <code>&#x27;</code>, smart right double <code>”</code> (U+201D), smart right single <code>’</code> (U+2019). Other quote styles (CJK 「」, etc.) aren&#x27;t included; if the LLM emits those they&#x27;ll fall back to no-split — no regression vs today.</p>
+<p>Walk-back updated: after finding <code>m.start() - 1</code>, if that&#x27;s a closing quote, walk one more position back to find the actual terminator. The iter-016 abbreviation check and iter-021 ordinal check still operate on the real terminator position.</p>
+<p>Tests (8 new in <code>TestSplitCompleteSentences</code>):</p>
+<ul><li>US-style with <code>.</code>, <code>?</code>, <code>!</code> inside the quote (3 cases)</li><li>Single quote, smart double, smart single (3 cases)</li><li>UK-style period outside still splits (control)</li><li>Abbreviation outside + quote inside: <code>Mr. Smith said &quot;hi.&quot;</code> splits correctly at the inner <code>&quot;</code>, not at <code>Mr.</code></li></ul>
+<p>Verification: <code>python -m pytest tests/unit/</code> → <strong>321 passed in 17s</strong> (313 existing + 8 new).</p>
+<p>Notes:</p>
+<ul><li>The two-branch lookbehind costs marginally more regex work but the match buffer is small (one in-progress bot reply token-by-token), so cost is negligible.</li><li>Bot-emitted smart quotes are common in modern LLM output: Claude/GPT formatted dialogue often uses <code>“…”</code> not straight <code>&quot;…&quot;</code>. Including smart quotes by default catches that without needing the bot&#x27;s prompt to special-case it.</li><li>The &quot;abbreviation OUTSIDE + quote INSIDE&quot; combined test is the regression-cover that catches future refactors that try to simplify the walk-back logic.</li></ul>
+<hr><nav><a href="index.html">← Index</a><a href="iter-021.html">← iter-021</a><a href="iter-023.html">iter-023 →</a></nav>
+</div>
+</body>
+</html>

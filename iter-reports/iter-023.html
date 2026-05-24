@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-023 — introspect play_fn signature once, fix double-call bug</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-022.html">← iter-022</a><a href="iter-024.html">iter-024 →</a></nav><header>
+<h1>iter-023 — introspect play_fn signature once, fix double-call bug</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-023-typeerror</code></span> · <span>commit: <code>8be4532</code></span></div>
+</header><p><strong>Branch:</strong> <code>iter-023-typeerror</code> (merged ff to main, commit <code>8be4532</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>Real subtle bug found by code review. <code>SentenceWorker._play_clip</code> had been wrapping each <code>play_fn</code> call in a <code>try/except TypeError</code> to fall back to a no-cancel-event signature for iter-008-style play_fns. That swallow had a silent failure mode — a <code>play_fn</code> whose <strong>body</strong> raised TypeError (for <em>any</em> reason) would be retried with the fallback signature, which would also raise (same body), so the function got called <em>twice</em> for the same sentence.</p>
+<p>Demonstrated before fix:</p>
+<pre class="code-block"><code>buggy_play raises TypeError, calls speaker.write first.
+Speaker received 4096 bytes (1024 samples × 2 calls × 2 bytes/sample)
+Expected 2048 bytes (one call&#x27;s worth of partial audio)</code></pre>
+<p>Fix: detect once at <code>SentenceWorker.__init__</code> whether the <code>play_fn</code> accepts a <code>cancel_event</code> kwarg via <code>inspect.signature</code>. Store the result on the worker, dispatch per-call without <code>try/except</code>. A TypeError raised by the <code>play_fn</code>&#x27;s body now surfaces correctly via the outer <code>except Exception</code> and gets recorded in <code>worker.errors</code> exactly once.</p>
+<p>What changed:</p>
+<ul><li><strong><code>examples/_chat_pipeline.py</code></strong>: <code>_play_fn_accepts_cancel_event(play_fn)</code>. Uses <code>inspect.signature</code>; checks for either an explicit <code>cancel_event</code> parameter or a <code>**kwargs</code>-style variadic. Conservative on errors: callables whose signature can&#x27;t be inspected (some C extensions / builtins) fall back to False, preserving the old fallback path. <code>self._play_fn_supports_cancel</code>. more <code>try/except TypeError</code>.<ul><li>New module-level helper</li><li><code>SentenceWorker.__init__</code> runs the check once and stores</li><li><code>SentenceWorker._play_clip</code> dispatches via the flag — no</li></ul></li></ul>
+<p>Tests (11 new in <code>tests/unit/test_play_fn_introspection.py</code>):</p>
+<p>Signature introspection (6):</p>
+<ul><li>explicit <code>cancel_event</code> kwarg detected</li><li>no <code>cancel_event</code> → not detected</li><li><code>**kwargs</code> variadic → detected</li><li>lambdas with / without <code>cancel_event</code></li><li>uninspectable callable falls back to False</li></ul>
+<p>Worker dispatch (3):</p>
+<ul><li><code>play_fn</code> with <code>cancel_event</code> receives the worker&#x27;s internal <code>threading.Event</code>-shaped object</li><li><code>play_fn</code> without <code>cancel_event</code> doesn&#x27;t get extra kwargs</li><li><code>**kwargs</code> <code>play_fn</code> receives <code>cancel_event</code> in the dict</li></ul>
+<p>TypeError bug regression (2):</p>
+<ul><li>buggy <code>play_fn</code> raising TypeError called <strong>exactly once</strong> per sentence; speaker captures one chunk&#x27;s worth (2048 bytes), not double; one error in <code>worker.errors</code>.</li><li>After a buggy first sentence, subsequent sentences still play cleanly (loop continues; doesn&#x27;t deadlock).</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/</code> → <strong>332 passed in 17s</strong> (321 existing + 11 new).</p>
+<p>Notes:</p>
+<ul><li><code>inspect.signature</code> has a small one-time cost at construction — negligible for the iter-008 + iter-023 design where workers are short-lived (one per turn).</li><li>This is the kind of bug that&#x27;s easy to miss in code review — <code>try/except TypeError</code> &quot;looks defensive&quot; but silently masks real failures. Worth remembering: <code>try/except</code> on a too-broad exception class is a code smell; introspect what you actually care about.</li></ul>
+<hr><nav><a href="index.html">← Index</a><a href="iter-022.html">← iter-022</a><a href="iter-024.html">iter-024 →</a></nav>
+</div>
+</body>
+</html>

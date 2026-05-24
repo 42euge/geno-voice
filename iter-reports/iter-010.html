@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-010 — wire barge-in into chat loop, primed_frames replay</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-009.html">← iter-009</a><a href="iter-011.html">iter-011 →</a></nav><header>
+<h1>iter-010 — wire barge-in into chat loop, primed_frames replay</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-010-bargein-wiring</code></span> · <span>commit: <code>9279220</code></span></div>
+</header><p><strong>Branch:</strong> <code>iter-010-bargein-wiring</code> (merged ff to main, commit <code>9279220</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>Closes the loop iter-009 started. The cancel/watcher primitives are now actually used by <code>mic_chat.run_chat</code>, and the user&#x27;s barge-in audio is preserved into the next record turn instead of dropped.</p>
+<p>What changed:</p>
+<ul><li><code>examples/_chat_recording.py</code>: Each primed frame is fed through the VAD before any live mic reads, in order. Each frame&#x27;s bytes are appended to the output wav as if read live. virtual clock anchored at function entry — <code>now = t_origin + frame_idx * (CHUNK / RATE)</code>. The previous <code>clock()</code>-per-frame approach had two failure modes that the primed-frames tests surfaced: (1) primed frames served in microseconds made the silence window appear to close instantly; (2) with a per-call test FrameClock, the first live read&#x27;s timestamp could land <em>before</em> the last primed timestamp, corrupting <code>last_speech_duration</code>. The unified virtual clock keeps time monotonic at audio rate regardless of clock provider. Production behavior is identical because PyAudio reads already block at audio rate.<ul><li><code>record_utterance_streaming</code> gained a <code>primed_frames</code> kwarg.</li><li><strong>Refactored time accounting</strong>: the function uses a single</li></ul></li></ul>
+<ul><li><code>examples/mic_chat.py</code>: while loop. After <code>worker.wait_done</code> returns, if <code>watcher.detected</code>, <code>watcher.frames</code> is captured into <code>primed_frames</code> and fed to the next <code>record_utterance</code> call. Reset to None after consumption. recorder uses, with <code>worker.cancel</code> as the callback. Watcher starts after <code>worker.start</code>; stops after <code>worker.wait_done</code>. Mic is flushed (bug-3 helper from iter-002) right before the watcher starts so audio buffered during the LLM phase isn&#x27;t misread as user speech. thread.<ul><li><code>run_chat</code> carries <code>primed_frames</code> across iterations of the</li><li>Spawns a <code>BargeInWatcher</code> pointed at the same mic the</li><li>LLM-error path also stops the watcher so we don&#x27;t leak a</li></ul></li></ul>
+<p>Tests (9 new):</p>
+<ul><li><code>tests/unit/test_chat_recording.py</code> — 6 priming tests: falls through to live mic; too-short blip yields <code>DONE_TOO_SHORT</code>; pedantic frame-count check.<ul><li>None / <code>[]</code> are no-ops; speech burst appears in wav; silence</li></ul></li><li><code>tests/unit/test_bargein_orchestration.py</code> — 3 full-loop tests: <code>worker.cancel</code> → <code>primed_frames</code> go into next record call → valid wav covers user audio. Closes the loop end to end. remaining 4.<ul><li>Bot speaks → user barges in on virtual mic → watcher fires</li><li>No-barge-in path: full sentence plays, no priming.</li><li>5-sentence queue: barge-in during sentence 1 drops the</li></ul></li></ul>
+<p>Verification: <code>python -m pytest tests/unit/</code> → <strong>143 passed in 10s</strong> (134 existing + 9 new).</p>
+<p>Notes:</p>
+<ul><li>The per-frame <code>clock()</code> bug was hidden under the simple iter-006 case (live-only reads through FrameClock) and only surfaced when primed and live frames coexisted. The fix (<code>t_origin</code> + frame counter) is also conceptually cleaner — the function&#x27;s view of time is now invariant to how the underlying clock behaves.</li><li>The orchestration tests are as close as we get on x86_64 Linux to &quot;the real chat loop is working.&quot; Deterministic in 0.2s using only virtual audio. That&#x27;s the payoff for everything iter-005 through iter-009 built up.</li></ul>
+<p>Next:</p>
+<ul><li>iter-011: filler-word generation (carried over from iter-009 plan). Pre-render short clips (&quot;hmm&quot;, &quot;let me think&quot;) at startup. Worker grows an idle-watchdog timer: if queue stays empty for &gt;600ms while <code>submit_done</code> hasn&#x27;t been called, play one filler. Behind a <code>config.local.yaml</code> flag.</li><li>iter-012: optional — keep the <code>BargeInWatcher</code> running across the LLM-streaming phase too, not just during play. Currently if the user starts talking while the LLM is still streaming the first response token, we miss those early frames. Doable but requires reasoning carefully about who owns the mic when.</li><li>iter-013: real-mic CI smoke test using ALSA loopback. Pipe TTS-rendered audio through <code>aplay</code> into <code>arecord</code>, then run the chat loop end-to-end on the actual PyAudio stack. Optional — closes the gap between virtual-audio tests and real hardware, but may not be worth the maintenance burden pre-1.0.</li></ul>
+<hr><nav><a href="index.html">← Index</a><a href="iter-009.html">← iter-009</a><a href="iter-011.html">iter-011 →</a></nav>
+</div>
+</body>
+</html>

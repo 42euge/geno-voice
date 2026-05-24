@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-013 — extract SSE parser, close LLM stream on barge-in</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-012.html">← iter-012</a><a href="iter-014.html">iter-014 →</a></nav><header>
+<h1>iter-013 — extract SSE parser, close LLM stream on barge-in</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-013-llm-close</code></span> · <span>commit: <code>8d949a8</code></span></div>
+</header><p><strong>Branch:</strong> <code>iter-013-llm-close</code> (merged ff to main, commit <code>8d949a8</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>iter-012 left a thread loose: when barge-in fires during the LLM stream phase, the consumer breaks out of the for-token loop, but the LLM generator (and its underlying HTTP response) hangs on until garbage collection eventually runs the finally block. This iter closes that gap and extracts the SSE parser as a side benefit.</p>
+<p>What changed:</p>
+<p>1. <strong>Extract SSE parser</strong> into <code>examples/_chat_llm.py</code>:</p>
+<ul><ul><li><code>parse_sse_token_stream(lines)</code> — pure parser. Takes any</li><li><code>stream_chat_completion(messages, config)</code> — thin generator</li><li><code>examples/mic_chat.py</code> re-exports <code>stream_chat_completion</code></li></ul></ul>
+<p>2. <strong>Consumer-side close</strong>:</p>
+<ul><ul><li>The naive idea (<code>coord.on_trigger = gen.close</code>) fails:</li><li>Correct pattern: wrap the for-loop in `try/finally:</li><li><code>mic_chat.run_chat</code>:</li></ul></ul>
+<p>Tests (18 new in <code>tests/unit/test_chat_llm.py</code>):</p>
+<p><code>parse_sse_token_stream</code> (13):</p>
+<ul><li>empty input; single + multi data lines; <code>[DONE]</code> stops; blank/non-data lines skipped; malformed JSON skipped; missing <code>choices</code>/<code>delta</code>/<code>content</code> skipped; empty content skipped; bytes decoded; invalid UTF-8 doesn&#x27;t raise; empty <code>&quot;choices&quot;: []</code> handled.</li></ul>
+<p><code>stream_chat_completion</code> lifecycle (3):</p>
+<ul><li>Full consumption closes response once. Generator close propagates to response close (verified with a slow fake response so the close lands mid-stream). Exception in response close is swallowed by the finally.</li></ul>
+<p>Consumer-side close pattern (2):</p>
+<ul><li>Consumer breaks mid-stream after <code>coord.trigger</code>; outer <code>try/finally</code> calls <code>gen.close</code>, response is released. Mirrors the mic_chat.run_chat shape exactly.</li><li>Normal completion via <code>[DONE]</code> also releases response; explicit <code>gen.close</code> after natural end is idempotent.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/</code> → <strong>190 passed in 11s</strong> (172 existing + 18 new).</p>
+<p>Notes:</p>
+<ul><li>The first attempt at this iteration wired <code>on_trigger=gen.close</code> and tested it cross-thread. Failing test caught the generator-already-executing bug — that&#x27;s the value of running the test before assuming the design. The fix-in-place documents the correct same-thread pattern.</li><li>Python generators are inherently single-threaded consumers — <code>close()</code> must come from the iterating thread. Worth remembering for any future generator-cleanup work (e.g. iter-014 if we ever want to interrupt synth_with_alignment).</li><li>The SSE parser handles edge cases (empty content, role chunks, malformed JSON, <code>[DONE]</code>) that real providers actually emit. Cheap insurance against expensive live debugging.</li></ul>
+<hr><nav><a href="index.html">← Index</a><a href="iter-012.html">← iter-012</a><a href="iter-014.html">iter-014 →</a></nav>
+</div>
+</body>
+</html>

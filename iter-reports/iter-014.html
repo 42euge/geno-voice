@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-014 — hardening pass: rms NaN, error-path frames, metric surfacing</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-013.html">← iter-013</a><a href="iter-015.html">iter-015 →</a></nav><header>
+<h1>iter-014 — hardening pass: rms NaN, error-path frames, metric surfacing</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-014-hardening</code></span> · <span>commit: <code>806c21a</code></span></div>
+</header><p><strong>Branch:</strong> <code>iter-014-hardening</code> (merged ff to main, commit <code>806c21a</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>A careful re-read of the now-stable code surface turned up three small but real issues. None blocked the happy path; each could silently corrupt user-visible behavior under uncommon-but-real conditions. (The ALSA-loopback stretch goal stays parked; this one is closer to home and unblocks proper testing of metrics.)</p>
+<p>What changed:</p>
+<p>1. <strong><code>rms()</code> returned NaN on empty input.</strong> <code>np.mean</code> of an empty slice emits <code>RuntimeWarning</code> and returns NaN. NaN silently broke <code>VadState.feed</code> because <code>NaN &gt; threshold</code> is always False — empty reads stayed IDLE forever and the loop stalled. Empty reads happen in practice (torn PyAudio reads, virtual mic flushed mid-iteration). Fix: guard with <code>len(frame) == 0</code> returning 0.0. Verified by a test that runs under <code>warnings.simplefilter(&quot;error&quot;)</code>.</p>
+<p>2. <strong>LLM-error path dropped watcher-captured user audio.</strong> If the user was barging in at the moment the LLM call failed (network blip, DNS, 5xx), the error path stopped the watcher cleanly but discarded <code>watcher.frames</code>. Now copied into <code>primed_frames</code> for the next record turn, with a status print so the user knows what happened.</p>
+<p>3. <strong><code>fillers_played</code> + <code>barge_in</code> not surfaced in <code>TurnMetrics</code>.</strong> iter-011 added <code>worker.fillers_played</code>; iter-012 added the coord-set check. Neither made it into the per-turn summary. Now: TTS line shows &quot;X sentences + Y fillers&quot; suffix; a yellow &quot;Barge-in: yes (user interrupted)&quot; line appears when the coordinator fired.</p>
+<p>Side benefit: extracted <code>TurnMetrics</code> into a new <code>examples/_chat_metrics.py</code> (same iter-006/007 pattern). Tests can now import it without dragging in pyaudio at module scope.</p>
+<p>Tests (14 new in <code>tests/unit/test_hardening.py</code>):</p>
+<p><code>rms()</code> edge cases (5):</p>
+<ul><li>empty array under <code>simplefilter(&quot;error&quot;)</code> returns 0.0 with no warning</li><li><code>None</code> input returns 0.0 (defensive)</li><li>silence returns 0.0</li><li>constant amplitude returns that amplitude</li><li>0.3 sine RMS matches theoretical 0.3/√2 within tolerance</li></ul>
+<p><code>record_utterance_streaming</code> with empty reads (1):</p>
+<ul><li>Custom mic stream serves 3 empty-bytes reads then real audio. Wrapped in <code>simplefilter(&quot;error&quot;)</code> so any latent warning fails the test. Loop completes and produces a non-empty wav covering the post-empty audio.</li></ul>
+<p><code>TurnMetrics.print</code> output (6):</p>
+<ul><li>0 fillers omits from TTS line; 1 filler shows singular; 2+ shows plural; <code>barge_in=False</code> omits line; <code>barge_in=True</code> shows yellow status; default metrics has new fields at 0/False.</li></ul>
+<p>Error-path carryover logic (2):</p>
+<ul><li><code>watcher.detected=True</code> copies frames; defensive copy (not same list object).</li><li><code>watcher.detected=False</code> leaves <code>primed_frames=None</code>.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/</code> → <strong>204 passed in 11s</strong> (190 existing + 14 new).</p>
+<p>Notes:</p>
+<ul><li>The <code>TurnMetrics.print</code> tests caught a small pluralization bug in passing — &quot;1 fillers&quot; vs &quot;1 filler&quot;. Easy to miss without the test.</li><li><code>_capture_print</code> uses <code>contextlib.redirect_stdout</code> instead of pytest&#x27;s <code>capsys</code> because it&#x27;s a unit test of the printer output, not a fixture-driven integration test. Either works; redirect_stdout is more explicit about what&#x27;s being captured.</li><li>The error-path-carryover test exercises the logic shape rather than calling <code>mic_chat.run_chat</code> directly. A full end-to-end test of <code>run_chat</code> would require stubbing STT + LLM + audio hardware — possible but a separate refactor.</li></ul>
+<hr><nav><a href="index.html">← Index</a><a href="iter-013.html">← iter-013</a><a href="iter-015.html">iter-015 →</a></nav>
+</div>
+</body>
+</html>

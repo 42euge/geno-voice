@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-021 — digit-prefixed ordinals don&#x27;t trigger abbreviation match</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-020.html">← iter-020</a><a href="iter-022.html">iter-022 →</a></nav><header>
+<h1>iter-021 — digit-prefixed ordinals don&#x27;t trigger abbreviation match</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-021-ordinals</code></span> · <span>commit: <code>c501d91</code></span></div>
+</header><p><strong>Branch:</strong> <code>iter-021-ordinals</code> (merged ff to main, commit <code>c501d91</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>Subtle iter-016 collision: the abbreviation set contains <code>&quot;st&quot;</code> (Street) and <code>&quot;rd&quot;</code> (Road) for postal-address contexts. But those also happen to be the suffix letters of the ordinal forms <code>1st</code> and <code>3rd</code>. The <code>_word_before_period</code> walk-back skipped the leading digit and extracted just <code>&quot;st&quot;</code> / <code>&quot;rd&quot;</code>, which then matched the abbreviation set, which then prevented the splitter from firing.</p>
+<p>Concrete failure:</p>
+<pre class="code-block"><code>&gt;&gt;&gt; split_complete_sentences(&quot;He came 1st. Then we go.&quot;)
+([], &#x27;He came 1st. Then we go.&#x27;)   # WRONG — should split</code></pre>
+<p>In production, the bot voicing &quot;He came in 1st. Then we celebrated.&quot; would have run the two sentences together as one TTS chunk, with no pause where the listener&#x27;s ear expected one.</p>
+<p>Fix in <code>_word_before_period</code>: after walking back over <code>[a-zA-Z.]</code>, check one position further. If it&#x27;s a digit, this is a numeric ordinal (1st, 2nd, 3rd, 4th, 100th, ...) — not an abbreviation. Return empty so the splitter falls through to default split behavior.</p>
+<p>Coverage matrix:</p>
+<table class="iter-table"><thead><tr><th>Input</th><th>Suffix</th><th>In abbrevs?</th><th>Before iter-021</th><th>After iter-021</th></tr></thead><tbody><tr><td><code>1st.</code></td><td><code>st</code></td><td>yes (Street)</td><td>doesn&#x27;t split (BUG)</td><td>splits</td></tr><tr><td><code>2nd.</code></td><td><code>nd</code></td><td>no</td><td>splits</td><td>splits</td></tr><tr><td><code>3rd.</code></td><td><code>rd</code></td><td>yes (Road)</td><td>doesn&#x27;t split (BUG)</td><td>splits</td></tr><tr><td><code>4th.</code></td><td><code>th</code></td><td>no</td><td>splits</td><td>splits</td></tr><tr><td><code>100th.</code></td><td><code>th</code></td><td>no</td><td>splits</td><td>splits</td></tr><tr><td><code>Mr.</code></td><td><code>mr</code></td><td>yes (Mister)</td><td>doesn&#x27;t split</td><td>doesn&#x27;t split</td></tr><tr><td><code>9 a.m.</code></td><td><code>a.m</code></td><td>yes</td><td>doesn&#x27;t split</td><td>doesn&#x27;t split</td></tr></tbody></table>
+<p>The &quot;9 a.m.&quot; control case is what makes the fix surgical: the digit <code>9</code> is separated from <code>a.m</code> by a space, so the walk-back&#x27;s <code>start</code> lands on the position after the space, and <code>buffer[start-1]</code> is the space (not the digit). Fix doesn&#x27;t trigger; abbreviation match still works.</p>
+<p>Tests (8 new in <code>TestSplitCompleteSentences</code>):</p>
+<ul><li><code>1st</code> regression; <code>3rd</code> regression</li><li><code>2nd</code> / <code>4th</code> / <code>100th</code> working</li><li>numbered list items still split</li><li><code>&quot;Mr. Smith&quot;</code> still doesn&#x27;t split (control)</li><li><code>&quot;9 a.m. Time&quot;</code> still doesn&#x27;t split (control)</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/</code> → <strong>313 passed in 17s</strong> (305 existing + 8 new).</p>
+<p>Notes:</p>
+<ul><li>Guard is <code>start &lt; end and start &gt; 0</code> — both edges. Without the <code>start &lt; end</code> clause, a period at index 0 with no walk would read <code>buffer[-1]</code> (Python&#x27;s wrap-around to last char), which would be wrong. Without the <code>start &gt; 0</code> clause, we&#x27;d index out of bounds.</li><li>This bug was hidden under iter-016&#x27;s acceptance testing because the test corpus didn&#x27;t include ordinals. The iter-021 tests fill that gap explicitly.</li></ul>
+<hr><nav><a href="index.html">← Index</a><a href="iter-020.html">← iter-020</a><a href="iter-022.html">iter-022 →</a></nav>
+</div>
+</body>
+</html>

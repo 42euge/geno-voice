@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-005 — virtual audio interfaces + TTS-driven simulation</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-004.html">← iter-004</a><a href="iter-006.html">iter-006 →</a></nav><header>
+<h1>iter-005 — virtual audio interfaces + TTS-driven simulation</h1>
+<div class="meta"><span>2026-05-23</span> · <span>branch: <code>iter-005-virtual-audio</code></span> · <span>commit: <code>ad20b0c</code></span></div>
+</header><p><strong>Branch:</strong> <code>iter-005-virtual-audio</code> (merged ff to main, commit <code>ad20b0c</code>) <strong>Date:</strong> 2026-05-23</p>
+<p>User redirected the iteration order: instead of doing streaming overlap, build software audio interfaces and use TTS as a simulated mic source. This unblocks every future iteration that needs end-to-end testing without hardware.</p>
+<p>What changed (new file: <code>examples/virtual_audio.py</code>):</p>
+<ul><li><code>VirtualMicStream</code> — push audio in, pyaudio-shaped read/get_available out. Reads beyond buffer zero-pad by default (matches a quiet mic).</li><li><code>VirtualSpeakerStream</code> — write captures audio. Optional <code>loopback_to</code> routes every write back into a paired mic. That&#x27;s the seed for iter-007 (barge-in) — bot output and user input share a stream.</li><li><code>VirtualAudioInterface</code> — drop-in replacement for <code>pyaudio.PyAudio()</code>. <code>.open(input=True)</code> returns a mic, <code>.open(output=True)</code> returns a speaker, <code>loopback=True</code> wires them.</li><li>Audio fixtures: <code>make_silence</code>, <code>make_tone_burst</code>, <code>make_noise_burst</code>, <code>concat</code>. Pure numpy; noise is deterministic with a seed.</li><li><code>feed_tts(mic, text, ...)</code> — renders via <code>tts/kokoro_engine</code>, resamples 24k→mic.rate (cheap linear), pads silence around speech. Raises <code>RuntimeError</code> cleanly if kokoro can&#x27;t load (so tests can skip).</li><li><code>simulate_vad_over_audio(audio, ...)</code> — chunk-by-chunk driver that returns the full event sequence + final VadState.</li></ul>
+<p>Tests (26 new in <code>tests/unit/test_virtual_audio.py</code>):</p>
+<ul><li>VirtualMicStream: round-trip, <code>push_silence</code>, underflow zero-pad, no-padding mode, close blocks, reads recorded, float audio scaled+clipped.</li><li>VirtualSpeakerStream: capture, float32 normalization, loopback, close blocks.</li><li>VirtualAudioInterface: input/output dispatch, loopback wiring, terminate.</li><li>Fixtures: silence-is-zero, tone-burst RMS matches theory (0.3 amp sine ≈ 0.21 RMS), noise determinism, concat ordering.</li><li>VAD-over-fixtures: pure silence stays idle; speech+silence fires exactly one DONE_OK; short blip → DONE_TOO_SHORT; two utterances → two DONE events; sub-threshold amp stays idle.</li><li>Byte-level path: VirtualMicStream → frombuffer → VadState produces expected events through the same path production code traverses.</li><li><strong>TTS smoke test (opt-in)</strong>: rendered &quot;Hello, this is a simulation test.&quot; via real kokoro, fed the virtual mic, drove VadState end to end. DONE_OK fires with <code>last_speech_duration &gt; 0.5s</code>. Confirms the synth → resample → bytes → VAD chain works on x86_64 Linux (despite the cpp-extensions warning from torch 2.10 / kokoro).</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/</code> → <strong>73 passed in 6.5s</strong>.</p>
+<p>Notes:</p>
+<ul><li>Surprised that kokoro actually synthesizes on Linux x86_64 — the `Skipping import of cpp extensions due to incompatible torch version` warning at import time looked fatal but the model still produces audio (slower path). The skipif guard catches the case where it can&#x27;t, so this stays portable.</li><li>The loopback wiring is intentionally simple: every write unconditionally pushes to the linked mic. Real barge-in (iter-007) needs an <code>enabled</code> flag we toggle while bot is speaking; that&#x27;s a one-line addition when we get there.</li></ul>
+<p>Next:</p>
+<ul><li>iter-006 (was iter-005 before user redirect): streaming LLM → TTS overlap. Now testable end-to-end: synth bot reply via TTS, route through a <code>VirtualSpeakerStream</code>, assert TTFS measured against <code>speech_ended_at</code> is below threshold.</li><li>iter-007: hook <code>mic_chat.py</code> to optionally use <code>VirtualAudioInterface</code> instead of <code>pyaudio.PyAudio()</code> so the chat loop can be smoke-tested in CI with a fixed prompt + a stubbed LLM. This is the foundation for benchmarking pipeline latency changes deterministically.</li></ul>
+<hr><nav><a href="index.html">← Index</a><a href="iter-004.html">← iter-004</a><a href="iter-006.html">iter-006 →</a></nav>
+</div>
+</body>
+</html>

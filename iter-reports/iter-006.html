@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-006 — extract record_utterance_streaming to pyaudio-free module</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-005.html">← iter-005</a><a href="iter-007.html">iter-007 →</a></nav><header>
+<h1>iter-006 — extract record_utterance_streaming to pyaudio-free module</h1>
+<div class="meta"><span>2026-05-23</span> · <span>branch: <code>iter-006-recording-extract</code></span> · <span>commit: <code>9cf4631</code></span></div>
+</header><p><strong>Branch:</strong> <code>iter-006-recording-extract</code> (merged ff to main, commit <code>9cf4631</code>) <strong>Date:</strong> 2026-05-23</p>
+<p>What changed:</p>
+<ul><li>New module <code>examples/_chat_recording.py</code> hosts the recording loop + its audio/VAD constants (RATE, CHUNK, SILENCE_THRESHOLD, etc.), <code>rms</code>, <code>_buffer_to_wav</code>, <code>_transcribe_quick</code>, and <code>record_utterance_streaming</code>. No top-level pyaudio import — the module is importable on x86_64 Linux without ALSA.</li><li><code>record_utterance_streaming</code> gained three injection points: <code>transcribe_fn</code> — <code>callable(wav) -&gt; str | None</code>. Tests stub this. <code>clock</code> — <code>callable() -&gt; float</code>. Tests pass a <code>FrameClock</code> that advances exactly one chunk per call, removing wall-time dependency from the test loop. <code>output</code> — file-like for the live preview. Tests pass <code>StringIO</code>.</li><li><code>mic_chat.py</code> re-imports the constants and function from the new module. Live behavior unchanged.</li><li>Side fix: the too-short branch now explicitly sets <code>stt_engine._last_text = None</code> so a stale value from a previous turn can&#x27;t leak through.</li></ul>
+<p>Tests (8 new in <code>tests/unit/test_chat_recording.py</code>):</p>
+<ul><li>Three-tuple with plausible values for a 1s tone burst.</li><li>Transcript stashed on <code>engine._last_text</code>.</li><li>Returned bytes parse as a valid 16kHz mono int16 WAV.</li><li>Too-short blip returns <code>(b&#x27;&#x27;, 0.0, 0.0)</code> and skips transcribe_fn.</li><li><code>transcribe_fn</code> receives strictly-growing wav buffers across multiple preview intervals (regression cover for streaming preview).</li><li>Preview only re-renders when text changes (prevents flicker).</li><li>Default <code>transcribe_fn</code> falls back to <code>_transcribe_quick</code> and returns None on Linux without crashing.</li><li><strong>TTS-fed smoke test (opt-in)</strong>: real kokoro renders &quot;Hello, this is a recording test.&quot;, virtual mic receives it, the full <code>record_utterance_streaming</code> runs with a stub transcriber, and asserts a well-formed wav of plausible duration.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/</code> → <strong>81 passed in ~9s</strong> (73 existing + 8 new).</p>
+<p>Notes:</p>
+<ul><li>The <code>FrameClock</code> test helper turned out to be the unlock: by advancing time exactly <code>chunk/rate</code> per <code>clock()</code> call, the VAD state machine sees the same time progression it would with real audio, but the test runs as fast as numpy can crunch the buffer.</li><li>One subtle thing learned writing the tests: <code>transcribe_fn</code> is called twice during the typical happy path — once at each <code>INFERENCE_INTERVAL</code> cross during speech (preview), and once at the very end on the final wav. The &quot;growing buffer&quot; test documents that contract.</li></ul>
+<p>Next:</p>
+<ul><li>iter-007: extract <code>play_aligned</code> to a pyaudio-free module the same way. Accept any speaker-shaped object (write/stop_stream/close), test against <code>VirtualSpeakerStream</code>. After this, every primitive the chat loop touches is testable.</li><li>iter-008: build streaming overlap — a <code>SentenceWorker</code> thread that consumes from a <code>Queue</code> of complete sentences, synthesizes via <code>tts_engine</code>, plays via the speaker stream, and reports playback duration. The LLM stream feeds the queue. Test using <code>VirtualSpeakerStream</code> to assert that playback starts before the LLM stream is done.</li><li>iter-009: barge-in. Run <code>VadState</code> on the mic input <em>during</em> speaker writes (loopback mode means mic and speaker share a buffer; we&#x27;d disable loopback for this and use a separate mic feeder for &quot;user starts speaking&quot; injection). When the worker detects speech, drain the sentence queue, stop the speaker, return control.</li></ul>
+<hr><nav><a href="index.html">← Index</a><a href="iter-005.html">← iter-005</a><a href="iter-007.html">iter-007 →</a></nav>
+</div>
+</body>
+</html>

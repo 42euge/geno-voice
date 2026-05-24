@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-018 — extract + validate config parsing</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-017.html">← iter-017</a><a href="iter-019.html">iter-019 →</a></nav><header>
+<h1>iter-018 — extract + validate config parsing</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-018-config</code></span> · <span>commit: <code>81a1879</code></span></div>
+</header><p><strong>Branch:</strong> <code>iter-018-config</code> (merged ff to main, commit <code>81a1879</code>) <strong>Date:</strong> 2026-05-24</p>
+<p><code>load_llm_config</code> was the last untested chunk that real users actually hit. It coupled file I/O, parsing, validation, and <code>sys.exit</code> into one function, and failed in real ways:</p>
+<ul><li>An empty <code>config.local.yaml</code> loaded as <code>None</code>, then crashed with <code>AttributeError(&quot;&#x27;NoneType&#x27; object has no attribute &#x27;get&#x27;&quot;)</code> instead of a useful &quot;config is empty&quot; message.</li><li>Missing required fields (<code>model</code>, <code>base_url</code>) didn&#x27;t raise — the user&#x27;s first hint was an HTTP 400 deep in the request stack.</li><li>Unresolved <code>${ENV_VAR}</code> placeholders called <code>sys.exit</code> from library-shaped code, hard to test or reuse.</li></ul>
+<p>What changed:</p>
+<ul><li><strong><code>examples/_chat_config.py</code></strong> (new) — pure-data parsers: resolve. Raises <code>ConfigError</code> with user-readable messages on: cfg is None/not a Mapping, missing <code>llm</code> section, missing required fields, empty/non-string field values, unresolved <code>${VAR}</code> placeholders. Side-effects: strips trailing slashes from <code>base_url</code>, defaults <code>max_tokens</code> to 150. <code>{}</code> on absent/None/non-dict input.<ul><li><code>ConfigError</code> exception type</li><li><code>parse_llm_config(cfg, *, env=os.environ)</code> — validate +</li><li><code>parse_chat_config(cfg)</code> — tolerant. Never raises; returns</li></ul></li></ul>
+<ul><li><strong><code>examples/mic_chat.py</code></strong>: wrappers that call the new parsers and convert <code>ConfigError</code> into a printed message + <code>sys.exit(1)</code>. cleanly (previously the YAMLError would propagate as an uncaught exception).<ul><li><code>load_llm_config</code> / <code>load_chat_config</code> become thin file-I/O</li><li>New <code>_read_yaml_or_exit</code> helper handles <code>yaml.YAMLError</code></li></ul></li></ul>
+<p>Tests (35 new in <code>tests/unit/test_chat_config.py</code>):</p>
+<p><code>parse_llm_config</code> happy path (6):</p>
+<ul><li>minimum valid config; max_tokens passthrough; extra fields passthrough; base_url trailing slash stripped (single + multiple); returns new dict (no input mutation).</li></ul>
+<p>env-var resolution (7):</p>
+<ul><li>set env var resolves; unset raises (var name in msg); empty value raises; empty <code>${}</code> raises; <code>${X</code> literal; <code>abc${X}</code> literal; <code>prefix-${KEY}</code> literal — documents the full-string- only contract.</li></ul>
+<p>structural failures (5):</p>
+<ul><li><code>None</code> input → ConfigError; non-Mapping top-level; missing <code>llm</code> section; <code>llm: None</code>; <code>llm: &quot;wrong-type&quot;</code>.</li></ul>
+<p>required field validation (parametrized over 3 fields × 3 cases):</p>
+<ul><li>missing key; empty string; non-string type. 9 cases for ~3 lines of test code — adding a new required field gets symmetric coverage automatically.</li></ul>
+<p><code>parse_chat_config</code> (7):</p>
+<ul><li>no <code>chat</code> section / <code>chat: None</code> / non-dict / top-level None or non-dict — all return <code>{}</code>. Valid chat section passed through as a copy.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/</code> → <strong>277 passed in 11s</strong> (242 existing + 35 new).</p>
+<p>Notes:</p>
+<ul><li>The &quot;empty placeholder&quot; / &quot;no closing brace&quot; / &quot;partial template&quot; tests document edge cases that were previously ambiguous. Now the contract is explicit: only the FULL value matching <code>${VAR}</code> resolves; anything else is literal.</li><li>The parametrized 3×3 required-field tests give 9 cases for ~3 lines of test code. Great for regression coverage if a future iter adds another required field.</li></ul>
+<hr><nav><a href="index.html">← Index</a><a href="iter-017.html">← iter-017</a><a href="iter-019.html">iter-019 →</a></nav>
+</div>
+</body>
+</html>

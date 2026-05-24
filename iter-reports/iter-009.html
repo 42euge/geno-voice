@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-009 — barge-in primitives: cancel_event + cancel + BargeInWatcher</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-008.html">← iter-008</a><a href="iter-010.html">iter-010 →</a></nav><header>
+<h1>iter-009 — barge-in primitives: cancel_event + cancel + BargeInWatcher</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-009-bargein</code></span> · <span>commit: <code>c4b34d5</code></span></div>
+</header><p><strong>Branch:</strong> <code>iter-009-bargein</code> (merged ff to main, commit <code>c4b34d5</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>What changed:</p>
+<p>1. <strong><code>play_aligned</code> cancel_event</strong> — <code>examples/_chat_playback.play_aligned</code> gained an optional <code>cancel_event</code> kwarg. The chunked-write loop checks it between chunks; on set, breaks early and returns elapsed time so far. Backward compat: omit the kwarg and behavior is unchanged.</p>
+<p>2. <strong><code>SentenceWorker.cancel()</code></strong> — hard-stop method that:</p>
+<ul><ul><ul></ul></ul></ul>
+<p>3. <strong><code>BargeInWatcher</code></strong> — new class in <code>examples/_chat_pipeline.py</code>. Background thread that reads from a mic stream, runs <code>VadState</code>, fires a callback on the configured trigger event. Configurable:</p>
+<ul><ul><ul></ul></ul></ul>
+<p>Tests (17 new in <code>tests/unit/test_bargein.py</code>):</p>
+<ul><li>play_aligned cancel_event: pre-set breaks immediately, mid-loop set breaks between chunks, unset completes, omission works.</li><li>SentenceWorker.cancel: interrupts in-flight sentence (verified by side-effect Event in play_fn), idempotent, before-start no-op, iter-008 play_fns without cancel_event still work.</li><li>BargeInWatcher: silence stays idle, speech burst triggers callback &lt; 2s, callback fires once during long speech, <code>done_ok</code> trigger waits for silence window (uses injected frame-clock for virtual time), invalid trigger raises, double-start raises, frames captured.</li><li><strong>Integration</strong>: 3 sentences submitted, watcher detects user speech on virtual mic, fires <code>worker.cancel</code>, worker breaks mid-sentence, byte-count math proves partial write, dropped sentences confirmed via <code>sentences_spoken &lt;= 1</code>.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/</code> → <strong>134 passed in 9s</strong> (117 existing + 17 new).</p>
+<p>Notes:</p>
+<ul><li>DONE_OK trigger test exposed a real subtlety: <code>time.monotonic()</code> doesn&#x27;t work for <code>VirtualMicStream</code> tests because pre-pushed audio is served in milliseconds. The VAD&#x27;s 0.8s silence window never elapses by wall clock. Solution: inject a frame-aligned clock — same <code>FrameClock</code> pattern as iter-006. In production this is a non-issue since real PyAudio serves frames at audio rate.</li><li>A play_fn that respects <code>cancel_event</code> must yield between chunks (sleep, blocking I/O, anything). Otherwise the worker thread races through the play loop before the test can set the flag. The test fixture uses <code>time.sleep(0.005)</code>; real audio playback blocks at audio rate so this happens naturally.</li></ul>
+<p>Next:</p>
+<ul><li>iter-010: wire barge-in into <code>mic_chat.run_chat</code>. Plumbing: during <code>worker.wait_done()</code>, run a <code>BargeInWatcher</code> on <code>mic</code> with <code>worker.cancel</code> as the callback. After <code>wait_done</code> returns, if <code>watcher.detected</code>, feed <code>watcher.frames</code> into the next <code>record_utterance_streaming</code> call (needs a small extension to the recording function to accept &quot;primed&quot; frames). Without this, the user&#x27;s first syllables are dropped.</li><li>iter-011: filler-word generation. Pre-render short audio clips (&quot;hmm&quot;, &quot;let me think&quot;) at startup. The worker grows an idle- watchdog timer: if the queue has been empty for &gt;600ms while <code>submit_done</code> hasn&#x27;t been called, play one filler clip. Hide behind <code>config.local.yaml</code> flag.</li></ul>
+<hr><nav><a href="index.html">← Index</a><a href="iter-008.html">← iter-008</a><a href="iter-010.html">iter-010 →</a></nav>
+</div>
+</body>
+</html>

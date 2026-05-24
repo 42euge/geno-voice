@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-017 — extract print_session_summary, fix median, add a.m./p.m.</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-016.html">← iter-016</a><a href="iter-018.html">iter-018 →</a></nav><header>
+<h1>iter-017 — extract print_session_summary, fix median, add a.m./p.m.</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-017-session-summary</code></span> · <span>commit: <code>f4c04cb</code></span></div>
+</header><p><strong>Branch:</strong> <code>iter-017-session-summary</code> (merged ff to main, commit <code>f4c04cb</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>Two small polish items bundled into one iteration.</p>
+<h3>1. print_session_summary</h3>
+<p>The KeyboardInterrupt summary in <code>mic_chat.run_chat</code> had two issues:</p>
+<ul><li><strong>Inlined</strong> inside the <code>except KeyboardInterrupt</code> clause → untestable without spinning up the full chat loop.</li><li><strong>Wrong median</strong>: <code>sorted(times)[len(times)//2]</code> returns the <em>upper</em> median for even-length lists. A 2-turn session with STTs <code>[50ms, 200ms]</code> reported &quot;median 200ms&quot; — biased toward the slower outlier. With <code>statistics.median</code> it&#x27;s 125ms.</li></ul>
+<p>Fix:</p>
+<ul><li><code>examples/_chat_metrics.py</code> grew `print_session_summary( metrics_list, llm_config, *, file=None)`. Computes medians via <code>_median_ms</code> (statistics-based), handles empty / single-turn / pluralization, surfaces <code>fillers_played</code> and <code>barge_in</code> totals when nonzero.</li><li><code>mic_chat.run_chat</code> KeyboardInterrupt handler is now a one-line delegate.</li></ul>
+<h3>2. a.m. / p.m. abbreviations</h3>
+<p>Time-of-day formats were missing from the iter-016 set:</p>
+<pre class="code-block"><code>&quot;It is 9:30 a.m. Time to wake.&quot;
+  -&gt; [&#x27;It is 9:30 a.m.&#x27;], &#x27;Time to wake.&#x27;   # before iter-017
+  -&gt; [], &#x27;It is 9:30 a.m. Time to wake.&#x27;    # after</code></pre>
+<p>Same UX hit as iter-016: TTS would have paused at &quot;a.m.&quot; treating it as a sentence end. Fix: added <code>&quot;a.m&quot;</code> and <code>&quot;p.m&quot;</code> to <code>NON_TERMINATING_ABBREVIATIONS</code>. Capitalized forms (<code>A.M.</code>) work because the lookup is lowercased.</p>
+<p>Tests (19 new in <code>tests/unit/test_session_summary.py</code>):</p>
+<p><code>_median_ms</code> (5):</p>
+<ul><li>empty → 0; single value; odd-length; **even-length averages middle two** (regression cover for the <code>sorted[len//2]</code> bug); unsorted input.</li></ul>
+<p><code>print_session_summary</code> (10):</p>
+<ul><li>empty list → &quot;no completed turns&quot;; single turn shows all lines; 3 turns pluralized; even-length <code>[50,100,150,200]</code> reports 125ms not 150ms; best TTFS = min; fillers line only when any played; barge-ins line only when any fired; missing model → &quot;unknown&quot;; default file writes to stdout.</li></ul>
+<p>a.m. / p.m. (4):</p>
+<ul><li><code>a.m.</code> doesn&#x27;t split; <code>p.m.</code> doesn&#x27;t split; capitalized <code>P.M.</code> doesn&#x27;t split (lowercased lookup); two full sentences with a.m./p.m. each split correctly at real terminators only.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/</code> → <strong>242 passed in 12s</strong> (223 existing + 19 new).</p>
+<p>Notes:</p>
+<ul><li>The first attempt at the 4-sentence test had wrong expectations for the trailing &quot;Yes.&quot; (no whitespace after → stays in remainder). Fixed in place; added a parallel test with trailing space that DOES split both. Both behaviors documented.</li><li><code>_median_ms</code> returns ms (not seconds) so it composes naturally with the f-string formatters used by callers.</li></ul>
+<hr><nav><a href="index.html">← Index</a><a href="iter-016.html">← iter-016</a><a href="iter-018.html">iter-018 →</a></nav>
+</div>
+</body>
+</html>
