@@ -1797,3 +1797,76 @@ Notes:
 - This bug was hidden under iter-016's acceptance testing
   because the test corpus didn't include ordinals. The iter-021
   tests fill that gap explicitly.
+
+---
+
+## iter-022 — split when terminator is followed by closing quote
+
+**Branch:** `iter-022-quoted-speech` (merged ff to main, commit `390978e`)
+**Date:** 2026-05-24
+
+The original `(?<=[.!?])\s+` lookbehind only matched when
+whitespace immediately followed a sentence terminator. With
+US-style quoted speech where the period sits *inside* the closing
+quote (`"hello."` vs UK-style `"hello".`), the char before the
+whitespace is `"`, not a terminator. The splitter never fired,
+so the bot would speak the quoted sentence and the next sentence
+as one long TTS chunk.
+
+Concrete failure (3 cases, all fixed):
+
+```
+"He said \"hello.\" Then he left."
+  Before: ([], '...')                            # no split
+  After:  (['He said "hello."'], 'Then he left.')
+
+"She asked \"why?\" Then waited."
+  Before: ([], '...')
+  After:  (['She asked "why?"'], 'Then waited.')
+
+"She said ‘hi.’ Done."   (smart quotes)
+  Before: ([], '...')
+  After:  (["She said ‘hi.’"], "Done.")
+```
+
+Fix uses Python regex alternation (variable-length lookbehind
+isn't supported, but two fixed-length alternatives can be OR'd):
+
+```python
+SENTENCE_END = re.compile(
+    r'(?<=[.!?])\s+|(?<=[.!?][\"\'”’])\s+'
+)
+```
+
+Quote characters covered: straight double `"`, straight single
+`'`, smart right double `”` (U+201D), smart right single `’`
+(U+2019). Other quote styles (CJK 「」, etc.) aren't included; if
+the LLM emits those they'll fall back to no-split — no
+regression vs today.
+
+Walk-back updated: after finding `m.start() - 1`, if that's a
+closing quote, walk one more position back to find the actual
+terminator. The iter-016 abbreviation check and iter-021 ordinal
+check still operate on the real terminator position.
+
+Tests (8 new in `TestSplitCompleteSentences`):
+- US-style with `.`, `?`, `!` inside the quote (3 cases)
+- Single quote, smart double, smart single (3 cases)
+- UK-style period outside still splits (control)
+- Abbreviation outside + quote inside: `Mr. Smith said "hi."`
+  splits correctly at the inner `"`, not at `Mr.`
+
+Verification: `python -m pytest tests/unit/` → **321 passed in 17s**
+(313 existing + 8 new).
+
+Notes:
+- The two-branch lookbehind costs marginally more regex work
+  but the match buffer is small (one in-progress bot reply
+  token-by-token), so cost is negligible.
+- Bot-emitted smart quotes are common in modern LLM output:
+  Claude/GPT formatted dialogue often uses `“…”` not straight
+  `"…"`. Including smart quotes by default catches that
+  without needing the bot's prompt to special-case it.
+- The "abbreviation OUTSIDE + quote INSIDE" combined test is
+  the regression-cover that catches future refactors that try
+  to simplify the walk-back logic.
