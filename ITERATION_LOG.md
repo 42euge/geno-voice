@@ -2366,3 +2366,66 @@ Notes:
   diagnostic. If it ever drives behavior (e.g. a different
   recovery strategy depending on which phase the barge-in
   hit), this fix becomes load-bearing.
+
+---
+
+## iter-031 — filter zero-TTFS turns from session summary
+
+**Branch:** `iter-031-ttfs-zero` (merged ff to main, commit `32e9577`)
+**Date:** 2026-05-24
+
+`print_session_summary` aggregated TTFS over every turn in
+`metrics_list`, but a turn that ends without audio playback leaves
+`metrics.ttfs` at its 0.0 default. Three real ways this happens:
+
+1. Worker errored before producing audio (synth crashed, speaker
+   factory raised, etc.)
+2. User barged in before any audio played
+3. LLM produced no tokens (rare — empty completion)
+
+In `_chat_loop.run_one_turn`:
+
+    if worker.first_audio_at is not None:
+        metrics.ttfs = worker.first_audio_at - speech_ended_at
+
+If `first_audio_at` is None, ttfs stays 0.0 and the turn is still
+appended to `metrics_list` (it had a transcript and a response —
+just no audio). Pre-iter-031, those zeros poisoned both stats:
+
+    Median TTFS:      150ms     (true value would be 280ms)
+    Best TTFS:        0ms       (no audio ever played that turn)
+
+"Best TTFS: 0ms" is the worst version — reads like a great result,
+actually means absence of data.
+
+Fix: filter `ttfs_times = [m.ttfs for m in metrics_list if m.ttfs > 0]`.
+If every turn was zero, render "n/a" instead of computing on an
+empty list (which would crash `min()` and `statistics.median()`).
+
+Tests (7 in `tests/unit/test_session_summary_ttfs_filter.py`):
+- Zero-TTFS turn excluded from median.
+- Zero-TTFS turn excluded from best (min).
+- All-zero session renders "n/a".
+- Single-turn all-zero renders "n/a".
+- Happy path (no zeros) is unchanged — regression guard.
+- Other aggregates (STT, LLM, TTS) still include all turns —
+  iter-031 is scoped to TTFS only because those measurements are
+  still valid even when no audio plays.
+- Barge-in counter still counts barge-in turns even when ttfs=0.
+
+Verification: `python -m pytest tests/unit/` → **402 passed in 18.5s**
+(395 existing + 7 new).
+
+Notes:
+- iter-017 introduced `print_session_summary` and `_median_ms` and
+  fixed an upper-median bias on even-length lists. iter-031 is the
+  follow-on for "what happens when some turns have 0 TTFS" — same
+  function, distinct edge case.
+- Pattern: aggregating sentinel/default values is silent data
+  corruption. When a metric has a "no value" state, the aggregate
+  has to handle that explicitly. The same audit could apply to
+  any 0.0-default TurnMetrics field (`stt_time` / `llm_first_token`
+  / `tts_time`) — but for those, 0 is rarely meaningful as "no
+  data" because successful turns produce non-zero values for them.
+  TTFS is special because a successful turn (transcript + response)
+  can still have 0 TTFS if the response was never spoken aloud.

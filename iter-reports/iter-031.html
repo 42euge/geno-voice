@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-031 — filter zero-TTFS turns from session summary</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-030.html">← iter-030</a></nav><header>
+<h1>iter-031 — filter zero-TTFS turns from session summary</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-031-ttfs-zero</code></span> · <span>commit: <code>32e9577</code></span></div>
+</header><p><strong>Branch:</strong> <code>iter-031-ttfs-zero</code> (merged ff to main, commit <code>32e9577</code>) <strong>Date:</strong> 2026-05-24</p>
+<p><code>print_session_summary</code> aggregated TTFS over every turn in <code>metrics_list</code>, but a turn that ends without audio playback leaves <code>metrics.ttfs</code> at its 0.0 default. Three real ways this happens:</p>
+<p>1. Worker errored before producing audio (synth crashed, speaker factory raised, etc.) 2. User barged in before any audio played 3. LLM produced no tokens (rare — empty completion)</p>
+<p>In <code>_chat_loop.run_one_turn</code>:</p>
+<p>if worker.first_audio_at is not None: metrics.ttfs = worker.first_audio_at - speech_ended_at</p>
+<p>If <code>first_audio_at</code> is None, ttfs stays 0.0 and the turn is still appended to <code>metrics_list</code> (it had a transcript and a response — just no audio). Pre-iter-031, those zeros poisoned both stats:</p>
+<p>Median TTFS:      150ms     (true value would be 280ms) Best TTFS:        0ms       (no audio ever played that turn)</p>
+<p>&quot;Best TTFS: 0ms&quot; is the worst version — reads like a great result, actually means absence of data.</p>
+<p>Fix: filter <code>ttfs_times = [m.ttfs for m in metrics_list if m.ttfs &gt; 0]</code>. If every turn was zero, render &quot;n/a&quot; instead of computing on an empty list (which would crash <code>min()</code> and <code>statistics.median()</code>).</p>
+<p>Tests (7 in <code>tests/unit/test_session_summary_ttfs_filter.py</code>):</p>
+<ul><li>Zero-TTFS turn excluded from median.</li><li>Zero-TTFS turn excluded from best (min).</li><li>All-zero session renders &quot;n/a&quot;.</li><li>Single-turn all-zero renders &quot;n/a&quot;.</li><li>Happy path (no zeros) is unchanged — regression guard.</li><li>Other aggregates (STT, LLM, TTS) still include all turns — iter-031 is scoped to TTFS only because those measurements are still valid even when no audio plays.</li><li>Barge-in counter still counts barge-in turns even when ttfs=0.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/</code> → <strong>402 passed in 18.5s</strong> (395 existing + 7 new).</p>
+<p>Notes:</p>
+<ul><li>iter-017 introduced <code>print_session_summary</code> and <code>_median_ms</code> and fixed an upper-median bias on even-length lists. iter-031 is the follow-on for &quot;what happens when some turns have 0 TTFS&quot; — same function, distinct edge case.</li><li>Pattern: aggregating sentinel/default values is silent data corruption. When a metric has a &quot;no value&quot; state, the aggregate has to handle that explicitly. The same audit could apply to any 0.0-default TurnMetrics field (<code>stt_time</code> / <code>llm_first_token</code> / <code>tts_time</code>) — but for those, 0 is rarely meaningful as &quot;no data&quot; because successful turns produce non-zero values for them. TTFS is special because a successful turn (transcript + response) can still have 0 TTFS if the response was never spoken aloud.</li></ul><nav><a href="index.html">← Index</a><a href="iter-030.html">← iter-030</a></nav>
+</div>
+</body>
+</html>

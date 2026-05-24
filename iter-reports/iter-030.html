@@ -104,7 +104,7 @@ table.iter-table th { background: var(--panel); }
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-029.html">← iter-029</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-029.html">← iter-029</a><a href="iter-031.html">iter-031 →</a></nav><header>
 <h1>iter-030 — clock injection for BargeInCoordinator</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-030-coord-clock</code></span> · <span>commit: <code>3d23c03</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-030-coord-clock</code> (merged ff to main, commit <code>3d23c03</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -117,7 +117,8 @@ table.iter-table th { background: var(--panel); }
 <ul><li><code>TestCoordinatorAcceptsClock</code> — default monotonic, injected clock, idempotency, counter-style callable.</li><li><code>TestChatLoopForwardsClockToCoord</code> — hooks <code>BargeInCoordinator.__init__</code> to capture the kwarg and verifies ChatLoop passed its own clock.</li><li><code>TestPhaseDecisionDeterministicUnderMockedClock</code> — direct demonstration that the phase comparison is now deterministic under a fake clock, in both before-stream-end and after-stream-end cases.</li></ul>
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>395 passed in 17.5s</strong> (388 existing + 7 new).</p>
 <p>Notes:</p>
-<ul><li>Pattern repeated from iter-028: when a config knob (clock, VAD state, threshold) is added to several components in a system, every component that participates in the same comparison or state machine has to take the same knob, otherwise the system is &quot;half-configured&quot; and behaves inconsistently. Worth a repo-wide audit periodically — what other shared concerns haven&#x27;t been threaded all the way through?</li><li>The phase string is currently only used for a printed diagnostic. If it ever drives behavior (e.g. a different recovery strategy depending on which phase the barge-in hit), this fix becomes load-bearing.</li></ul><nav><a href="index.html">← Index</a><a href="iter-029.html">← iter-029</a></nav>
+<ul><li>Pattern repeated from iter-028: when a config knob (clock, VAD state, threshold) is added to several components in a system, every component that participates in the same comparison or state machine has to take the same knob, otherwise the system is &quot;half-configured&quot; and behaves inconsistently. Worth a repo-wide audit periodically — what other shared concerns haven&#x27;t been threaded all the way through?</li><li>The phase string is currently only used for a printed diagnostic. If it ever drives behavior (e.g. a different recovery strategy depending on which phase the barge-in hit), this fix becomes load-bearing.</li></ul>
+<hr><nav><a href="index.html">← Index</a><a href="iter-029.html">← iter-029</a><a href="iter-031.html">iter-031 →</a></nav>
 </div>
 </body>
 </html>
