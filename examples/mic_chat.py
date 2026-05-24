@@ -57,16 +57,15 @@ from examples._chat_playback import (
     play_aligned as _play_aligned_core,
 )
 
-# Streaming-overlap worker + barge-in primitives — runs synth + play
-# on a background thread (iter-008) and lets a mic-side watcher
-# cancel mid-sentence when the user starts speaking (iter-009/010).
-# BargeInCoordinator (iter-012) bundles the cancel + LLM-stream
-# stop signals so barge-in works during the LLM phase too.
-from examples._chat_pipeline import (
+# Streaming-overlap worker + barge-in primitives. Re-exported here
+# so external imports keep working; the actual orchestration lives
+# in examples/_chat_loop.py (iter-015).
+from examples._chat_pipeline import (  # noqa: F401
     BargeInCoordinator,
     BargeInWatcher,
     SentenceWorker,
 )
+from examples._chat_loop import ChatLoop
 
 DIM = "\033[2m"
 BOLD = "\033[1m"
@@ -241,234 +240,62 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
     mic = pa.open(format=pyaudio.paInt16, channels=CHANNELS,
                   rate=RATE, input=True, frames_per_buffer=CHUNK)
 
+    # Wire up real dependencies for ChatLoop. The class itself is
+    # platform-agnostic and dep-injected (iter-015); these closures
+    # bind it to PyAudio + kokoro + the requests-backed LLM.
+    def _speaker_factory():
+        return pa.open(
+            format=pyaudio.paInt16, channels=1,
+            rate=TTS_RATE, output=True,
+            frames_per_buffer=1024,
+        )
+
+    def _synth(sentence: str):
+        return synthesize_with_alignment(tts_engine, sentence, voice, speed)
+
+    def _play(speaker, audio_np, tokens, *, is_first_sentence=False, cancel_event=None):
+        return _play_aligned_core(
+            speaker, audio_np, tokens,
+            is_first_sentence=is_first_sentence,
+            rate=TTS_RATE,
+            cancel_event=cancel_event,
+        )
+
+    chat_loop = ChatLoop(
+        mic=mic,
+        speaker_factory=_speaker_factory,
+        rate=RATE,
+        chunk=CHUNK,
+        silence_duration=SILENCE_DURATION,
+        stt_engine=stt_engine,
+        llm_stream_fn=llm_stream,
+        llm_config=llm_config,
+        synth_fn=_synth,
+        play_fn=_play,
+        fillers=rendered_fillers,
+        idle_threshold=filler_idle_threshold,
+    )
+
     system_prompt = llm_config.get("system_prompt", "You are a concise voice assistant.")
     messages = [{"role": "system", "content": system_prompt}]
     all_metrics = []
-
-    # Frames captured by a BargeInWatcher during the previous bot
-    # response, if any. Fed into the next record_utterance_streaming
-    # call so the user's first syllables aren't dropped. iter-010.
     primed_frames: list[bytes] | None = None
 
     try:
         turn = 0
         while True:
             print(f"  {DIM}[{turn + 1}] waiting...{RESET}", end="", flush=True)
-            wav_bytes, speech_dur, stt_time = record_utterance_streaming(
-                mic, stt_engine, primed_frames=primed_frames,
-            )
-            primed_frames = None  # consumed
-            if not wav_bytes:
+            result = chat_loop.run_one_turn(messages, primed_frames=primed_frames)
+            primed_frames = result.next_primed_frames
+            if result.had_error:
                 continue
-
-            metrics = TurnMetrics(speech_duration=speech_dur, model=llm_config["model"])
-            speech_ended_at = time.monotonic() - SILENCE_DURATION
-            turn_start = time.monotonic()
-
-            metrics.stt_time = stt_time
-            text = stt_engine._last_text
-
-            if not text or len(text.strip()) < 2:
-                print(f"  {YELLOW}(no transcription){RESET}")
+            if result.metrics is None:
                 continue
-            metrics.transcript = text.strip()
-
-            # Stream LLM → accumulate sentences → TTS with alignment → play
-            messages.append({"role": "user", "content": metrics.transcript})
-
-            llm_start = time.monotonic()
-            first_token_at = None
-            token_buffer = ""
-            full_response = ""
-
-            # Spin up a background SentenceWorker that owns one persistent
-            # speaker stream and processes complete sentences off a queue.
-            # While it synthesizes + plays, the main thread stays in the
-            # for-token loop so LLM receipt is no longer blocked. iter-008.
-            def _speaker_factory():
-                return pa.open(
-                    format=pyaudio.paInt16, channels=1,
-                    rate=TTS_RATE, output=True,
-                    frames_per_buffer=1024,
-                )
-
-            def _synth(sentence: str):
-                return synthesize_with_alignment(tts_engine, sentence, voice, speed)
-
-            def _play(speaker, audio_np, tokens, *, is_first_sentence=False):
-                return _play_aligned_core(
-                    speaker, audio_np, tokens,
-                    is_first_sentence=is_first_sentence,
-                    rate=TTS_RATE,
-                )
-
-            worker = SentenceWorker(
-                speaker_factory=_speaker_factory,
-                synth_fn=_synth,
-                play_fn=_play,
-                fillers=rendered_fillers,
-                idle_threshold=(
-                    filler_idle_threshold if rendered_fillers else 0.0
-                ),
-            )
-            worker.start()
-
-            # Drop any audio the mic has buffered during the LLM
-            # round-trip — otherwise the watcher would interpret it
-            # as fresh user speech the moment we start it.
-            flush_pending_audio(mic, chunk_size=CHUNK)
-
-            # Watch the mic for user barge-in across BOTH the LLM
-            # token-streaming phase AND the worker playback phase.
-            # iter-009 added the watcher; iter-010 wired it during
-            # play; iter-012 extends it across LLM streaming via a
-            # BargeInCoordinator that bundles the worker.cancel
-            # with a threading.Event the for-token loop checks.
-            # Open the LLM stream up front so we can hold a handle to
-            # the generator and explicitly close it once the consumer
-            # loop exits. Without this, a barge-in break leaves the
-            # generator (and its HTTP response) alive until garbage
-            # collection eventually runs the finally block. iter-013.
-            #
-            # NOTE: gen.close() is NOT wired into coord.on_trigger
-            # because cross-thread generator close raises
-            # ValueError("generator already executing") if the
-            # consumer is mid-next(). The same-thread try/finally
-            # pattern below is the safe one.
-            llm_gen = llm_stream(messages, llm_config)
-            coord = BargeInCoordinator(worker=worker)
-            watcher = BargeInWatcher(
-                mic=mic,
-                on_speech_detected=coord.trigger,
-                chunk_size=CHUNK,
-                rate=RATE,
-            )
-            watcher.start()
-
-            llm_stream_done_at = None
-            try:
-                for token in llm_gen:
-                    if coord.is_set():
-                        # User barge-in during LLM streaming —
-                        # stop pulling tokens immediately. The
-                        # watcher already cancelled the worker.
-                        break
-                    if first_token_at is None:
-                        first_token_at = time.monotonic()
-                    token_buffer += token
-                    full_response += token
-
-                    complete, token_buffer = split_complete_sentences(token_buffer)
-                    for sentence in complete:
-                        worker.submit(sentence)
-
-                # Stamp end-of-stream BEFORE waiting on TTS/playback so
-                # llm_total measures only the LLM streaming window
-                # (bug #2 from iter-001 still applies in this code path).
-                llm_stream_done_at = time.monotonic()
-
-                if not coord.is_set():
-                    # Normal completion: drain remaining buffer + wait
-                    # for worker. On barge-in we skip both because the
-                    # worker is already cancelled and any trailing
-                    # text is meaningless.
-                    remaining = token_buffer.strip()
-                    if remaining:
-                        worker.submit(remaining)
-                    worker.submit_done()
-                    worker.wait_done(timeout=120.0)
-                else:
-                    # Worker was already cancelled by coord.trigger;
-                    # just wait for its thread to wind down.
-                    worker.wait_done(timeout=5.0)
-
-                # Stop the watcher; if it detected user speech, save
-                # its captured frames so the next record_utterance
-                # call can replay them and not lose the user's
-                # first syllables.
-                watcher.stop(timeout=2.0)
-                if watcher.detected:
-                    primed_frames = list(watcher.frames)
-                    phase = (
-                        "LLM-stream phase"
-                        if coord.triggered_at is not None
-                        and llm_stream_done_at is not None
-                        and coord.triggered_at < llm_stream_done_at
-                        else "playback phase"
-                    )
-                    print(
-                        f"\n  {DIM}barge-in during {phase}: replaying "
-                        f"{len(primed_frames)} captured frames "
-                        f"({len(primed_frames) * CHUNK / RATE:.1f}s){RESET}"
-                    )
-                print()  # newline after the streamed bot text
-
-                # Pull TTFS / metrics from the worker.
-                if worker.first_audio_at is not None:
-                    metrics.ttfs = worker.first_audio_at - speech_ended_at
-                metrics.llm_first_token = (first_token_at - llm_start) if first_token_at else 0
-                metrics.llm_total = (
-                    (llm_stream_done_at - llm_start) if llm_stream_done_at else 0
-                )
-                metrics.tts_time = worker.tts_time
-                metrics.playback_time = worker.playback_time
-                metrics.sentences_spoken = worker.sentences_spoken
-                metrics.fillers_played = worker.fillers_played
-                metrics.barge_in = coord.is_set()
-                metrics.response = full_response.strip()
-                metrics.total_e2e = time.monotonic() - turn_start
-
-                messages.append({"role": "assistant", "content": metrics.response})
-
-                if worker.errors:
-                    # Surface any synth/play errors that occurred in the
-                    # background but didn't take down the worker.
-                    for err in worker.errors:
-                        print(f"  {YELLOW}worker error: {err}{RESET}")
-
-            except Exception as e:
-                print(f"\n  {YELLOW}LLM error: {e}{RESET}")
-                messages.pop()
-                watcher.stop(timeout=2.0)
-                # iter-014: even on the LLM-error path, if the user
-                # was barging in we should carry their captured audio
-                # forward into the next record turn. Otherwise their
-                # speech gets dropped just because the LLM happened
-                # to fail at the same time.
-                if watcher.detected:
-                    primed_frames = list(watcher.frames)
-                    print(
-                        f"  {DIM}barge-in during failed LLM call: "
-                        f"replaying {len(primed_frames)} captured frames "
-                        f"({len(primed_frames) * CHUNK / RATE:.1f}s){RESET}"
-                    )
-                worker.stop(timeout=5.0)  # drop pending sentences, close speaker
-                # The mic stream has been silently buffering during the
-                # (possibly long) failed LLM call. Drain it so we don't
-                # immediately trigger STT on stale audio. Bug #3.
-                drained = flush_pending_audio(mic, chunk_size=CHUNK)
-                if drained:
-                    print(
-                        f"  {DIM}flushed {drained} stale audio frames "
-                        f"({drained / RATE:.1f}s){RESET}"
-                    )
-                continue
-            finally:
-                # iter-013: ensure the LLM generator's finally block
-                # runs (which closes the upstream HTTP response). On
-                # the happy path this is a no-op since the generator
-                # already exhausted naturally; on barge-in or LLM
-                # error this releases the connection promptly.
-                try:
-                    llm_gen.close()
-                except Exception:
-                    pass
-
-            metrics.print(turn + 1)
-            all_metrics.append(metrics)
+            print()  # newline after the streamed bot text
+            result.metrics.print(turn + 1)
+            all_metrics.append(result.metrics)
             turn += 1
-
-            messages = trim_history(messages, max_user_assistant=20)
+            messages = ChatLoop.trim_messages(messages, max_user_assistant=20)
 
     except KeyboardInterrupt:
         print(f"\n\n{DIM}{'─' * 56}{RESET}")
