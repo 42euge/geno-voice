@@ -1009,3 +1009,121 @@ deterministically using virtual audio + faked LLM tokens.
 
 The only remaining log item is iter-014 (formerly iter-013) ALSA
 loopback CI — pure infrastructure work with diminishing returns.
+
+---
+
+## iter-014 — hardening pass: rms NaN, error-path frames, metric surfacing
+
+**Branch:** `iter-014-hardening` (merged ff to main, commit `806c21a`)
+**Date:** 2026-05-24
+
+A careful re-read of the now-stable code surface turned up three
+small but real issues. None blocked the happy path; each could
+silently corrupt user-visible behavior under uncommon-but-real
+conditions. (The ALSA-loopback stretch goal stays parked; this
+one is closer to home and unblocks proper testing of metrics.)
+
+What changed:
+
+1. **`rms()` returned NaN on empty input.** `np.mean` of an empty
+   slice emits `RuntimeWarning` and returns NaN. NaN silently
+   broke `VadState.feed` because `NaN > threshold` is always
+   False — empty reads stayed IDLE forever and the loop stalled.
+   Empty reads happen in practice (torn PyAudio reads, virtual
+   mic flushed mid-iteration). Fix: guard with `len(frame) == 0`
+   returning 0.0. Verified by a test that runs under
+   `warnings.simplefilter("error")`.
+
+2. **LLM-error path dropped watcher-captured user audio.** If the
+   user was barging in at the moment the LLM call failed (network
+   blip, DNS, 5xx), the error path stopped the watcher cleanly
+   but discarded `watcher.frames`. Now copied into `primed_frames`
+   for the next record turn, with a status print so the user
+   knows what happened.
+
+3. **`fillers_played` + `barge_in` not surfaced in `TurnMetrics`.**
+   iter-011 added `worker.fillers_played`; iter-012 added the
+   coord-set check. Neither made it into the per-turn summary.
+   Now: TTS line shows "X sentences + Y fillers" suffix; a yellow
+   "Barge-in: yes (user interrupted)" line appears when the
+   coordinator fired.
+
+Side benefit: extracted `TurnMetrics` into a new
+`examples/_chat_metrics.py` (same iter-006/007 pattern). Tests
+can now import it without dragging in pyaudio at module scope.
+
+Tests (14 new in `tests/unit/test_hardening.py`):
+
+`rms()` edge cases (5):
+- empty array under `simplefilter("error")` returns 0.0 with
+  no warning
+- `None` input returns 0.0 (defensive)
+- silence returns 0.0
+- constant amplitude returns that amplitude
+- 0.3 sine RMS matches theoretical 0.3/√2 within tolerance
+
+`record_utterance_streaming` with empty reads (1):
+- Custom mic stream serves 3 empty-bytes reads then real audio.
+  Wrapped in `simplefilter("error")` so any latent warning
+  fails the test. Loop completes and produces a non-empty wav
+  covering the post-empty audio.
+
+`TurnMetrics.print` output (6):
+- 0 fillers omits from TTS line; 1 filler shows singular;
+  2+ shows plural; `barge_in=False` omits line;
+  `barge_in=True` shows yellow status; default metrics has
+  new fields at 0/False.
+
+Error-path carryover logic (2):
+- `watcher.detected=True` copies frames; defensive copy (not
+  same list object).
+- `watcher.detected=False` leaves `primed_frames=None`.
+
+Verification: `python -m pytest tests/unit/` → **204 passed in 11s**
+(190 existing + 14 new).
+
+Notes:
+- The `TurnMetrics.print` tests caught a small pluralization bug
+  in passing — "1 fillers" vs "1 filler". Easy to miss without
+  the test.
+- `_capture_print` uses `contextlib.redirect_stdout` instead of
+  pytest's `capsys` because it's a unit test of the printer
+  output, not a fixture-driven integration test. Either works;
+  redirect_stdout is more explicit about what's being captured.
+- The error-path-carryover test exercises the logic shape rather
+  than calling `mic_chat.run_chat` directly. A full end-to-end
+  test of `run_chat` would require stubbing STT + LLM + audio
+  hardware — possible but a separate refactor.
+
+---
+
+# Status
+
+**14 iterations shipped, 204 tests passing in 11s.** All five
+focus-list goals plus four follow-ons:
+
+| Phase | Iterations |
+|-------|------------|
+| Bugs #1-#4 | 001-003 |
+| Refactor (5 helper modules + virtual_audio + _chat_metrics) | 004-007, 014 |
+| Streaming overlap | 008 |
+| Barge-in (playback + LLM-stream + frame-replay) | 009-010, 012 |
+| Filler words | 011 |
+| LLM-stream cleanup | 013 |
+| Hardening (rms, error-path frames, metrics) | 014 |
+
+Every primitive in the chat pipeline is testable in isolation,
+and three full-loop orchestration tests exercise the whole
+pipeline deterministically. Real bugs caught while writing tests
+this round include: the per-frame clock divergence on primed/live
+boundary (iter-010), the cross-thread generator close ValueError
+(iter-013), and the rms-empty-NaN that would silently stall the
+recording loop (iter-014). Each was hidden behind happy-path
+behavior and would have manifested only under specific edge
+conditions in production.
+
+The codebase is at a comfortable stopping point. Further work
+would be: real-mic CI smoke test (iter-013 in original numbering,
+diminishing returns), `run_chat` end-to-end refactor (substantial
+but tests the actual production path), or pivoting to features
+beyond the original focus list.
