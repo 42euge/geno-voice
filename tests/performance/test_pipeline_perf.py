@@ -51,6 +51,40 @@ from examples.virtual_audio import (  # noqa: E402
 
 
 PERF_OUT = ROOT / "iter-reports" / "perf-results.json"
+# iter-039: also save a per-iteration snapshot so the perf page can
+# render time-series across iterations. Iteration number is
+# discovered from the most recent ``## iter-NNN —`` heading in
+# ITERATION_LOG.md (the same source the report generator reads),
+# falling back to the git commit count if the log can't be parsed.
+LOG_PATH = ROOT / "ITERATION_LOG.md"
+
+
+def _resolve_iter_number() -> str:
+    """Return the most recent iter-NNN from ITERATION_LOG.md, or
+    fall back to a 3-digit commit count if parsing fails.
+
+    Pulled out as a free function so it's testable in isolation.
+    """
+    if LOG_PATH.exists():
+        # Walk lines from the END so we find the most recent header
+        # without scanning the whole file.
+        lines = LOG_PATH.read_text().splitlines()
+        import re as _re
+        pat = _re.compile(r"^## iter-(\d{3}) —")
+        for line in reversed(lines):
+            m = pat.match(line)
+            if m:
+                return m.group(1)
+    # Fallback: use the commit count. Won't collide with a real
+    # iter-NNN since no iter has had >999 commits.
+    try:
+        import subprocess as _sp
+        n = _sp.check_output(
+            ["git", "rev-list", "--count", "HEAD"], cwd=ROOT, text=True,
+        ).strip()
+        return n.zfill(3)
+    except Exception:
+        return "000"
 
 
 # ---- Scenario plumbing ------------------------------------------------------
@@ -80,14 +114,25 @@ def _record(result: ScenarioResult) -> None:
     """Append a result and re-write the JSON file. Re-writing on
     every record means partial runs still leave usable output if a
     later scenario crashes.
+
+    iter-039: ALSO write a per-iteration snapshot to
+    ``perf-iter-NNN.json``. The latest-snapshot file remains for
+    backwards compat with iter-036 charts; the per-iter files are
+    what the time-series view reads. Both files are kept in sync
+    on every record, so a partial run still leaves usable history.
     """
     _RESULTS.append(result)
     PERF_OUT.parent.mkdir(parents=True, exist_ok=True)
+    iter_num = _resolve_iter_number()
     payload = {
         "captured_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "iteration": iter_num,
         "scenarios": [asdict(r) for r in _RESULTS],
     }
     PERF_OUT.write_text(json.dumps(payload, indent=2))
+    # Per-iter file. Same payload — keeps the schema parallel.
+    per_iter = PERF_OUT.parent / f"perf-iter-{iter_num}.json"
+    per_iter.write_text(json.dumps(payload, indent=2))
 
 
 @pytest.fixture(scope="session", autouse=True)

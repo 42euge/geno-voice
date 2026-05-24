@@ -508,6 +508,7 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
 svg.chart.hbar { max-width: 720px; }
 svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
 svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
 table.perf-table {
   border-collapse: collapse;
   width: 100%;
@@ -1015,7 +1016,146 @@ def _load_perf_results(path: Path) -> dict | None:
         return None
 
 
-def render_performance_page(perf_payload: dict | None) -> str:
+def _load_perf_history(reports_dir: Path) -> list[dict]:
+    """iter-039: load all per-iteration perf snapshots from
+    ``perf-iter-NNN.json`` files in ``reports_dir``, sorted by
+    iteration. Returns a list of payloads. Empty list if none.
+    """
+    out: list[dict] = []
+    if not reports_dir.exists():
+        return out
+    for path in sorted(reports_dir.glob("perf-iter-*.json")):
+        m = re.match(r"perf-iter-(\d{3})\.json$", path.name)
+        if not m:
+            continue
+        try:
+            payload = json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        payload.setdefault("iteration", m.group(1))
+        out.append(payload)
+    out.sort(key=lambda p: p.get("iteration", ""))
+    return out
+
+
+def _svg_multi_line_chart(
+    series_by_label: dict,
+    *,
+    title: str,
+    y_label: str,
+    width: int = 720,
+    height: int = 320,
+) -> str:
+    """iter-039: SVG line chart with one polyline per series — used
+    for "metric over iterations, one line per scenario". Each series
+    gets a color from a fixed palette so the same scenario looks the
+    same across charts.
+
+    `series_by_label` maps scenario_name → list of (iteration_number,
+    value) tuples.
+    """
+    if not series_by_label or not any(s for s in series_by_label.values()):
+        return f'<div class="chart-empty">{html.escape(title)}: no data</div>'
+
+    palette = ["#7aa2f7", "#9ece6a", "#bb9af7", "#e0af68", "#f7768e",
+               "#7dcfff", "#f7c453", "#c0caf5"]
+    pad_l, pad_r, pad_t, pad_b = 56, 200, 30, 36
+    inner_w = width - pad_l - pad_r
+    inner_h = height - pad_t - pad_b
+
+    all_xs: list[float] = []
+    all_ys: list[float] = []
+    for pts in series_by_label.values():
+        for x, y in pts:
+            all_xs.append(x)
+            all_ys.append(y)
+    if not all_xs:
+        return f'<div class="chart-empty">{html.escape(title)}: no data</div>'
+    x_min, x_max = min(all_xs), max(all_xs)
+    y_min = 0
+    y_max = max(max(all_ys), 1) * 1.08
+
+    def sx(x: float) -> float:
+        if x_max == x_min:
+            return pad_l + inner_w / 2
+        return pad_l + (x - x_min) / (x_max - x_min) * inner_w
+
+    def sy(y: float) -> float:
+        return pad_t + inner_h - (y - y_min) / (y_max - y_min) * inner_h
+
+    y_ticks = []
+    for frac in (0.0, 0.25, 0.5, 0.75, 1.0):
+        v = y_min + frac * (y_max - y_min)
+        y = sy(v)
+        y_ticks.append(
+            f'<line x1="{pad_l}" x2="{width - pad_r}" y1="{y:.1f}" y2="{y:.1f}" '
+            f'class="grid"/>'
+            f'<text x="{pad_l - 8}" y="{y + 4:.1f}" '
+            f'text-anchor="end" class="axis">{int(round(v))}</text>'
+        )
+
+    x_ticks = []
+    if x_max == x_min:
+        x_ticks.append(
+            f'<text x="{sx(x_min):.1f}" y="{height - pad_b + 18}" '
+            f'text-anchor="middle" class="axis">'
+            f'iter-{int(round(x_min)):03d}</text>'
+        )
+    else:
+        for x in (x_min, (x_min + x_max) / 2, x_max):
+            x_ticks.append(
+                f'<text x="{sx(x):.1f}" y="{height - pad_b + 18}" '
+                f'text-anchor="middle" class="axis">'
+                f'iter-{int(round(x)):03d}</text>'
+            )
+
+    series_html: list[str] = []
+    legend_html: list[str] = []
+    for i, (label, pts) in enumerate(series_by_label.items()):
+        if not pts:
+            continue
+        color = palette[i % len(palette)]
+        pts_sorted = sorted(pts, key=lambda p: p[0])
+        if len(pts_sorted) == 1:
+            x, y = pts_sorted[0]
+            series_html.append(
+                f'<circle cx="{sx(x):.1f}" cy="{sy(y):.1f}" r="4" '
+                f'fill="{color}"/>'
+            )
+        else:
+            d = " ".join(
+                ("M" if j == 0 else "L") + f"{sx(x):.1f},{sy(y):.1f}"
+                for j, (x, y) in enumerate(pts_sorted)
+            )
+            series_html.append(
+                f'<path d="{d}" fill="none" stroke="{color}" stroke-width="2"/>'
+            )
+            for x, y in pts_sorted:
+                series_html.append(
+                    f'<circle cx="{sx(x):.1f}" cy="{sy(y):.1f}" r="3" '
+                    f'fill="{color}"/>'
+                )
+        ly = pad_t + 4 + i * 18
+        lx = width - pad_r + 12
+        legend_html.append(
+            f'<rect x="{lx}" y="{ly}" width="14" height="3" fill="{color}"/>'
+            f'<text x="{lx + 20}" y="{ly + 5}" class="legend">'
+            f'{html.escape(label)}</text>'
+        )
+
+    return f"""<svg viewBox="0 0 {width} {height}" class="chart"
+xmlns="http://www.w3.org/2000/svg" role="img" aria-label="{html.escape(title)}">
+<text x="{pad_l}" y="18" class="chart-title">{html.escape(title)}</text>
+<text x="{pad_l}" y="{height - 4}" class="chart-axis-label">iteration</text>
+<text x="14" y="{pad_t + inner_h / 2}" class="chart-axis-label" transform="rotate(-90 14,{pad_t + inner_h / 2})" text-anchor="middle">{html.escape(y_label)}</text>
+{''.join(y_ticks)}
+{''.join(x_ticks)}
+{''.join(series_html)}
+{''.join(legend_html)}
+</svg>"""
+
+
+def render_performance_page(perf_payload: dict | None, history: list[dict] | None = None) -> str:
     """Build iter-reports/performance.html — per-scenario bar charts
     of TTFS, STT, TTS, LLM-1st-token, and wall time.
 
@@ -1113,12 +1253,15 @@ def render_performance_page(perf_payload: dict | None) -> str:
         'reflect <em>pipeline overhead</em>, not neural-net latency. '
         'Real-engine perf testing belongs in a separate live suite.</p>'
         + table_html
-        + '<h2>Time-to-first-speech (TTFS)</h2>'
+        + '<h2>Latest snapshot</h2>'
+        '<p class="meta">Most recent run; one bar per scenario per metric.</p>'
+        '<h3>Time-to-first-speech (TTFS)</h3>'
         + chart_ttfs
-        + '<h2>STT time</h2>' + chart_stt
-        + '<h2>TTS time</h2>' + chart_tts
-        + '<h2>LLM first-token</h2>' + chart_llm
-        + '<h2>Wall-clock turn time</h2>' + chart_wall
+        + '<h3>STT time</h3>' + chart_stt
+        + '<h3>TTS time</h3>' + chart_tts
+        + '<h3>LLM first-token</h3>' + chart_llm
+        + '<h3>Wall-clock turn time</h3>' + chart_wall
+        + _render_perf_history_section(history or [])
         + '<h2>Refresh the data</h2>'
         '<pre class="code-block"><code>python -m pytest tests/performance/'
         '\npython scripts/generate_iteration_reports.py'
@@ -1126,6 +1269,71 @@ def render_performance_page(perf_payload: dict | None) -> str:
         + nav_html
     )
     return _page_template("Performance — geno-voice", body_html)
+
+
+def _render_perf_history_section(history: list[dict]) -> str:
+    """iter-039: render a "metric over iterations" section using the
+    multi-line chart helper. One chart per metric; one line per
+    scenario; x-axis = iteration number.
+
+    If only one iteration of history exists, render a soft note
+    rather than a sparse chart — multi-line charts need at least
+    two iterations to convey trend.
+    """
+    if not history:
+        return ""
+    if len(history) < 2:
+        only = history[0].get("iteration", "?")
+        return (
+            '<h2>Across iterations</h2>'
+            f'<p class="meta">Only one iteration captured so far '
+            f'(<code>iter-{html.escape(only)}</code>). The time-series '
+            'view will populate as more snapshots are collected — '
+            'each iteration\'s perf run writes <code>iter-reports/'
+            'perf-iter-NNN.json</code>.</p>'
+        )
+
+    # Build {scenario_name: [(iter_num, value), ...]} for each metric.
+    def _build(metric: str) -> dict:
+        out: dict = {}
+        for snap in history:
+            try:
+                it_num = float(int(snap.get("iteration", "0")))
+            except (ValueError, TypeError):
+                continue
+            for s in snap.get("scenarios", []):
+                name = s.get("name")
+                if not name:
+                    continue
+                v = s.get(metric)
+                if not isinstance(v, (int, float)):
+                    continue
+                out.setdefault(name, []).append((it_num, float(v)))
+        return out
+
+    chart_ttfs = _svg_multi_line_chart(
+        _build("ttfs_ms"), title="TTFS over iterations", y_label="ms",
+    )
+    chart_wall = _svg_multi_line_chart(
+        _build("wall_ms"), title="Wall over iterations", y_label="ms",
+    )
+    chart_tts = _svg_multi_line_chart(
+        _build("tts_ms"), title="TTS over iterations", y_label="ms",
+    )
+    chart_stt = _svg_multi_line_chart(
+        _build("stt_ms"), title="STT over iterations", y_label="ms",
+    )
+
+    return (
+        '<h2>Across iterations</h2>'
+        f'<p class="meta">Time-series across '
+        f'<strong>{len(history)}</strong> captured iterations. '
+        'One line per scenario.</p>'
+        '<h3>TTFS</h3>' + chart_ttfs
+        + '<h3>Wall-clock turn time</h3>' + chart_wall
+        + '<h3>TTS</h3>' + chart_tts
+        + '<h3>STT</h3>' + chart_stt
+    )
 
 
 # ---- Entry point ------------------------------------------------------------
@@ -1159,8 +1367,9 @@ def main() -> int:
     # placeholder so the link from testing.html / iter pages
     # doesn't 404.
     perf_payload = _load_perf_results(PERF_RESULTS_PATH)
+    perf_history = _load_perf_history(OUT_DIR)
     perf_path = OUT_DIR / "performance.html"
-    perf_path.write_text(render_performance_page(perf_payload))
+    perf_path.write_text(render_performance_page(perf_payload, perf_history))
 
     print(
         f"Wrote {len(iterations)} iteration reports + "
