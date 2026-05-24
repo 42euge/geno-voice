@@ -173,6 +173,14 @@ class SentenceWorker:
         # pipeline is actually slow. Metric 2.16 in the perf-metrics
         # taxonomy.
         self.idle_gap_total: float = 0.0
+        # iter-046: count of non-punctuation tokens emitted (across
+        # all sentences this run) and cumulative audio seconds. Used
+        # to derive bot WPM. Metric 1.13 in the perf-metrics taxonomy.
+        # Healthy voice agents land 150-180 WPM; outside that range
+        # is either too fast (user can't follow) or too slow (user
+        # interrupts). Excludes filler clips — those have no tokens.
+        self.word_count_total: int = 0
+        self.audio_seconds_total: float = 0.0
         self.fillers_played: int = 0
         self.tts_time: float = 0.0
         self.playback_time: float = 0.0
@@ -397,6 +405,24 @@ class SentenceWorker:
                 if played:
                     is_first_audio = False
                     self.sentences_spoken += 1
+                    # iter-046: accumulate words + audio seconds for WPM.
+                    # Words = non-punctuation tokens. Falls back to a
+                    # whitespace split on the sentence text if tokens
+                    # is empty — kokoro's alignment can be missing on
+                    # some configurations.
+                    if tokens:
+                        for tok in tokens:
+                            text = tok.get("text", "") if isinstance(tok, dict) else getattr(tok, "text", "")
+                            stripped = text.strip()
+                            if stripped and not all(c in ".,!?;:" for c in stripped):
+                                self.word_count_total += 1
+                    else:
+                        self.word_count_total += len(sentence.split())
+                    # Audio duration: sample count / TTS rate. The
+                    # play_fn writes int16 PCM at 24kHz (TTS_RATE);
+                    # use that here. We have audio_np in float32
+                    # already so its length is the sample count.
+                    self.audio_seconds_total += len(audio_np) / 24000.0
         finally:
             for method in ("stop_stream", "close"):
                 fn = getattr(speaker, method, None)

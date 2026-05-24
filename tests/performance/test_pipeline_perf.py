@@ -113,6 +113,8 @@ class ScenarioResult:
     worker_idle_gap_ms: float = 0.0
     # iter-045: mean character length of sentences submitted.
     mean_sentence_chars: float = 0.0
+    # iter-046: bot speaking rate (words per minute).
+    bot_wpm: float = 0.0
     wall_ms: float = 0.0          # full run_one_turn wall-clock
     barge_in: bool = False
     # iter-041: time from barge-in detect to playback halt. 0 if
@@ -282,6 +284,7 @@ def _run_scenario(
         streaming_overlap_ratio=m.streaming_overlap_ratio,
         worker_idle_gap_ms=m.worker_idle_gap_total * 1000,
         mean_sentence_chars=m.mean_sentence_chars,
+        bot_wpm=m.bot_wpm,
         wall_ms=wall * 1000,
         barge_in=m.barge_in,
         barge_in_latency_ms=m.barge_in_latency * 1000,
@@ -447,6 +450,7 @@ class TestPerfScenarios:
         streaming_overlap_ratio=m.streaming_overlap_ratio,
         worker_idle_gap_ms=m.worker_idle_gap_total * 1000,
         mean_sentence_chars=m.mean_sentence_chars,
+        bot_wpm=m.bot_wpm,
             wall_ms=wall * 1000,
             barge_in=m.barge_in,
             barge_in_latency_ms=m.barge_in_latency * 1000,

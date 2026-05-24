@@ -371,6 +371,18 @@ class ChatLoop:
                 metrics.mean_sentence_chars = (
                     sentence_chars_total / sentence_chars_count
                 )
+            # iter-046: bot WPM. Both components must be >0 — a
+            # turn with no audio (worker errored, no sentences
+            # submitted) or no words (alignment broken) leaves
+            # bot_wpm at 0.
+            if (
+                worker.audio_seconds_total > 0
+                and worker.word_count_total > 0
+            ):
+                metrics.bot_wpm = (
+                    worker.word_count_total
+                    / (worker.audio_seconds_total / 60.0)
+                )
             metrics.tts_time = worker.tts_time
             metrics.playback_time = worker.playback_time
             metrics.sentences_spoken = worker.sentences_spoken

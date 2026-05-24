@@ -70,6 +70,13 @@ class TurnMetrics:
     # in voice context lands ~50-100 chars / sentence. Metric 2.6
     # in the perf-metrics taxonomy.
     mean_sentence_chars: float = 0.0
+    # iter-046: bot speaking rate in words-per-minute, derived from
+    # the worker's word_count_total / audio_seconds_total. UX-research
+    # sweet spot is 150-180 WPM; outside that range is a tunable
+    # knob (kokoro's `speed` parameter). 0 means no audio played
+    # this turn (or no tokens produced — alignment failed).
+    # Metric 1.13 in the perf-metrics taxonomy.
+    bot_wpm: float = 0.0
     # iter-040: count of sentences cut mid-stream by cancel_event
     # (vs completed naturally before barge-in fired). Only non-zero
     # on barge-in turns where the cancel landed during a sentence's
@@ -138,6 +145,16 @@ class TurnMetrics:
         tts_suffix += ")"
         print(f"  {_DIM}│{_RESET}  TTS:           {self.tts_time*1000:>7.0f}ms  {tts_suffix}")
         print(f"  {_DIM}│{_RESET}  Playback:      {self.playback_time*1000:>7.0f}ms")
+        # iter-046: bot WPM. Skip if 0 (no audio / no tokens). Color:
+        # green if 130-200 (around the UX-research sweet spot 150-180),
+        # yellow otherwise (too fast or too slow).
+        if self.bot_wpm > 0:
+            color = _GREEN if 130 <= self.bot_wpm <= 200 else _YELLOW
+            print(
+                f"  {_DIM}│{_RESET}  Bot WPM:       "
+                f"{color}{self.bot_wpm:>6.0f}{_RESET}  "
+                f"({_DIM}target 150-180{_RESET})"
+            )
         # iter-043: streaming overlap. Skip the line on turns where
         # it's 0 (sequential — audio came after LLM finished, so
         # streaming bought us nothing this turn — common on very
@@ -314,6 +331,8 @@ def print_session_summary(metrics_list: list[TurnMetrics], llm_config: dict, *, 
         for m in metrics_list
         if m.mean_sentence_chars > 0
     ]
+    # iter-046: bot WPM across measurable turns.
+    bot_wpms = [m.bot_wpm for m in metrics_list if m.bot_wpm > 0]
 
     _emit(f"{_BOLD}  Session Summary ({n} turn{'' if n == 1 else 's'}){_RESET}")
     _emit(f"    Median STT:       {_median_ms(stt_times):.0f}ms")
@@ -378,5 +397,8 @@ def print_session_summary(metrics_list: list[TurnMetrics], llm_config: dict, *, 
         # iter-045: mean across the per-turn means.
         avg_chars = sum(sentence_lens) / len(sentence_lens)
         _emit(f"    Mean sentence:    {avg_chars:.0f} chars")
+    if bot_wpms:
+        median_wpm = statistics.median(bot_wpms)
+        _emit(f"    Median bot WPM:   {median_wpm:.0f}")
     _emit(f"    Model:            {llm_config.get('model', 'unknown')}")
     _emit()
