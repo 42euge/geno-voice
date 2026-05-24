@@ -1127,3 +1127,149 @@ would be: real-mic CI smoke test (iter-013 in original numbering,
 diminishing returns), `run_chat` end-to-end refactor (substantial
 but tests the actual production path), or pivoting to features
 beyond the original focus list.
+
+---
+
+## iter-015 — extract ChatLoop class, real production path now tested
+
+**Branch:** `iter-015-chat-loop` (merged ff to main, commit `82a8e7b`)
+**Date:** 2026-05-24
+
+The orchestration tests in iter-009 / iter-010 / iter-012
+*approximated* the structure of `run_chat`'s per-turn body. They
+proved the components compose correctly when wired the way
+`mic_chat.run_chat` wires them, but the actual function was
+untested. A refactor that accidentally changed the wiring would
+still pass the orchestration tests — they tested their own
+helper, not `run_chat`.
+
+This iteration extracts the per-turn body into a `ChatLoop` class
+with every dependency injected. The same code path that the
+production chat loop runs is now driven directly by tests using
+`VirtualMicStream` + `VirtualSpeakerStream` + stub STT + stub LLM.
+
+What changed:
+
+- `examples/_chat_loop.py` (new):
+  - `ChatLoop` class. Constructor accepts:
+    - Audio: `mic`, `speaker_factory`, `rate`, `chunk`,
+      `silence_duration`.
+    - STT: `stt_engine`, optional `transcribe_fn`.
+    - LLM: `llm_stream_fn` (callable), `llm_config`.
+    - TTS: `synth_fn`, `play_fn`.
+    - Filler config: `fillers`, `idle_threshold`.
+    - Tunables: `clock`, `output`, timeouts.
+  - `run_one_turn(messages, primed_frames=None) -> TurnResult`
+    where `TurnResult` has `metrics`, `next_primed_frames`,
+    `had_error`.
+  - Same observable behavior as the inline `run_chat` body,
+    including iter-013 LLM cleanup and iter-014 hardening.
+
+- `examples/mic_chat.py`:
+  - Per-turn body shrunk from ~200 lines to ~15. `run_chat` now
+    builds three closures (`_speaker_factory`, `_synth`,
+    `_play`) that bind the runtime types, instantiates
+    `ChatLoop`, and drives it in a thin while-True with
+    `primed_frames` threading.
+
+Tests (8 new in `tests/unit/test_chat_loop.py`):
+
+NoTranscription (2):
+- Too-short utterance → metrics=None, no primed, no error.
+- Empty transcript → "(no transcription)" path → metrics=None.
+
+NormalTurn (2):
+- Full turn: stub STT="how are you", stub LLM="I am well.
+  Thanks for asking.", virtual mic+speaker. Verifies metrics
+  populated, history updated (user + assistant), speaker
+  received audio.
+- Sentence count: LLM yielding "One. Two. Three." → at least
+  three sentences played.
+
+BargeInDuringLlmStream (1):
+- Background thread schedules user speech mid-LLM-stream.
+  Verifies `barge_in` flag, `next_primed_frames` non-None,
+  no error.
+
+LlmErrorPath (2):
+- LLM raises → `had_error=True`, metrics=None, user message
+  popped from history.
+- LLM raises with no user audio → `next_primed=None`. (The
+  race "LLM raises AND watcher fires" is covered in isolation
+  by `test_hardening.py::TestErrorPathFrameCarryover` — can't
+  engineer it deterministically here because the for-loop's
+  `coord.is_set()` check makes the watcher win the race; if it
+  fires first the loop exits cleanly and no exception reaches
+  the except block.)
+
+FillerIntegration (1):
+- Slow LLM (200ms before first token), 50ms idle threshold.
+  Filler plays once, real sentences after. `fillers_played==1`,
+  `sentences_spoken>=1`. Validates the iter-011 wiring through
+  ChatLoop end to end.
+
+Verification: `python -m pytest tests/unit/` → **212 passed in 11s**
+(204 existing + 8 new).
+
+Notes:
+- The first attempt at the LLM-error-with-barge-in test failed
+  for an instructive reason: the watcher fires `coord.trigger`
+  before the LLM raises, so the for-loop's
+  `if coord.is_set(): break` exits cleanly without ever raising.
+  The test's premise (both error path AND watcher detection
+  observable in the result) is impossible to engineer
+  deterministically. Documented in the replacement test's
+  comment so future contributors don't try the same dead end.
+- The extraction reduced `mic_chat.py` from a ~280-line
+  per-turn block to a ~15-line caller. Almost everything moved
+  into `_chat_loop.py`. The trade-off: one more module to
+  navigate, but every other module in the project now imports
+  cleanly without pyaudio at module scope. Test reach is the
+  big win.
+
+---
+
+# Status
+
+**15 iterations shipped, 212 unit tests passing in 11s.** Every
+layer of the chat pipeline is now testable on x86_64 Linux:
+
+| Layer | Test surface |
+|-------|--------------|
+| VAD state machine | `test_chat_helpers.py` (iter-004) |
+| Recording loop | `test_chat_recording.py` (iter-006/010) |
+| Playback loop | `test_chat_playback.py` (iter-007) |
+| Streaming worker | `test_chat_pipeline.py` (iter-008) |
+| Filler subsystem | `test_fillers.py` (iter-011) |
+| Barge-in primitives | `test_bargein.py` (iter-009) |
+| Barge-in coordinator | `test_bargein_coordinator.py` (iter-012) |
+| LLM SSE parser | `test_chat_llm.py` (iter-013) |
+| Hardening edge cases | `test_hardening.py` (iter-014) |
+| **Full per-turn orchestration** | `test_chat_loop.py` (iter-015) |
+| Sub-orchestrations | `test_bargein_orchestration.py`, `test_llm_stream_barge.py` |
+| Virtual audio infra | `test_virtual_audio.py` (iter-005) |
+
+The iter-015 ChatLoop tests are the integration-level validation
+that was missing — they run the actual production code path with
+stub external dependencies, in 0.6s deterministic.
+
+Real bugs caught while writing tests, in chronological order:
+- iter-008: thread-safety semantics around `submit_done`/`wait_done`
+- iter-009: float precision near 0.8 (1.4 - 0.6 = 0.7999...)
+- iter-010: per-frame `clock()` divergence on primed/live boundary
+- iter-013: cross-thread `gen.close()` raises `ValueError`
+- iter-014: `rms()` NaN on empty input silently stalls VAD
+- iter-015: barge-in event fires before LLM exception → can't
+  test the simultaneous case, only via separate logic test
+
+Each was hidden behind happy-path behavior and would have surfaced
+only under specific edge conditions in production.
+
+The codebase is at a strong stopping point. Future directions:
+1. Real-mic CI smoke test (iter-013 in original numbering, infra
+   work, diminishing returns)
+2. End-to-end test using real kokoro TTS as the LLM-token-source
+   surrogate (closer to production reality but slower; ~6s per
+   test)
+3. Pivot to features outside the original focus list (multi-turn
+   memory tuning, voice cloning, multi-language, etc.)
