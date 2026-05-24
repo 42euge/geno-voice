@@ -1431,3 +1431,107 @@ Stretch goals (real-mic CI, end-to-end with kokoro as token
 source) remain unaddressed. They're substantial infra work with
 diminishing returns; consider them when actual user feedback
 demands.
+
+---
+
+## iter-018 — extract + validate config parsing
+
+**Branch:** `iter-018-config` (merged ff to main, commit `81a1879`)
+**Date:** 2026-05-24
+
+`load_llm_config` was the last untested chunk that real users
+actually hit. It coupled file I/O, parsing, validation, and
+`sys.exit` into one function, and failed in real ways:
+
+- An empty `config.local.yaml` loaded as `None`, then crashed
+  with `AttributeError("'NoneType' object has no attribute 'get'")`
+  instead of a useful "config is empty" message.
+- Missing required fields (`model`, `base_url`) didn't raise — the
+  user's first hint was an HTTP 400 deep in the request stack.
+- Unresolved `${ENV_VAR}` placeholders called `sys.exit` from
+  library-shaped code, hard to test or reuse.
+
+What changed:
+
+- **`examples/_chat_config.py`** (new) — pure-data parsers:
+  - `ConfigError` exception type
+  - `parse_llm_config(cfg, *, env=os.environ)` — validate +
+    resolve. Raises `ConfigError` with user-readable messages on:
+    cfg is None/not a Mapping, missing `llm` section, missing
+    required fields, empty/non-string field values, unresolved
+    `${VAR}` placeholders. Side-effects: strips trailing slashes
+    from `base_url`, defaults `max_tokens` to 150.
+  - `parse_chat_config(cfg)` — tolerant. Never raises; returns
+    `{}` on absent/None/non-dict input.
+
+- **`examples/mic_chat.py`**:
+  - `load_llm_config` / `load_chat_config` become thin file-I/O
+    wrappers that call the new parsers and convert `ConfigError`
+    into a printed message + `sys.exit(1)`.
+  - New `_read_yaml_or_exit` helper handles `yaml.YAMLError`
+    cleanly (previously the YAMLError would propagate as an
+    uncaught exception).
+
+Tests (35 new in `tests/unit/test_chat_config.py`):
+
+`parse_llm_config` happy path (6):
+- minimum valid config; max_tokens passthrough; extra fields
+  passthrough; base_url trailing slash stripped (single +
+  multiple); returns new dict (no input mutation).
+
+env-var resolution (7):
+- set env var resolves; unset raises (var name in msg); empty
+  value raises; empty `${}` raises; `${X` literal; `abc${X}`
+  literal; `prefix-${KEY}` literal — documents the full-string-
+  only contract.
+
+structural failures (5):
+- `None` input → ConfigError; non-Mapping top-level; missing
+  `llm` section; `llm: None`; `llm: "wrong-type"`.
+
+required field validation (parametrized over 3 fields × 3 cases):
+- missing key; empty string; non-string type. 9 cases for ~3
+  lines of test code — adding a new required field gets
+  symmetric coverage automatically.
+
+`parse_chat_config` (7):
+- no `chat` section / `chat: None` / non-dict / top-level
+  None or non-dict — all return `{}`. Valid chat section
+  passed through as a copy.
+
+Verification: `python -m pytest tests/unit/` → **277 passed in 11s**
+(242 existing + 35 new).
+
+Notes:
+- The "empty placeholder" / "no closing brace" / "partial
+  template" tests document edge cases that were previously
+  ambiguous. Now the contract is explicit: only the FULL value
+  matching `${VAR}` resolves; anything else is literal.
+- The parametrized 3×3 required-field tests give 9 cases for ~3
+  lines of test code. Great for regression coverage if a future
+  iter adds another required field.
+
+---
+
+# Status (18 iterations)
+
+**277 unit tests passing in 11s.** Every part of the chat
+pipeline that can be unit-tested has been; what's left is mostly
+the runtime bindings (real PyAudio, real kokoro inference, real
+HTTP) and the things only worth testing on real hardware.
+
+Genuine remaining options:
+- Real-mic CI smoke test via ALSA loopback (infra, diminishing
+  returns)
+- End-to-end with real kokoro as LLM-token-source surrogate
+  (~6s per test, validates the full chain)
+- More splitter polish (PhD variants, percentage signs,
+  European number formatting)
+- CSV export of session metrics for benchmarking
+- Move `synthesize_with_alignment` out of mic_chat into its
+  own pyaudio-free module (would let us test it with a
+  fake pipeline; modest value since the function is mostly a
+  loop around kokoro's pipeline iterator)
+
+The codebase has reached a stable, well-tested state. Each
+remaining iteration adds polish rather than capability.
