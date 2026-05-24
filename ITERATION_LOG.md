@@ -351,3 +351,76 @@ Next:
   feeder for "user starts speaking" injection). When the worker
   detects speech, drain the sentence queue, stop the speaker,
   return control.
+
+---
+
+## iter-007 — extract play_aligned to pyaudio-free module
+
+**Branch:** `iter-007-playback-extract` (merged ff to main, commit `3005fde`)
+**Date:** 2026-05-24
+
+What changed:
+- New module `examples/_chat_playback.py` hosts the playback loop +
+  `TTS_RATE`, `DEFAULT_PLAY_CHUNK`, ANSI codes, plus `_emit_token`
+  and `_is_punct_only` helpers.
+- `play_aligned(speaker_stream, audio_np, tokens, ...)` now takes a
+  caller-owned speaker-shaped object (only `.write(bytes)` is
+  required). Lifecycle is the caller's responsibility.
+- `mic_chat.play_aligned` becomes a thin wrapper that opens a
+  pyaudio output stream, calls the core function, and closes the
+  stream — preserving the current open-per-sentence behavior. The
+  persistent-stream optimization is iter-008's job.
+- Injection points: `output` (file-like) and `clock` (callable),
+  same pattern as iter-006.
+- Quirk preserved: tokens emitted during the loop are bolded; tokens
+  emitted *after* the loop (when `start` > audio duration) are emitted
+  in plain text. This matches the original code; a regression test
+  documents it so a future cleanup is intentional.
+
+Tests (18 new in `tests/unit/test_chat_playback.py`):
+- `_is_punct_only`: punctuation True, words False, empty False.
+- Audio writes: total bytes match input, chunk size honored, empty
+  audio writes nothing, float→int16 saturation correct.
+- First-sentence prefix: `\r CLEAR_LINE  Bot: ` only on first, no
+  prefix on subsequent calls.
+- Token reveal: in-order during playback, punctuation uses
+  backspace, empty/whitespace tokens dropped, words bold, trailing
+  tokens flushed unbolded after loop.
+- Clock injection: elapsed computed from supplied clock; default
+  output falls back to real stdout.
+- Loopback: `VirtualSpeakerStream` → `VirtualMicStream` wiring still
+  works; audio bytes round-trip identically. Seed for iter-009.
+
+Verification: `python -m pytest tests/unit/` → **99 passed in ~9s**
+(81 existing + 18 new).
+
+Notes:
+- Two iters to extract two functions. Now every primitive the chat
+  loop touches — VAD, audio flush, recording, playback, render-
+  preview, sentence-split, history-trim — is testable on x86_64
+  Linux. The chat loop's remaining `pyaudio` calls are confined to
+  `run_chat`'s setup/teardown plus the two thin wrappers.
+- The loopback test is a tiny but meaningful proof point: writing
+  to a `VirtualSpeakerStream` whose `loopback_to` is set pushes the
+  exact same int16 samples into the paired mic. That's the
+  primitive iter-009 barge-in needs — bot speaks, mic sees the
+  speech, VAD watches the mic.
+
+Next:
+- iter-008: streaming LLM → TTS overlap. Pull the in-loop synth +
+  play_aligned calls out into a `SentenceWorker` thread that pulls
+  complete sentences from a `Queue`. The main thread keeps the LLM
+  stream open so token receipt isn't blocked by audio playback.
+  Holds a single persistent speaker stream — open in the worker's
+  setup, close in its teardown. Test by feeding a fixed list of
+  sentences into the queue, watching the speaker accumulate audio,
+  and asserting the worker runs ahead of the simulated LLM clock.
+- iter-009: barge-in. Mic-side `VadState` runs in parallel with the
+  worker. On `DONE_OK` from the mic, signal the worker to drop the
+  sentence queue and stop the speaker, return control. Test using
+  loopback paired with a "user injection" feeder that pushes a
+  user-speech burst into the same mic the worker is listening to.
+- iter-010: filler-word generation. While `metrics.llm_first_token`
+  is high, emit a pre-rendered "hmm…" or "let me think…" via TTS
+  before the real first sentence. Cheap latency-perception win.
+  Configurable via `config.local.yaml`.
