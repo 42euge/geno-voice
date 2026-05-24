@@ -204,3 +204,78 @@ Next:
   stream, drop pending sentences, and start recording. Requires the
   TTS + playback work from iter-005 since playback needs to be
   cancellable from outside the playing thread.
+
+---
+
+## iter-005 — virtual audio interfaces + TTS-driven simulation
+
+**Branch:** `iter-005-virtual-audio` (merged ff to main, commit `ad20b0c`)
+**Date:** 2026-05-23
+
+User redirected the iteration order: instead of doing streaming
+overlap, build software audio interfaces and use TTS as a simulated
+mic source. This unblocks every future iteration that needs end-to-end
+testing without hardware.
+
+What changed (new file: `examples/virtual_audio.py`):
+- `VirtualMicStream` — push audio in, pyaudio-shaped read/get_available
+  out. Reads beyond buffer zero-pad by default (matches a quiet mic).
+- `VirtualSpeakerStream` — write captures audio. Optional `loopback_to`
+  routes every write back into a paired mic. That's the seed for
+  iter-007 (barge-in) — bot output and user input share a stream.
+- `VirtualAudioInterface` — drop-in replacement for `pyaudio.PyAudio()`.
+  `.open(input=True)` returns a mic, `.open(output=True)` returns a
+  speaker, `loopback=True` wires them.
+- Audio fixtures: `make_silence`, `make_tone_burst`, `make_noise_burst`,
+  `concat`. Pure numpy; noise is deterministic with a seed.
+- `feed_tts(mic, text, ...)` — renders via `tts/kokoro_engine`,
+  resamples 24k→mic.rate (cheap linear), pads silence around speech.
+  Raises `RuntimeError` cleanly if kokoro can't load (so tests can
+  skip).
+- `simulate_vad_over_audio(audio, ...)` — chunk-by-chunk driver that
+  returns the full event sequence + final VadState.
+
+Tests (26 new in `tests/unit/test_virtual_audio.py`):
+- VirtualMicStream: round-trip, `push_silence`, underflow zero-pad,
+  no-padding mode, close blocks, reads recorded, float audio
+  scaled+clipped.
+- VirtualSpeakerStream: capture, float32 normalization, loopback,
+  close blocks.
+- VirtualAudioInterface: input/output dispatch, loopback wiring,
+  terminate.
+- Fixtures: silence-is-zero, tone-burst RMS matches theory
+  (0.3 amp sine ≈ 0.21 RMS), noise determinism, concat ordering.
+- VAD-over-fixtures: pure silence stays idle; speech+silence fires
+  exactly one DONE_OK; short blip → DONE_TOO_SHORT; two utterances
+  → two DONE events; sub-threshold amp stays idle.
+- Byte-level path: VirtualMicStream → frombuffer → VadState produces
+  expected events through the same path production code traverses.
+- **TTS smoke test (opt-in)**: rendered "Hello, this is a simulation
+  test." via real kokoro, fed the virtual mic, drove VadState end to
+  end. DONE_OK fires with `last_speech_duration > 0.5s`. Confirms
+  the synth → resample → bytes → VAD chain works on x86_64 Linux
+  (despite the cpp-extensions warning from torch 2.10 / kokoro).
+
+Verification: `python -m pytest tests/unit/` → **73 passed in 6.5s**.
+
+Notes:
+- Surprised that kokoro actually synthesizes on Linux x86_64 — the
+  `Skipping import of cpp extensions due to incompatible torch
+  version` warning at import time looked fatal but the model still
+  produces audio (slower path). The skipif guard catches the case
+  where it can't, so this stays portable.
+- The loopback wiring is intentionally simple: every write
+  unconditionally pushes to the linked mic. Real barge-in (iter-007)
+  needs an `enabled` flag we toggle while bot is speaking; that's a
+  one-line addition when we get there.
+
+Next:
+- iter-006 (was iter-005 before user redirect): streaming LLM → TTS
+  overlap. Now testable end-to-end: synth bot reply via TTS, route
+  through a `VirtualSpeakerStream`, assert TTFS measured against
+  `speech_ended_at` is below threshold.
+- iter-007: hook `mic_chat.py` to optionally use
+  `VirtualAudioInterface` instead of `pyaudio.PyAudio()` so the chat
+  loop can be smoke-tested in CI with a fixed prompt + a stubbed
+  LLM. This is the foundation for benchmarking pipeline latency
+  changes deterministically.
