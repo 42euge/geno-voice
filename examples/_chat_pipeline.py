@@ -469,3 +469,76 @@ class BargeInWatcher:
         if self._trigger_on == "done_ok":
             return event is self._VadEvent.DONE_OK
         return False
+
+
+# ---- Barge-in coordinator ----------------------------------------------------
+
+class BargeInCoordinator:
+    """Single-shot barge-in signal that bundles together the actions
+    that need to happen when the user interrupts.
+
+    The chat loop creates one per turn and wires it into:
+      - ``BargeInWatcher`` callback: ``coord.trigger``
+      - The LLM for-token loop: ``if coord.is_set(): break``
+      - SentenceWorker: cancelled inside ``trigger()``
+
+    Idempotent — multiple calls to ``trigger()`` are safe; only the
+    first one does anything. That matters because the watcher might
+    fire on multiple ACTIVE events, or because cleanup paths might
+    call ``trigger()`` defensively.
+
+    `on_trigger` is an optional hook for hangups that can't go
+    through the worker — closing an open HTTP requests stream, for
+    instance, so we stop pulling tokens we'll never use.
+    """
+
+    def __init__(
+        self,
+        worker=None,
+        *,
+        on_trigger: Optional[Callable[[], None]] = None,
+    ):
+        self._worker = worker
+        self._on_trigger = on_trigger
+        self._event = threading.Event()
+        self._lock = threading.Lock()
+        # When the trigger fired, in monotonic seconds. None until set.
+        self.triggered_at: Optional[float] = None
+
+    @property
+    def event(self) -> threading.Event:
+        """The underlying ``threading.Event`` — useful when callers
+        want to ``.wait()`` on it directly.
+        """
+        return self._event
+
+    def is_set(self) -> bool:
+        return self._event.is_set()
+
+    def trigger(self) -> None:
+        """Idempotent. The first call:
+            1. flips the event (so the for-token loop sees it)
+            2. timestamps ``triggered_at``
+            3. calls ``worker.cancel()`` if a worker is bound
+            4. calls ``on_trigger`` if one is bound
+
+        Subsequent calls are no-ops. Exceptions in step 3 / 4 are
+        swallowed so a bad hook can't leave the event un-set.
+        """
+        with self._lock:
+            if self._event.is_set():
+                return
+            self._event.set()
+            self.triggered_at = time.monotonic()
+        # Outside the lock — worker.cancel takes its own lock and
+        # may join a thread; we don't want to hold ours that long.
+        if self._worker is not None:
+            try:
+                self._worker.cancel(timeout=5.0)
+            except Exception:
+                pass
+        if self._on_trigger is not None:
+            try:
+                self._on_trigger()
+            except Exception:
+                pass

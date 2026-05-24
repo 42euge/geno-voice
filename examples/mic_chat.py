@@ -60,7 +60,13 @@ from examples._chat_playback import (
 # Streaming-overlap worker + barge-in primitives — runs synth + play
 # on a background thread (iter-008) and lets a mic-side watcher
 # cancel mid-sentence when the user starts speaking (iter-009/010).
-from examples._chat_pipeline import BargeInWatcher, SentenceWorker
+# BargeInCoordinator (iter-012) bundles the cancel + LLM-stream
+# stop signals so barge-in works during the LLM phase too.
+from examples._chat_pipeline import (
+    BargeInCoordinator,
+    BargeInWatcher,
+    SentenceWorker,
+)
 
 DIM = "\033[2m"
 BOLD = "\033[1m"
@@ -380,14 +386,16 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
             # as fresh user speech the moment we start it.
             flush_pending_audio(mic, chunk_size=CHUNK)
 
-            # Watch the mic for user barge-in while the bot is
-            # speaking. On detection, fire worker.cancel so the
-            # current sentence breaks mid-stream and pending ones
-            # are dropped. Captured frames feed the next record loop
-            # so the user's first syllables aren't lost. iter-010.
+            # Watch the mic for user barge-in across BOTH the LLM
+            # token-streaming phase AND the worker playback phase.
+            # iter-009 added the watcher; iter-010 wired it during
+            # play; iter-012 extends it across LLM streaming via a
+            # BargeInCoordinator that bundles the worker.cancel
+            # with a threading.Event the for-token loop checks.
+            coord = BargeInCoordinator(worker=worker)
             watcher = BargeInWatcher(
                 mic=mic,
-                on_speech_detected=lambda: worker.cancel(timeout=5.0),
+                on_speech_detected=coord.trigger,
                 chunk_size=CHUNK,
                 rate=RATE,
             )
@@ -396,6 +404,11 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
             llm_stream_done_at = None
             try:
                 for token in llm_stream(messages, llm_config):
+                    if coord.is_set():
+                        # User barge-in during LLM streaming —
+                        # stop pulling tokens immediately. The
+                        # watcher already cancelled the worker.
+                        break
                     if first_token_at is None:
                         first_token_at = time.monotonic()
                     token_buffer += token
@@ -410,12 +423,21 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
                 # (bug #2 from iter-001 still applies in this code path).
                 llm_stream_done_at = time.monotonic()
 
-                remaining = token_buffer.strip()
-                if remaining:
-                    worker.submit(remaining)
+                if not coord.is_set():
+                    # Normal completion: drain remaining buffer + wait
+                    # for worker. On barge-in we skip both because the
+                    # worker is already cancelled and any trailing
+                    # text is meaningless.
+                    remaining = token_buffer.strip()
+                    if remaining:
+                        worker.submit(remaining)
+                    worker.submit_done()
+                    worker.wait_done(timeout=120.0)
+                else:
+                    # Worker was already cancelled by coord.trigger;
+                    # just wait for its thread to wind down.
+                    worker.wait_done(timeout=5.0)
 
-                worker.submit_done()
-                worker.wait_done(timeout=120.0)
                 # Stop the watcher; if it detected user speech, save
                 # its captured frames so the next record_utterance
                 # call can replay them and not lose the user's
@@ -423,8 +445,15 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
                 watcher.stop(timeout=2.0)
                 if watcher.detected:
                     primed_frames = list(watcher.frames)
+                    phase = (
+                        "LLM-stream phase"
+                        if coord.triggered_at is not None
+                        and llm_stream_done_at is not None
+                        and coord.triggered_at < llm_stream_done_at
+                        else "playback phase"
+                    )
                     print(
-                        f"\n  {DIM}barge-in: replaying "
+                        f"\n  {DIM}barge-in during {phase}: replaying "
                         f"{len(primed_frames)} captured frames "
                         f"({len(primed_frames) * CHUNK / RATE:.1f}s){RESET}"
                     )
