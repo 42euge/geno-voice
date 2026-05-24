@@ -2125,3 +2125,63 @@ Notes:
   tests use cancellable_play that doesn't have trailing tokens,
   so they didn't exercise this path. iter-026's targeted tests
   fill that gap.
+
+---
+
+## iter-027 — stop worker+watcher in run_one_turn finally
+
+**Branch:** `iter-027-keyboardinterrupt` (merged ff to main, commit `3f68dc0`)
+**Date:** 2026-05-24
+
+Real shutdown bug found by code review. `except Exception` in
+`ChatLoop.run_one_turn` doesn't catch `KeyboardInterrupt` (which
+inherits from `BaseException`). When the user pressed Ctrl+C
+during the for-token loop, `KeyboardInterrupt` propagated through
+`except Exception` (untouched) → `finally` (which only closed
+`llm_gen`) → out of run_one_turn. Worker and watcher threads kept
+running, with the worker's speaker stream still open. Daemon-thread
+cleanup at process exit eventually killed them, but the speaker
+wasn't cleanly closed first.
+
+Demonstrated:
+
+```
+Before iter-027:
+  KeyboardInterrupt during LLM stream
+  → speaker._closed: False   ← worker thread still running
+
+After iter-027:
+  → speaker._closed: True    ← worker.stop in finally → _run finally → close
+```
+
+Fix: add idempotent `watcher.stop` + `worker.stop` calls to
+`run_one_turn`'s finally block. The existing finally only closed
+`llm_gen`; we now also stop both background threads on any exit
+path. Idempotent stops don't affect normal-completion or
+LLM-error paths.
+
+Tests (3 new in `TestKeyboardInterruptCleanup`):
+- KeyboardInterrupt propagates AND speaker is closed (proves
+  worker.stop ran via the worker's own finally).
+- Worker thread is joined after KeyboardInterrupt propagates
+  (captured via SentenceWorker `__init__` hook).
+- Normal completion still works (idempotent stops are no-ops on
+  already-stopped workers/watchers).
+
+Verification: `python -m pytest tests/unit/` → **354 passed in 17s**
+(351 existing + 3 new).
+
+Notes:
+- The finally now does four cleanup operations: `llm_gen.close`,
+  `watcher.stop`, `worker.stop`, all wrapped in `try/except` so
+  a failure in one doesn't cascade. Order: close LLM first
+  (release HTTP socket promptly), stop worker last (give
+  synth/play a moment to wind down).
+- `BaseException` vs `Exception` distinction is one of those
+  Python details easy to miss. `except Exception` is good
+  defensively (won't catch system-level signals) but you have
+  to plan for the propagation path through `finally`.
+- Pattern: any background thread spawned in a function should
+  have stop calls in the function's finally block, not just
+  in the success path. KeyboardInterrupt and other
+  BaseExceptions take you straight there.
