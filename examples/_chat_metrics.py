@@ -32,6 +32,15 @@ _RESET = "\033[0m"
 class TurnMetrics:
     speech_duration: float = 0.0
     stt_time: float = 0.0
+    # iter-049: STT real-time factor — stt_time / speech_duration.
+    # <1 = STT runs faster than realtime (can be invoked inline at
+    # end-of-turn). >1 = STT is the bottleneck and needs streaming
+    # partial transcription to overlap with speech. Mlx-whisper-large
+    # on Apple Silicon lands ~0.1-0.3 on M-series. 0 = either
+    # speech_duration was 0 (false trigger turn — though those don't
+    # produce TurnMetrics post-iter-031) or stt_time wasn't measured.
+    # Metric 1.7 in the perf-metrics taxonomy.
+    stt_rtf: float = 0.0
     llm_first_token: float = 0.0
     # iter-038: time from LLM start to the first complete sentence
     # reaching the TTS worker. Distinct from llm_first_token: the
@@ -123,7 +132,15 @@ class TurnMetrics:
         print()
         print(f"  {_DIM}┌─ PIPELINE{_RESET}")
         print(f"  {_DIM}│{_RESET}  Speech:        {self.speech_duration*1000:>7.0f}ms")
-        print(f"  {_DIM}│{_RESET}  STT:           {self.stt_time*1000:>7.0f}ms")
+        # iter-049: append STT RTF when measurable.
+        if self.stt_rtf > 0:
+            rtf_color = _GREEN if self.stt_rtf < 1.0 else _YELLOW
+            print(
+                f"  {_DIM}│{_RESET}  STT:           {self.stt_time*1000:>7.0f}ms  "
+                f"({rtf_color}RTF {self.stt_rtf:.2f}x{_RESET})"
+            )
+        else:
+            print(f"  {_DIM}│{_RESET}  STT:           {self.stt_time*1000:>7.0f}ms")
         print(f"  {_DIM}│{_RESET}  LLM 1st tok:   {self.llm_first_token*1000:>7.0f}ms")
         # iter-038: TTFsent — time-to-first-sentence. Show the gap
         # between first-token and first-sentence in parens so the
@@ -312,6 +329,8 @@ def print_session_summary(
 
     n = len(metrics_list)
     stt_times = [m.stt_time for m in metrics_list]
+    # iter-049: STT RTF over turns where it was measurable.
+    stt_rtfs = [m.stt_rtf for m in metrics_list if m.stt_rtf > 0]
     llm_ft = [m.llm_first_token for m in metrics_list]
     # iter-038: median TTFsent over turns where a sentence actually
     # emerged. Filter out 0s (parallel to iter-031's TTFS-zero filter)
@@ -376,6 +395,8 @@ def print_session_summary(
 
     _emit(f"{_BOLD}  Session Summary ({n} turn{'' if n == 1 else 's'}){_RESET}")
     _emit(f"    Median STT:       {_median_ms(stt_times):.0f}ms")
+    if stt_rtfs:
+        _emit(f"    Median STT RTF:   {statistics.median(stt_rtfs):.2f}x")
     _emit(f"    Median LLM 1st:   {_median_ms(llm_ft):.0f}ms")
     if llm_fs:
         _emit(f"    Median LLM sent:  {_median_ms(llm_fs):.0f}ms")

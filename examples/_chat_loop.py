@@ -210,6 +210,10 @@ class ChatLoop:
         speech_ended_at = self._clock() - self._silence_duration
         turn_start = self._clock()
         metrics.stt_time = stt_time
+        # iter-049: STT real-time factor. Only meaningful when
+        # speech_duration > 0 — guard against div-by-zero.
+        if speech_dur > 0:
+            metrics.stt_rtf = stt_time / speech_dur
         metrics.transcript = text.strip()
 
         # ---- Phase 2: LLM stream + worker + watcher ----
