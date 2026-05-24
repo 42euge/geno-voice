@@ -3036,3 +3036,88 @@ Notes:
 - Choice not made: NO automatic deletion of old per-iter snapshots.
   At ~1 KB each, 100 iterations = ~100 KB. Cheap, and the history
   is the whole point.
+
+---
+
+## iter-040 — cancel-correctness metric (taxonomy 2.18)
+
+**Branch:** `iter-040-cancel-correctness` (merged ff to main, commit `441b05f`)
+**Date:** 2026-05-24
+
+Third metric pulled from `docs/perf-metrics-taxonomy.md`. **Metric
+2.18 — Cancel-event correctness rate**, in the "Architecture-specific"
+bucket. Validates the iter-009 / iter-026 cancel plumbing.
+
+A barge-in can land in two places:
+1. *Mid-sentence* — cancel fires during a sentence's playback, the
+   play loop breaks via `cancel_event`, audio cuts off immediately.
+   Clean cut-off. iter-026's post-cancel-flush guard kicks in.
+2. *Between sentences* — cancel fires in the silent gap, the
+   current sentence finishes naturally, the worker exits before
+   the next. Also clean.
+
+Both are success outcomes, but they tell different stories about
+how the user is interrupting:
+- **High mid-stream rate** — users are impatient or the bot's
+  response is going wrong, and they're cutting it off.
+- **Low mid-stream rate** — users are waiting for natural pauses,
+  the bot is being responsive enough that mid-sentence interrupts
+  aren't needed.
+
+Detection mechanism: before/after sampling around `play_fn`. In
+`SentenceWorker._play_clip`:
+
+    cancel_was_set_before = self._cancel_event.is_set()
+    elapsed = self._play_fn(...)
+    if not cancel_was_set_before and self._cancel_event.is_set():
+        self.cancelled_sentences += 1
+
+Tighter than sampling only after the call: a cancel firing in the
+microseconds following natural completion would otherwise count
+as a false positive. With the before-snapshot, we know cancel
+transitioned during the play.
+
+Surfaced at three layers:
+
+1. `SentenceWorker.cancelled_sentences: int = 0` — counter on the
+   worker, accumulates across all sentences in the run.
+2. `TurnMetrics.sentences_cancelled: int = 0` — ChatLoop transfers
+   from worker.
+3. Per-turn print and session summary use it to label barge-ins:
+   - "yes (user interrupted) (1 cut mid-stream)"
+   - "yes (user interrupted) (between sentences)"
+   - "Barge-ins: 4 (2 mid-stream, 50%)"
+   - "Barge-ins: 2 (all between sentences)"
+
+Tests (12 in `tests/unit/test_cancel_correctness.py`):
+- `TestDefault` — counter defaults to 0 on both Worker and TurnMetrics.
+- `TestPlayClipDetection`:
+  - Natural completion does NOT increment.
+  - Mid-stream cancel increments exactly once (subsequent queued
+    sentences are drained without play, so don't double-count).
+  - Pre-set cancel_event does NOT increment (no false positives
+    from cleanup paths).
+- `TestPerTurnPrint` — no-barge omits, mid-stream shows count,
+  between-sentences shows label.
+- `TestSessionSummary` — no-barges omits, all-mid → "100%", mixed
+  → "50%", all-gap → "all between sentences".
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **556 passed, 1 skipped in 22s** (544 existing
++ 12 new).
+
+Notes:
+- Three metrics from the taxonomy now live: 2.19 (mic stale frames),
+  1.10 (LLM TTFsent), 2.18 (cancel correctness). The cadence — one
+  metric per iteration, small testable scope — is the right
+  rhythm.
+- Originally planned as iter-039 but the user redirected to the
+  per-iter perf history feature; iter-040 picks it up.
+- Subtle: the before/after sample handles the common race but not
+  every edge. If cancel fires DURING the natural completion path
+  in some platform-specific way, the detection might miss. For an
+  aggregate metric across many turns, the noise is acceptable.
+- Combine with iter-031 (TTFS-zero filter) and iter-038 (TTFsent)
+  in the session summary, the operator now has a much richer
+  picture: TTFS variance, sentence-level latency, and barge-in
+  shape, not just totals.
