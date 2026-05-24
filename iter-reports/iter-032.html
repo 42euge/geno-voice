@@ -104,7 +104,7 @@ table.iter-table th { background: var(--panel); }
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-031.html">← iter-031</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-031.html">← iter-031</a><a href="iter-033.html">iter-033 →</a></nav><header>
 <h1>iter-032 — SSE parser swallows AttributeError on non-dict choices[0]</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-032-sse-attrerror</code></span> · <span>commit: <code>7d3bca5</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-032-sse-attrerror</code> (merged ff to main, commit <code>7d3bca5</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -119,7 +119,8 @@ table.iter-table th { background: var(--panel); }
 <ul><li><code>TestNonDictChoicesElement</code> — <code>choices[0]</code> is None / string / int / list. Each bad chunk gets skipped; trailing good tokens reach the consumer.</li><li><code>TestStreamFullyAbortsWithoutFix</code> — multiple bad chunks interspersed with good ones; bad chunks at start / end of stream. All good tokens make it through, <code>[DONE]</code> still terminates cleanly.</li><li><code>TestExistingErrorPathsStillCaught</code> — regression guards for the four error types we already handled (JSONDecodeError, KeyError, IndexError, TypeError) so a future &quot;narrow the except clause&quot; cleanup doesn&#x27;t silently revert.</li></ul>
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>413 passed in 17.9s</strong> (402 existing + 11 new).</p>
 <p>Notes:</p>
-<ul><li>Pattern: when an except clause enumerates specific exceptions, audit the protected expression for every TYPE of failure that produces an error not in the list. Here the audit is &quot;what does <code>.get()</code> raise on non-dict?&quot; — AttributeError. Easy to miss in the original code review because the line &quot;looks fine.&quot;</li><li>Wider exception (e.g. <code>except Exception</code>) would have caught this but also masks bugs in the parser itself. The narrower fix is better — explicit, documented, traceable.</li><li>Could be extended to `except (json.JSONDecodeError, LookupError, AttributeError, TypeError)` (LookupError covers KeyError + IndexError) for marginal compactness. Kept the explicit list to preserve grep-ability of which conditions are tolerated.</li></ul><nav><a href="index.html">← Index</a><a href="iter-031.html">← iter-031</a></nav>
+<ul><li>Pattern: when an except clause enumerates specific exceptions, audit the protected expression for every TYPE of failure that produces an error not in the list. Here the audit is &quot;what does <code>.get()</code> raise on non-dict?&quot; — AttributeError. Easy to miss in the original code review because the line &quot;looks fine.&quot;</li><li>Wider exception (e.g. <code>except Exception</code>) would have caught this but also masks bugs in the parser itself. The narrower fix is better — explicit, documented, traceable.</li><li>Could be extended to `except (json.JSONDecodeError, LookupError, AttributeError, TypeError)` (LookupError covers KeyError + IndexError) for marginal compactness. Kept the explicit list to preserve grep-ability of which conditions are tolerated.</li></ul>
+<hr><nav><a href="index.html">← Index</a><a href="iter-031.html">← iter-031</a><a href="iter-033.html">iter-033 →</a></nav>
 </div>
 </body>
 </html>

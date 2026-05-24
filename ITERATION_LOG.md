@@ -2494,3 +2494,68 @@ Notes:
   AttributeError, TypeError)` (LookupError covers KeyError +
   IndexError) for marginal compactness. Kept the explicit list to
   preserve grep-ability of which conditions are tolerated.
+
+---
+
+## iter-033 — split sentences after terminator+closing-paren / bracket
+
+**Branch:** `iter-033-closing-parens` (merged ff to main, commit `298bac2`)
+**Date:** 2026-05-24
+
+iter-022 added support for terminator+closing-quote so US-style
+quoted speech split:
+
+    He said "hello." Then he left.
+
+But the same shape with parens / brackets — common in LLM output —
+didn't split:
+
+    He left (long ago.) Today returned.   →  ❌ no split
+    Per spec [see ref.] We continue.       →  ❌ no split
+
+Verified before fixing:
+
+    >>> split_complete_sentences('He left (long ago.) Today returned.')
+    ([], 'He left (long ago.) Today returned.')
+
+The streaming overlap pipeline (iter-008) waits for complete
+sentences before submitting to TTS, so a paren-tail bot response
+sat in the buffer until the *next* terminator arrived (often the
+end of the whole reply). TTFS suffered.
+
+Fix: generalize `_CLOSING_QUOTES` (quotes only) to
+`_CLOSING_AFTER_TERMINATOR` (quotes + parens + brackets + curly).
+Build SENTENCE_END from the constant via `re.escape` so adding
+more closing chars in the future only requires touching the
+string. Keep `_CLOSING_QUOTES` as a backwards-compat alias.
+
+Update the abbreviation walk-back in `split_complete_sentences`
+to use the new constant — non-terminating abbreviations inside
+parens (`See note (etc.) and more.`) still don't split.
+
+Tests (21 in `tests/unit/test_splitter_closing_parens.py`):
+- `TestClosingParens` — period/exclamation/question + ); paren
+  at very end (no whitespace, no split); multi-sentence chain.
+- `TestClosingBrackets` — `.]` and `.}`.
+- `TestRegressionsFromIter022` — all four quote variants still
+  split (straight + smart, double + single).
+- `TestPlainSentencesUnaffected` — non-quoted, non-parenthesized
+  sentences split exactly as before.
+- `TestAbbreviationInsideParens` — `(etc.)` and `(i.e.)` still
+  don't split; `(Mr. Smith.)` does.
+- `TestConstantAndRegex` — `)`, `]`, `}` all in the set; quotes
+  still in the set; backwards-compat alias preserved; regex
+  matches every closing variant.
+
+Verification: `python -m pytest tests/unit/` → **434 passed in 17.5s**
+(413 existing + 21 new).
+
+Notes:
+- Pattern reused from iter-022: when a sentence-boundary feature
+  has multiple natural variants (quotes, parens, brackets), the
+  cleanest approach is one constant + re.escape so each variant
+  is data, not code.
+- Did NOT add `>` (closing angle / blockquote marker). LLM output
+  rarely uses it as a closing-after-terminator and it'd risk
+  false positives in HTML-flavored content. Same reasoning for
+  `>>` and `}}`.
