@@ -3521,3 +3521,68 @@ Notes:
   visible in the per-turn print and session summary.
 - Next candidates: 2.20 (loopback echo barge-in rate), 1.4
   (VAD false-trigger rate), 1.5 (VAD missed-speech rate).
+
+---
+
+## iter-047 — barge-in phase metric (taxonomy 2.11)
+
+**Branch:** `iter-047-barge-phase` (merged ff to main, commit `ff7c43f`)
+**Date:** 2026-05-24
+
+Ninth metric pulled from `docs/perf-metrics-taxonomy.md`. **Metric
+2.11 — Barge-in phase distribution**.
+
+The phase string was already computed in `_chat_loop` for the
+diagnostic print. iter-047 lifts it to a structured metric so the
+session summary can show the distribution — which is the actually
+useful operational view.
+
+The two phases tell different stories:
+- **`llm_stream`**: user interrupted while the LLM was still
+  streaming tokens. The bot hadn't started speaking yet. User was
+  impatient with TTFS. **Root cause: LLM TTFT.**
+- **`playback`**: user interrupted while the bot was speaking.
+  Verbose / wrong response. **Root cause: system prompt / response
+  quality.**
+
+A session full of llm_stream barges and another full of playback
+barges have orthogonal fixes. iter-047 makes that distinction
+visible at session-summary glance.
+
+Implementation:
+- `TurnMetrics.barge_in_phase: str = ""` (new field).
+- ChatLoop assigns `"llm_stream"` or `"playback"` alongside the
+  existing diagnostic print — single source of truth, refactored
+  the inline string-construction to use the same key.
+- Per-turn Barge-in line gains `(during LLM stream)` /
+  `(during playback)` suffix after the existing cancel note.
+- Session summary: `Barge phases: N LLM-stream, M playback`
+  emitted when at least one phase was recorded.
+- `ScenarioResult.barge_in_phase` on perf snapshots — the new
+  field flows into the time-series automatically.
+
+Tests (10 in `tests/unit/test_barge_phase.py`):
+- Default empty string.
+- Per-turn print: no-barge omits, llm_stream and playback both
+  shown with distinct suffixes, empty-phase-with-barge omits
+  cleanly (forward-compat).
+- Session aggregate: no-data omits, mixed shows counts, single
+  phase shows zero for the absent phase.
+- ChatLoop wires: deterministic barge scenario (perf-suite shape)
+  populates one of the two values; no-barge keeps "".
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **630 passed, 1 skipped in 23s** (620
+existing + 10 new).
+
+Notes:
+- Nine metrics from the taxonomy now live (2.19 / 1.10 / 2.18 /
+  2.10 / 2.1 / 2.16 / 2.6 / 1.13 / 2.11). Per-turn print + session
+  summary together render a fairly complete operational dashboard:
+  TTFS, sub-budgets, fragmentation, parallelism, cancel quality,
+  barge shape + phase + latency, mic stale frames, bot WPM.
+- Refactor opportunity noted: the per-turn Barge-in line is
+  getting long ("yes (user interrupted) (1 cut mid-stream)
+  (during LLM stream)"). Future iter could split into multiple
+  fields or compress to symbols. Out of scope here — the message
+  is accurate, just verbose.
