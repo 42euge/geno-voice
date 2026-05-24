@@ -73,6 +73,20 @@ RESET = "\033[0m"
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.local.yaml"
 
 
+def load_chat_config() -> dict:
+    """Read the optional ``chat`` section of config.local.yaml.
+
+    Returns a dict — empty if the section is missing. Used for
+    iter-011 filler-word config (``chat.fillers``,
+    ``chat.fillers_idle_threshold``).
+    """
+    if not CONFIG_PATH.exists():
+        return {}
+    with open(CONFIG_PATH) as f:
+        cfg = yaml.safe_load(f) or {}
+    return cfg.get("chat", {}) or {}
+
+
 def load_llm_config() -> dict:
     if not CONFIG_PATH.exists():
         print(f"  {YELLOW}Missing config.local.yaml — create it with llm settings{RESET}")
@@ -256,6 +270,33 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
 
     print(f"  STT loaded in {stt_load*1000:.0f}ms")
     print(f"  TTS loaded in {tts_load*1000:.0f}ms")
+
+    # Pre-render fillers (iter-011). Empty by default; opt in via
+    # config.local.yaml:
+    #   chat:
+    #     fillers: ["hmm", "let me think", "well,"]
+    #     fillers_idle_threshold: 0.6
+    chat_cfg = load_chat_config()
+    filler_texts: list[str] = list(chat_cfg.get("fillers") or [])
+    filler_idle_threshold: float = float(chat_cfg.get("fillers_idle_threshold", 0.6))
+    rendered_fillers: list[tuple] = []
+    if filler_texts:
+        t_fill = time.monotonic()
+        for text in filler_texts:
+            try:
+                audio_np, tokens = synthesize_with_alignment(
+                    tts_engine, text, voice, speed,
+                )
+                if len(audio_np) > 0:
+                    rendered_fillers.append((audio_np, tokens))
+            except Exception as e:
+                print(f"  {YELLOW}filler synth failed for {text!r}: {e}{RESET}")
+        print(
+            f"  Pre-rendered {len(rendered_fillers)}/{len(filler_texts)} "
+            f"fillers in {(time.monotonic() - t_fill)*1000:.0f}ms "
+            f"(idle threshold {filler_idle_threshold:.2f}s)"
+        )
+
     print(f"  {GREEN}Ready.{RESET} Speak and I'll respond. Ctrl+C to quit.\n")
 
     pa = pyaudio.PyAudio()
@@ -327,6 +368,10 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
                 speaker_factory=_speaker_factory,
                 synth_fn=_synth,
                 play_fn=_play,
+                fillers=rendered_fillers,
+                idle_threshold=(
+                    filler_idle_threshold if rendered_fillers else 0.0
+                ),
             )
             worker.start()
 

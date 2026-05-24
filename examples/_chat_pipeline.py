@@ -83,12 +83,29 @@ class SentenceWorker:
         play_fn: PlayFn,
         clock: Callable[[], float] = time.monotonic,
         output=None,
+        fillers: Optional[list] = None,
+        idle_threshold: float = 0.0,
+        filler_picker: Optional[Callable[[list], object]] = None,
     ):
         self._speaker_factory = speaker_factory
         self._synth_fn = synth_fn
         self._play_fn = play_fn
         self._clock = clock
         self._output = output if output is not None else sys.stdout
+
+        # Pre-rendered filler clips. Each entry is an ``(audio_np,
+        # tokens)`` tuple — the same shape ``synth_fn`` returns. The
+        # caller is responsible for synthesizing them once at startup
+        # so we don't pay TTS latency exactly when we're trying to
+        # mask it. iter-011.
+        self._fillers = list(fillers) if fillers else []
+        self._idle_threshold = float(idle_threshold)
+        # Picker so tests can be deterministic (random.choice in prod,
+        # ``lambda lst: lst[0]`` in tests).
+        if filler_picker is None:
+            import random as _r
+            filler_picker = _r.choice
+        self._filler_picker = filler_picker
 
         self._queue: Queue = Queue()
         self._thread: Optional[threading.Thread] = None
@@ -103,6 +120,7 @@ class SentenceWorker:
 
         # Public metrics — read after wait_done() / stop() returns.
         self.sentences_spoken: int = 0
+        self.fillers_played: int = 0
         self.tts_time: float = 0.0
         self.playback_time: float = 0.0
         self.first_audio_at: Optional[float] = None
@@ -188,6 +206,39 @@ class SentenceWorker:
 
     # --- worker body -------------------------------------------------
 
+    def _play_clip(self, speaker, audio_np, tokens, *, is_first: bool) -> bool:
+        """Play one audio clip via play_fn. Updates first_audio_at and
+        playback_time; appends to errors on failure. Returns True if a
+        non-empty clip was actually played, False if it was skipped or
+        crashed.
+
+        Used for both real sentences (from the queue) and pre-rendered
+        fillers, so the bookkeeping stays in one place.
+        """
+        if audio_np is None or len(audio_np) == 0:
+            return False
+        if self.first_audio_at is None:
+            self.first_audio_at = self._clock()
+        try:
+            try:
+                elapsed = self._play_fn(
+                    speaker, audio_np, tokens,
+                    is_first_sentence=is_first,
+                    cancel_event=self._cancel_event,
+                )
+            except TypeError:
+                # play_fn doesn't accept cancel_event (iter-008
+                # callers); fall back to the simpler signature.
+                elapsed = self._play_fn(
+                    speaker, audio_np, tokens,
+                    is_first_sentence=is_first,
+                )
+            self.playback_time += float(elapsed) if elapsed else 0.0
+            return True
+        except Exception as e:
+            self.errors.append(e)
+            return False
+
     def _run(self) -> None:
         # Open the persistent speaker. If this fails (no audio device,
         # virtual interface terminated, etc.) record the error and exit.
@@ -197,9 +248,49 @@ class SentenceWorker:
             self.errors.append(e)
             return
 
+        # Tracks "have we written any audio output yet" — drives the
+        # is_first_sentence flag for the play_fn (controls the "Bot:"
+        # prefix). Includes both fillers and real sentences.
+        is_first_audio = True
+        filler_used = False
+
         try:
             while True:
-                item = self._queue.get()
+                # Decide whether to wait with a timeout so we can play
+                # a filler if the LLM stalls. Only applies before the
+                # first real sentence and only if fillers are
+                # configured.
+                use_filler_timeout = (
+                    bool(self._fillers)
+                    and self._idle_threshold > 0
+                    and not filler_used
+                    and self.sentences_spoken == 0
+                    and not self._submit_done_called
+                )
+                try:
+                    if use_filler_timeout:
+                        item = self._queue.get(timeout=self._idle_threshold)
+                    else:
+                        item = self._queue.get()
+                except Empty:
+                    # Idle threshold hit before any sentence arrived —
+                    # play one filler clip to mask LLM first-token
+                    # latency. Only happens once per worker run.
+                    if self._fillers and not filler_used:
+                        clip = self._filler_picker(self._fillers)
+                        audio_np, tokens = clip
+                        played = self._play_clip(
+                            speaker, audio_np, tokens, is_first=is_first_audio,
+                        )
+                        if played:
+                            is_first_audio = False
+                            self.fillers_played += 1
+                        # Whether or not it played, mark used so we
+                        # don't loop forever choosing the same idle
+                        # path again.
+                        filler_used = True
+                    continue
+
                 if item is _SENTINEL:
                     break
                 if self._stop_event.is_set():
@@ -219,38 +310,12 @@ class SentenceWorker:
                     self.errors.append(e)
                     continue
 
-                if audio_np is None or len(audio_np) == 0:
-                    continue
-
-                if self.first_audio_at is None:
-                    self.first_audio_at = self._clock()
-
-                # Play. Prefer passing cancel_event (iter-009 barge-in),
-                # but fall back gracefully if play_fn doesn't accept it
-                # — keeps the iter-008 test play_fns and any external
-                # callers working without modification.
-                try:
-                    is_first = self.sentences_spoken == 0
-                    try:
-                        elapsed = self._play_fn(
-                            speaker,
-                            audio_np,
-                            tokens,
-                            is_first_sentence=is_first,
-                            cancel_event=self._cancel_event,
-                        )
-                    except TypeError:
-                        elapsed = self._play_fn(
-                            speaker,
-                            audio_np,
-                            tokens,
-                            is_first_sentence=is_first,
-                        )
-                    self.playback_time += float(elapsed) if elapsed else 0.0
+                played = self._play_clip(
+                    speaker, audio_np, tokens, is_first=is_first_audio,
+                )
+                if played:
+                    is_first_audio = False
                     self.sentences_spoken += 1
-                except Exception as e:
-                    self.errors.append(e)
-                    continue
         finally:
             for method in ("stop_stream", "close"):
                 fn = getattr(speaker, method, None)
