@@ -78,36 +78,57 @@ RESET = "\033[0m"
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.local.yaml"
 
 
+# Pure parse + validate logic lives in examples/_chat_config; this
+# module just handles file I/O and CLI exit behavior. iter-018.
+from examples._chat_config import (  # noqa: E402
+    ConfigError,
+    parse_chat_config,
+    parse_llm_config,
+)
+
+
+def _read_yaml_or_exit() -> object:
+    """Read CONFIG_PATH and return the parsed YAML object (or None
+    if the file is missing). Exits the process on missing file
+    or YAML parse errors — both are unrecoverable for the chat CLI.
+    """
+    if not CONFIG_PATH.exists():
+        print(f"  {YELLOW}Missing config.local.yaml — create it with llm settings{RESET}")
+        sys.exit(1)
+    try:
+        with open(CONFIG_PATH) as f:
+            return yaml.safe_load(f)
+    except yaml.YAMLError as e:
+        print(f"  {YELLOW}config.local.yaml is invalid YAML: {e}{RESET}")
+        sys.exit(1)
+
+
 def load_chat_config() -> dict:
     """Read the optional ``chat`` section of config.local.yaml.
 
-    Returns a dict — empty if the section is missing. Used for
-    iter-011 filler-word config (``chat.fillers``,
+    Returns an empty dict if the file is missing or the section is
+    absent. Used for iter-011 filler-word config (``chat.fillers``,
     ``chat.fillers_idle_threshold``).
     """
     if not CONFIG_PATH.exists():
         return {}
-    with open(CONFIG_PATH) as f:
-        cfg = yaml.safe_load(f) or {}
-    return cfg.get("chat", {}) or {}
+    cfg = _read_yaml_or_exit()
+    return parse_chat_config(cfg)
 
 
 def load_llm_config() -> dict:
-    if not CONFIG_PATH.exists():
-        print(f"  {YELLOW}Missing config.local.yaml — create it with llm settings{RESET}")
+    """Read + validate the ``llm`` section of config.local.yaml.
+
+    On any structural problem (missing file, missing section,
+    missing required fields, unresolved ``${ENV_VAR}`` placeholder
+    in ``api_key``) prints a helpful message and exits.
+    """
+    cfg = _read_yaml_or_exit()
+    try:
+        return parse_llm_config(cfg)
+    except ConfigError as e:
+        print(f"  {YELLOW}{e}{RESET}")
         sys.exit(1)
-    with open(CONFIG_PATH) as f:
-        cfg = yaml.safe_load(f)
-    llm = cfg.get("llm", {})
-    api_key = llm.get("api_key", "")
-    if api_key.startswith("${") and api_key.endswith("}"):
-        env_var = api_key[2:-1]
-        api_key = os.environ.get(env_var, "")
-        if not api_key:
-            print(f"  {YELLOW}Env var {env_var} not set{RESET}")
-            sys.exit(1)
-    llm["api_key"] = api_key
-    return llm
 
 
 # llm_stream now lives in examples/_chat_llm.py. Re-exported here so
