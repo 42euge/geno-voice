@@ -10,7 +10,22 @@ import re
 from dataclasses import dataclass, field
 from enum import Enum
 
-SENTENCE_END = re.compile(r'(?<=[.!?])\s+')
+# Closing-quote characters that can sit between a sentence terminator
+# and the whitespace before the next sentence. Includes straight
+# double, straight single, and the two common smart "right" quotes.
+_CLOSING_QUOTES = "\"'”’"
+
+# iter-022: allow an optional closing quote between the terminator
+# and the whitespace, so US-style quoted speech splits correctly:
+#     He said "hello." Then he left.
+#                     ^ this whitespace is preceded by `."` not `.`
+# Python regex doesn't support variable-length lookbehind, so we OR
+# two fixed-length alternatives:
+#     (?<=[.!?])\s+              terminator immediately before space
+#     (?<=[.!?]<quote>)\s+       terminator + one closing-quote char
+SENTENCE_END = re.compile(
+    r'(?<=[.!?])\s+|(?<=[.!?][\"\'”’])\s+'
+)
 
 # Common abbreviations that end with a period but should NOT terminate
 # a sentence in voice context. Lowercased; the splitter checks the
@@ -193,11 +208,15 @@ def split_complete_sentences(buffer: str) -> tuple[list[str], str]:
 
     real_splits = []
     for m in matches:
-        # The terminator character is at m.start() - 1 (the regex
-        # uses lookbehind so the match itself is the whitespace).
-        # Only check abbreviation status if it's a period — `!` and
-        # `?` always terminate.
+        # The character at m.start() - 1 is either the terminator
+        # itself (single-lookbehind branch) OR a closing quote
+        # (terminator-plus-quote branch from iter-022). Walk back
+        # one position past the quote in the latter case to find
+        # the actual terminator. Only check abbreviation status if
+        # the terminator is a period — `!` and `?` always end.
         terminator_idx = m.start() - 1
+        if terminator_idx >= 0 and buffer[terminator_idx] in _CLOSING_QUOTES:
+            terminator_idx -= 1
         if buffer[terminator_idx] == ".":
             word = _word_before_period(buffer, terminator_idx)
             if word in NON_TERMINATING_ABBREVIATIONS:

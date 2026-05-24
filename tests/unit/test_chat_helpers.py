@@ -234,6 +234,70 @@ class TestSplitCompleteSentences:
         assert complete == ["It is 9 a.m. Time to wake."]
         assert rest == "Yes."
 
+    # ---- iter-022: terminator + closing quote + whitespace -----------------
+
+    def test_us_style_quoted_speech_with_period_inside_quote_splits(self):
+        # Bot says: He said "hello." Then he left.
+        # US convention puts the period inside the closing quote.
+        # Without iter-022, the lookbehind ``(?<=[.!?])\s+`` would
+        # not match because the char before the space is `"`, not
+        # a terminator.
+        complete, rest = split_complete_sentences(
+            'He said "hello." Then he left.'
+        )
+        assert complete == ['He said "hello."']
+        assert rest == "Then he left."
+
+    def test_question_mark_inside_quote_splits(self):
+        complete, rest = split_complete_sentences('She asked "why?" Then waited.')
+        assert complete == ['She asked "why?"']
+        assert rest == "Then waited."
+
+    def test_exclamation_inside_quote_splits(self):
+        complete, rest = split_complete_sentences('He yelled "stop!" And ran.')
+        assert complete == ['He yelled "stop!"']
+        assert rest == "And ran."
+
+    def test_single_quote_after_terminator_splits(self):
+        complete, rest = split_complete_sentences("She said 'hi.' Then waited.")
+        assert complete == ["She said 'hi.'"]
+        assert rest == "Then waited."
+
+    def test_smart_double_quote_after_terminator_splits(self):
+        # Smart "right" quote U+201D — common in LLM output.
+        complete, rest = split_complete_sentences(
+            "He said “hello.” Then."
+        )
+        assert complete == ["He said “hello.”"]
+        assert rest == "Then."
+
+    def test_smart_single_quote_after_terminator_splits(self):
+        # Smart "right" single quote U+2019.
+        complete, rest = split_complete_sentences(
+            "She said ‘hi.’ Done."
+        )
+        assert complete == ["She said ‘hi.’"]
+        assert rest == "Done."
+
+    def test_uk_style_period_outside_quote_still_splits(self):
+        # Control: pre-iter-022, this case worked because the
+        # terminator IS immediately before the space. Confirm
+        # the iter-022 changes didn't break it.
+        complete, rest = split_complete_sentences(
+            'He said "hello". Then he left.'
+        )
+        assert complete == ['He said "hello".']
+        assert rest == "Then he left."
+
+    def test_abbreviation_outside_quoted_speech_still_doesnt_split(self):
+        # Mixing iter-016 + iter-022: "Mr." outside quote stays
+        # glued to next word; "hi." inside quote splits.
+        complete, rest = split_complete_sentences(
+            'Mr. Smith said "hi." Hello.'
+        )
+        assert complete == ['Mr. Smith said "hi."']
+        assert rest == "Hello."
+
 
 class TestTrimHistory:
     def test_empty(self):
