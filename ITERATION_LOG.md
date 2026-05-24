@@ -1870,3 +1870,84 @@ Notes:
 - The "abbreviation OUTSIDE + quote INSIDE" combined test is
   the regression-cover that catches future refactors that try
   to simplify the walk-back logic.
+
+---
+
+## iter-023 — introspect play_fn signature once, fix double-call bug
+
+**Branch:** `iter-023-typeerror` (merged ff to main, commit `8be4532`)
+**Date:** 2026-05-24
+
+Real subtle bug found by code review.
+`SentenceWorker._play_clip` had been wrapping each `play_fn` call
+in a `try/except TypeError` to fall back to a no-cancel-event
+signature for iter-008-style play_fns. That swallow had a silent
+failure mode — a `play_fn` whose **body** raised TypeError (for
+*any* reason) would be retried with the fallback signature, which
+would also raise (same body), so the function got called *twice*
+for the same sentence.
+
+Demonstrated before fix:
+
+```
+buggy_play raises TypeError, calls speaker.write first.
+Speaker received 4096 bytes (1024 samples × 2 calls × 2 bytes/sample)
+Expected 2048 bytes (one call's worth of partial audio)
+```
+
+Fix: detect once at `SentenceWorker.__init__` whether the
+`play_fn` accepts a `cancel_event` kwarg via `inspect.signature`.
+Store the result on the worker, dispatch per-call without
+`try/except`. A TypeError raised by the `play_fn`'s body now
+surfaces correctly via the outer `except Exception` and gets
+recorded in `worker.errors` exactly once.
+
+What changed:
+
+- **`examples/_chat_pipeline.py`**:
+  - New module-level helper
+    `_play_fn_accepts_cancel_event(play_fn)`. Uses
+    `inspect.signature`; checks for either an explicit
+    `cancel_event` parameter or a `**kwargs`-style variadic.
+    Conservative on errors: callables whose signature can't be
+    inspected (some C extensions / builtins) fall back to False,
+    preserving the old fallback path.
+  - `SentenceWorker.__init__` runs the check once and stores
+    `self._play_fn_supports_cancel`.
+  - `SentenceWorker._play_clip` dispatches via the flag — no
+    more `try/except TypeError`.
+
+Tests (11 new in `tests/unit/test_play_fn_introspection.py`):
+
+Signature introspection (6):
+- explicit `cancel_event` kwarg detected
+- no `cancel_event` → not detected
+- `**kwargs` variadic → detected
+- lambdas with / without `cancel_event`
+- uninspectable callable falls back to False
+
+Worker dispatch (3):
+- `play_fn` with `cancel_event` receives the worker's internal
+  `threading.Event`-shaped object
+- `play_fn` without `cancel_event` doesn't get extra kwargs
+- `**kwargs` `play_fn` receives `cancel_event` in the dict
+
+TypeError bug regression (2):
+- buggy `play_fn` raising TypeError called **exactly once** per
+  sentence; speaker captures one chunk's worth (2048 bytes), not
+  double; one error in `worker.errors`.
+- After a buggy first sentence, subsequent sentences still play
+  cleanly (loop continues; doesn't deadlock).
+
+Verification: `python -m pytest tests/unit/` → **332 passed in 17s**
+(321 existing + 11 new).
+
+Notes:
+- `inspect.signature` has a small one-time cost at construction —
+  negligible for the iter-008 + iter-023 design where workers
+  are short-lived (one per turn).
+- This is the kind of bug that's easy to miss in code review —
+  `try/except TypeError` "looks defensive" but silently masks
+  real failures. Worth remembering: `try/except` on a too-broad
+  exception class is a code smell; introspect what you actually
+  care about.
