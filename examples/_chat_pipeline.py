@@ -573,12 +573,22 @@ class BargeInCoordinator:
         worker=None,
         *,
         on_trigger: Optional[Callable[[], None]] = None,
+        clock: Callable[[], float] = time.monotonic,
     ):
         self._worker = worker
         self._on_trigger = on_trigger
+        # iter-030: the chat loop compares ``triggered_at`` against
+        # timestamps stamped by its own injected clock to decide
+        # phase ("LLM-stream" vs "playback") for the barge-in
+        # diagnostic message. Calling ``time.monotonic()`` here
+        # would make those two values incomparable under any test
+        # that mocks the clock — the test would see ``triggered_at``
+        # in real wall-clock time but ``llm_stream_done_at`` on the
+        # fake clock. Accept the same clock the caller already uses.
+        self._clock = clock
         self._event = threading.Event()
         self._lock = threading.Lock()
-        # When the trigger fired, in monotonic seconds. None until set.
+        # When the trigger fired, sampled from ``clock``. None until set.
         self.triggered_at: Optional[float] = None
 
     @property
@@ -605,7 +615,7 @@ class BargeInCoordinator:
             if self._event.is_set():
                 return
             self._event.set()
-            self.triggered_at = time.monotonic()
+            self.triggered_at = self._clock()
         # Outside the lock — worker.cancel takes its own lock and
         # may join a thread; we don't want to hold ours that long.
         if self._worker is not None:

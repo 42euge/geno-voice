@@ -228,7 +228,11 @@ class ChatLoop:
         flush_pending_audio(self._mic, chunk_size=self._chunk)
 
         llm_gen = self._llm_stream_fn(messages, self._llm_config)
-        coord = BargeInCoordinator(worker=worker)
+        # iter-030: pass the same clock so ``coord.triggered_at`` is
+        # comparable against ``llm_stream_done_at`` below (both sampled
+        # from ``self._clock``). Without this, mocked-clock tests
+        # couldn't verify the phase decision.
+        coord = BargeInCoordinator(worker=worker, clock=self._clock)
         # iter-028: build the watcher's VadState from the same VAD
         # config that record_utterance_streaming uses, so a user who
         # tunes ``chat.vad.silence_threshold`` for a noisy room gets
