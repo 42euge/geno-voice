@@ -26,6 +26,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from stt import WhisperEngine
 from tts import get_engine as get_tts_engine
 
+# Pure helpers — extracted for testability, see examples/_chat_helpers.py.
+from examples._chat_helpers import (
+    SENTENCE_END,
+    split_complete_sentences,
+    trim_history,
+)
+
 RATE = 16000
 CHANNELS = 1
 CHUNK = 1024
@@ -41,7 +48,6 @@ CYAN = "\033[36m"
 MAGENTA = "\033[35m"
 RESET = "\033[0m"
 
-SENTENCE_END = re.compile(r'(?<=[.!?])\s+')
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.local.yaml"
 
 
@@ -290,7 +296,10 @@ def play_aligned(pa, audio_np, tokens, is_first_sentence=False):
                          frames_per_buffer=play_chunk)
 
     if is_first_sentence:
-        sys.stdout.write(f"  {CYAN}Bot:{RESET} ")
+        # Clear any leftover "[N] waiting..." or live-preview line on the
+        # current row before printing "Bot:". Without this, we get duplicate
+        # "Bot:" lines on multi-sentence responses (bug #1).
+        sys.stdout.write(f"\r{CLEAR_LINE}  {CYAN}Bot:{RESET} ")
         sys.stdout.flush()
 
     t0 = time.monotonic()
@@ -403,6 +412,7 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
             total_playback_time = 0.0
             ttfs_recorded = False
 
+            llm_stream_done_at = None
             try:
                 for token in llm_stream(messages, llm_config):
                     if first_token_at is None:
@@ -411,13 +421,9 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
                     full_response += token
 
                     # Check if we have a complete sentence
-                    parts = SENTENCE_END.split(token_buffer)
-                    if len(parts) > 1:
-                        for sentence in parts[:-1]:
-                            sentence = sentence.strip()
-                            if not sentence:
-                                continue
-
+                    complete, token_buffer_next = split_complete_sentences(token_buffer)
+                    if complete:
+                        for sentence in complete:
                             # Synthesize with word-level timing
                             t = time.monotonic()
                             audio_np, tokens = synthesize_with_alignment(
@@ -441,7 +447,12 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
                             total_playback_time += elapsed
                             sentences_spoken += 1
 
-                        token_buffer = parts[-1]
+                        token_buffer = token_buffer_next
+
+                # Stamp end-of-stream BEFORE any trailing synth/playback so
+                # llm_total measures only the LLM streaming window, not the
+                # follow-on TTS/playback work (bug #2).
+                llm_stream_done_at = time.monotonic()
 
                 # Handle remaining text after stream ends
                 remaining = token_buffer.strip()
@@ -467,7 +478,11 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
                 print()  # newline after streamed text
 
                 metrics.llm_first_token = (first_token_at - llm_start) if first_token_at else 0
-                metrics.llm_total = time.monotonic() - llm_start
+                # Use the stamped end-of-stream time, not "now" — "now" includes
+                # all the trailing TTS/playback work and produces absurd values.
+                metrics.llm_total = (
+                    (llm_stream_done_at - llm_start) if llm_stream_done_at else 0
+                )
                 metrics.tts_time = total_tts_time
                 metrics.playback_time = total_playback_time
                 metrics.sentences_spoken = sentences_spoken
@@ -485,8 +500,7 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
             all_metrics.append(metrics)
             turn += 1
 
-            if len(messages) > 21:
-                messages = [messages[0]] + messages[-20:]
+            messages = trim_history(messages, max_user_assistant=20)
 
     except KeyboardInterrupt:
         print(f"\n\n{DIM}{'─' * 56}{RESET}")
