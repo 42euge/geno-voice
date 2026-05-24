@@ -31,6 +31,7 @@ synthesizer with deterministic audio.
 
 from __future__ import annotations
 
+import inspect
 import sys
 import threading
 import time
@@ -38,6 +39,35 @@ from queue import Empty, Queue
 from typing import Callable, Optional
 
 import numpy as np
+
+
+def _play_fn_accepts_cancel_event(play_fn) -> bool:
+    """Return True if ``play_fn`` looks like it can accept a
+    ``cancel_event`` keyword argument.
+
+    Detected via ``inspect.signature`` once at worker construction
+    rather than per-call ``try/except TypeError``. The old
+    per-call approach masked real bugs: a play_fn whose BODY
+    raised ``TypeError`` (for any reason) would be retried
+    without ``cancel_event``, causing the function to be invoked
+    *twice* per sentence and writing partial audio twice.
+
+    Conservative on errors: if the callable's signature can't
+    be inspected (some C extensions, builtin functions), assume
+    no cancel_event support — same fallback the old code provided
+    for old-style play_fns.
+    """
+    try:
+        sig = inspect.signature(play_fn)
+    except (ValueError, TypeError):
+        return False
+    params = sig.parameters
+    if "cancel_event" in params:
+        return True
+    # ``**kwargs`` accepts anything, including cancel_event.
+    return any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+    )
 
 # Sentinel marking "no more sentences will be submitted." Using a unique
 # object ensures it can never collide with a real sentence string.
@@ -90,6 +120,10 @@ class SentenceWorker:
         self._speaker_factory = speaker_factory
         self._synth_fn = synth_fn
         self._play_fn = play_fn
+        # iter-023: detect once at construction whether the
+        # play_fn accepts ``cancel_event``, instead of swallowing
+        # TypeError per-call (which masked real bugs).
+        self._play_fn_supports_cancel = _play_fn_accepts_cancel_event(play_fn)
         self._clock = clock
         self._output = output if output is not None else sys.stdout
 
@@ -220,15 +254,18 @@ class SentenceWorker:
         if self.first_audio_at is None:
             self.first_audio_at = self._clock()
         try:
-            try:
+            # iter-023: signature was inspected at construction;
+            # call with the right kwargs once. A TypeError raised
+            # by the play_fn body now surfaces correctly via the
+            # outer ``except Exception`` instead of triggering a
+            # silent retry.
+            if self._play_fn_supports_cancel:
                 elapsed = self._play_fn(
                     speaker, audio_np, tokens,
                     is_first_sentence=is_first,
                     cancel_event=self._cancel_event,
                 )
-            except TypeError:
-                # play_fn doesn't accept cancel_event (iter-008
-                # callers); fall back to the simpler signature.
+            else:
                 elapsed = self._play_fn(
                     speaker, audio_np, tokens,
                     is_first_sentence=is_first,
