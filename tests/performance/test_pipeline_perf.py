@@ -107,6 +107,8 @@ class ScenarioResult:
     sentences_spoken: int = 0
     # iter-040: sentences cut mid-stream by cancel_event.
     sentences_cancelled: int = 0
+    # iter-043: streaming overlap ratio (0.0–1.0).
+    streaming_overlap_ratio: float = 0.0
     wall_ms: float = 0.0          # full run_one_turn wall-clock
     barge_in: bool = False
     # iter-041: time from barge-in detect to playback halt. 0 if
@@ -273,6 +275,7 @@ def _run_scenario(
         speech_duration_ms=m.speech_duration * 1000,
         sentences_spoken=m.sentences_spoken,
         sentences_cancelled=m.sentences_cancelled,
+        streaming_overlap_ratio=m.streaming_overlap_ratio,
         wall_ms=wall * 1000,
         barge_in=m.barge_in,
         barge_in_latency_ms=m.barge_in_latency * 1000,
@@ -435,6 +438,7 @@ class TestPerfScenarios:
             speech_duration_ms=m.speech_duration * 1000,
             sentences_spoken=m.sentences_spoken,
             sentences_cancelled=m.sentences_cancelled,
+        streaming_overlap_ratio=m.streaming_overlap_ratio,
             wall_ms=wall * 1000,
             barge_in=m.barge_in,
             barge_in_latency_ms=m.barge_in_latency * 1000,

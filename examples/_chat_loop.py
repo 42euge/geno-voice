@@ -332,6 +332,29 @@ class ChatLoop:
             metrics.llm_total = (
                 (llm_stream_done_at - llm_start) if llm_stream_done_at else 0
             )
+            # iter-043: streaming overlap ratio. Defined as the
+            # fraction of the LLM-stream window during which audio
+            # was already playing. Only computable when both ends
+            # of each interval exist — first_audio_at on the worker
+            # (audio actually started) and llm_stream_done_at
+            # (LLM finished). Clamps:
+            #   - If first_audio_at is None (no audio played):
+            #     ratio = 0 (no overlap by definition).
+            #   - If first_audio_at >= llm_stream_done_at (audio
+            #     started AFTER LLM finished, fully sequential):
+            #     ratio = 0.
+            #   - If llm_total is 0 (no LLM time, edge case):
+            #     ratio = 0.
+            #   - Else ratio in (0, 1].
+            if (
+                worker.first_audio_at is not None
+                and llm_stream_done_at is not None
+                and metrics.llm_total > 0
+            ):
+                overlap = max(0.0, llm_stream_done_at - worker.first_audio_at)
+                metrics.streaming_overlap_ratio = min(
+                    1.0, overlap / metrics.llm_total
+                )
             metrics.tts_time = worker.tts_time
             metrics.playback_time = worker.playback_time
             metrics.sentences_spoken = worker.sentences_spoken

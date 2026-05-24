@@ -42,6 +42,16 @@ class TurnMetrics:
     llm_total: float = 0.0
     tts_time: float = 0.0
     playback_time: float = 0.0
+    # iter-043: fraction of the LLM-stream window during which the
+    # worker was already playing audio (vs synth + play happening
+    # serially after the stream completed). 1.0 = first audio
+    # landed at llm_start (impossible — there's at least the
+    # first-sentence wait + first synth). Realistic 0.4-0.8 on
+    # multi-sentence responses with a fast-enough LLM. 0 means
+    # the worker only played AFTER the LLM finished — sequential,
+    # iter-008 streaming-overlap not buying us anything that turn.
+    # Metric 2.1 in the perf-metrics taxonomy.
+    streaming_overlap_ratio: float = 0.0
     ttfs: float = 0.0
     total_e2e: float = 0.0
     sentences_spoken: int = 0
@@ -107,6 +117,19 @@ class TurnMetrics:
         tts_suffix += ")"
         print(f"  {_DIM}│{_RESET}  TTS:           {self.tts_time*1000:>7.0f}ms  {tts_suffix}")
         print(f"  {_DIM}│{_RESET}  Playback:      {self.playback_time*1000:>7.0f}ms")
+        # iter-043: streaming overlap. Skip the line on turns where
+        # it's 0 (sequential — audio came after LLM finished, so
+        # streaming bought us nothing this turn — common on very
+        # short responses). Show as percentage. Color-code: green
+        # if >50% (good overlap), yellow ≤50%.
+        if self.streaming_overlap_ratio > 0:
+            pct = self.streaming_overlap_ratio * 100
+            color = _GREEN if pct >= 50 else _YELLOW
+            print(
+                f"  {_DIM}│{_RESET}  Overlap:       "
+                f"{color}{pct:>6.0f}%{_RESET}  "
+                f"({_DIM}LLM↔TTS concurrency{_RESET})"
+            )
         if self.barge_in:
             # iter-040: distinguish mid-stream cancel (cancel landed
             # during sentence playback — clean cut-off) vs between-
@@ -244,6 +267,13 @@ def print_session_summary(metrics_list: list[TurnMetrics], llm_config: dict, *, 
     # something actually leaked — a clean session shouldn't be cluttered
     # with a "0 stale frames" line.
     stale_total = sum(m.mic_stale_frames for m in metrics_list)
+    # iter-043: streaming overlap ratios across turns where they
+    # could be computed (>0 = audio overlapped LLM stream).
+    overlap_ratios = [
+        m.streaming_overlap_ratio
+        for m in metrics_list
+        if m.streaming_overlap_ratio > 0
+    ]
 
     _emit(f"{_BOLD}  Session Summary ({n} turn{'' if n == 1 else 's'}){_RESET}")
     _emit(f"    Median STT:       {_median_ms(stt_times):.0f}ms")
@@ -295,5 +325,14 @@ def print_session_summary(metrics_list: list[TurnMetrics], llm_config: dict, *, 
             f"    Mic stale:        {stale_total} frames "
             f"({stale_seconds_total:.1f}s) — check echo cancellation"
         )
+    if overlap_ratios:
+        # iter-043: median streaming overlap across measurable turns.
+        # >50% means the worker generally got audio out before the
+        # LLM finished — iter-008 streaming-overlap is paying off.
+        # <20% means the bot responded so fast (or the LLM is so
+        # chatty) that overlap isn't happening; investigate
+        # first-sentence latency (iter-038's TTFsent) and synth time.
+        median_pct = statistics.median(overlap_ratios) * 100
+        _emit(f"    Median overlap:   {median_pct:.0f}%")
     _emit(f"    Model:            {llm_config.get('model', 'unknown')}")
     _emit()
