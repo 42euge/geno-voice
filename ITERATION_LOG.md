@@ -1650,3 +1650,80 @@ The codebase has reached its design endpoint. Further
 iterations would be: pick up real-mic CI infra (high cost,
 diminishing returns), add new features (multi-language voice,
 voice cloning), or call it done.
+
+---
+
+## iter-020 — configurable VAD via chat.vad config section
+
+**Branch:** `iter-020-vad-config` (merged ff to main, commit `75ba389`)
+**Date:** 2026-05-24
+
+The VAD parameters had been hardcoded module constants since
+iter-006. Real users have noisier mics, busier rooms, and
+different turn-taking preferences than the desk-mic defaults
+assume. They've had no way to tune except by editing source.
+This iteration exposes them via config.local.yaml:
+
+```yaml
+chat:
+  vad:
+    silence_threshold: 0.05      # noisier room
+    silence_duration: 0.5         # faster turn-taking
+    min_speech_duration: 0.5      # ignore brief blips
+```
+
+What changed:
+
+- **`examples/_chat_recording.py`**: `record_utterance_streaming`
+  gained `silence_threshold`, `silence_duration`,
+  `min_speech_duration` kwargs (default to the existing module
+  constants).
+
+- **`examples/_chat_loop.py`**: `ChatLoop` constructor accepts
+  the same three kwargs, forwards them to record_utterance per
+  turn.
+
+- **`examples/_chat_config.py`**: `VAD_DEFAULTS` dict +
+  `parse_vad_config(chat_cfg)` extractor. Tolerant — bad types,
+  non-positive numbers, missing keys all fall through to
+  defaults so a typo'd VAD config doesn't kill the chat loop.
+
+- **`examples/mic_chat.py`**: reads `chat.vad` via
+  `parse_vad_config`, passes to ChatLoop.
+
+Tests (16 new in `tests/unit/test_vad_config.py`):
+
+`parse_vad_config` (10):
+- no chat / no vad section → defaults
+- partial vad backfills; full vad overrides
+- int values coerced to float
+- non-Mapping chat / vad → defaults (tolerant)
+- string values for numeric fields fall back per-key
+- zero / negative values fall back per-key
+- returns a new dict
+
+`record_utterance_streaming` with overridden VAD (5):
+- High threshold rejects quiet speech that the default detects.
+- Low threshold catches sub-default audio (RMS ≈ 0.0035).
+- Short `silence_duration` produces shorter wav (parallel-mic
+  comparison vs default 0.8s window on the same audio).
+- Strict `min_speech_duration` → DONE_TOO_SHORT → empty wav.
+- Default kwargs match module constants (regression cover).
+
+ChatLoop forwarding (1):
+- End-to-end: ChatLoop with `min_speech_duration=1.0` rejects a
+  0.5s utterance via DONE_TOO_SHORT → `result.metrics is None`.
+
+Verification: `python -m pytest tests/unit/` → **305 passed in 18s**
+(289 existing + 16 new).
+
+Notes:
+- Tolerant validation pattern matches `parse_chat_config` from
+  iter-018: never raise on bad input, just fall back. The chat
+  loop is more useful with bad VAD config than dead.
+- The "compared to default 0.8s window" test uses two parallel
+  mic streams pushing the same audio — clean way to verify
+  behavioral difference without timing assertions.
+- `VAD_DEFAULTS` is exposed as a module attribute so tests can
+  assert against it directly (rather than the recording-module
+  constants we want callers to be insulated from).
