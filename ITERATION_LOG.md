@@ -3456,3 +3456,68 @@ Notes:
   surface.
 - Next candidates: 1.13 (bot WPM), 2.20 (loopback echo barge-in
   rate), 1.4 (VAD false-trigger rate).
+
+---
+
+## iter-046 — bot WPM metric (taxonomy 1.13)
+
+**Branch:** `iter-046-bot-wpm` (merged ff to main, commit `cd5a3f2`)
+**Date:** 2026-05-24
+
+Eighth metric pulled from `docs/perf-metrics-taxonomy.md`. **Metric
+1.13 — Bot speaking rate (words per minute)**, "Standard" bucket.
+
+UX research clusters comfortable voice-agent speech at **150-180 WPM**:
+- <130: too slow → user interrupts (manifests as iter-040
+  mid-stream cancels).
+- 130-200: comfortable.
+- >200: too fast → user can't follow (manifests as repeat-please
+  follow-ups).
+
+The metric tells you whether kokoro's `speed=1.0` default is right
+for the voice. Some voices want 0.9 or 1.1; bot_wpm is the closed-
+loop signal that confirms the choice.
+
+Implementation:
+- `SentenceWorker.word_count_total: int = 0` and
+  `SentenceWorker.audio_seconds_total: float = 0.0` (new fields).
+  Per sentence, count non-punctuation tokens from the alignment;
+  fall back to `len(sentence.split())` when alignment is missing
+  (kokoro misconfig). Audio duration = `len(audio_np) / 24000`.
+- `TurnMetrics.bot_wpm: float = 0.0`; ChatLoop derives from worker
+  totals when both >0.
+- Per-turn print: "Bot WPM: NNN (target 150-180)" only when >0.
+  Green 130-200, yellow otherwise.
+- Session summary: median across measurable turns.
+- `ScenarioResult.bot_wpm` on perf snapshots.
+
+Tests (13 in `tests/unit/test_bot_wpm.py`):
+- Defaults zero on Worker + Metrics.
+- Per-turn print: zero omits, in-range emits with target label,
+  out-of-range still shown.
+- Session aggregate: no-data omits, with-data emits median,
+  zero-filter (parallel to iter-031's TTFS pattern).
+- Worker word counting: alignment-with-tokens counts non-punct,
+  empty alignment falls back to whitespace split, multi-sentence
+  accumulates correctly.
+- ChatLoop wires: 3 words in 1 sec audio → ~180 WPM; empty audio
+  → 0 WPM.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **620 passed, 1 skipped in 22s** (607 existing
++ 13 new).
+
+Notes:
+- Eight metrics from the taxonomy now live (2.19 / 1.10 / 2.18 /
+  2.10 / 2.1 / 2.16 / 2.6 / 1.13). The dashboard is
+  starting to feel "complete enough" for ops review of a real
+  voice agent — TTFS at the top, and a fan of diagnostic metrics
+  underneath that explains the TTFS.
+- Combined with iter-045's `mean_sentence_chars`, the worker
+  side of the pipeline has clear visibility: how many words per
+  minute (rate), how long is each sentence (size), how long does
+  the worker idle between sentences (gap), how many sentences
+  get cut mid-stream (cancel correctness). All four shapes
+  visible in the per-turn print and session summary.
+- Next candidates: 2.20 (loopback echo barge-in rate), 1.4
+  (VAD false-trigger rate), 1.5 (VAD missed-speech rate).

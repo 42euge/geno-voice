@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-045 — sentence-split fragmentation metric (taxonomy 2.6)</title>
+<title>iter-046 — bot WPM metric (taxonomy 1.13)</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,22 +168,21 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-044.html">← iter-044</a><a href="iter-046.html">iter-046 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-045 — sentence-split fragmentation metric (taxonomy 2.6)</h1>
-<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-045-sentence-len</code></span> · <span>commit: <code>3a675ab</code></span> · <span>tests: <code>+10</code> (total 607)</span></div>
-</header><p><strong>Branch:</strong> <code>iter-045-sentence-len</code> (merged ff to main, commit <code>3a675ab</code>) <strong>Date:</strong> 2026-05-24</p>
-<p>Seventh metric pulled from <code>docs/perf-metrics-taxonomy.md</code>. <strong>Metric 2.6 — Sentence-split fragmentation</strong>, &quot;Architecture-specific&quot; bucket.</p>
-<p>Mean character length of sentences submitted to the worker per turn. The taxonomy notes:</p>
-<ul><li>mean ≪ ~30 chars: over-fragmented, defeats streaming-overlap because TTS finishes the short sentence before the next arrives.</li><li>mean ≫ ~150 chars: under-fragmented, increases TTFS because the first complete sentence arrives too late.</li><li>mean 50-100: healthy LLM voice output.</li></ul>
-<p>Combined with iter-043 (overlap) + iter-044 (idle gap), the splitter side of the pipeline is now observable: if overlap is low and idle gap is high, look at fragmentation — short sentences would explain it (worker keeps starving).</p>
+<nav><a href="index.html">← Index</a><a href="iter-045.html">← iter-045</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-046 — bot WPM metric (taxonomy 1.13)</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-046-bot-wpm</code></span> · <span>commit: <code>cd5a3f2</code></span> · <span>tests: <code>+13</code> (total 620)</span></div>
+</header><p><strong>Branch:</strong> <code>iter-046-bot-wpm</code> (merged ff to main, commit <code>cd5a3f2</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>Eighth metric pulled from <code>docs/perf-metrics-taxonomy.md</code>. <strong>Metric 1.13 — Bot speaking rate (words per minute)</strong>, &quot;Standard&quot; bucket.</p>
+<p>UX research clusters comfortable voice-agent speech at <strong>150-180 WPM</strong>:</p>
+<ul><li>&lt;130: too slow → user interrupts (manifests as iter-040 mid-stream cancels).</li><li>130-200: comfortable.</li><li>&gt;200: too fast → user can&#x27;t follow (manifests as repeat-please follow-ups).</li></ul>
+<p>The metric tells you whether kokoro&#x27;s <code>speed=1.0</code> default is right for the voice. Some voices want 0.9 or 1.1; bot_wpm is the closed- loop signal that confirms the choice.</p>
 <p>Implementation:</p>
-<ul><li>ChatLoop accumulates <code>sentence_chars_total + sentence_chars_count</code> across the for-token loop (and the trailing-remainder submit).</li><li><code>TurnMetrics.mean_sentence_chars: float = 0.0</code> (new field).</li><li>Per-turn print appends <code>&quot;, avg N chars&quot;</code> inside the existing TTS suffix — compact, no new line.</li><li>Session summary: <code>Mean sentence: N chars</code> averaged across turns where any sentence was submitted (&gt;0 filter, parallel to iter-031&#x27;s TTFS).</li><li><code>ScenarioResult.mean_sentence_chars</code> on perf snapshots.</li></ul>
-<p>Tests (10 in <code>tests/unit/test_sentence_fragmentation.py</code>):</p>
-<ul><li>Default 0; per-turn print zero/nonzero; session aggregate zero/some-data/filter-zeros.</li><li>ChatLoop wires: the fragment, so mean &gt; 0 (not 0). Documents the actual behavior of the chat loop.<ul><li>Short sentences (&quot;Yes.&quot;, &quot;OK.&quot;, &quot;Done.&quot;) → mean &lt; 10.</li><li>Normal sentences (~50 chars) → mean 30-70.</li><li>No-terminator stream → trailing-remainder submit captures</li></ul></li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>607 passed, 1 skipped in 22s</strong> (597 existing + 10 new).</p>
+<ul><li><code>SentenceWorker.word_count_total: int = 0</code> and <code>SentenceWorker.audio_seconds_total: float = 0.0</code> (new fields). Per sentence, count non-punctuation tokens from the alignment; fall back to <code>len(sentence.split())</code> when alignment is missing (kokoro misconfig). Audio duration = <code>len(audio_np) / 24000</code>.</li><li><code>TurnMetrics.bot_wpm: float = 0.0</code>; ChatLoop derives from worker totals when both &gt;0.</li><li>Per-turn print: &quot;Bot WPM: NNN (target 150-180)&quot; only when &gt;0. Green 130-200, yellow otherwise.</li><li>Session summary: median across measurable turns.</li><li><code>ScenarioResult.bot_wpm</code> on perf snapshots.</li></ul>
+<p>Tests (13 in <code>tests/unit/test_bot_wpm.py</code>):</p>
+<ul><li>Defaults zero on Worker + Metrics.</li><li>Per-turn print: zero omits, in-range emits with target label, out-of-range still shown.</li><li>Session aggregate: no-data omits, with-data emits median, zero-filter (parallel to iter-031&#x27;s TTFS pattern).</li><li>Worker word counting: alignment-with-tokens counts non-punct, empty alignment falls back to whitespace split, multi-sentence accumulates correctly.</li><li>ChatLoop wires: 3 words in 1 sec audio → ~180 WPM; empty audio → 0 WPM.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>620 passed, 1 skipped in 22s</strong> (607 existing + 13 new).</p>
 <p>Notes:</p>
-<ul><li>Seven metrics from the taxonomy now live (2.19 / 1.10 / 2.18 / 2.10 / 2.1 / 2.16 / 2.6). The full picture per turn: speech → STT → LLM 1st token / 1st sentence → idle gap → TTS (with fragmentation) → playback → TTFS → barge (with cancel shape + latency) → mic stale frames. Pretty complete diagnostic surface.</li><li>Next candidates: 1.13 (bot WPM), 2.20 (loopback echo barge-in rate), 1.4 (VAD false-trigger rate).</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-044.html">← iter-044</a><a href="iter-046.html">iter-046 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li>Eight metrics from the taxonomy now live (2.19 / 1.10 / 2.18 / 2.10 / 2.1 / 2.16 / 2.6 / 1.13). The dashboard is starting to feel &quot;complete enough&quot; for ops review of a real voice agent — TTFS at the top, and a fan of diagnostic metrics underneath that explains the TTFS.</li><li>Combined with iter-045&#x27;s <code>mean_sentence_chars</code>, the worker side of the pipeline has clear visibility: how many words per minute (rate), how long is each sentence (size), how long does the worker idle between sentences (gap), how many sentences get cut mid-stream (cancel correctness). All four shapes visible in the per-turn print and session summary.</li><li>Next candidates: 2.20 (loopback echo barge-in rate), 1.4 (VAD false-trigger rate), 1.5 (VAD missed-speech rate).</li></ul><nav><a href="index.html">← Index</a><a href="iter-045.html">← iter-045</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>
