@@ -6,3 +6,4 @@ session/cues/
 test-data/*.wav
 .env
 config.local.yaml
+.claude/

@@ -2307,3 +2307,62 @@ Going forward: each iteration's ship process should include
 summary to ITERATION_LOG.md, so `iter-reports/` always reflects
 current state. The script is fast (<100ms for 29 iterations) and
 deterministic.
+
+---
+
+## iter-030 — clock injection for BargeInCoordinator
+
+**Branch:** `iter-030-coord-clock` (merged ff to main, commit `3d23c03`)
+**Date:** 2026-05-24
+
+`SentenceWorker`, `BargeInWatcher`, `ChatLoop`, `record_utterance_streaming`
+all accept an injected clock so tests can replace it with a deterministic
+counter. `BargeInCoordinator` was the odd one out — it stamped
+`self.triggered_at = time.monotonic()` directly. In production this
+matched (everyone is monotonic), but the moment a test injected a fake
+clock, the phase comparison in `ChatLoop`:
+
+    phase = (
+        "LLM-stream phase"
+        if coord.triggered_at is not None
+        and llm_stream_done_at is not None
+        and coord.triggered_at < llm_stream_done_at
+        else "playback phase"
+    )
+
+mixed two clocks: `triggered_at` in real wall time (from `time.monotonic`),
+`llm_stream_done_at` on the test's fake clock. The `<` comparison then
+depended on whether the real clock had advanced enough during the test
+to land before or after the fake clock's frozen value — a flake.
+
+What changed:
+- `BargeInCoordinator.__init__` accepts `clock=time.monotonic`. Default
+  preserves prior behavior so unrelated callers keep working.
+- `trigger()` samples `self._clock()` instead of `time.monotonic()`.
+- `ChatLoop.run_one_turn` constructs the coordinator with
+  `clock=self._clock` so both timestamps come from the same source.
+
+Tests (7, in `tests/unit/test_bargein_coordinator_clock.py`):
+- `TestCoordinatorAcceptsClock` — default monotonic, injected clock,
+  idempotency, counter-style callable.
+- `TestChatLoopForwardsClockToCoord` — hooks `BargeInCoordinator.__init__`
+  to capture the kwarg and verifies ChatLoop passed its own clock.
+- `TestPhaseDecisionDeterministicUnderMockedClock` — direct demonstration
+  that the phase comparison is now deterministic under a fake clock,
+  in both before-stream-end and after-stream-end cases.
+
+Verification: `python -m pytest tests/unit/` → **395 passed in 17.5s**
+(388 existing + 7 new).
+
+Notes:
+- Pattern repeated from iter-028: when a config knob (clock, VAD
+  state, threshold) is added to several components in a system,
+  every component that participates in the same comparison or
+  state machine has to take the same knob, otherwise the system
+  is "half-configured" and behaves inconsistently. Worth a
+  repo-wide audit periodically — what other shared concerns
+  haven't been threaded all the way through?
+- The phase string is currently only used for a printed
+  diagnostic. If it ever drives behavior (e.g. a different
+  recovery strategy depending on which phase the barge-in
+  hit), this fix becomes load-bearing.

@@ -104,7 +104,7 @@ table.iter-table th { background: var(--panel); }
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-028.html">← iter-028</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-028.html">← iter-028</a><a href="iter-030.html">iter-030 →</a></nav><header>
 <h1>iter-029 — HTML iteration reports</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-029-html-reports</code></span> · <span>commit: <code>2d862af</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-029-html-reports</code> (merged ff to main, commit <code>2d862af</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -119,7 +119,8 @@ table.iter-table th { background: var(--panel); }
 <ul><li>Inline rules: HTML escape, bold, italic, inline code, composition, word-internal underscore preserved (<code>user_role</code> stays plain)</li><li>Block rules: h2/h3, paragraph, hr, fenced code (with escape), bullet lists, tables, blockquotes</li><li>Parser edges: empty log, headerless log, single iteration with full metadata, multiple iterations with prev/next wiring, <code># Status</code> block between iterations gets dropped, iteration without metadata still parses</li><li>Rendering: title shown, branch+commit shown, test counts shown, navigation conditional on prev/next presence, index lists all iterations, title is HTML-escaped</li><li>Real-log integration: parses actual ITERATION_LOG.md into ≥28 iterations with strictly ascending numbers</li></ul>
 <p>Bug found and fixed during implementation: <code>_render_bullet_list._flush_sub</code> crashed with <code>IndexError: list index out of range</code> when the body of an iteration started with an indented sub-bullet (no parent bullet yet). Fixed to check <code>if items:</code> before appending the nested list to the previous item, and to emit the nested list at the top level if no parent exists yet. Defensive — the structure is unusual but it does occur.</p>
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>388 passed in 18s</strong> (358 existing + 30 new).</p>
-<p>Going forward: each iteration&#x27;s ship process should include <code>python scripts/generate_iteration_reports.py</code> after appending the summary to ITERATION_LOG.md, so <code>iter-reports/</code> always reflects current state. The script is fast (&lt;100ms for 29 iterations) and deterministic.</p><nav><a href="index.html">← Index</a><a href="iter-028.html">← iter-028</a></nav>
+<p>Going forward: each iteration&#x27;s ship process should include <code>python scripts/generate_iteration_reports.py</code> after appending the summary to ITERATION_LOG.md, so <code>iter-reports/</code> always reflects current state. The script is fast (&lt;100ms for 29 iterations) and deterministic.</p>
+<hr><nav><a href="index.html">← Index</a><a href="iter-028.html">← iter-028</a><a href="iter-030.html">iter-030 →</a></nav>
 </div>
 </body>
 </html>
