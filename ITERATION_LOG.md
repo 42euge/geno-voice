@@ -2828,3 +2828,64 @@ Notes:
   actual LLM) needs a separate "live" suite — out of scope here.
 - The performance page link is now on every iter page so a reader
   reviewing iter-NNN can jump straight to the perf snapshot.
+
+---
+
+## iter-037 — mic stale-frame count on TurnMetrics (taxonomy 2.19)
+
+**Branch:** `iter-037-stale-frames` (merged ff to main, commit `1ff0064`)
+**Date:** 2026-05-24
+
+First instrumentation pulled from `docs/perf-metrics-taxonomy.md`.
+Metric **2.19 — Mic flush stale-frame count**, in the
+"Architecture-specific" bucket. The data was already there:
+`flush_pending_audio` has returned a `drained` int since iter-002,
+but ChatLoop dropped it on the floor.
+
+Why this metric matters: many stale frames each turn means the mic
+accumulated bot audio between turns — acoustic echo, OS loopback,
+or Bluetooth duplex. A small consistent value is harmless (trailing
+silence the recorder didn't consume before VAD's DONE_OK). A large
+value is the signal "your setup needs echo cancellation."
+
+Changes:
+- `TurnMetrics.mic_stale_frames: int = 0` (new field).
+- `ChatLoop.run_one_turn` captures `flush_pending_audio`'s return
+  and stashes on metrics.
+- `TurnMetrics.print` emits "Mic stale: N frames (Ns)" only when
+  N > 0; yellow if > 0.5s, dim otherwise (don't crowd the print
+  with a clean turn).
+- `print_session_summary` aggregates totals; emits only when
+  total is non-zero, with "check echo cancellation" suggestion.
+
+Honest limitation documented in the iteration log: the count
+includes trailing silence the recorder didn't consume before
+VAD's DONE_OK fired. So a clean turn still shows ~0.5s of
+"stale" because the recorder's silence_duration window left
+unconsumed silent bytes in the buffer. Future iter could
+distinguish silent stale (harmless) from voiced stale (real echo)
+via RMS on the flushed bytes — iter-037 keeps the metric simple
+and exposes the raw count.
+
+Tests (10 in `tests/unit/test_mic_stale_frames.py`):
+- `TestDefault` — TurnMetrics defaults to 0.
+- `TestPerTurnPrint` — zero omits the line, non-zero emits with
+  frames + seconds.
+- `TestSessionSummary` — zero total omits, non-zero emits with
+  aggregate + seconds + suggestion.
+- `TestChatLoopCapturesStaleFrames` — field is populated on
+  metrics; extra audio beyond utterance is counted; extra-burst
+  strictly greater than baseline.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **515 passed, 1 skipped in 32s** (505
+existing + 10 new).
+
+Notes:
+- Pattern: pulling metrics from the taxonomy doc one at a time
+  is the right cadence. Each instrumentation should be a
+  small, testable unit. iter-037 took two file edits + one new
+  test file — appropriate scope.
+- Next candidates from the taxonomy: 2.10 (barge-in latency —
+  triggered_at exists since iter-030, just need playback_stopped_at),
+  2.18 (cancel-event correctness), 1.10 (LLM time-to-first-sentence).

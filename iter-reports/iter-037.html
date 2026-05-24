@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-037 — mic stale-frame count on TurnMetrics (taxonomy 2.19)</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-036.html">← iter-036</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-037 — mic stale-frame count on TurnMetrics (taxonomy 2.19)</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-037-stale-frames</code></span> · <span>commit: <code>1ff0064</code></span> · <span>tests: <code>+10</code> (total 515)</span></div>
+</header><p><strong>Branch:</strong> <code>iter-037-stale-frames</code> (merged ff to main, commit <code>1ff0064</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>First instrumentation pulled from <code>docs/perf-metrics-taxonomy.md</code>. Metric <strong>2.19 — Mic flush stale-frame count</strong>, in the &quot;Architecture-specific&quot; bucket. The data was already there: <code>flush_pending_audio</code> has returned a <code>drained</code> int since iter-002, but ChatLoop dropped it on the floor.</p>
+<p>Why this metric matters: many stale frames each turn means the mic accumulated bot audio between turns — acoustic echo, OS loopback, or Bluetooth duplex. A small consistent value is harmless (trailing silence the recorder didn&#x27;t consume before VAD&#x27;s DONE_OK). A large value is the signal &quot;your setup needs echo cancellation.&quot;</p>
+<p>Changes:</p>
+<ul><li><code>TurnMetrics.mic_stale_frames: int = 0</code> (new field).</li><li><code>ChatLoop.run_one_turn</code> captures <code>flush_pending_audio</code>&#x27;s return and stashes on metrics.</li><li><code>TurnMetrics.print</code> emits &quot;Mic stale: N frames (Ns)&quot; only when N &gt; 0; yellow if &gt; 0.5s, dim otherwise (don&#x27;t crowd the print with a clean turn).</li><li><code>print_session_summary</code> aggregates totals; emits only when total is non-zero, with &quot;check echo cancellation&quot; suggestion.</li></ul>
+<p>Honest limitation documented in the iteration log: the count includes trailing silence the recorder didn&#x27;t consume before VAD&#x27;s DONE_OK fired. So a clean turn still shows ~0.5s of &quot;stale&quot; because the recorder&#x27;s silence_duration window left unconsumed silent bytes in the buffer. Future iter could distinguish silent stale (harmless) from voiced stale (real echo) via RMS on the flushed bytes — iter-037 keeps the metric simple and exposes the raw count.</p>
+<p>Tests (10 in <code>tests/unit/test_mic_stale_frames.py</code>):</p>
+<ul><li><code>TestDefault</code> — TurnMetrics defaults to 0.</li><li><code>TestPerTurnPrint</code> — zero omits the line, non-zero emits with frames + seconds.</li><li><code>TestSessionSummary</code> — zero total omits, non-zero emits with aggregate + seconds + suggestion.</li><li><code>TestChatLoopCapturesStaleFrames</code> — field is populated on metrics; extra audio beyond utterance is counted; extra-burst strictly greater than baseline.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>515 passed, 1 skipped in 32s</strong> (505 existing + 10 new).</p>
+<p>Notes:</p>
+<ul><li>Pattern: pulling metrics from the taxonomy doc one at a time is the right cadence. Each instrumentation should be a small, testable unit. iter-037 took two file edits + one new test file — appropriate scope.</li><li>Next candidates from the taxonomy: 2.10 (barge-in latency — triggered_at exists since iter-030, just need playback_stopped_at), 2.18 (cancel-event correctness), 1.10 (LLM time-to-first-sentence).</li></ul><nav><a href="index.html">← Index</a><a href="iter-036.html">← iter-036</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>
