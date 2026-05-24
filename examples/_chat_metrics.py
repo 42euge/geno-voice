@@ -131,7 +131,13 @@ def print_session_summary(metrics_list: list[TurnMetrics], llm_config: dict, *, 
     stt_times = [m.stt_time for m in metrics_list]
     llm_ft = [m.llm_first_token for m in metrics_list]
     tts_times = [m.tts_time for m in metrics_list]
-    ttfs_times = [m.ttfs for m in metrics_list]
+    # iter-031: a turn that ended without audio (worker error,
+    # barge-in before first audio, LLM produced no tokens) leaves
+    # ``metrics.ttfs`` at its 0.0 default. Including those zeros
+    # in the aggregate biases the median down and makes "Best
+    # TTFS: 0ms" appear, which is misleading — TTFS only has
+    # meaning for turns that actually played audio. Filter.
+    ttfs_times = [m.ttfs for m in metrics_list if m.ttfs > 0]
     fillers_total = sum(m.fillers_played for m in metrics_list)
     barges_total = sum(1 for m in metrics_list if m.barge_in)
 
@@ -139,10 +145,17 @@ def print_session_summary(metrics_list: list[TurnMetrics], llm_config: dict, *, 
     _emit(f"    Median STT:       {_median_ms(stt_times):.0f}ms")
     _emit(f"    Median LLM 1st:   {_median_ms(llm_ft):.0f}ms")
     _emit(f"    Median TTS:       {_median_ms(tts_times):.0f}ms")
-    _emit(
-        f"    {_BOLD}Median TTFS:      {_median_ms(ttfs_times):.0f}ms{_RESET}"
-    )
-    _emit(f"    Best TTFS:        {min(ttfs_times) * 1000:.0f}ms")
+    if ttfs_times:
+        _emit(
+            f"    {_BOLD}Median TTFS:      {_median_ms(ttfs_times):.0f}ms{_RESET}"
+        )
+        _emit(f"    Best TTFS:        {min(ttfs_times) * 1000:.0f}ms")
+    else:
+        # All turns ended without audio. Emit a placeholder rather
+        # than a misleading "0ms" so the user knows it isn't a
+        # win, it's an absence of data.
+        _emit(f"    {_BOLD}Median TTFS:      n/a{_RESET}")
+        _emit(f"    Best TTFS:        n/a")
     if fillers_total:
         _emit(f"    Fillers played:   {fillers_total}")
     if barges_total:
