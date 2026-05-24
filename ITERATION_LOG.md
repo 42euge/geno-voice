@@ -2185,3 +2185,61 @@ Notes:
   have stop calls in the function's finally block, not just
   in the success path. KeyboardInterrupt and other
   BaseExceptions take you straight there.
+
+---
+
+## iter-028 — pass VAD config to BargeInWatcher in ChatLoop
+
+**Branch:** `iter-028-watcher-vad` (merged ff to main, commit `c35028b`)
+**Date:** 2026-05-24
+
+iter-020 follow-on. iter-020 made VAD parameters configurable via
+the `chat.vad` config section, and `ChatLoop` accepted them as
+kwargs and forwarded them to `record_utterance_streaming`. But the
+`BargeInWatcher` constructed inside `run_one_turn` was built without
+a `vad=` kwarg — so it constructed its own `VadState()` with
+hardcoded defaults regardless of user config.
+
+Concrete consequence: a user setting
+`chat.vad.silence_threshold = 0.05` for a noisy room got the
+recorder tuned, but the barge-in watcher kept the default `0.02`.
+The watcher would fire on background-noise levels the recorder
+was ignoring → false barge-ins.
+
+Fix: `ChatLoop` builds a `VadState` from its stored VAD params and
+passes it to `BargeInWatcher` via the existing `vad=` kwarg.
+
+Tests (4 new in `tests/unit/test_watcher_vad_threshold.py`):
+
+VAD config plumbing (2):
+- Default ChatLoop → watcher receives default-threshold VadState
+  (verified by capturing the `vad=` kwarg via `__init__` hook)
+- Custom ChatLoop (silence_threshold=0.05, silence_duration=0.5,
+  min=0.5) → watcher receives the same custom VadState
+
+Behavioral verification (2):
+- Watcher with high threshold (0.05) ignores quiet noise
+  (amp 0.03, RMS ≈ 0.021) — no detection, no callback
+- Watcher with default threshold (0.02) catches the same noise
+
+The behavioral pair is the load-bearing assertion: the wiring
+test alone could pass with a misconfigured threshold (e.g. if
+someone hardcoded a value); the parallel watchers showing
+divergent detection prove the threshold *actually* does what it
+claims.
+
+Verification: `python -m pytest tests/unit/` → **358 passed in 18s**
+(354 existing + 4 new).
+
+Notes:
+- This is the iter-020 follow-on that should have been part of
+  iter-020 itself. Caught only by code-review-driven inspection
+  of which functions consume the VAD config — the iter-020
+  behavioral test only exercised the recorder, not the watcher.
+- `BargeInWatcher.vad=` kwarg has existed since iter-009 —
+  iter-028 is purely "ChatLoop now uses it." No API change to
+  the watcher.
+- Pattern: when a config param is added to one consumer, audit
+  *all* consumers. Half-applied config is worse than no config
+  because it produces inconsistent behavior between subsystems
+  that should agree.
