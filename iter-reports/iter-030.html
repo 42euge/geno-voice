@@ -144,12 +144,30 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
   color: var(--muted);
   font-size: 13px;
 }
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-029.html">← iter-029</a><a href="iter-031.html">iter-031 →</a><a href="testing.html">Testing →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-029.html">← iter-029</a><a href="iter-031.html">iter-031 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
 <h1>iter-030 — clock injection for BargeInCoordinator</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-030-coord-clock</code></span> · <span>commit: <code>3d23c03</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-030-coord-clock</code> (merged ff to main, commit <code>3d23c03</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -163,7 +181,7 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>395 passed in 17.5s</strong> (388 existing + 7 new).</p>
 <p>Notes:</p>
 <ul><li>Pattern repeated from iter-028: when a config knob (clock, VAD state, threshold) is added to several components in a system, every component that participates in the same comparison or state machine has to take the same knob, otherwise the system is &quot;half-configured&quot; and behaves inconsistently. Worth a repo-wide audit periodically — what other shared concerns haven&#x27;t been threaded all the way through?</li><li>The phase string is currently only used for a printed diagnostic. If it ever drives behavior (e.g. a different recovery strategy depending on which phase the barge-in hit), this fix becomes load-bearing.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-029.html">← iter-029</a><a href="iter-031.html">iter-031 →</a><a href="testing.html">Testing →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-029.html">← iter-029</a><a href="iter-031.html">iter-031 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

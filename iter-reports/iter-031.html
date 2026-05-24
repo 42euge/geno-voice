@@ -144,12 +144,30 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
   color: var(--muted);
   font-size: 13px;
 }
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-030.html">← iter-030</a><a href="iter-032.html">iter-032 →</a><a href="testing.html">Testing →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-030.html">← iter-030</a><a href="iter-032.html">iter-032 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
 <h1>iter-031 — filter zero-TTFS turns from session summary</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-031-ttfs-zero</code></span> · <span>commit: <code>32e9577</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-031-ttfs-zero</code> (merged ff to main, commit <code>32e9577</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -166,7 +184,7 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>402 passed in 18.5s</strong> (395 existing + 7 new).</p>
 <p>Notes:</p>
 <ul><li>iter-017 introduced <code>print_session_summary</code> and <code>_median_ms</code> and fixed an upper-median bias on even-length lists. iter-031 is the follow-on for &quot;what happens when some turns have 0 TTFS&quot; — same function, distinct edge case.</li><li>Pattern: aggregating sentinel/default values is silent data corruption. When a metric has a &quot;no value&quot; state, the aggregate has to handle that explicitly. The same audit could apply to any 0.0-default TurnMetrics field (<code>stt_time</code> / <code>llm_first_token</code> / <code>tts_time</code>) — but for those, 0 is rarely meaningful as &quot;no data&quot; because successful turns produce non-zero values for them. TTFS is special because a successful turn (transcript + response) can still have 0 TTFS if the response was never spoken aloud.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-030.html">← iter-030</a><a href="iter-032.html">iter-032 →</a><a href="testing.html">Testing →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-030.html">← iter-030</a><a href="iter-032.html">iter-032 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

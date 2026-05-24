@@ -144,12 +144,30 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
   color: var(--muted);
   font-size: 13px;
 }
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-023.html">← iter-023</a><a href="iter-025.html">iter-025 →</a><a href="testing.html">Testing →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-023.html">← iter-023</a><a href="iter-025.html">iter-025 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
 <h1>iter-024 — consolidate inline RMS in BargeInWatcher</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-024-rms-consolidate</code></span> · <span>commit: <code>14943ef</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-024-rms-consolidate</code> (merged ff to main, commit <code>14943ef</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -164,7 +182,7 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>339 passed in 17s</strong> (332 existing + 7 new).</p>
 <p>Notes:</p>
 <ul><li>The <code>is</code>-identity test is the load-bearing assertion — equality could be satisfied by an inlined re-implementation; identity insists on the same function object.</li><li>This is a refactor with zero behavioral change. The point is preventing a class of future bugs (drift between duplicated code), not fixing a current one.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-023.html">← iter-023</a><a href="iter-025.html">iter-025 →</a><a href="testing.html">Testing →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-023.html">← iter-023</a><a href="iter-025.html">iter-025 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

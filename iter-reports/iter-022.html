@@ -144,12 +144,30 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
   color: var(--muted);
   font-size: 13px;
 }
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-021.html">← iter-021</a><a href="iter-023.html">iter-023 →</a><a href="testing.html">Testing →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-021.html">← iter-021</a><a href="iter-023.html">iter-023 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
 <h1>iter-022 — split when terminator is followed by closing quote</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-022-quoted-speech</code></span> · <span>commit: <code>390978e</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-022-quoted-speech</code> (merged ff to main, commit <code>390978e</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -177,7 +195,7 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>321 passed in 17s</strong> (313 existing + 8 new).</p>
 <p>Notes:</p>
 <ul><li>The two-branch lookbehind costs marginally more regex work but the match buffer is small (one in-progress bot reply token-by-token), so cost is negligible.</li><li>Bot-emitted smart quotes are common in modern LLM output: Claude/GPT formatted dialogue often uses <code>“…”</code> not straight <code>&quot;…&quot;</code>. Including smart quotes by default catches that without needing the bot&#x27;s prompt to special-case it.</li><li>The &quot;abbreviation OUTSIDE + quote INSIDE&quot; combined test is the regression-cover that catches future refactors that try to simplify the walk-back logic.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-021.html">← iter-021</a><a href="iter-023.html">iter-023 →</a><a href="testing.html">Testing →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-021.html">← iter-021</a><a href="iter-023.html">iter-023 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

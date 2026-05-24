@@ -144,12 +144,30 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
   color: var(--muted);
   font-size: 13px;
 }
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-026.html">← iter-026</a><a href="iter-028.html">iter-028 →</a><a href="testing.html">Testing →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-026.html">← iter-026</a><a href="iter-028.html">iter-028 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
 <h1>iter-027 — stop worker+watcher in run_one_turn finally</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-027-keyboardinterrupt</code></span> · <span>commit: <code>3f68dc0</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-027-keyboardinterrupt</code> (merged ff to main, commit <code>3f68dc0</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -167,7 +185,7 @@ After iter-027:
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>354 passed in 17s</strong> (351 existing + 3 new).</p>
 <p>Notes:</p>
 <ul><li>The finally now does four cleanup operations: <code>llm_gen.close</code>, <code>watcher.stop</code>, <code>worker.stop</code>, all wrapped in <code>try/except</code> so a failure in one doesn&#x27;t cascade. Order: close LLM first (release HTTP socket promptly), stop worker last (give synth/play a moment to wind down).</li><li><code>BaseException</code> vs <code>Exception</code> distinction is one of those Python details easy to miss. <code>except Exception</code> is good defensively (won&#x27;t catch system-level signals) but you have to plan for the propagation path through <code>finally</code>.</li><li>Pattern: any background thread spawned in a function should have stop calls in the function&#x27;s finally block, not just in the success path. KeyboardInterrupt and other BaseExceptions take you straight there.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-026.html">← iter-026</a><a href="iter-028.html">iter-028 →</a><a href="testing.html">Testing →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-026.html">← iter-026</a><a href="iter-028.html">iter-028 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

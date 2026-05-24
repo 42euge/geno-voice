@@ -144,12 +144,30 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
   color: var(--muted);
   font-size: 13px;
 }
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-005.html">← iter-005</a><a href="iter-007.html">iter-007 →</a><a href="testing.html">Testing →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-005.html">← iter-005</a><a href="iter-007.html">iter-007 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
 <h1>iter-006 — extract record_utterance_streaming to pyaudio-free module</h1>
 <div class="meta"><span>2026-05-23</span> · <span>branch: <code>iter-006-recording-extract</code></span> · <span>commit: <code>9cf4631</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-006-recording-extract</code> (merged ff to main, commit <code>9cf4631</code>) <strong>Date:</strong> 2026-05-23</p>
@@ -162,7 +180,7 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
 <ul><li>The <code>FrameClock</code> test helper turned out to be the unlock: by advancing time exactly <code>chunk/rate</code> per <code>clock()</code> call, the VAD state machine sees the same time progression it would with real audio, but the test runs as fast as numpy can crunch the buffer.</li><li>One subtle thing learned writing the tests: <code>transcribe_fn</code> is called twice during the typical happy path — once at each <code>INFERENCE_INTERVAL</code> cross during speech (preview), and once at the very end on the final wav. The &quot;growing buffer&quot; test documents that contract.</li></ul>
 <p>Next:</p>
 <ul><li>iter-007: extract <code>play_aligned</code> to a pyaudio-free module the same way. Accept any speaker-shaped object (write/stop_stream/close), test against <code>VirtualSpeakerStream</code>. After this, every primitive the chat loop touches is testable.</li><li>iter-008: build streaming overlap — a <code>SentenceWorker</code> thread that consumes from a <code>Queue</code> of complete sentences, synthesizes via <code>tts_engine</code>, plays via the speaker stream, and reports playback duration. The LLM stream feeds the queue. Test using <code>VirtualSpeakerStream</code> to assert that playback starts before the LLM stream is done.</li><li>iter-009: barge-in. Run <code>VadState</code> on the mic input <em>during</em> speaker writes (loopback mode means mic and speaker share a buffer; we&#x27;d disable loopback for this and use a separate mic feeder for &quot;user starts speaking&quot; injection). When the worker detects speech, drain the sentence queue, stop the speaker, return control.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-005.html">← iter-005</a><a href="iter-007.html">iter-007 →</a><a href="testing.html">Testing →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-005.html">← iter-005</a><a href="iter-007.html">iter-007 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

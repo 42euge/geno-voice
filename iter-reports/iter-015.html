@@ -144,12 +144,30 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
   color: var(--muted);
   font-size: 13px;
 }
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-014.html">← iter-014</a><a href="iter-016.html">iter-016 →</a><a href="testing.html">Testing →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-014.html">← iter-014</a><a href="iter-016.html">iter-016 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
 <h1>iter-015 — extract ChatLoop class, real production path now tested</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-015-chat-loop</code></span> · <span>commit: <code>82a8e7b</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-015-chat-loop</code> (merged ff to main, commit <code>82a8e7b</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -172,7 +190,7 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>212 passed in 11s</strong> (204 existing + 8 new).</p>
 <p>Notes:</p>
 <ul><li>The first attempt at the LLM-error-with-barge-in test failed for an instructive reason: the watcher fires <code>coord.trigger</code> before the LLM raises, so the for-loop&#x27;s <code>if coord.is_set(): break</code> exits cleanly without ever raising. The test&#x27;s premise (both error path AND watcher detection observable in the result) is impossible to engineer deterministically. Documented in the replacement test&#x27;s comment so future contributors don&#x27;t try the same dead end.</li><li>The extraction reduced <code>mic_chat.py</code> from a ~280-line per-turn block to a ~15-line caller. Almost everything moved into <code>_chat_loop.py</code>. The trade-off: one more module to navigate, but every other module in the project now imports cleanly without pyaudio at module scope. Test reach is the big win.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-014.html">← iter-014</a><a href="iter-016.html">iter-016 →</a><a href="testing.html">Testing →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-014.html">← iter-014</a><a href="iter-016.html">iter-016 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

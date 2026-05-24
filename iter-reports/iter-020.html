@@ -144,12 +144,30 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
   color: var(--muted);
   font-size: 13px;
 }
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-019.html">← iter-019</a><a href="iter-021.html">iter-021 →</a><a href="testing.html">Testing →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-019.html">← iter-019</a><a href="iter-021.html">iter-021 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
 <h1>iter-020 — configurable VAD via chat.vad config section</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-020-vad-config</code></span> · <span>commit: <code>75ba389</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-020-vad-config</code> (merged ff to main, commit <code>75ba389</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -174,7 +192,7 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>305 passed in 18s</strong> (289 existing + 16 new).</p>
 <p>Notes:</p>
 <ul><li>Tolerant validation pattern matches <code>parse_chat_config</code> from iter-018: never raise on bad input, just fall back. The chat loop is more useful with bad VAD config than dead.</li><li>The &quot;compared to default 0.8s window&quot; test uses two parallel mic streams pushing the same audio — clean way to verify behavioral difference without timing assertions.</li><li><code>VAD_DEFAULTS</code> is exposed as a module attribute so tests can assert against it directly (rather than the recording-module constants we want callers to be insulated from).</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-019.html">← iter-019</a><a href="iter-021.html">iter-021 →</a><a href="testing.html">Testing →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-019.html">← iter-019</a><a href="iter-021.html">iter-021 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

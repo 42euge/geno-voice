@@ -144,12 +144,30 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
   color: var(--muted);
   font-size: 13px;
 }
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-017.html">← iter-017</a><a href="iter-019.html">iter-019 →</a><a href="testing.html">Testing →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-017.html">← iter-017</a><a href="iter-019.html">iter-019 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
 <h1>iter-018 — extract + validate config parsing</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-018-config</code></span> · <span>commit: <code>81a1879</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-018-config</code> (merged ff to main, commit <code>81a1879</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -172,7 +190,7 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>277 passed in 11s</strong> (242 existing + 35 new).</p>
 <p>Notes:</p>
 <ul><li>The &quot;empty placeholder&quot; / &quot;no closing brace&quot; / &quot;partial template&quot; tests document edge cases that were previously ambiguous. Now the contract is explicit: only the FULL value matching <code>${VAR}</code> resolves; anything else is literal.</li><li>The parametrized 3×3 required-field tests give 9 cases for ~3 lines of test code. Great for regression coverage if a future iter adds another required field.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-017.html">← iter-017</a><a href="iter-019.html">iter-019 →</a><a href="testing.html">Testing →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-017.html">← iter-017</a><a href="iter-019.html">iter-019 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

@@ -144,12 +144,30 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
   color: var(--muted);
   font-size: 13px;
 }
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-031.html">← iter-031</a><a href="iter-033.html">iter-033 →</a><a href="testing.html">Testing →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-031.html">← iter-031</a><a href="iter-033.html">iter-033 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
 <h1>iter-032 — SSE parser swallows AttributeError on non-dict choices[0]</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-032-sse-attrerror</code></span> · <span>commit: <code>7d3bca5</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-032-sse-attrerror</code> (merged ff to main, commit <code>7d3bca5</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -165,7 +183,7 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>413 passed in 17.9s</strong> (402 existing + 11 new).</p>
 <p>Notes:</p>
 <ul><li>Pattern: when an except clause enumerates specific exceptions, audit the protected expression for every TYPE of failure that produces an error not in the list. Here the audit is &quot;what does <code>.get()</code> raise on non-dict?&quot; — AttributeError. Easy to miss in the original code review because the line &quot;looks fine.&quot;</li><li>Wider exception (e.g. <code>except Exception</code>) would have caught this but also masks bugs in the parser itself. The narrower fix is better — explicit, documented, traceable.</li><li>Could be extended to `except (json.JSONDecodeError, LookupError, AttributeError, TypeError)` (LookupError covers KeyError + IndexError) for marginal compactness. Kept the explicit list to preserve grep-ability of which conditions are tolerated.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-031.html">← iter-031</a><a href="iter-033.html">iter-033 →</a><a href="testing.html">Testing →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-031.html">← iter-031</a><a href="iter-033.html">iter-033 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

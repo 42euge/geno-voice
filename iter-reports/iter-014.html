@@ -144,12 +144,30 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
   color: var(--muted);
   font-size: 13px;
 }
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-013.html">← iter-013</a><a href="iter-015.html">iter-015 →</a><a href="testing.html">Testing →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-013.html">← iter-013</a><a href="iter-015.html">iter-015 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
 <h1>iter-014 — hardening pass: rms NaN, error-path frames, metric surfacing</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-014-hardening</code></span> · <span>commit: <code>806c21a</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-014-hardening</code> (merged ff to main, commit <code>806c21a</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -171,7 +189,7 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>204 passed in 11s</strong> (190 existing + 14 new).</p>
 <p>Notes:</p>
 <ul><li>The <code>TurnMetrics.print</code> tests caught a small pluralization bug in passing — &quot;1 fillers&quot; vs &quot;1 filler&quot;. Easy to miss without the test.</li><li><code>_capture_print</code> uses <code>contextlib.redirect_stdout</code> instead of pytest&#x27;s <code>capsys</code> because it&#x27;s a unit test of the printer output, not a fixture-driven integration test. Either works; redirect_stdout is more explicit about what&#x27;s being captured.</li><li>The error-path-carryover test exercises the logic shape rather than calling <code>mic_chat.run_chat</code> directly. A full end-to-end test of <code>run_chat</code> would require stubbing STT + LLM + audio hardware — possible but a separate refactor.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-013.html">← iter-013</a><a href="iter-015.html">iter-015 →</a><a href="testing.html">Testing →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-013.html">← iter-013</a><a href="iter-015.html">iter-015 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

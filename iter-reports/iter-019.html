@@ -144,12 +144,30 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
   color: var(--muted);
   font-size: 13px;
 }
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-018.html">← iter-018</a><a href="iter-020.html">iter-020 →</a><a href="testing.html">Testing →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-018.html">← iter-018</a><a href="iter-020.html">iter-020 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
 <h1>iter-019 — extract synthesize_with_alignment, real-kokoro e2e test</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-019-tts-extract</code></span> · <span>commit: <code>203e251</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-019-tts-extract</code> (merged ff to main, commit <code>203e251</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -166,7 +184,7 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>289 passed in 18s</strong> (277 existing + 12 new).</p>
 <p>Notes:</p>
 <ul><li>Suite went from 11s → 18s. Three new kokoro integration tests cost ~1-2s each. Could mark them <code>@pytest.mark.slow</code> if this becomes painful, but &lt;20s is still tight enough for fast iteration.</li><li><code>_chat_loop.py</code> was unchanged this iteration — <code>synth_fn</code> is already injectable, so swapping in real kokoro just means passing the right callable. That&#x27;s the iter-015 architecture paying off.</li><li>The duck-type tensor check (<code>hasattr(audio, &quot;numpy&quot;)</code>) is cleaner than the original <code>isinstance(audio, torch.Tensor)</code> because it doesn&#x27;t require importing torch when the engine already returns numpy. Real kokoro returns tensors; the conversion still works.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-018.html">← iter-018</a><a href="iter-020.html">iter-020 →</a><a href="testing.html">Testing →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-018.html">← iter-018</a><a href="iter-020.html">iter-020 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

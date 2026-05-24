@@ -18,6 +18,7 @@ ITERATION_LOG.md. iter-029 added this script and made
 from __future__ import annotations
 
 import html
+import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,6 +26,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LOG_PATH = REPO_ROOT / "ITERATION_LOG.md"
 OUT_DIR = REPO_ROOT / "iter-reports"
+# iter-036: performance results dumped by tests/performance/.
+# Optional — performance.html is only rendered when this exists.
+PERF_RESULTS_PATH = OUT_DIR / "perf-results.json"
 
 
 @dataclass
@@ -500,6 +504,24 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
   color: var(--muted);
   font-size: 13px;
 }
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
 """
 
 
@@ -531,6 +553,8 @@ def render_iteration(it: Iteration) -> str:
         nav_parts.append(f'<a href="iter-{it.next_id}.html">iter-{it.next_id} →</a>')
     # iter-035: testing report link, present on every iter page.
     nav_parts.append('<a href="testing.html">Testing →</a>')
+    # iter-036: performance report link.
+    nav_parts.append('<a href="performance.html">Performance →</a>')
     nav_html = "<nav>" + "".join(nav_parts) + "</nav>"
 
     meta_bits: list[str] = []
@@ -595,7 +619,13 @@ def render_index(iterations: list[Iteration]) -> str:
     )
 
     # iter-035: top-level link to the testing posture page.
-    nav_html = '<nav><a href="testing.html">Testing →</a></nav>'
+    # iter-036: + performance page link.
+    nav_html = (
+        '<nav>'
+        '<a href="testing.html">Testing →</a>'
+        '<a href="performance.html">Performance →</a>'
+        '</nav>'
+    )
 
     body_html = (
         '<header><h1>geno-voice iteration log</h1>'
@@ -875,8 +905,12 @@ python -m pytest tests/integration/
 python -m pytest tests/unit/ tests/integration/
 </code></pre>"""
 
+    # iter-036: testing page links sideways to the perf page.
     nav_html = (
-        '<nav><a href="index.html">← Index</a></nav>'
+        '<nav>'
+        '<a href="index.html">← Index</a>'
+        '<a href="performance.html">Performance →</a>'
+        '</nav>'
     )
 
     body_html = (
@@ -896,6 +930,202 @@ python -m pytest tests/unit/ tests/integration/
         + nav_html
     )
     return _page_template("Testing — geno-voice", body_html)
+
+
+# ---- iter-036: performance report (per-scenario bar charts) -----------------
+
+
+def _svg_horizontal_bars(
+    rows: list[tuple[str, float]],
+    *,
+    title: str,
+    x_label: str,
+    width: int = 720,
+    bar_height: int = 22,
+    color: str = "#7aa2f7",
+    units: str = "ms",
+) -> str:
+    """Render a horizontal bar chart with one row per (label, value).
+    Used for per-scenario performance comparisons.
+
+    Each row's label sits left of the bar; the numeric value renders
+    at the bar's right edge.
+    """
+    if not rows:
+        return f'<div class="chart-empty">{html.escape(title)}: no data</div>'
+
+    pad_l, pad_r, pad_t, pad_b = 200, 80, 30, 24
+    inner_w = width - pad_l - pad_r
+    height = pad_t + pad_b + len(rows) * (bar_height + 6)
+
+    values = [v for _, v in rows]
+    v_max = max(max(values), 1) * 1.08
+
+    bars: list[str] = []
+    for i, (label, v) in enumerate(rows):
+        y = pad_t + i * (bar_height + 6)
+        bw = (v / v_max) * inner_w if v_max > 0 else 0
+        bars.append(
+            f'<rect x="{pad_l}" y="{y}" width="{bw:.1f}" height="{bar_height}" '
+            f'fill="{color}"/>'
+        )
+        bars.append(
+            f'<text x="{pad_l - 8}" y="{y + bar_height * 0.7:.1f}" '
+            f'text-anchor="end" class="axis-label">'
+            f'{html.escape(label)}</text>'
+        )
+        # Value at end of bar.
+        bars.append(
+            f'<text x="{pad_l + bw + 6:.1f}" y="{y + bar_height * 0.7:.1f}" '
+            f'class="value">'
+            f'{v:.0f}{html.escape(units)}</text>'
+        )
+
+    # X-axis tick labels: 0, mid, max.
+    ticks = []
+    for frac in (0.0, 0.5, 1.0):
+        x = pad_l + frac * inner_w
+        v = frac * v_max
+        ticks.append(
+            f'<line x1="{x:.1f}" x2="{x:.1f}" y1="{pad_t - 4}" '
+            f'y2="{height - pad_b}" class="grid"/>'
+            f'<text x="{x:.1f}" y="{height - pad_b + 12}" '
+            f'text-anchor="middle" class="axis">{int(v)}</text>'
+        )
+
+    return f"""<svg viewBox="0 0 {width} {height}" class="chart hbar"
+xmlns="http://www.w3.org/2000/svg" role="img" aria-label="{html.escape(title)}">
+<text x="14" y="18" class="chart-title">{html.escape(title)}</text>
+<text x="{pad_l + inner_w / 2}" y="{height - 4}" text-anchor="middle"
+  class="chart-axis-label">{html.escape(x_label)}</text>
+{''.join(ticks)}
+{''.join(bars)}
+</svg>"""
+
+
+def _load_perf_results(path: Path) -> dict | None:
+    """Load the JSON dumped by tests/performance/. Return None if
+    the file doesn't exist or fails to parse.
+    """
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def render_performance_page(perf_payload: dict | None) -> str:
+    """Build iter-reports/performance.html — per-scenario bar charts
+    of TTFS, STT, TTS, LLM-1st-token, and wall time.
+
+    If ``perf_payload`` is None (no JSON yet), render a placeholder
+    page that explains how to populate it.
+    """
+    nav_html = (
+        '<nav>'
+        '<a href="index.html">← Index</a>'
+        '<a href="testing.html">← Testing</a>'
+        '</nav>'
+    )
+
+    if not perf_payload or not perf_payload.get("scenarios"):
+        body_html = (
+            nav_html
+            + '<header><h1>Performance</h1>'
+            '<div class="meta">No perf-results.json yet</div></header>'
+            '<p>Run the performance suite to populate this page:</p>'
+            '<pre class="code-block"><code>python -m pytest tests/performance/</code></pre>'
+            '<p>The suite drives <code>ChatLoop</code> across simulated '
+            'scenarios (short/long utterance, slow LLM, slow TTS, fillers '
+            'enabled, etc.) and dumps timings to '
+            '<code>iter-reports/perf-results.json</code>. This page '
+            "renders bar charts of those timings per scenario.</p>"
+            + nav_html
+        )
+        return _page_template("Performance — geno-voice", body_html)
+
+    scenarios = perf_payload["scenarios"]
+    captured_at = perf_payload.get("captured_at", "unknown")
+
+    def _rows(metric_key: str) -> list[tuple[str, float]]:
+        return [(s["name"], s.get(metric_key, 0.0)) for s in scenarios]
+
+    chart_ttfs = _svg_horizontal_bars(
+        _rows("ttfs_ms"),
+        title="TTFS by scenario",
+        x_label="ms (lower is better)",
+        color="#7aa2f7",
+    )
+    chart_stt = _svg_horizontal_bars(
+        _rows("stt_ms"),
+        title="STT time by scenario",
+        x_label="ms",
+        color="#9ece6a",
+    )
+    chart_tts = _svg_horizontal_bars(
+        _rows("tts_ms"),
+        title="TTS time by scenario",
+        x_label="ms (cumulative across sentences)",
+        color="#bb9af7",
+    )
+    chart_llm = _svg_horizontal_bars(
+        _rows("llm_first_token_ms"),
+        title="LLM first-token by scenario",
+        x_label="ms",
+        color="#e0af68",
+    )
+    chart_wall = _svg_horizontal_bars(
+        _rows("wall_ms"),
+        title="Wall-clock time by scenario",
+        x_label="ms",
+        color="#f7768e",
+    )
+
+    # Scenario description table for context.
+    rows_html: list[str] = []
+    for s in scenarios:
+        rows_html.append(
+            f"<tr>"
+            f"<td><code>{html.escape(s['name'])}</code></td>"
+            f"<td>{html.escape(s['description'])}</td>"
+            f"<td class='num'>{int(s['sentences_spoken'])}</td>"
+            f"<td>{'yes' if s.get('barge_in') else 'no'}</td>"
+            f"</tr>"
+        )
+    table_html = (
+        '<table class="perf-table"><thead><tr>'
+        '<th>Scenario</th><th>Description</th>'
+        '<th>Sentences</th><th>Barge-in</th>'
+        '</tr></thead><tbody>'
+        + "".join(rows_html)
+        + '</tbody></table>'
+    )
+
+    body_html = (
+        nav_html
+        + '<header><h1>Performance</h1>'
+        f'<div class="meta">Captured at <code>{html.escape(captured_at)}</code> '
+        f'· {len(scenarios)} scenario{"" if len(scenarios) == 1 else "s"} '
+        f'· stub LLM + stub TTS</div></header>'
+        '<p>Each scenario drives one full <code>ChatLoop.run_one_turn</code> '
+        'on virtual audio. Stubs are used for STT / LLM / TTS so the numbers '
+        'reflect <em>pipeline overhead</em>, not neural-net latency. '
+        'Real-engine perf testing belongs in a separate live suite.</p>'
+        + table_html
+        + '<h2>Time-to-first-speech (TTFS)</h2>'
+        + chart_ttfs
+        + '<h2>STT time</h2>' + chart_stt
+        + '<h2>TTS time</h2>' + chart_tts
+        + '<h2>LLM first-token</h2>' + chart_llm
+        + '<h2>Wall-clock turn time</h2>' + chart_wall
+        + '<h2>Refresh the data</h2>'
+        '<pre class="code-block"><code>python -m pytest tests/performance/'
+        '\npython scripts/generate_iteration_reports.py'
+        '</code></pre>'
+        + nav_html
+    )
+    return _page_template("Performance — geno-voice", body_html)
 
 
 # ---- Entry point ------------------------------------------------------------
@@ -924,9 +1154,17 @@ def main() -> int:
     testing_path = OUT_DIR / "testing.html"
     testing_path.write_text(render_testing_page(iterations, REPO_ROOT))
 
+    # iter-036: performance page (per-scenario bar charts). Always
+    # written — when no JSON exists it shows the "run the suite"
+    # placeholder so the link from testing.html / iter pages
+    # doesn't 404.
+    perf_payload = _load_perf_results(PERF_RESULTS_PATH)
+    perf_path = OUT_DIR / "performance.html"
+    perf_path.write_text(render_performance_page(perf_payload))
+
     print(
-        f"Wrote {len(iterations)} iteration reports + index + testing.html "
-        f"to {OUT_DIR}/"
+        f"Wrote {len(iterations)} iteration reports + "
+        f"index + testing.html + performance.html to {OUT_DIR}/"
     )
     return 0
 

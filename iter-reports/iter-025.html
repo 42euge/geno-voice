@@ -144,12 +144,30 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
   color: var(--muted);
   font-size: 13px;
 }
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-024.html">← iter-024</a><a href="iter-026.html">iter-026 →</a><a href="testing.html">Testing →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-024.html">← iter-024</a><a href="iter-026.html">iter-026 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
 <h1>iter-025 — BargeInWatcher captures only post-detection frames</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-025-watcher-frames</code></span> · <span>commit: <code>3de5039</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-025-watcher-frames</code> (merged ff to main, commit <code>3de5039</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -170,7 +188,7 @@ Right: trigger first → flush [s5,s6,s7] → append t8 → [s5,s6,s7,t8]</code>
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>347 passed in 18s</strong> (339 existing + 8 new).</p>
 <p>Notes:</p>
 <ul><li>Behavior change. Existing tests pass because they assert <code>len(frames) &gt; 0</code> not specific counts. External callers that relied on full pre-detection capture can restore via <code>lead_in_chunks=N</code>.</li><li>Bot acoustic feedback is fundamentally an AEC problem. iter-025 just stops <em>amplifying</em> it by feeding the bot audio back through STT.</li><li>Ring buffer bounded at <code>lead_in_chunks × CHUNK</code> bytes — at default 0, zero memory. Generous <code>lead_in=10</code> (~640ms), 20KB.</li><li>The first-attempt test caught the double-append bug cleanly. Worth noting for future &quot;small implementation&quot; work: writing the test before/while writing the code keeps these orderings honest.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-024.html">← iter-024</a><a href="iter-026.html">iter-026 →</a><a href="testing.html">Testing →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-024.html">← iter-024</a><a href="iter-026.html">iter-026 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

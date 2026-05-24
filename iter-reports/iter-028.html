@@ -144,12 +144,30 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
   color: var(--muted);
   font-size: 13px;
 }
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-027.html">← iter-027</a><a href="iter-029.html">iter-029 →</a><a href="testing.html">Testing →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-027.html">← iter-027</a><a href="iter-029.html">iter-029 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
 <h1>iter-028 — pass VAD config to BargeInWatcher in ChatLoop</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-028-watcher-vad</code></span> · <span>commit: <code>c35028b</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-028-watcher-vad</code> (merged ff to main, commit <code>c35028b</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -165,7 +183,7 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>358 passed in 18s</strong> (354 existing + 4 new).</p>
 <p>Notes:</p>
 <ul><li>This is the iter-020 follow-on that should have been part of iter-020 itself. Caught only by code-review-driven inspection of which functions consume the VAD config — the iter-020 behavioral test only exercised the recorder, not the watcher.</li><li><code>BargeInWatcher.vad=</code> kwarg has existed since iter-009 — iter-028 is purely &quot;ChatLoop now uses it.&quot; No API change to the watcher.</li><li>Pattern: when a config param is added to one consumer, audit <em>all</em> consumers. Half-applied config is worse than no config because it produces inconsistent behavior between subsystems that should agree.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-027.html">← iter-027</a><a href="iter-029.html">iter-029 →</a><a href="testing.html">Testing →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-027.html">← iter-027</a><a href="iter-029.html">iter-029 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

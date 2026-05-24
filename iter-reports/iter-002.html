@@ -144,12 +144,30 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
   color: var(--muted);
   font-size: 13px;
 }
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-001.html">← iter-001</a><a href="iter-003.html">iter-003 →</a><a href="testing.html">Testing →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-001.html">← iter-001</a><a href="iter-003.html">iter-003 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
 <h1>iter-002 — fix bug #3 (mic buffer not flushed after LLM error)</h1>
 <div class="meta"><span>2026-05-23</span> · <span>branch: <code>iter-002-bug-3</code></span> · <span>commit: <code>795a3aa</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-002-bug-3</code> (merged ff to main, commit <code>795a3aa</code>) <strong>Date:</strong> 2026-05-23</p>
@@ -160,7 +178,7 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
 <ul><li>Cannot end-to-end test the actual pyaudio path on x86_64 Linux without hardware. The FakeStream contract matches pyaudio&#x27;s two methods exactly, so the unit tests give us solid coverage of the drain logic. A future on-device smoke test would close the gap.</li></ul>
 <p>Next:</p>
 <ul><li>iter-003: bug #4 (preview reprint wraps when text exceeds terminal width). Wire <code>format_preview_line</code> into <code>record_utterance_streaming</code>, use <code>shutil.get_terminal_size()</code> to pick the width, and add a test with a fake stdout that asserts no wraparound.</li><li>iter-004: split <code>record_utterance_streaming</code> into pure VAD logic (testable) + thin pyaudio glue. The VAD state machine is the most fragile part of the loop and currently has zero tests.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-001.html">← iter-001</a><a href="iter-003.html">iter-003 →</a><a href="testing.html">Testing →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-001.html">← iter-001</a><a href="iter-003.html">iter-003 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

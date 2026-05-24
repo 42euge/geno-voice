@@ -144,12 +144,30 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
   color: var(--muted);
   font-size: 13px;
 }
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-008.html">← iter-008</a><a href="iter-010.html">iter-010 →</a><a href="testing.html">Testing →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-008.html">← iter-008</a><a href="iter-010.html">iter-010 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
 <h1>iter-009 — barge-in primitives: cancel_event + cancel + BargeInWatcher</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-009-bargein</code></span> · <span>commit: <code>c4b34d5</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-009-bargein</code> (merged ff to main, commit <code>c4b34d5</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -166,7 +184,7 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
 <ul><li>DONE_OK trigger test exposed a real subtlety: <code>time.monotonic()</code> doesn&#x27;t work for <code>VirtualMicStream</code> tests because pre-pushed audio is served in milliseconds. The VAD&#x27;s 0.8s silence window never elapses by wall clock. Solution: inject a frame-aligned clock — same <code>FrameClock</code> pattern as iter-006. In production this is a non-issue since real PyAudio serves frames at audio rate.</li><li>A play_fn that respects <code>cancel_event</code> must yield between chunks (sleep, blocking I/O, anything). Otherwise the worker thread races through the play loop before the test can set the flag. The test fixture uses <code>time.sleep(0.005)</code>; real audio playback blocks at audio rate so this happens naturally.</li></ul>
 <p>Next:</p>
 <ul><li>iter-010: wire barge-in into <code>mic_chat.run_chat</code>. Plumbing: during <code>worker.wait_done()</code>, run a <code>BargeInWatcher</code> on <code>mic</code> with <code>worker.cancel</code> as the callback. After <code>wait_done</code> returns, if <code>watcher.detected</code>, feed <code>watcher.frames</code> into the next <code>record_utterance_streaming</code> call (needs a small extension to the recording function to accept &quot;primed&quot; frames). Without this, the user&#x27;s first syllables are dropped.</li><li>iter-011: filler-word generation. Pre-render short audio clips (&quot;hmm&quot;, &quot;let me think&quot;) at startup. The worker grows an idle- watchdog timer: if the queue has been empty for &gt;600ms while <code>submit_done</code> hasn&#x27;t been called, play one filler clip. Hide behind <code>config.local.yaml</code> flag.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-008.html">← iter-008</a><a href="iter-010.html">iter-010 →</a><a href="testing.html">Testing →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-008.html">← iter-008</a><a href="iter-010.html">iter-010 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

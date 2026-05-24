@@ -144,12 +144,30 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
   color: var(--muted);
   font-size: 13px;
 }
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-007.html">← iter-007</a><a href="iter-009.html">iter-009 →</a><a href="testing.html">Testing →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-007.html">← iter-007</a><a href="iter-009.html">iter-009 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
 <h1>iter-008 — streaming LLM → TTS overlap via SentenceWorker</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-008-streaming-overlap</code></span> · <span>commit: <code>ad4d946</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-008-streaming-overlap</code> (merged ff to main, commit <code>ad4d946</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -164,7 +182,7 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
 <ul><li>The threaded <code>stop</code> test uses a <code>synth_started</code> Event + <code>proceed</code> Event to deterministically place the worker in &quot;currently synthesizing, two more queued&quot; state before calling <code>stop()</code>. The assertion is &quot;exactly one sentence got spoken&quot; — the in-flight one finishes, the queued ones are dropped. This was the most likely-to-be-flaky test; it consistently runs in &lt;50ms.</li><li><code>worker.errors</code> exists so production code can surface background failures without taking down the chat loop. <code>mic_chat.run_chat</code> prints any worker errors after <code>wait_done</code> returns.</li><li>Single-sentence replies see no behavior change. Multi-sentence replies should show lower TTFS for sentence 2+ because the LLM stream now overlaps with playback.</li></ul>
 <p>Next:</p>
 <ul><li>iter-009: barge-in. Run <code>VadState</code> on the mic stream <em>during</em> speaker writes. When the user starts speaking, signal the worker to drop pending sentences and stop the speaker mid-sentence. Requires a &quot;hard cancel&quot; path on the worker (the current <code>stop</code> is &quot;drain + finish current&quot;); add <code>cancel()</code> that sets a flag the play_fn checks per audio chunk. Test using loopback paired with a &quot;user injection&quot; feeder that pushes user-speech into the mic the worker is also watching.</li><li>iter-010: filler words during LLM first-token wait. Pre-render short audio clips (&quot;hmm…&quot;, &quot;let me think…&quot;) and have the worker play them if the queue stays empty for more than ~600ms. Hide behind a config flag so it&#x27;s opt-in.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-007.html">← iter-007</a><a href="iter-009.html">iter-009 →</a><a href="testing.html">Testing →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-007.html">← iter-007</a><a href="iter-009.html">iter-009 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

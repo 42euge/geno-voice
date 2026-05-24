@@ -144,12 +144,30 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
   color: var(--muted);
   font-size: 13px;
 }
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-020.html">← iter-020</a><a href="iter-022.html">iter-022 →</a><a href="testing.html">Testing →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-020.html">← iter-020</a><a href="iter-022.html">iter-022 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
 <h1>iter-021 — digit-prefixed ordinals don&#x27;t trigger abbreviation match</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-021-ordinals</code></span> · <span>commit: <code>c501d91</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-021-ordinals</code> (merged ff to main, commit <code>c501d91</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -167,7 +185,7 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>313 passed in 17s</strong> (305 existing + 8 new).</p>
 <p>Notes:</p>
 <ul><li>Guard is <code>start &lt; end and start &gt; 0</code> — both edges. Without the <code>start &lt; end</code> clause, a period at index 0 with no walk would read <code>buffer[-1]</code> (Python&#x27;s wrap-around to last char), which would be wrong. Without the <code>start &gt; 0</code> clause, we&#x27;d index out of bounds.</li><li>This bug was hidden under iter-016&#x27;s acceptance testing because the test corpus didn&#x27;t include ordinals. The iter-021 tests fill that gap explicitly.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-020.html">← iter-020</a><a href="iter-022.html">iter-022 →</a><a href="testing.html">Testing →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-020.html">← iter-020</a><a href="iter-022.html">iter-022 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

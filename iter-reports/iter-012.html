@@ -144,12 +144,30 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
   color: var(--muted);
   font-size: 13px;
 }
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-011.html">← iter-011</a><a href="iter-013.html">iter-013 →</a><a href="testing.html">Testing →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-011.html">← iter-011</a><a href="iter-013.html">iter-013 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
 <h1>iter-012 — extend barge-in across the LLM-streaming phase</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-012-llm-stream-barge</code></span> · <span>commit: <code>f1e7a4e</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-012-llm-stream-barge</code> (merged ff to main, commit <code>f1e7a4e</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -163,7 +181,7 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>172 passed in 11s</strong> (155 existing + 17 new).</p>
 <p>Notes:</p>
 <ul><li>The faked-LLM orchestration test runs in 150ms. Production behavior is identical because the same components compose the same way — the test just stubs out the HTTP transport.</li><li>The &quot;event set before cancel returns&quot; test was tricky to write deterministically. The current approach uses a concurrent reader thread that polls <code>is_set()</code> while the trigger runs; the assertion fails if the worker.cancel blocks the event-set call. Real production cancel paths do their own join, so this guards against accidentally reordering the cascade.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-011.html">← iter-011</a><a href="iter-013.html">iter-013 →</a><a href="testing.html">Testing →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-011.html">← iter-011</a><a href="iter-013.html">iter-013 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

@@ -144,12 +144,30 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
   color: var(--muted);
   font-size: 13px;
 }
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-002.html">← iter-002</a><a href="iter-004.html">iter-004 →</a><a href="testing.html">Testing →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-002.html">← iter-002</a><a href="iter-004.html">iter-004 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
 <h1>iter-003 — fix bug #4 (preview reprint wraps on long utterances)</h1>
 <div class="meta"><span>2026-05-23</span> · <span>branch: <code>iter-003-bug-4</code></span> · <span>commit: <code>7349fb7</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-003-bug-4</code> (merged ff to main, commit <code>7349fb7</code>) <strong>Date:</strong> 2026-05-23</p>
@@ -159,7 +177,7 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
 <p>All four originally-listed mic_chat.py bugs are now fixed: ✓ Bug #1 (iter-001) — duplicate &quot;Bot:&quot; lines ✓ Bug #2 (iter-001) — absurd llm_total values ✓ Bug #3 (iter-002) — mic buffer not flushed after LLM error ✓ Bug #4 (iter-003) — preview reprint wraps on long utterances</p>
 <p>Next:</p>
 <ul><li>iter-004: extract VAD state machine into a pure helper. Currently the silence/speech detection is inlined in <code>record_utterance_streaming</code> with monotonic timestamps and ad-hoc state — moving it to <code>vad_state.feed(level, now) -&gt; Event</code> makes it testable without audio hardware. This is also the prerequisite for the architecture goals (streaming overlap, barge-in).</li><li>iter-005: streaming LLM → TTS overlap. Right now sentences synthesize and play synchronously inside the for-loop, blocking the next token receipt. A producer/consumer queue with the LLM streaming on the main thread and TTS+playback on a worker would cut median TTFS substantially.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-002.html">← iter-002</a><a href="iter-004.html">iter-004 →</a><a href="testing.html">Testing →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-002.html">← iter-002</a><a href="iter-004.html">iter-004 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

@@ -144,12 +144,30 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
   color: var(--muted);
   font-size: 13px;
 }
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-010.html">← iter-010</a><a href="iter-012.html">iter-012 →</a><a href="testing.html">Testing →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-010.html">← iter-010</a><a href="iter-012.html">iter-012 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
 <h1>iter-011 — filler-word generation in SentenceWorker</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-011-fillers</code></span> · <span>commit: <code>12b718b</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-011-fillers</code> (merged ff to main, commit <code>12b718b</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -162,7 +180,7 @@ svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>155 passed in 11s</strong> (143 existing + 12 new).</p>
 <p>Notes:</p>
 <ul><li>The <code>_play_clip</code> extraction made the diff bigger but is the right shape going forward — fillers, sentences, and any future audio output (e.g. confirmation tones) all share the same path.</li><li>One filler per run is intentional. A tempting extension is &quot;play another filler if the LLM stalls mid-stream too,&quot; but that adds a watchdog timer and a bunch of edge cases. Skipping for now; the first-token-latency mask is where 90% of the win is.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-010.html">← iter-010</a><a href="iter-012.html">iter-012 →</a><a href="testing.html">Testing →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-010.html">← iter-010</a><a href="iter-012.html">iter-012 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>
