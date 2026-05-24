@@ -3337,3 +3337,64 @@ Notes:
 - The "fillers_on" 70% number is itself a useful signal —
   validates that iter-011's filler design actually overlaps the
   filler with the LLM stream.
+
+---
+
+## iter-044 — worker idle-gap metric (taxonomy 2.16)
+
+**Branch:** `iter-044-idle-gap` (merged ff to main, commit `7e52670`)
+**Date:** 2026-05-24
+
+Sixth metric pulled from `docs/perf-metrics-taxonomy.md`. **Metric
+2.16 — Sentence-worker idle gap**, "Architecture-specific" bucket.
+
+Cumulative time `SentenceWorker` spent blocked on
+`self._queue.get(...)` waiting for the next sentence. Excludes the
+first wait — that's TTFsent (iter-038 territory); after the first
+sentence, the gap before the next is the metric.
+
+Diagnostic value: combined with iter-043's `streaming_overlap_ratio`,
+the pair localizes pipeline bottlenecks:
+
+| overlap | idle_gap | what it means |
+|---------|----------|---------------|
+| low     | high     | LLM is the bottleneck (didn't produce sentences fast enough) |
+| low     | low      | synth is the bottleneck (ate the LLM's lead before next sentence arrived) |
+| high    | any      | pipeline is healthy |
+
+Implementation:
+
+- `SentenceWorker.idle_gap_total: float = 0.0` (new field).
+- Stamp `gap_t0 = self._clock()` before each `queue.get(...)`. On
+  successful return AND after the first sentence has been spoken,
+  add the delta to `idle_gap_total`.
+- `TurnMetrics.worker_idle_gap_total: float = 0.0`, transferred by
+  ChatLoop.
+- Per-turn print: "Idle gap: Nms (worker waited for sentences)" only
+  when >0. Yellow if >300ms ("worker is starving"), dim otherwise.
+- `ScenarioResult.worker_idle_gap_ms` on perf snapshots.
+
+Tests (8 in `tests/unit/test_worker_idle_gap.py`):
+- Defaults are 0 on both Worker and TurnMetrics.
+- `TestPerTurnPrint` — zero omits the line, non-zero shows ms +
+  explainer.
+- `TestWorkerIdleGap`:
+  - First wait does NOT count (single-sentence response gives
+    `idle_gap_total == 0` regardless of pre-sentence wait).
+  - Between-sentence gap IS counted (real sleep yields >0 gap).
+  - Back-to-back sentences yield <50ms gap (just queue overhead).
+- `TestChatLoopWires` — field lands on metrics as a float ≥0.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **597 passed, 1 skipped in 22s** (589 existing
++ 8 new).
+
+Notes:
+- Six metrics from the taxonomy now live (2.19 / 1.10 / 2.18 /
+  2.10 / 2.1 / 2.16). The "where is the bottleneck?" picture is
+  now reasonably complete: TTFS for end-to-end, llm_first_sentence
+  for LLM-side wait, streaming_overlap_ratio for parallelism
+  achievement, idle_gap for between-sentence wait, plus the
+  cancel + barge picture for interaction quality.
+- Next candidates: 1.13 (bot WPM), 2.6 (sentence-split fragmentation),
+  2.20 (loopback echo barge-in rate).

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-043 — streaming overlap ratio metric (taxonomy 2.1)</title>
+<title>iter-044 — worker idle-gap metric (taxonomy 2.16)</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,26 +168,21 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-042.html">← iter-042</a><a href="iter-044.html">iter-044 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-043 — streaming overlap ratio metric (taxonomy 2.1)</h1>
-<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-043-overlap-ratio</code></span> · <span>commit: <code>c6d684d</code></span> · <span>tests: <code>+9</code> (total 589)</span></div>
-</header><p><strong>Branch:</strong> <code>iter-043-overlap-ratio</code> (merged ff to main, commit <code>c6d684d</code>) <strong>Date:</strong> 2026-05-24</p>
-<p>Fifth metric pulled from <code>docs/perf-metrics-taxonomy.md</code>. <strong>Metric 2.1 — Streaming overlap ratio</strong>, in the &quot;Architecture-specific&quot; bucket. The taxonomy is direct: &quot;the whole point of <code>SentenceWorker</code> is to run TTS in parallel with token receipt. If overlap is 0, the worker is just adding latency.&quot;</p>
-<p>Definition adopted (a simple proxy):</p>
-<p>overlap_ratio = max(0, llm_stream_done_at - first_audio_at) / llm_total</p>
-<ul><li>1.0 (capped) — audio started before LLM finished and stayed through end-of-stream.</li><li>0.5 — audio overlapped half the stream.</li><li>0 — audio only started AFTER LLM finished, or didn&#x27;t play at all. Sequential. iter-008 streaming-overlap not paying off this turn.</li></ul>
-<p>Skipped a more elaborate &quot;union of synth + play intervals intersected with LLM window&quot; definition because (a) it requires new instrumentation in the worker (synth_at, play_at lists), (b) the simple proxy already answers the operational question (&quot;does my pipeline benefit from streaming?&quot;).</p>
-<p>Surfaced at three layers:</p>
-<p>1. <code>TurnMetrics.streaming_overlap_ratio: float = 0.0</code> (new field). 2. ChatLoop computes it after <code>llm_stream_done_at</code> is set. 3. Per-turn print: &quot;Overlap: NN% (LLM↔TTS concurrency)&quot; only on turns where &gt;0. Green ≥50%, yellow &lt;50%. 4. Session summary: &quot;Median overlap: NN%&quot; over turns where &gt;0 (parallel to iter-031&#x27;s TTFS filter). 5. <code>ScenarioResult.streaming_overlap_ratio</code> on perf rows.</p>
-<p>Empirical results from the perf suite (stub LLM is too fast for most scenarios to show overlap):</p>
-<ul><li>short_short / short_long / long_short / tts / stt / slow_llm: 0%.</li><li>fillers_on: 70% (filler clip starts immediately, LLM is slow).</li><li>barge_in: 50% (barge cuts mid-stream during LLM).</li></ul>
-<p>Real-LLM perf with 200-500ms TTFT would show meaningful overlap on every multi-sentence scenario. The metric is calibrated for that reality.</p>
-<p>Tests (9 in <code>tests/unit/test_streaming_overlap.py</code>):</p>
-<ul><li>Default 0.</li><li>Per-turn print — zero omits, non-zero shows pct + explainer, 100% renders correctly.</li><li>Session aggregate — no-data omits, some-data shows median, zero turns filtered.</li><li>ChatLoop arithmetic — real audio play yields &gt;0 ratio bounded ≤1; no-audio (LLM yields fragments only) yields 0.</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>589 passed, 1 skipped in 21s</strong> (580 existing + 9 new).</p>
+<nav><a href="index.html">← Index</a><a href="iter-043.html">← iter-043</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-044 — worker idle-gap metric (taxonomy 2.16)</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-044-idle-gap</code></span> · <span>commit: <code>7e52670</code></span> · <span>tests: <code>+8</code> (total 597)</span></div>
+</header><p><strong>Branch:</strong> <code>iter-044-idle-gap</code> (merged ff to main, commit <code>7e52670</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>Sixth metric pulled from <code>docs/perf-metrics-taxonomy.md</code>. <strong>Metric 2.16 — Sentence-worker idle gap</strong>, &quot;Architecture-specific&quot; bucket.</p>
+<p>Cumulative time <code>SentenceWorker</code> spent blocked on <code>self._queue.get(...)</code> waiting for the next sentence. Excludes the first wait — that&#x27;s TTFsent (iter-038 territory); after the first sentence, the gap before the next is the metric.</p>
+<p>Diagnostic value: combined with iter-043&#x27;s <code>streaming_overlap_ratio</code>, the pair localizes pipeline bottlenecks:</p>
+<table class="iter-table"><thead><tr><th>overlap</th><th>idle_gap</th><th>what it means</th></tr></thead><tbody><tr><td>low</td><td>high</td><td>LLM is the bottleneck (didn&#x27;t produce sentences fast enough)</td></tr><tr><td>low</td><td>low</td><td>synth is the bottleneck (ate the LLM&#x27;s lead before next sentence arrived)</td></tr><tr><td>high</td><td>any</td><td>pipeline is healthy</td></tr></tbody></table>
+<p>Implementation:</p>
+<ul><li><code>SentenceWorker.idle_gap_total: float = 0.0</code> (new field).</li><li>Stamp <code>gap_t0 = self._clock()</code> before each <code>queue.get(...)</code>. On successful return AND after the first sentence has been spoken, add the delta to <code>idle_gap_total</code>.</li><li><code>TurnMetrics.worker_idle_gap_total: float = 0.0</code>, transferred by ChatLoop.</li><li>Per-turn print: &quot;Idle gap: Nms (worker waited for sentences)&quot; only when &gt;0. Yellow if &gt;300ms (&quot;worker is starving&quot;), dim otherwise.</li><li><code>ScenarioResult.worker_idle_gap_ms</code> on perf snapshots.</li></ul>
+<p>Tests (8 in <code>tests/unit/test_worker_idle_gap.py</code>):</p>
+<ul><li>Defaults are 0 on both Worker and TurnMetrics.</li><li><code>TestPerTurnPrint</code> — zero omits the line, non-zero shows ms + explainer.</li><li><code>TestWorkerIdleGap</code>: <code>idle_gap_total == 0</code> regardless of pre-sentence wait).<ul><li>First wait does NOT count (single-sentence response gives</li><li>Between-sentence gap IS counted (real sleep yields &gt;0 gap).</li><li>Back-to-back sentences yield &lt;50ms gap (just queue overhead).</li></ul></li><li><code>TestChatLoopWires</code> — field lands on metrics as a float ≥0.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>597 passed, 1 skipped in 22s</strong> (589 existing + 8 new).</p>
 <p>Notes:</p>
-<ul><li>Five metrics from the taxonomy now live (2.19 / 1.10 / 2.18 / 2.10 / 2.1). Iterating one per loop has worked; we have ~40 more on the wishlist.</li><li>The &quot;fillers_on&quot; 70% number is itself a useful signal — validates that iter-011&#x27;s filler design actually overlaps the filler with the LLM stream.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-042.html">← iter-042</a><a href="iter-044.html">iter-044 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li>Six metrics from the taxonomy now live (2.19 / 1.10 / 2.18 / 2.10 / 2.1 / 2.16). The &quot;where is the bottleneck?&quot; picture is now reasonably complete: TTFS for end-to-end, llm_first_sentence for LLM-side wait, streaming_overlap_ratio for parallelism achievement, idle_gap for between-sentence wait, plus the cancel + barge picture for interaction quality.</li><li>Next candidates: 1.13 (bot WPM), 2.6 (sentence-split fragmentation), 2.20 (loopback echo barge-in rate).</li></ul><nav><a href="index.html">← Index</a><a href="iter-043.html">← iter-043</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>
