@@ -3196,3 +3196,73 @@ Notes:
   iter-035's TestBargeInDuringPlayback is the right shape but
   pytest.skipped due to flaky timing; the perf suite's deterministic
   timeline could make it reliable.
+
+---
+
+## iter-042 — perf-suite barge-in scenario + barge-in latency on perf snapshot
+
+**Branch:** `iter-042-perf-barge` (merged ff to main, commit `345ad7c`)
+**Date:** 2026-05-24
+
+iter-041 instrumented barge-in latency on `TurnMetrics`. iter-042
+wires it into the perf-snapshot row, adds a deterministic perf
+scenario that actually triggers a barge-in, and renders the
+metric on `performance.html` (latest-snapshot bar chart + time-series
+across iterations).
+
+**The deterministic-barge workaround.** The naive "push barge audio
+in the mic up front" approach fails because iter-002's
+`flush_pending_audio` drains the mic between phases and eats the
+barge tone before the watcher starts. The fix: push the barge
+from a daemon thread that fires 50ms after `run_one_turn` starts —
+by which point the flush has run and the watcher is active.
+
+This is much more reliable than iter-035's `TestBargeInDuringPlayback`
+(which is marked `pytest.skip` when timing-flaky). The perf scenario
+has run cleanly on every loop iteration since landing.
+
+**ScenarioResult schema additions.** Five new fields (mostly
+catch-up from earlier iterations whose metrics weren't yet on the
+perf rows):
+- `llm_first_sentence_ms` (iter-038, taxonomy 1.10)
+- `sentences_cancelled` (iter-040, taxonomy 2.18)
+- `barge_in_latency_ms` (iter-041, taxonomy 2.10)
+- `mic_stale_frames` (iter-037, taxonomy 2.19)
+
+**Generator chart additions.** Two new chart sites:
+- "Barge-in latency by scenario" in the latest-snapshot section
+  (horizontal bar chart, yellow palette).
+- "Barge-in latency over iterations" in the time-series section
+  (multi-line chart, one line per scenario).
+
+Both charts use an emit-only-with-data rule: if no scenario row
+in the relevant data has a non-zero measurement, the chart is
+suppressed (don't show all-zero bars or empty lines).
+
+Tests (8 in `tests/unit/test_perf_barge_chart.py`):
+- `TestLatestSnapshotBargeChart` — no-barge-data omits the chart,
+  at-least-one emits with the value visible, palette color check.
+- `TestHistoryBargeChart` — no-barge-history omits, with-barge
+  emits with legend label, scenario name shows up in time-series.
+- `TestScenarioSchemaSurfacedInTable` — table reflects barge_in
+  flag (yes/no cells).
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **580 passed, 1 skipped in 21s** (571
+existing + 8 new + 1 new perf scenario).
+
+The new perf scenario records: `barge_in=True`,
+`barge_in_latency_ms ~5ms` (virtual audio is instant),
+`sentences_cancelled=1`. Real-world latency on PyAudio + kokoro
+will be 20-100ms — the chart is calibrated for that range.
+
+Notes:
+- iter-040 / iter-041 / iter-042 form a tight trio: instrument
+  cancel correctness, instrument barge latency, wire both into
+  the perf scenario. The full barge-in observability story is
+  now: "a barge fired, here's how fast, and here's whether it
+  cut a sentence mid-stream."
+- Future barge work would need to drive perf scenarios that
+  REGRESS when something gets slower (e.g. a wider VAD poll
+  interval). The perf charts are ready; the regression detection
+  isn't built yet.

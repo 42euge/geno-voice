@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-041 — barge-in latency metric (taxonomy 2.10)</title>
+<title>iter-042 — perf-suite barge-in scenario + barge-in latency on perf snapshot</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,23 +168,24 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-040.html">← iter-040</a><a href="iter-042.html">iter-042 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-041 — barge-in latency metric (taxonomy 2.10)</h1>
-<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-041-barge-latency</code></span> · <span>commit: <code>f05bf96</code></span> · <span>tests: <code>+15</code> (total 571)</span></div>
-</header><p><strong>Branch:</strong> <code>iter-041-barge-latency</code> (merged ff to main, commit <code>f05bf96</code>) <strong>Date:</strong> 2026-05-24</p>
-<p>Fourth metric pulled from <code>docs/perf-metrics-taxonomy.md</code>. <strong>Metric 2.10 — Barge-in latency</strong>, in the &quot;Architecture-specific&quot; bucket.</p>
-<p>The taxonomy doc is blunt about why this matters: &quot;&gt;~200ms is the moment the user thinks the bot is ignoring them.&quot; The whole barge-in feature (iter-009 / iter-010 / iter-012 / iter-024 / iter-025 / iter-026 / iter-027 / iter-028) lives or dies on one number.</p>
-<p>Implementation:</p>
-<ul><li><code>BargeInCoordinator</code> gains <code>playback_stopped_at: Optional[float]</code>, stamped after <code>worker.cancel()</code> returns inside <code>trigger()</code>. That&#x27;s the moment the worker thread has joined and playback is truly halted (cancel_event drained the play_aligned chunk loop, then the thread exited).</li><li><code>ChatLoop</code> computes <code>metrics.barge_in_latency = max(0.0, playback_stopped_at - triggered_at)</code>. Clamps negative (shouldn&#x27;t happen, defensive against clock injection bugs).</li><li><code>TurnMetrics.barge_in_latency: float = 0.0</code> (new field).</li></ul>
-<p>Surfaced at three layers:</p>
-<p>1. Per-turn print: &quot;Barge latency: Nms (detect → halt)&quot; on barge-in turns. Yellow if &gt;100ms, green if ≤100ms. 2. Session summary: median + worst across the session. Filters zero-latency turns (parallel to iter-031 / iter-038&#x27;s filters). 3. The performance.html time-series will pick this up automatically once perf-iter-NNN.json snapshots include barge-in scenarios with latency. (The current perf scenarios don&#x27;t trigger barge-ins, so this is a follow-on for a future iter that adds a <code>barge_in</code> perf scenario.)</p>
-<p>Test design — using a <code>MagicMock</code> worker with a side_effect that mutates the fake clock during <code>cancel()</code>, we prove the <code>playback_stopped_at</code> is sampled AFTER cancel returns (not before). That&#x27;s the contract the metric depends on.</p>
-<p>Tests (15 in <code>tests/unit/test_barge_latency.py</code>):</p>
-<ul><li><code>TestCoordinatorTimestamps</code> — default None, trigger stamps both timestamps, worker.cancel happens BEFORE the stamp (sleeping mock proves the order), idempotent doesn&#x27;t overwrite, no-worker still stamps both.</li><li><code>TestPerTurnPrint</code> — default 0, no-barge omits, barge with zero latency omits, barge with latency emits with &quot;(detect → halt)&quot;.</li><li><code>TestChatLoopArithmetic</code> — subtraction, negative clamps to 0.</li><li><code>TestSessionSummary</code> — no-barge omits block, barges with latencies show median + worst, zero-latency turns filtered from median, all-zero suppresses block.</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>571 passed, 1 skipped in 20s</strong> (556 existing + 15 new).</p>
+<nav><a href="index.html">← Index</a><a href="iter-041.html">← iter-041</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-042 — perf-suite barge-in scenario + barge-in latency on perf snapshot</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-042-perf-barge</code></span> · <span>commit: <code>345ad7c</code></span></div>
+</header><p><strong>Branch:</strong> <code>iter-042-perf-barge</code> (merged ff to main, commit <code>345ad7c</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>iter-041 instrumented barge-in latency on <code>TurnMetrics</code>. iter-042 wires it into the perf-snapshot row, adds a deterministic perf scenario that actually triggers a barge-in, and renders the metric on <code>performance.html</code> (latest-snapshot bar chart + time-series across iterations).</p>
+<p><strong>The deterministic-barge workaround.</strong> The naive &quot;push barge audio in the mic up front&quot; approach fails because iter-002&#x27;s <code>flush_pending_audio</code> drains the mic between phases and eats the barge tone before the watcher starts. The fix: push the barge from a daemon thread that fires 50ms after <code>run_one_turn</code> starts — by which point the flush has run and the watcher is active.</p>
+<p>This is much more reliable than iter-035&#x27;s <code>TestBargeInDuringPlayback</code> (which is marked <code>pytest.skip</code> when timing-flaky). The perf scenario has run cleanly on every loop iteration since landing.</p>
+<p><strong>ScenarioResult schema additions.</strong> Five new fields (mostly catch-up from earlier iterations whose metrics weren&#x27;t yet on the perf rows):</p>
+<ul><li><code>llm_first_sentence_ms</code> (iter-038, taxonomy 1.10)</li><li><code>sentences_cancelled</code> (iter-040, taxonomy 2.18)</li><li><code>barge_in_latency_ms</code> (iter-041, taxonomy 2.10)</li><li><code>mic_stale_frames</code> (iter-037, taxonomy 2.19)</li></ul>
+<p><strong>Generator chart additions.</strong> Two new chart sites:</p>
+<ul><li>&quot;Barge-in latency by scenario&quot; in the latest-snapshot section (horizontal bar chart, yellow palette).</li><li>&quot;Barge-in latency over iterations&quot; in the time-series section (multi-line chart, one line per scenario).</li></ul>
+<p>Both charts use an emit-only-with-data rule: if no scenario row in the relevant data has a non-zero measurement, the chart is suppressed (don&#x27;t show all-zero bars or empty lines).</p>
+<p>Tests (8 in <code>tests/unit/test_perf_barge_chart.py</code>):</p>
+<ul><li><code>TestLatestSnapshotBargeChart</code> — no-barge-data omits the chart, at-least-one emits with the value visible, palette color check.</li><li><code>TestHistoryBargeChart</code> — no-barge-history omits, with-barge emits with legend label, scenario name shows up in time-series.</li><li><code>TestScenarioSchemaSurfacedInTable</code> — table reflects barge_in flag (yes/no cells).</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>580 passed, 1 skipped in 21s</strong> (571 existing + 8 new + 1 new perf scenario).</p>
+<p>The new perf scenario records: <code>barge_in=True</code>, <code>barge_in_latency_ms ~5ms</code> (virtual audio is instant), <code>sentences_cancelled=1</code>. Real-world latency on PyAudio + kokoro will be 20-100ms — the chart is calibrated for that range.</p>
 <p>Notes:</p>
-<ul><li>Four metrics from the taxonomy now live: 2.19 (mic stale frames), 1.10 (LLM TTFsent), 2.18 (cancel correctness), 2.10 (barge latency). The cadence — one per iteration — has held over four iterations and the codebase has absorbed each cleanly.</li><li>Combined with iter-040&#x27;s mid-stream count, you can now answer: &quot;of the barges this session, how many were mid-sentence and how slow was the cancel?&quot; That&#x27;s the full barge-in story.</li><li>Future: a perf-suite scenario that explicitly fires a barge-in mid-playback so this metric lands in the time-series charts. iter-035&#x27;s TestBargeInDuringPlayback is the right shape but pytest.skipped due to flaky timing; the perf suite&#x27;s deterministic timeline could make it reliable.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-040.html">← iter-040</a><a href="iter-042.html">iter-042 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li>iter-040 / iter-041 / iter-042 form a tight trio: instrument cancel correctness, instrument barge latency, wire both into the perf scenario. The full barge-in observability story is now: &quot;a barge fired, here&#x27;s how fast, and here&#x27;s whether it cut a sentence mid-stream.&quot;</li><li>Future barge work would need to drive perf scenarios that REGRESS when something gets slower (e.g. a wider VAD poll interval). The perf charts are ready; the regression detection isn&#x27;t built yet.</li></ul><nav><a href="index.html">← Index</a><a href="iter-041.html">← iter-041</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>
