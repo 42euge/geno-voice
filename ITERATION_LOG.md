@@ -2954,3 +2954,85 @@ Notes:
   hardened the splitter for abbreviations, ordinals, quoted speech,
   and parens — without those fixes, TTFsent would be misleadingly
   high on text containing "Mr. Smith" or "1st place" or `(...).`.
+
+---
+
+## iter-039 — per-iteration perf snapshots + time-series charts
+
+**Branch:** `iter-039-perf-history` (merged ff to main, commit `9be7b1b`)
+**Date:** 2026-05-24
+
+iter-036 saved one `perf-results.json` (latest snapshot). With many
+iterations landing, the more useful view became "metric trajectory
+over iterations" — did TTFS regress when iter-031 filtered zero
+turns? Did iter-038's TTFsent instrumentation slow wall time? You
+can't see that from a single snapshot.
+
+User asked for "performance test reports for each iteration." Three
+pieces:
+
+**1. Per-iter snapshot file.** Each perf run now writes
+`iter-reports/perf-iter-NNN.json` alongside the existing
+`perf-results.json`. Iteration number resolved from the most recent
+`## iter-NNN —` heading in `ITERATION_LOG.md`; falls back to git
+commit count if the log can't be parsed.
+
+**2. Generator helpers.** Two new functions in
+`scripts/generate_iteration_reports.py`:
+- `_load_perf_history(reports_dir)` walks `perf-iter-NNN.json`
+  files, sorted by iteration. Robust to malformed JSON, missing
+  iteration field, unrelated files in the dir.
+- `_svg_multi_line_chart(series_by_label, ...)` — pure-SVG line
+  chart with one polyline per series + a per-series legend in
+  fixed palette colors.
+
+**3. `performance.html` reorganized.** Two top-level sections:
+- "Latest snapshot" — the iter-036 horizontal bar charts (TTFS,
+  STT, TTS, LLM 1st token, wall — one bar per scenario).
+- "Across iterations" — new time-series block with multi-line
+  charts (TTFS, wall, TTS, STT — one line per scenario, x-axis =
+  iter number). Soft "only one captured" note when history has
+  one entry; fills in over time.
+
+Iter-038 was the seed (perf-iter-038.json saved during this
+iteration's perf run before commit). iter-039.json will be added
+by the loop's perf-run step at the end of this iteration. From
+iter-040 forward each loop iteration appends another snapshot.
+
+Loop prompt updated to include the perf-run step ahead of report
+regeneration:
+
+    python -m pytest tests/performance/ -q
+    python scripts/generate_iteration_reports.py
+
+Tests (19 in `tests/unit/test_perf_history.py`):
+- `TestLoadPerfHistory` — empty / missing dir, single file,
+  multiple files sorted by iteration, malformed JSON skipped,
+  non-`perf-iter-` files ignored, filename fallback when JSON
+  lacks 'iteration' key.
+- `TestMultiLineChart` — empty / all-empty placeholder, single
+  point per series renders as circle, multi-point as path+dots,
+  legend has every label, HTML-escaped title.
+- `TestPerformancePageHistory` — no history → no section, single
+  iter → soft note, multi-iter → 9 SVGs (5 latest + 4 history),
+  iteration count emitted, non-numeric iteration row skipped
+  without crashing.
+- `TestResolveIterNumber` — real repo resolves to a 3-digit
+  string (canary that the helper still works against the live
+  ITERATION_LOG.md).
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **544 passed, 1 skipped in 32s** (525 existing
++ 19 new).
+
+Notes:
+- `cancel-correctness` (taxonomy 2.18) was originally going to be
+  iter-039 but the user redirected to per-iter perf history. The
+  cancel-correctness work will return as iter-040 or later.
+- The "Across iterations" charts will show real trends starting
+  iter-041 (when there are 3+ snapshots). Until then, a single
+  point per scenario is rendered as a circle so the page still
+  looks reasonable.
+- Choice not made: NO automatic deletion of old per-iter snapshots.
+  At ~1 KB each, 100 iterations = ~100 KB. Cheap, and the history
+  is the whole point.

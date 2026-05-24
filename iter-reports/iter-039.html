@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-038 — LLM time-to-first-sentence metric (taxonomy 1.10)</title>
+<title>iter-039 — per-iteration perf snapshots + time-series charts</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,21 +168,25 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-037.html">← iter-037</a><a href="iter-039.html">iter-039 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-038 — LLM time-to-first-sentence metric (taxonomy 1.10)</h1>
-<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-038-ttfsent</code></span> · <span>commit: <code>e7bd3f5</code></span> · <span>tests: <code>+10</code> (total 525)</span></div>
-</header><p><strong>Branch:</strong> <code>iter-038-ttfsent</code> (merged ff to main, commit <code>e7bd3f5</code>) <strong>Date:</strong> 2026-05-24</p>
-<p>Second metric pulled from <code>docs/perf-metrics-taxonomy.md</code>. <strong>Metric 1.10 — LLM time-to-first-sentence (TTFsent)</strong>, in the &quot;Standard&quot; bucket.</p>
-<p>The existing <code>llm_first_token</code> records when the first token arrived from the LLM. But TTS can&#x27;t actually run until a complete <em>sentence</em> reaches the worker — and the splitter only emits one when a terminator (<code>.</code>, <code>!</code>, <code>?</code>) followed by whitespace appears. The LLM may stream chatty preamble (no terminator) for a while between first-token and first-sentence, and that gap is invisible in the current metrics.</p>
-<p>Two scenarios with identical first-token times can have very different TTFS depending on how the LLM phrases its response. A system prompt nudge like &quot;respond in short sentences&quot; would compress TTFsent without changing first-token. With this metric, the impact is measurable.</p>
-<p>Changes:</p>
-<ul><li><code>TurnMetrics.llm_first_sentence: float = 0.0</code> (new field).</li><li><code>ChatLoop.run_one_turn</code> stamps <code>first_sentence_at</code> the first time <code>split_complete_sentences</code> yields a non-empty list. Field set to <code>first_sentence_at - llm_start</code> after the LLM stream completes; 0 if no terminator ever arrived.</li><li><code>TurnMetrics.print</code> emits &quot;LLM 1st sent: Nms (+Mms preamble)&quot; only when &gt; 0. The parenthetical shows the gap from first-token so the reader sees splitter-wait at a glance.</li><li><code>print_session_summary</code> shows median TTFsent over turns where it&#x27;s &gt; 0 (parallel to iter-031&#x27;s TTFS filter).</li></ul>
-<p>Tests (10 in <code>tests/unit/test_llm_first_sentence.py</code>):</p>
-<ul><li><code>TestDefault</code> — TurnMetrics defaults to 0.</li><li><code>TestPerTurnPrint</code> — zero omits the line; non-zero shows preamble gap; zero-gap edge case (first token IS the terminator) shows &quot;+0ms preamble&quot;.</li><li><code>TestSessionSummary</code> — no turns omits the median line; multi-turn emits median in ms; zero turns filtered from the median.</li><li><code>TestChatLoopCapturesFirstSentence</code> — terminator triggers the stamp; no-terminator stream leaves it at 0; long-preamble stream shows gap &gt;= preamble sleep.</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>525 passed, 1 skipped in 31s</strong> (515 existing + 10 new).</p>
+<nav><a href="index.html">← Index</a><a href="iter-038.html">← iter-038</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-039 — per-iteration perf snapshots + time-series charts</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-039-perf-history</code></span> · <span>commit: <code>9be7b1b</code></span> · <span>tests: <code>+19</code> (total 544)</span></div>
+</header><p><strong>Branch:</strong> <code>iter-039-perf-history</code> (merged ff to main, commit <code>9be7b1b</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>iter-036 saved one <code>perf-results.json</code> (latest snapshot). With many iterations landing, the more useful view became &quot;metric trajectory over iterations&quot; — did TTFS regress when iter-031 filtered zero turns? Did iter-038&#x27;s TTFsent instrumentation slow wall time? You can&#x27;t see that from a single snapshot.</p>
+<p>User asked for &quot;performance test reports for each iteration.&quot; Three pieces:</p>
+<p><strong>1. Per-iter snapshot file.</strong> Each perf run now writes <code>iter-reports/perf-iter-NNN.json</code> alongside the existing <code>perf-results.json</code>. Iteration number resolved from the most recent <code>## iter-NNN —</code> heading in <code>ITERATION_LOG.md</code>; falls back to git commit count if the log can&#x27;t be parsed.</p>
+<p><strong>2. Generator helpers.</strong> Two new functions in <code>scripts/generate_iteration_reports.py</code>:</p>
+<ul><li><code>_load_perf_history(reports_dir)</code> walks <code>perf-iter-NNN.json</code> files, sorted by iteration. Robust to malformed JSON, missing iteration field, unrelated files in the dir.</li><li><code>_svg_multi_line_chart(series_by_label, ...)</code> — pure-SVG line chart with one polyline per series + a per-series legend in fixed palette colors.</li></ul>
+<p><strong>3. <code>performance.html</code> reorganized.</strong> Two top-level sections:</p>
+<ul><li>&quot;Latest snapshot&quot; — the iter-036 horizontal bar charts (TTFS, STT, TTS, LLM 1st token, wall — one bar per scenario).</li><li>&quot;Across iterations&quot; — new time-series block with multi-line charts (TTFS, wall, TTS, STT — one line per scenario, x-axis = iter number). Soft &quot;only one captured&quot; note when history has one entry; fills in over time.</li></ul>
+<p>Iter-038 was the seed (perf-iter-038.json saved during this iteration&#x27;s perf run before commit). iter-039.json will be added by the loop&#x27;s perf-run step at the end of this iteration. From iter-040 forward each loop iteration appends another snapshot.</p>
+<p>Loop prompt updated to include the perf-run step ahead of report regeneration:</p>
+<p>python -m pytest tests/performance/ -q python scripts/generate_iteration_reports.py</p>
+<p>Tests (19 in <code>tests/unit/test_perf_history.py</code>):</p>
+<ul><li><code>TestLoadPerfHistory</code> — empty / missing dir, single file, multiple files sorted by iteration, malformed JSON skipped, non-<code>perf-iter-</code> files ignored, filename fallback when JSON lacks &#x27;iteration&#x27; key.</li><li><code>TestMultiLineChart</code> — empty / all-empty placeholder, single point per series renders as circle, multi-point as path+dots, legend has every label, HTML-escaped title.</li><li><code>TestPerformancePageHistory</code> — no history → no section, single iter → soft note, multi-iter → 9 SVGs (5 latest + 4 history), iteration count emitted, non-numeric iteration row skipped without crashing.</li><li><code>TestResolveIterNumber</code> — real repo resolves to a 3-digit string (canary that the helper still works against the live ITERATION_LOG.md).</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>544 passed, 1 skipped in 32s</strong> (525 existing + 19 new).</p>
 <p>Notes:</p>
-<ul><li>Two metrics from the taxonomy now live (2.19 + 1.10). The cadence is one metric per iteration; that&#x27;s the right rhythm — small testable additions, each with its own diagnostic value.</li><li>Next candidates: 2.10 (barge-in latency — needs a <code>playback_stopped_at</code> hook in the worker), 2.18 (cancel-event correctness — <code>play_aligned</code> should report HOW it exited, not just elapsed seconds).</li><li>The &quot;preamble lag&quot; insight is only as good as the splitter&#x27;s terminator detection. iter-016 / iter-021 / iter-022 / iter-033 hardened the splitter for abbreviations, ordinals, quoted speech, and parens — without those fixes, TTFsent would be misleadingly high on text containing &quot;Mr. Smith&quot; or &quot;1st place&quot; or <code>(...).</code>.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-037.html">← iter-037</a><a href="iter-039.html">iter-039 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li><code>cancel-correctness</code> (taxonomy 2.18) was originally going to be iter-039 but the user redirected to per-iter perf history. The cancel-correctness work will return as iter-040 or later.</li><li>The &quot;Across iterations&quot; charts will show real trends starting iter-041 (when there are 3+ snapshots). Until then, a single point per scenario is rendered as a circle so the page still looks reasonable.</li><li>Choice not made: NO automatic deletion of old per-iter snapshots. At ~1 KB each, 100 iterations = ~100 KB. Cheap, and the history is the whole point.</li></ul><nav><a href="index.html">← Index</a><a href="iter-038.html">← iter-038</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>
