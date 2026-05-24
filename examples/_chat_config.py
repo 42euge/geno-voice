@@ -200,3 +200,66 @@ def parse_vad_config(chat_cfg: Any) -> dict:
         # else fall through to default — bad type / non-positive
         # number / missing key all hit the default.
     return out
+
+
+# iter-034: filler-word config. iter-011 introduced fillers but
+# the parsing lived inline in ``mic_chat.run_chat`` and was
+# brittle:
+#   - ``chat.fillers: "hi"`` (string instead of list) became
+#     ``["h", "i"]`` because ``list("hi")`` iterates chars.
+#   - ``chat.fillers_idle_threshold: "abc"`` crashed startup
+#     with a ValueError from ``float(...)``.
+#   - Non-string list items (numbers, dicts) reached the TTS
+#     synth where they failed late with confusing errors.
+# This parser is tolerant in the same shape as parse_vad_config:
+# typo'd config silently falls back to defaults / drops bad
+# items.
+FILLER_DEFAULTS = {
+    "texts": [],
+    "idle_threshold": 0.6,
+}
+
+
+def parse_filler_config(chat_cfg: Any) -> dict:
+    """Extract the optional filler config from a parsed chat config.
+
+    Returns a dict with two keys:
+      ``texts`` — list of strings to pre-render as filler clips.
+        Empty list if config is missing / malformed.
+      ``idle_threshold`` — seconds the worker waits before playing
+        a filler. Default 0.6.
+
+    Tolerant of malformed input:
+      - ``fillers`` not a list → empty list (no fillers).
+      - Non-string items in ``fillers`` → silently dropped from
+        the output list. (Numbers, dicts, etc. would only fail
+        later inside TTS with confusing errors.)
+      - Empty / whitespace-only strings → dropped.
+      - ``fillers_idle_threshold`` not a positive number →
+        default 0.6.
+
+    Mirrors the iter-020 parse_vad_config pattern.
+    """
+    out = {
+        "texts": list(FILLER_DEFAULTS["texts"]),
+        "idle_threshold": FILLER_DEFAULTS["idle_threshold"],
+    }
+    if not isinstance(chat_cfg, Mapping):
+        return out
+
+    raw_texts = chat_cfg.get("fillers")
+    if isinstance(raw_texts, list):
+        # Drop non-strings and empty / whitespace-only strings.
+        cleaned = []
+        for item in raw_texts:
+            if isinstance(item, str):
+                stripped = item.strip()
+                if stripped:
+                    cleaned.append(stripped)
+        out["texts"] = cleaned
+
+    raw_threshold = chat_cfg.get("fillers_idle_threshold")
+    if isinstance(raw_threshold, (int, float)) and raw_threshold > 0:
+        out["idle_threshold"] = float(raw_threshold)
+
+    return out

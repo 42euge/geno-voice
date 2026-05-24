@@ -206,12 +206,16 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
     #     fillers: ["hmm", "let me think", "well,"]
     #     fillers_idle_threshold: 0.6
     chat_cfg = load_chat_config()
-    filler_texts: list[str] = list(chat_cfg.get("fillers") or [])
-    filler_idle_threshold: float = float(chat_cfg.get("fillers_idle_threshold", 0.6))
+    # iter-034: tolerant filler config — was inline + brittle
+    # (string-as-list bug, ValueError on bad threshold). Now
+    # mirrors the iter-020 parse_vad_config pattern.
+    from examples._chat_config import parse_filler_config, parse_vad_config
+    filler_cfg = parse_filler_config(chat_cfg)
+    filler_texts: list[str] = filler_cfg["texts"]
+    filler_idle_threshold: float = filler_cfg["idle_threshold"]
     # iter-020: optional VAD tuning. parse_vad_config defaults
     # match the _chat_recording module constants and tolerates
     # malformed user input.
-    from examples._chat_config import parse_vad_config
     vad_cfg = parse_vad_config(chat_cfg)
     rendered_fillers: list[tuple] = []
     if filler_texts:
