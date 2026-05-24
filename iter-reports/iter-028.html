@@ -104,7 +104,7 @@ table.iter-table th { background: var(--panel); }
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-027.html">← iter-027</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-027.html">← iter-027</a><a href="iter-029.html">iter-029 →</a></nav><header>
 <h1>iter-028 — pass VAD config to BargeInWatcher in ChatLoop</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-028-watcher-vad</code></span> · <span>commit: <code>c35028b</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-028-watcher-vad</code> (merged ff to main, commit <code>c35028b</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -119,7 +119,8 @@ table.iter-table th { background: var(--panel); }
 <p>The behavioral pair is the load-bearing assertion: the wiring test alone could pass with a misconfigured threshold (e.g. if someone hardcoded a value); the parallel watchers showing divergent detection prove the threshold <em>actually</em> does what it claims.</p>
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>358 passed in 18s</strong> (354 existing + 4 new).</p>
 <p>Notes:</p>
-<ul><li>This is the iter-020 follow-on that should have been part of iter-020 itself. Caught only by code-review-driven inspection of which functions consume the VAD config — the iter-020 behavioral test only exercised the recorder, not the watcher.</li><li><code>BargeInWatcher.vad=</code> kwarg has existed since iter-009 — iter-028 is purely &quot;ChatLoop now uses it.&quot; No API change to the watcher.</li><li>Pattern: when a config param is added to one consumer, audit <em>all</em> consumers. Half-applied config is worse than no config because it produces inconsistent behavior between subsystems that should agree.</li></ul><nav><a href="index.html">← Index</a><a href="iter-027.html">← iter-027</a></nav>
+<ul><li>This is the iter-020 follow-on that should have been part of iter-020 itself. Caught only by code-review-driven inspection of which functions consume the VAD config — the iter-020 behavioral test only exercised the recorder, not the watcher.</li><li><code>BargeInWatcher.vad=</code> kwarg has existed since iter-009 — iter-028 is purely &quot;ChatLoop now uses it.&quot; No API change to the watcher.</li><li>Pattern: when a config param is added to one consumer, audit <em>all</em> consumers. Half-applied config is worse than no config because it produces inconsistent behavior between subsystems that should agree.</li></ul>
+<hr><nav><a href="index.html">← Index</a><a href="iter-027.html">← iter-027</a><a href="iter-029.html">iter-029 →</a></nav>
 </div>
 </body>
 </html>

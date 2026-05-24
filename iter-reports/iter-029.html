@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-029 — HTML iteration reports</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-028.html">← iter-028</a></nav><header>
+<h1>iter-029 — HTML iteration reports</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-029-html-reports</code></span> · <span>commit: <code>2d862af</code></span></div>
+</header><p><strong>Branch:</strong> <code>iter-029-html-reports</code> (merged ff to main, commit <code>2d862af</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>The log itself is now substantial (28 iterations, 2200+ lines of markdown), and skimming it as one file is awkward. The user asked for browsable HTML reports per iteration plus integration of report generation into the loop going forward.</p>
+<p>Adds <code>scripts/generate_iteration_reports.py</code> — a no-deps markdown→HTML generator that walks ITERATION_LOG.md, splits at <code>## iter-NNN —</code> headers, extracts metadata (branch, commit, date, test counts) via regex, and emits one HTML page per iteration plus an index.</p>
+<p>Output lives in <code>iter-reports/</code>:</p>
+<ul><li><code>index.html</code> — card grid of all iterations with title + metadata</li><li><code>iter-NNN.html</code> × N — individual pages with prev/next nav</li></ul>
+<p>The renderer handles a useful subset of markdown:</p>
+<ul><li>Headers (h2/h3/h4), paragraphs, hr (<code>---</code>)</li><li>Fenced code blocks (HTML-escaped inside <code>&lt;pre&gt;&lt;code&gt;</code>)</li><li>Bullet lists with nested sub-lists</li><li>Inline code (`<code> </code>code<code> </code><code>), bold (</code>**<code>), italic (</code>*<code>/</code>_`)</li><li>Tables (pipe-delimited, header row + separator)</li><li>Blockquotes</li></ul>
+<p>All user content is HTML-escaped before rendering, so an iteration title or body that contains <code>&lt;script&gt;</code> becomes <code>&amp;lt;script&amp;gt;</code>.</p>
+<p>Tests (30 in <code>tests/unit/test_iteration_reports.py</code>):</p>
+<ul><li>Inline rules: HTML escape, bold, italic, inline code, composition, word-internal underscore preserved (<code>user_role</code> stays plain)</li><li>Block rules: h2/h3, paragraph, hr, fenced code (with escape), bullet lists, tables, blockquotes</li><li>Parser edges: empty log, headerless log, single iteration with full metadata, multiple iterations with prev/next wiring, <code># Status</code> block between iterations gets dropped, iteration without metadata still parses</li><li>Rendering: title shown, branch+commit shown, test counts shown, navigation conditional on prev/next presence, index lists all iterations, title is HTML-escaped</li><li>Real-log integration: parses actual ITERATION_LOG.md into ≥28 iterations with strictly ascending numbers</li></ul>
+<p>Bug found and fixed during implementation: <code>_render_bullet_list._flush_sub</code> crashed with <code>IndexError: list index out of range</code> when the body of an iteration started with an indented sub-bullet (no parent bullet yet). Fixed to check <code>if items:</code> before appending the nested list to the previous item, and to emit the nested list at the top level if no parent exists yet. Defensive — the structure is unusual but it does occur.</p>
+<p>Verification: <code>python -m pytest tests/unit/</code> → <strong>388 passed in 18s</strong> (358 existing + 30 new).</p>
+<p>Going forward: each iteration&#x27;s ship process should include <code>python scripts/generate_iteration_reports.py</code> after appending the summary to ITERATION_LOG.md, so <code>iter-reports/</code> always reflects current state. The script is fast (&lt;100ms for 29 iterations) and deterministic.</p><nav><a href="index.html">← Index</a><a href="iter-028.html">← iter-028</a></nav>
+</div>
+</body>
+</html>

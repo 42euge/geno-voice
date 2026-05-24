@@ -2243,3 +2243,67 @@ Notes:
   *all* consumers. Half-applied config is worse than no config
   because it produces inconsistent behavior between subsystems
   that should agree.
+
+---
+
+## iter-029 — HTML iteration reports
+
+**Branch:** `iter-029-html-reports` (merged ff to main, commit `2d862af`)
+**Date:** 2026-05-24
+
+The log itself is now substantial (28 iterations, 2200+ lines of
+markdown), and skimming it as one file is awkward. The user asked
+for browsable HTML reports per iteration plus integration of report
+generation into the loop going forward.
+
+Adds `scripts/generate_iteration_reports.py` — a no-deps markdown→HTML
+generator that walks ITERATION_LOG.md, splits at `## iter-NNN —`
+headers, extracts metadata (branch, commit, date, test counts) via
+regex, and emits one HTML page per iteration plus an index.
+
+Output lives in `iter-reports/`:
+- `index.html` — card grid of all iterations with title + metadata
+- `iter-NNN.html` × N — individual pages with prev/next nav
+
+The renderer handles a useful subset of markdown:
+- Headers (h2/h3/h4), paragraphs, hr (`---`)
+- Fenced code blocks (HTML-escaped inside `<pre><code>`)
+- Bullet lists with nested sub-lists
+- Inline code (`` `code` ``), bold (`**`), italic (`*`/`_`)
+- Tables (pipe-delimited, header row + separator)
+- Blockquotes
+
+All user content is HTML-escaped before rendering, so an iteration
+title or body that contains `<script>` becomes `&lt;script&gt;`.
+
+Tests (30 in `tests/unit/test_iteration_reports.py`):
+- Inline rules: HTML escape, bold, italic, inline code, composition,
+  word-internal underscore preserved (`user_role` stays plain)
+- Block rules: h2/h3, paragraph, hr, fenced code (with escape),
+  bullet lists, tables, blockquotes
+- Parser edges: empty log, headerless log, single iteration with
+  full metadata, multiple iterations with prev/next wiring,
+  `# Status` block between iterations gets dropped, iteration
+  without metadata still parses
+- Rendering: title shown, branch+commit shown, test counts shown,
+  navigation conditional on prev/next presence, index lists all
+  iterations, title is HTML-escaped
+- Real-log integration: parses actual ITERATION_LOG.md into ≥28
+  iterations with strictly ascending numbers
+
+Bug found and fixed during implementation: `_render_bullet_list._flush_sub`
+crashed with `IndexError: list index out of range` when the body
+of an iteration started with an indented sub-bullet (no parent
+bullet yet). Fixed to check `if items:` before appending the nested
+list to the previous item, and to emit the nested list at the top
+level if no parent exists yet. Defensive — the structure is unusual
+but it does occur.
+
+Verification: `python -m pytest tests/unit/` → **388 passed in 18s**
+(358 existing + 30 new).
+
+Going forward: each iteration's ship process should include
+`python scripts/generate_iteration_reports.py` after appending the
+summary to ITERATION_LOG.md, so `iter-reports/` always reflects
+current state. The script is fast (<100ms for 29 iterations) and
+deterministic.
