@@ -51,6 +51,12 @@ from examples._chat_recording import (
     rms,
 )
 
+# Playback loop — extracted similarly, takes any speaker-shaped stream.
+from examples._chat_playback import (
+    TTS_RATE,
+    play_aligned as _play_aligned_core,
+)
+
 DIM = "\033[2m"
 BOLD = "\033[1m"
 GREEN = "\033[32m"
@@ -159,9 +165,6 @@ class TurnMetrics:
         print()
 
 
-TTS_RATE = 24000
-
-
 def synthesize_with_alignment(tts_engine, text: str, voice: str, speed: float):
     """Synthesize text and return (audio_np, tokens_with_timing).
 
@@ -197,70 +200,32 @@ def synthesize_with_alignment(tts_engine, text: str, voice: str, speed: float):
 
 
 def play_aligned(pa, audio_np, tokens, is_first_sentence=False):
-    """Play audio via PyAudio, revealing words in sync.
+    """Open a per-sentence PyAudio output stream and run the core
+    play loop from examples/_chat_playback.py against it.
 
-    Prints words incrementally (no \r rewrite). On first sentence,
-    prints the "Bot: " prefix. Returns playback duration.
+    The persistent-stream optimization (open once, reuse across
+    sentences) is iter-008 streaming-overlap territory; for now we
+    preserve the current open-per-sentence behavior so the iter-007
+    extraction is purely structural.
     """
-    # Convert float32 to int16
-    audio_int16 = (audio_np * 32767).astype(np.int16)
-    total_samples = len(audio_int16)
     play_chunk = 1024  # ~42ms at 24kHz
-
-    out_stream = pa.open(format=pyaudio.paInt16, channels=1,
-                         rate=TTS_RATE, output=True,
-                         frames_per_buffer=play_chunk)
-
-    if is_first_sentence:
-        # Clear any leftover "[N] waiting..." or live-preview line on the
-        # current row before printing "Bot:". Without this, we get duplicate
-        # "Bot:" lines on multi-sentence responses (bug #1).
-        sys.stdout.write(f"\r{CLEAR_LINE}  {CYAN}Bot:{RESET} ")
-        sys.stdout.flush()
-
-    t0 = time.monotonic()
-    samples_played = 0
-    token_idx = 0
-
+    out_stream = pa.open(
+        format=pyaudio.paInt16, channels=1,
+        rate=TTS_RATE, output=True,
+        frames_per_buffer=play_chunk,
+    )
     try:
-        while samples_played < total_samples:
-            end = min(samples_played + play_chunk, total_samples)
-            chunk_bytes = audio_int16[samples_played:end].tobytes()
-            out_stream.write(chunk_bytes)
-            samples_played = end
-
-            # Current playback position in seconds
-            pos = samples_played / TTS_RATE
-
-            # Reveal words whose start_ts we've passed
-            while token_idx < len(tokens) and tokens[token_idx]["start"] <= pos:
-                word = tokens[token_idx]["text"]
-                if word.strip() and not all(c in '.,!?;:' for c in word.strip()):
-                    sys.stdout.write(f"{BOLD}{word}{RESET} ")
-                    sys.stdout.flush()
-                elif word.strip():
-                    # Punctuation: backspace over trailing space, attach
-                    sys.stdout.write(f"\b{word} ")
-                    sys.stdout.flush()
-                token_idx += 1
-
+        return _play_aligned_core(
+            out_stream,
+            audio_np,
+            tokens,
+            is_first_sentence=is_first_sentence,
+            play_chunk=play_chunk,
+            rate=TTS_RATE,
+        )
     finally:
         out_stream.stop_stream()
         out_stream.close()
-
-    elapsed = time.monotonic() - t0
-
-    # Flush any remaining tokens
-    while token_idx < len(tokens):
-        word = tokens[token_idx]["text"]
-        if word.strip() and not all(c in '.,!?;:' for c in word.strip()):
-            sys.stdout.write(f"{word} ")
-        elif word.strip():
-            sys.stdout.write(f"\b{word} ")
-        token_idx += 1
-    sys.stdout.flush()
-
-    return elapsed
 
 
 def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
