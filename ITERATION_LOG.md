@@ -3649,3 +3649,58 @@ Notes:
 - Session-level metric pattern works well — passing as kwarg to
   print_session_summary keeps the data flow explicit. Future
   session metrics (1.5, 2.4) can use the same shape.
+
+---
+
+## iter-049 — STT real-time factor metric (taxonomy 1.7)
+
+**Branch:** `iter-049-stt-rtf` (merged ff to main, commit `b7f02f4`)
+**Date:** 2026-05-24
+
+Eleventh metric pulled from `docs/perf-metrics-taxonomy.md`. **Metric
+1.7 — STT real-time factor (RTF)**, "Standard" bucket.
+
+Simplest possible metric: `stt_rtf = stt_time / speech_duration`.
+Both inputs already on TurnMetrics since iter-001. iter-049 just
+exposes the ratio.
+
+Operational signal:
+- **<1**: STT runs faster than realtime — safe to invoke inline at
+  end-of-turn. Mlx-whisper-large on Apple Silicon: ~0.1-0.3.
+- **>1**: STT is the bottleneck — need streaming partial
+  transcription, smaller model, or hardware acceleration.
+
+Implementation:
+- `TurnMetrics.stt_rtf: float = 0.0` (new field).
+- ChatLoop computes after `stt_time` + `speech_dur` are set; guards
+  div-by-zero (zero-speech turns can't reach this code path post-
+  iter-031, but the guard documents the contract).
+- Per-turn print: extends STT line to `"STT: NNms (RTF 0.05x)"`.
+  Green if <1, yellow if ≥1. Falls back to plain `STT: NNms`
+  when RTF is 0 (back-compat for tests + zero-data turns).
+- Session summary: `Median STT RTF: N.NNx` filtered for >0.
+- `ScenarioResult.stt_rtf` on perf snapshots.
+
+Tests (8 in `tests/unit/test_stt_rtf.py`):
+- Default 0.
+- Per-turn print: zero falls back to plain line, sub-realtime
+  shown, ≥1 still rendered.
+- Session aggregate: no-data omits, with-data shows median,
+  zero-filter (parallel to iter-031 / iter-038 / iter-046 / iter-048).
+- ChatLoop arithmetic: real run with `slow_transcribe` (50ms
+  sleep) on ~1s speech yields RTF that matches
+  `stt_time / speech_duration` and is <0.2.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **645 passed, 1 skipped in 22s** (637
+existing + 8 new).
+
+Notes:
+- Eleven metrics from the taxonomy now live (24% of the 46-metric
+  list). The trivial-ratio pattern (1.7) shipped in this iter took
+  ~10 minutes — proof that some metrics are nearly-free once the
+  underlying inputs are already captured.
+- Next candidates: 1.5 (VAD missed-speech rate), 2.4 (filler
+  false-positive rate), 1.11 (TTS RTF).
+- 1.11 (TTS RTF) is the symmetric pair to 1.7. Same shape: ratio
+  of synth time to audio duration. Could be a tight follow-on.

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-048 — VAD false-trigger rate metric (taxonomy 1.4)</title>
+<title>iter-049 — STT real-time factor metric (taxonomy 1.7)</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,22 +168,21 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-047.html">← iter-047</a><a href="iter-049.html">iter-049 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-048 — VAD false-trigger rate metric (taxonomy 1.4)</h1>
-<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-048-vad-false</code></span> · <span>commit: <code>9e8579d</code></span> · <span>tests: <code>+7</code> (total 637)</span></div>
-</header><p><strong>Branch:</strong> <code>iter-048-vad-false</code> (merged ff to main, commit <code>9e8579d</code>) <strong>Date:</strong> 2026-05-24</p>
-<p>Tenth metric pulled from <code>docs/perf-metrics-taxonomy.md</code>. <strong>Metric 1.4 — VAD false-trigger rate</strong>.</p>
-<p>Counts turns where <code>ChatLoop.run_one_turn</code> returned <code>metrics=None</code> AND <code>had_error=False</code> — VAD fired ACTIVE but the utterance was too short (<code>DONE_TOO_SHORT</code>) or the transcription came back empty. High rate = silence_threshold too low or min_speech_duration too short; the bot &quot;thinks&quot; the user spoke when they didn&#x27;t and wastes a turn.</p>
-<p>This is the first <strong>session-level</strong> metric — different shape from the per-turn TurnMetrics fields. Distinguished cleanly from LLM errors (which also yield metrics=None but with had_error=True).</p>
+<nav><a href="index.html">← Index</a><a href="iter-048.html">← iter-048</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-049 — STT real-time factor metric (taxonomy 1.7)</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-049-stt-rtf</code></span> · <span>commit: <code>b7f02f4</code></span> · <span>tests: <code>+8</code> (total 645)</span></div>
+</header><p><strong>Branch:</strong> <code>iter-049-stt-rtf</code> (merged ff to main, commit <code>b7f02f4</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>Eleventh metric pulled from <code>docs/perf-metrics-taxonomy.md</code>. <strong>Metric 1.7 — STT real-time factor (RTF)</strong>, &quot;Standard&quot; bucket.</p>
+<p>Simplest possible metric: <code>stt_rtf = stt_time / speech_duration</code>. Both inputs already on TurnMetrics since iter-001. iter-049 just exposes the ratio.</p>
+<p>Operational signal:</p>
+<ul><li><strong>&lt;1</strong>: STT runs faster than realtime — safe to invoke inline at end-of-turn. Mlx-whisper-large on Apple Silicon: ~0.1-0.3.</li><li><strong>&gt;1</strong>: STT is the bottleneck — need streaming partial transcription, smaller model, or hardware acceleration.</li></ul>
 <p>Implementation:</p>
-<ul><li><code>print_session_summary</code> gains <code>false_triggers: int = 0</code> kwarg (back-compat default). Emits &quot;VAD false-trig: N/M (P%) — tune silence_threshold or min_speech_duration&quot; when &gt;0.</li><li><code>mic_chat.run_chat</code> counts false triggers across the chat loop: the existing <code>if result.metrics is None: continue</code> branch now bumps <code>false_triggers</code> when <code>had_error</code> is False. Passes total to print_session_summary.</li></ul>
-<p>Documented limitation: when <code>metrics_list</code> is empty (session ended before any successful turn), the existing early-return placeholder (&quot;Session ended (no completed turns)&quot;) fires before the false- trigger line would emit. Future iter could lift the false-trigger reporting above the early return — for now, callers see the placeholder and ignore the suppressed metric. Edge case isn&#x27;t critical because in practice if every turn is a false trigger, the user will notice anyway and tune their config.</p>
-<p>Tests (7 in <code>tests/unit/test_vad_false_trigger.py</code>):</p>
-<ul><li><code>print_session_summary</code> kwarg behavior: default zero omits, explicit zero omits, one trigger shows &quot;N/M (P%)&quot; with tuning text, high rate shown correctly, empty-metrics-list edge case documented.</li><li><code>mic_chat</code> loop pattern: simulated TurnResult sequence increments counter on <code>metrics=None &amp;&amp; !had_error</code>; does NOT increment on <code>metrics=None &amp;&amp; had_error</code> (LLM error path is not a false trigger).</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>637 passed, 1 skipped in 20s</strong> (630 existing + 7 new).</p>
+<ul><li><code>TurnMetrics.stt_rtf: float = 0.0</code> (new field).</li><li>ChatLoop computes after <code>stt_time</code> + <code>speech_dur</code> are set; guards div-by-zero (zero-speech turns can&#x27;t reach this code path post- iter-031, but the guard documents the contract).</li><li>Per-turn print: extends STT line to <code>&quot;STT: NNms (RTF 0.05x)&quot;</code>. Green if &lt;1, yellow if ≥1. Falls back to plain <code>STT: NNms</code> when RTF is 0 (back-compat for tests + zero-data turns).</li><li>Session summary: <code>Median STT RTF: N.NNx</code> filtered for &gt;0.</li><li><code>ScenarioResult.stt_rtf</code> on perf snapshots.</li></ul>
+<p>Tests (8 in <code>tests/unit/test_stt_rtf.py</code>):</p>
+<ul><li>Default 0.</li><li>Per-turn print: zero falls back to plain line, sub-realtime shown, ≥1 still rendered.</li><li>Session aggregate: no-data omits, with-data shows median, zero-filter (parallel to iter-031 / iter-038 / iter-046 / iter-048).</li><li>ChatLoop arithmetic: real run with <code>slow_transcribe</code> (50ms sleep) on ~1s speech yields RTF that matches <code>stt_time / speech_duration</code> and is &lt;0.2.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>645 passed, 1 skipped in 22s</strong> (637 existing + 8 new).</p>
 <p>Notes:</p>
-<ul><li>Ten metrics from the taxonomy now live (2.19 / 1.10 / 2.18 / 2.10 / 2.1 / 2.16 / 2.6 / 1.13 / 2.11 / 1.4). Hit a milestone: 10/46 — 22% of the taxonomy is instrumented.</li><li>Remaining high-value candidates: 1.5 (VAD missed-speech rate), 2.4 (filler false-positive rate), 1.7 (STT real-time factor), 3.1 (naturalness gap).</li><li>Session-level metric pattern works well — passing as kwarg to print_session_summary keeps the data flow explicit. Future session metrics (1.5, 2.4) can use the same shape.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-047.html">← iter-047</a><a href="iter-049.html">iter-049 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li>Eleven metrics from the taxonomy now live (24% of the 46-metric list). The trivial-ratio pattern (1.7) shipped in this iter took ~10 minutes — proof that some metrics are nearly-free once the underlying inputs are already captured.</li><li>Next candidates: 1.5 (VAD missed-speech rate), 2.4 (filler false-positive rate), 1.11 (TTS RTF).</li><li>1.11 (TTS RTF) is the symmetric pair to 1.7. Same shape: ratio of synth time to audio duration. Could be a tight follow-on.</li></ul><nav><a href="index.html">← Index</a><a href="iter-048.html">← iter-048</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>
