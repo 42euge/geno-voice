@@ -120,6 +120,8 @@ class ScenarioResult:
     # iter-041: time from barge-in detect to playback halt. 0 if
     # no barge-in fired this scenario.
     barge_in_latency_ms: float = 0.0
+    # iter-047: barge-in phase ("llm_stream", "playback", or "").
+    barge_in_phase: str = ""
     # iter-037: count of mic frames flushed at start of turn.
     mic_stale_frames: int = 0
 
@@ -288,6 +290,7 @@ def _run_scenario(
         wall_ms=wall * 1000,
         barge_in=m.barge_in,
         barge_in_latency_ms=m.barge_in_latency * 1000,
+        barge_in_phase=m.barge_in_phase,
         mic_stale_frames=m.mic_stale_frames,
     )
     _record(res)
@@ -454,6 +457,7 @@ class TestPerfScenarios:
             wall_ms=wall * 1000,
             barge_in=m.barge_in,
             barge_in_latency_ms=m.barge_in_latency * 1000,
+        barge_in_phase=m.barge_in_phase,
             mic_stale_frames=m.mic_stale_frames,
         )
         _record(res)

@@ -312,13 +312,19 @@ class ChatLoop:
             watcher.stop(timeout=2.0)
             if watcher.detected:
                 next_primed = list(watcher.frames)
-                phase = (
-                    "LLM-stream phase"
+                # iter-047: structured phase. Used both for the
+                # diagnostic string AND for the metric on TurnMetrics
+                # (where the value is "llm_stream" or "playback" —
+                # the user-facing string adds " phase" suffix).
+                phase_key = (
+                    "llm_stream"
                     if coord.triggered_at is not None
                     and llm_stream_done_at is not None
                     and coord.triggered_at < llm_stream_done_at
-                    else "playback phase"
+                    else "playback"
                 )
+                metrics.barge_in_phase = phase_key
+                phase = f"{phase_key.replace('_', '-')} phase"
                 self._print(
                     f"\n  {_DIM}barge-in during {phase}: replaying "
                     f"{len(next_primed)} captured frames "

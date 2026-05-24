@@ -90,6 +90,13 @@ class TurnMetrics:
     # made it into the per-turn summary.
     fillers_played: int = 0
     barge_in: bool = False
+    # iter-047: which phase the barge-in fired in. "" if no barge,
+    # else "llm_stream" (interrupted while LLM was still streaming
+    # tokens — user impatient with TTFS) or "playback" (interrupted
+    # while bot was speaking — verbose / wrong response). Different
+    # root causes, different fixes. Metric 2.11 in the perf-metrics
+    # taxonomy.
+    barge_in_phase: str = ""
     # iter-041: time from BargeInCoordinator.trigger() firing to
     # playback being fully stopped (worker thread joined). Metric
     # 2.10 in the perf-metrics taxonomy. The whole barge-in feature
@@ -191,9 +198,19 @@ class TurnMetrics:
                 )
             else:
                 cancel_note = " (between sentences)"
+            # iter-047: phase context. "llm_stream" = user interrupted
+            # before bot started speaking (impatient with TTFS).
+            # "playback" = user interrupted bot speech (verbose /
+            # wrong response).
+            if self.barge_in_phase == "llm_stream":
+                phase_note = " (during LLM stream)"
+            elif self.barge_in_phase == "playback":
+                phase_note = " (during playback)"
+            else:
+                phase_note = ""
             print(
                 f"  {_DIM}│{_RESET}  {_YELLOW}Barge-in:      "
-                f"yes (user interrupted){cancel_note}{_RESET}"
+                f"yes (user interrupted){cancel_note}{phase_note}{_RESET}"
             )
             # iter-041: barge-in latency. Only meaningful when
             # >0 (some test paths leave it at 0). Color-code:
@@ -303,6 +320,15 @@ def print_session_summary(metrics_list: list[TurnMetrics], llm_config: dict, *, 
     mid_cancels = sum(
         1 for m in metrics_list if m.barge_in and m.sentences_cancelled > 0
     )
+    # iter-047: barge-in phase distribution.
+    llm_phase_barges = sum(
+        1 for m in metrics_list
+        if m.barge_in and m.barge_in_phase == "llm_stream"
+    )
+    playback_phase_barges = sum(
+        1 for m in metrics_list
+        if m.barge_in and m.barge_in_phase == "playback"
+    )
     # iter-041: barge-in latency over turns where it was measured
     # (>0 — both triggered_at and playback_stopped_at have to be
     # set for the metric to be meaningful).
@@ -375,6 +401,17 @@ def print_session_summary(metrics_list: list[TurnMetrics], llm_config: dict, *, 
             _emit(
                 f"    Worst barge:      "
                 f"{max(barge_latencies) * 1000:.0f}ms"
+            )
+        # iter-047: phase distribution. Only show when at least one
+        # phase value was set; gives root-cause hint:
+        #   high LLM-phase = users impatient with TTFS — fix LLM TTFT.
+        #   high playback-phase = bot output is verbose / wrong —
+        #     fix system prompt or response quality.
+        if llm_phase_barges or playback_phase_barges:
+            _emit(
+                f"    Barge phases:     "
+                f"{llm_phase_barges} LLM-stream, "
+                f"{playback_phase_barges} playback"
             )
     if stale_total:
         # iter-037: surface aggregate stale-frame total so a "session
