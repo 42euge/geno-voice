@@ -83,6 +83,7 @@ def play_aligned(
     clock: Callable[[], float] = time.monotonic,
     play_chunk: int = DEFAULT_PLAY_CHUNK,
     rate: int = TTS_RATE,
+    cancel_event=None,
 ) -> float:
     """Stream `audio_np` into `speaker_stream` chunk-by-chunk and reveal
     `tokens` in real-time as playback advances.
@@ -97,6 +98,13 @@ def play_aligned(
     position get printed when their chunk is written; any tokens whose
     start exceeds the audio duration (rare, but possible) get flushed
     after the loop.
+
+    `cancel_event` is an optional ``threading.Event``-shaped object
+    (anything with ``.is_set()``). When set, the play loop breaks
+    between chunks — the current chunk in flight finishes writing,
+    but no further chunks are queued. This is the iter-009 barge-in
+    primitive: a watcher on the mic side can flip the flag the
+    instant it detects user speech, and the worker stops mid-sentence.
 
     Returns elapsed wall-clock seconds spent inside the play loop.
     """
@@ -118,6 +126,8 @@ def play_aligned(
     token_idx = 0
 
     while samples_played < total_samples:
+        if cancel_event is not None and cancel_event.is_set():
+            break
         end = min(samples_played + play_chunk, total_samples)
         chunk_bytes = audio_int16[samples_played:end].tobytes()
         speaker_stream.write(chunk_bytes)

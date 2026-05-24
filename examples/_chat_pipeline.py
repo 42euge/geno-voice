@@ -93,8 +93,13 @@ class SentenceWorker:
         self._queue: Queue = Queue()
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        # Hard-cancel signal forwarded to play_fn so it can break
+        # mid-chunk. iter-009 barge-in primitive — distinct from
+        # _stop_event, which is the polite "drain and exit" signal.
+        self._cancel_event = threading.Event()
         self._started = False
         self._submit_done_called = False
+        self.cancelled: bool = False
 
         # Public metrics — read after wait_done() / stop() returns.
         self.sentences_spoken: int = 0
@@ -146,8 +151,8 @@ class SentenceWorker:
         """Drain the queue, signal stop, and join the thread.
 
         Pending unplayed sentences are dropped. The currently-playing
-        sentence is allowed to finish (mid-sentence cancellation is
-        iter-009 barge-in territory).
+        sentence is allowed to finish — for mid-sentence cancellation
+        use ``cancel()`` instead.
         """
         if not self._started:
             return
@@ -164,6 +169,22 @@ class SentenceWorker:
         self._queue.put(_SENTINEL)
         if self._thread is not None:
             self._thread.join(timeout=timeout)
+
+    def cancel(self, timeout: float = 5.0) -> None:
+        """Hard-cancel: interrupt the currently-playing sentence
+        mid-stream and drop everything queued behind it.
+
+        Implementation: set ``_cancel_event`` so play_fn breaks between
+        chunks (see examples/_chat_playback.play_aligned), then drain
+        and join just like ``stop()``.
+
+        Idempotent — calling twice is safe.
+        """
+        if not self._started:
+            return
+        self.cancelled = True
+        self._cancel_event.set()
+        self.stop(timeout=timeout)
 
     # --- worker body -------------------------------------------------
 
@@ -204,15 +225,27 @@ class SentenceWorker:
                 if self.first_audio_at is None:
                     self.first_audio_at = self._clock()
 
-                # Play
+                # Play. Prefer passing cancel_event (iter-009 barge-in),
+                # but fall back gracefully if play_fn doesn't accept it
+                # — keeps the iter-008 test play_fns and any external
+                # callers working without modification.
                 try:
                     is_first = self.sentences_spoken == 0
-                    elapsed = self._play_fn(
-                        speaker,
-                        audio_np,
-                        tokens,
-                        is_first_sentence=is_first,
-                    )
+                    try:
+                        elapsed = self._play_fn(
+                            speaker,
+                            audio_np,
+                            tokens,
+                            is_first_sentence=is_first,
+                            cancel_event=self._cancel_event,
+                        )
+                    except TypeError:
+                        elapsed = self._play_fn(
+                            speaker,
+                            audio_np,
+                            tokens,
+                            is_first_sentence=is_first,
+                        )
                     self.playback_time += float(elapsed) if elapsed else 0.0
                     self.sentences_spoken += 1
                 except Exception as e:
@@ -226,3 +259,148 @@ class SentenceWorker:
                         fn()
                     except Exception:
                         pass
+
+
+# ---- Barge-in watcher --------------------------------------------------------
+
+class BargeInWatcher:
+    """Background thread that listens for user speech on a mic stream
+    while the bot is speaking.
+
+    Run a ``VadState`` over chunks read from the mic. When the VAD
+    transitions into the configured trigger event (default:
+    ``ACTIVE`` — i.e. the moment user speech crosses the threshold),
+    invoke the user-supplied callback once. Continue capturing frames
+    after triggering so the orchestrating code can replay them into
+    the next ``record_utterance_streaming`` call (so the user's first
+    syllables aren't lost).
+
+    Designed to be paired with ``SentenceWorker.cancel`` — the typical
+    setup is:
+
+        watcher = BargeInWatcher(
+            mic=mic_stream,
+            on_speech_detected=worker.cancel,
+        )
+        watcher.start()
+        worker.submit(...); worker.submit(...)
+        worker.submit_done()
+        worker.wait_done()
+        watcher.stop()
+        if watcher.detected:
+            # feed watcher.frames into the next record loop
+
+    Tests inject deterministic audio via the iter-005
+    ``VirtualMicStream`` and verify the callback fires at the right
+    instant relative to pushed audio.
+    """
+
+    def __init__(
+        self,
+        *,
+        mic,
+        on_speech_detected: Callable[[], None],
+        vad=None,
+        chunk_size: int = 1024,
+        rate: int = 16000,
+        trigger_on: str = "active",
+        clock: Callable[[], float] = time.monotonic,
+        poll_interval: float = 0.005,
+    ):
+        # Local import keeps this module independent of the helpers
+        # module's import path during type-checking.
+        from examples._chat_helpers import VadEvent, VadState
+
+        self._mic = mic
+        self._callback = on_speech_detected
+        self._vad = vad if vad is not None else VadState()
+        self._chunk = chunk_size
+        self._rate = rate
+        if trigger_on not in ("active", "done_ok"):
+            raise ValueError(
+                f"trigger_on must be 'active' or 'done_ok', got {trigger_on!r}"
+            )
+        self._trigger_on = trigger_on
+        self._clock = clock
+        self._poll = poll_interval
+        self._VadEvent = VadEvent
+
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._started = False
+
+        # Public observable state (read after stop()).
+        self.detected: bool = False
+        self.frames: list[bytes] = []
+        self.events: list = []  # full sequence for assertions
+        self.frame_idx_at_trigger: Optional[int] = None
+
+    def start(self) -> None:
+        if self._started:
+            raise RuntimeError("BargeInWatcher already started")
+        self._started = True
+        self._thread = threading.Thread(
+            target=self._run, name="BargeInWatcher", daemon=True
+        )
+        self._thread.start()
+
+    def stop(self, timeout: float = 2.0) -> None:
+        if not self._started:
+            return
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=timeout)
+
+    def _run(self) -> None:
+        frame_idx = 0
+        while not self._stop_event.is_set():
+            try:
+                # Only read if data is actually available, so the
+                # watcher doesn't grab the silence-padding zeros that
+                # VirtualMicStream serves on underflow (which would
+                # generate noisy IDLE events at the rate of the poll
+                # loop). For real PyAudio mics, get_read_available()
+                # returns the count buffered in PortAudio.
+                avail = getattr(self._mic, "get_read_available", lambda: self._chunk)()
+            except Exception:
+                avail = 0
+
+            if avail < self._chunk:
+                # Sleep briefly so we don't pin a core; this is also
+                # the granularity at which the watcher reacts.
+                if self._stop_event.wait(timeout=self._poll):
+                    break
+                continue
+
+            try:
+                data = self._mic.read(self._chunk, exception_on_overflow=False)
+            except Exception:
+                break
+
+            if not data:
+                continue
+
+            self.frames.append(data)
+            audio = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+            level = float(np.sqrt(np.mean(audio ** 2))) if len(audio) else 0.0
+            now = self._clock()
+            event = self._vad.feed(level, now)
+            self.events.append(event)
+
+            if not self.detected and self._trigger_matches(event):
+                self.detected = True
+                self.frame_idx_at_trigger = frame_idx
+                try:
+                    self._callback()
+                except Exception:
+                    # Caller's callback shouldn't take down the watcher.
+                    pass
+
+            frame_idx += 1
+
+    def _trigger_matches(self, event) -> bool:
+        if self._trigger_on == "active":
+            return event is self._VadEvent.ACTIVE
+        if self._trigger_on == "done_ok":
+            return event is self._VadEvent.DONE_OK
+        return False
