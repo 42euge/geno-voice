@@ -38,6 +38,10 @@ class Iteration:
     body_md: str = ""  # full markdown body, headers + paragraphs
     tests_added: int = 0
     total_tests: int = 0
+    # iter-035: pulled from the verification line. Used for the
+    # testing.html runtime plot. 0 means "not parseable" (some
+    # early iterations had no timing in their verification line).
+    test_runtime_s: float = 0.0
     next_id: str = ""  # "002" for navigation
     prev_id: str = ""
 
@@ -62,6 +66,12 @@ _BRANCH_RE = re.compile(
 _DATE_RE = re.compile(r"\*\*Date:\*\*\s+(?P<date>\S+)")
 _TESTS_RE = re.compile(
     r"\*\*(?P<total>\d+)\s+passed.*\((?P<existing>\d+)\s+existing\s+\+\s+(?P<new>\d+)\s+new\)"
+)
+# iter-035: pull the runtime portion of the verification line —
+# patterns like ``**413 passed in 17.9s**`` or ``**358 passed in 18s**``.
+# Optional (some early iters omitted it).
+_RUNTIME_RE = re.compile(
+    r"\*\*\d+\s+passed\s+in\s+(?P<seconds>\d+(?:\.\d+)?)s\*\*"
 )
 
 
@@ -126,6 +136,9 @@ def _populate_metadata(it: Iteration) -> None:
     if m:
         it.total_tests = int(m.group("total"))
         it.tests_added = int(m.group("new"))
+    m = _RUNTIME_RE.search(body)
+    if m:
+        it.test_runtime_s = float(m.group("seconds"))
 
 
 # ---- Markdown → HTML --------------------------------------------------------
@@ -442,6 +455,51 @@ table.iter-table th { background: var(--panel); }
   font-size: 11px;
   margin-left: 8px;
 }
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
 """
 
 
@@ -471,6 +529,8 @@ def render_iteration(it: Iteration) -> str:
         nav_parts.append(f'<a href="iter-{it.prev_id}.html">← iter-{it.prev_id}</a>')
     if it.next_id:
         nav_parts.append(f'<a href="iter-{it.next_id}.html">iter-{it.next_id} →</a>')
+    # iter-035: testing report link, present on every iter page.
+    nav_parts.append('<a href="testing.html">Testing →</a>')
     nav_html = "<nav>" + "".join(nav_parts) + "</nav>"
 
     meta_bits: list[str] = []
@@ -534,13 +594,308 @@ def render_index(iterations: list[Iteration]) -> str:
         + ".</p>"
     )
 
+    # iter-035: top-level link to the testing posture page.
+    nav_html = '<nav><a href="testing.html">Testing →</a></nav>'
+
     body_html = (
         '<header><h1>geno-voice iteration log</h1>'
         '<div class="meta">Generated from ITERATION_LOG.md</div></header>'
+        + nav_html
         + summary
         + "".join(cards)
     )
     return _page_template("geno-voice iteration log", body_html)
+
+
+# ---- iter-035: testing report (SVG plots) ------------------------------------
+
+
+def _count_test_files(repo_root: Path) -> tuple[int, int]:
+    """Count test files under tests/unit/ and tests/integration/. The
+    counts shown on testing.html sit alongside the per-iteration test
+    totals, so a reader can see both "how many test FILES we have"
+    and "how many test CASES are running."
+
+    Returns (unit_files, integration_files). Either may be 0.
+    """
+    unit_dir = repo_root / "tests" / "unit"
+    int_dir = repo_root / "tests" / "integration"
+    unit_n = len(list(unit_dir.glob("test_*.py"))) if unit_dir.exists() else 0
+    int_n = len(list(int_dir.glob("test_*.py"))) if int_dir.exists() else 0
+    return unit_n, int_n
+
+
+def _svg_line_chart(
+    series: list[tuple[float, float]],
+    *,
+    title: str,
+    y_label: str,
+    width: int = 720,
+    height: int = 280,
+    color: str = "#7aa2f7",
+) -> str:
+    """Render a simple SVG line chart with axes, gridlines, and dots
+    at each data point. Pure-Python, no dependencies — the goal is
+    a single self-contained iter-reports/ tree that opens fine on a
+    plain HTTP server.
+
+    `series` is a list of (x, y) tuples, where x is the iteration
+    number and y is the metric. x is plotted left-to-right.
+    """
+    if not series:
+        return f'<div class="chart-empty">{html.escape(title)}: no data</div>'
+
+    pad_l, pad_r, pad_t, pad_b = 56, 16, 30, 36
+    inner_w = width - pad_l - pad_r
+    inner_h = height - pad_t - pad_b
+
+    xs = [p[0] for p in series]
+    ys = [p[1] for p in series]
+    x_min, x_max = min(xs), max(xs)
+    y_min = 0  # always anchor at zero so growth is visually honest
+    y_max = max(max(ys), 1)
+    # Add 8% headroom on top so the highest point doesn't touch the frame.
+    y_max *= 1.08
+
+    def sx(x: float) -> float:
+        if x_max == x_min:
+            return pad_l + inner_w / 2
+        return pad_l + (x - x_min) / (x_max - x_min) * inner_w
+
+    def sy(y: float) -> float:
+        if y_max == y_min:
+            return pad_t + inner_h / 2
+        return pad_t + inner_h - (y - y_min) / (y_max - y_min) * inner_h
+
+    # Polyline path
+    path_d = " ".join(
+        ("M" if i == 0 else "L") + f"{sx(x):.1f},{sy(y):.1f}"
+        for i, (x, y) in enumerate(series)
+    )
+
+    # Y-axis ticks: 0, 25%, 50%, 75%, 100% of y_max
+    y_ticks = []
+    for frac in (0.0, 0.25, 0.5, 0.75, 1.0):
+        v = y_min + frac * (y_max - y_min)
+        y = sy(v)
+        y_ticks.append(
+            f'<line x1="{pad_l}" x2="{width - pad_r}" y1="{y:.1f}" y2="{y:.1f}" '
+            f'class="grid"/>'
+            f'<text x="{pad_l - 8}" y="{y + 4:.1f}" '
+            f'text-anchor="end" class="axis">{int(round(v))}</text>'
+        )
+
+    # X-axis ticks: first, mid, last
+    x_ticks = []
+    for x in (x_min, (x_min + x_max) / 2, x_max):
+        xi = sx(x)
+        x_ticks.append(
+            f'<text x="{xi:.1f}" y="{height - pad_b + 18}" '
+            f'text-anchor="middle" class="axis">iter-{int(round(x)):03d}</text>'
+        )
+
+    # Data points
+    dots = "".join(
+        f'<circle cx="{sx(x):.1f}" cy="{sy(y):.1f}" r="3" fill="{color}"/>'
+        for x, y in series
+    )
+
+    return f"""<svg viewBox="0 0 {width} {height}" class="chart"
+xmlns="http://www.w3.org/2000/svg" role="img" aria-label="{html.escape(title)}">
+<text x="{pad_l}" y="18" class="chart-title">{html.escape(title)}</text>
+<text x="{pad_l}" y="{height - 4}" class="chart-axis-label">iteration</text>
+<text x="14" y="{pad_t + inner_h / 2}" class="chart-axis-label" transform="rotate(-90 14,{pad_t + inner_h / 2})" text-anchor="middle">{html.escape(y_label)}</text>
+{''.join(y_ticks)}
+{''.join(x_ticks)}
+<path d="{path_d}" fill="none" stroke="{color}" stroke-width="2"/>
+{dots}
+</svg>"""
+
+
+def _svg_bar_chart(
+    series: list[tuple[float, float]],
+    *,
+    title: str,
+    y_label: str,
+    width: int = 720,
+    height: int = 280,
+    color: str = "#9ece6a",
+) -> str:
+    """Render a simple SVG bar chart. ``series`` is (x, y) tuples;
+    bars are placed at evenly-spaced columns along x.
+    """
+    if not series:
+        return f'<div class="chart-empty">{html.escape(title)}: no data</div>'
+
+    pad_l, pad_r, pad_t, pad_b = 56, 16, 30, 36
+    inner_w = width - pad_l - pad_r
+    inner_h = height - pad_t - pad_b
+
+    n = len(series)
+    bar_gap = 2
+    bar_w = max(2.0, inner_w / n - bar_gap)
+
+    ys = [p[1] for p in series]
+    y_min = 0
+    y_max = max(max(ys), 1) * 1.08
+
+    def sy(y: float) -> float:
+        return pad_t + inner_h - (y - y_min) / (y_max - y_min) * inner_h
+
+    bars = []
+    for i, (x, y) in enumerate(series):
+        bx = pad_l + i * (inner_w / n)
+        by = sy(y)
+        bh = pad_t + inner_h - by
+        bars.append(
+            f'<rect x="{bx:.1f}" y="{by:.1f}" width="{bar_w:.1f}" '
+            f'height="{bh:.1f}" fill="{color}"/>'
+        )
+
+    y_ticks = []
+    for frac in (0.0, 0.25, 0.5, 0.75, 1.0):
+        v = y_min + frac * (y_max - y_min)
+        y = sy(v)
+        y_ticks.append(
+            f'<line x1="{pad_l}" x2="{width - pad_r}" y1="{y:.1f}" y2="{y:.1f}" '
+            f'class="grid"/>'
+            f'<text x="{pad_l - 8}" y="{y + 4:.1f}" '
+            f'text-anchor="end" class="axis">{int(round(v))}</text>'
+        )
+
+    # X-axis ticks at first, mid, last iteration.
+    if n >= 1:
+        first_idx, mid_idx, last_idx = 0, n // 2, n - 1
+        x_ticks = []
+        for idx in {first_idx, mid_idx, last_idx}:
+            xi = pad_l + idx * (inner_w / n) + bar_w / 2
+            iter_num = int(round(series[idx][0]))
+            x_ticks.append(
+                f'<text x="{xi:.1f}" y="{height - pad_b + 18}" '
+                f'text-anchor="middle" class="axis">iter-{iter_num:03d}</text>'
+            )
+    else:
+        x_ticks = []
+
+    return f"""<svg viewBox="0 0 {width} {height}" class="chart"
+xmlns="http://www.w3.org/2000/svg" role="img" aria-label="{html.escape(title)}">
+<text x="{pad_l}" y="18" class="chart-title">{html.escape(title)}</text>
+<text x="{pad_l}" y="{height - 4}" class="chart-axis-label">iteration</text>
+<text x="14" y="{pad_t + inner_h / 2}" class="chart-axis-label" transform="rotate(-90 14,{pad_t + inner_h / 2})" text-anchor="middle">{html.escape(y_label)}</text>
+{''.join(y_ticks)}
+{''.join(x_ticks)}
+{''.join(bars)}
+</svg>"""
+
+
+def render_testing_page(iterations: list[Iteration], repo_root: Path) -> str:
+    """Build iter-reports/testing.html — one page summarizing the
+    project's test posture over iterations.
+
+    Plots:
+      - Total tests over time (line chart, cumulative).
+      - Tests added per iteration (bar chart).
+      - Test runtime over time (line chart, where measured).
+
+    Plus a current breakdown of test files by suite (unit /
+    integration) so the reader can tell the suites apart at a
+    glance.
+    """
+    nums = [int(it.number) for it in iterations]
+
+    # Series 1: cumulative total tests. Use the parsed ``total_tests``
+    # for iters where it was recorded; carry the previous value
+    # forward when an iter didn't update the count (rare — but it's
+    # safer than zero).
+    total_series: list[tuple[float, float]] = []
+    last_total = 0
+    for it in iterations:
+        if it.total_tests > 0:
+            last_total = it.total_tests
+        total_series.append((float(it.number), float(last_total)))
+
+    # Series 2: tests added per iteration (the parsed `+N new` value).
+    added_series = [
+        (float(it.number), float(it.tests_added)) for it in iterations
+    ]
+
+    # Series 3: runtime over iterations — only include iters where
+    # we parsed a number (early iters had no timing in the
+    # verification line).
+    runtime_series = [
+        (float(it.number), it.test_runtime_s)
+        for it in iterations
+        if it.test_runtime_s > 0
+    ]
+
+    chart_total = _svg_line_chart(
+        total_series,
+        title="Total tests passing",
+        y_label="tests",
+    )
+    chart_added = _svg_bar_chart(
+        added_series,
+        title="Tests added per iteration",
+        y_label="tests added",
+    )
+    chart_runtime = _svg_line_chart(
+        runtime_series,
+        title="Test runtime (seconds)",
+        y_label="seconds",
+        color="#bb9af7",
+    )
+
+    unit_n, int_n = _count_test_files(repo_root)
+    latest = iterations[-1] if iterations else None
+    latest_total = latest.total_tests if latest else 0
+    latest_runtime = latest.test_runtime_s if latest else 0
+    median_added = (
+        sorted(it.tests_added for it in iterations)[len(iterations) // 2]
+        if iterations
+        else 0
+    )
+
+    summary_html = f"""<div class="stat-grid">
+<div class="stat"><div class="stat-num">{latest_total}</div><div class="stat-label">tests passing</div></div>
+<div class="stat"><div class="stat-num">{unit_n}</div><div class="stat-label">unit test files</div></div>
+<div class="stat"><div class="stat-num">{int_n}</div><div class="stat-label">integration test files</div></div>
+<div class="stat"><div class="stat-num">{latest_runtime:.1f}s</div><div class="stat-label">latest runtime</div></div>
+<div class="stat"><div class="stat-num">{median_added}</div><div class="stat-label">median added / iter</div></div>
+</div>"""
+
+    # Run-it-yourself instructions
+    run_block = """<h2>Run the tests yourself</h2>
+<pre class="code-block"><code># Unit suite — fast, no I/O dependencies
+python -m pytest tests/unit/
+
+# Integration suite — drives ChatLoop end-to-end with virtual audio
+python -m pytest tests/integration/
+
+# Both
+python -m pytest tests/unit/ tests/integration/
+</code></pre>"""
+
+    nav_html = (
+        '<nav><a href="index.html">← Index</a></nav>'
+    )
+
+    body_html = (
+        nav_html
+        + "<header><h1>Testing</h1>"
+        '<div class="meta">Test posture across iterations · '
+        "Generated from ITERATION_LOG.md + repo scan</div></header>"
+        + summary_html
+        + "<h2>Total tests passing</h2>" + chart_total
+        + "<h2>Tests added per iteration</h2>" + chart_added
+        + "<h2>Test runtime</h2>"
+        '<p class="meta">Pulled from each iteration\'s verification '
+        'line (e.g. <code>457 passed in 18.3s</code>). Some early '
+        'iterations omitted the seconds suffix and are excluded.</p>'
+        + chart_runtime
+        + run_block
+        + nav_html
+    )
+    return _page_template("Testing — geno-voice", body_html)
 
 
 # ---- Entry point ------------------------------------------------------------
@@ -565,8 +920,13 @@ def main() -> int:
     index_path = OUT_DIR / "index.html"
     index_path.write_text(render_index(iterations))
 
+    # iter-035: testing posture page, with SVG plots.
+    testing_path = OUT_DIR / "testing.html"
+    testing_path.write_text(render_testing_page(iterations, REPO_ROOT))
+
     print(
-        f"Wrote {len(iterations)} iteration reports + index to {OUT_DIR}/"
+        f"Wrote {len(iterations)} iteration reports + index + testing.html "
+        f"to {OUT_DIR}/"
     )
     return 0
 

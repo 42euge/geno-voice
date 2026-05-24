@@ -99,12 +99,57 @@ table.iter-table th { background: var(--panel); }
   font-size: 11px;
   margin-left: 8px;
 }
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-018.html">← iter-018</a><a href="iter-020.html">iter-020 →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-018.html">← iter-018</a><a href="iter-020.html">iter-020 →</a><a href="testing.html">Testing →</a></nav><header>
 <h1>iter-019 — extract synthesize_with_alignment, real-kokoro e2e test</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-019-tts-extract</code></span> · <span>commit: <code>203e251</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-019-tts-extract</code> (merged ff to main, commit <code>203e251</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -121,7 +166,7 @@ table.iter-table th { background: var(--panel); }
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>289 passed in 18s</strong> (277 existing + 12 new).</p>
 <p>Notes:</p>
 <ul><li>Suite went from 11s → 18s. Three new kokoro integration tests cost ~1-2s each. Could mark them <code>@pytest.mark.slow</code> if this becomes painful, but &lt;20s is still tight enough for fast iteration.</li><li><code>_chat_loop.py</code> was unchanged this iteration — <code>synth_fn</code> is already injectable, so swapping in real kokoro just means passing the right callable. That&#x27;s the iter-015 architecture paying off.</li><li>The duck-type tensor check (<code>hasattr(audio, &quot;numpy&quot;)</code>) is cleaner than the original <code>isinstance(audio, torch.Tensor)</code> because it doesn&#x27;t require importing torch when the engine already returns numpy. Real kokoro returns tensors; the conversion still works.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-018.html">← iter-018</a><a href="iter-020.html">iter-020 →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-018.html">← iter-018</a><a href="iter-020.html">iter-020 →</a><a href="testing.html">Testing →</a></nav>
 </div>
 </body>
 </html>

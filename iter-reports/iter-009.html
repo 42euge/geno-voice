@@ -99,12 +99,57 @@ table.iter-table th { background: var(--panel); }
   font-size: 11px;
   margin-left: 8px;
 }
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-008.html">← iter-008</a><a href="iter-010.html">iter-010 →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-008.html">← iter-008</a><a href="iter-010.html">iter-010 →</a><a href="testing.html">Testing →</a></nav><header>
 <h1>iter-009 — barge-in primitives: cancel_event + cancel + BargeInWatcher</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-009-bargein</code></span> · <span>commit: <code>c4b34d5</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-009-bargein</code> (merged ff to main, commit <code>c4b34d5</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -121,7 +166,7 @@ table.iter-table th { background: var(--panel); }
 <ul><li>DONE_OK trigger test exposed a real subtlety: <code>time.monotonic()</code> doesn&#x27;t work for <code>VirtualMicStream</code> tests because pre-pushed audio is served in milliseconds. The VAD&#x27;s 0.8s silence window never elapses by wall clock. Solution: inject a frame-aligned clock — same <code>FrameClock</code> pattern as iter-006. In production this is a non-issue since real PyAudio serves frames at audio rate.</li><li>A play_fn that respects <code>cancel_event</code> must yield between chunks (sleep, blocking I/O, anything). Otherwise the worker thread races through the play loop before the test can set the flag. The test fixture uses <code>time.sleep(0.005)</code>; real audio playback blocks at audio rate so this happens naturally.</li></ul>
 <p>Next:</p>
 <ul><li>iter-010: wire barge-in into <code>mic_chat.run_chat</code>. Plumbing: during <code>worker.wait_done()</code>, run a <code>BargeInWatcher</code> on <code>mic</code> with <code>worker.cancel</code> as the callback. After <code>wait_done</code> returns, if <code>watcher.detected</code>, feed <code>watcher.frames</code> into the next <code>record_utterance_streaming</code> call (needs a small extension to the recording function to accept &quot;primed&quot; frames). Without this, the user&#x27;s first syllables are dropped.</li><li>iter-011: filler-word generation. Pre-render short audio clips (&quot;hmm&quot;, &quot;let me think&quot;) at startup. The worker grows an idle- watchdog timer: if the queue has been empty for &gt;600ms while <code>submit_done</code> hasn&#x27;t been called, play one filler clip. Hide behind <code>config.local.yaml</code> flag.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-008.html">← iter-008</a><a href="iter-010.html">iter-010 →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-008.html">← iter-008</a><a href="iter-010.html">iter-010 →</a><a href="testing.html">Testing →</a></nav>
 </div>
 </body>
 </html>

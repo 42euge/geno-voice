@@ -99,12 +99,57 @@ table.iter-table th { background: var(--panel); }
   font-size: 11px;
   margin-left: 8px;
 }
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-033.html">← iter-033</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-033.html">← iter-033</a><a href="testing.html">Testing →</a></nav><header>
 <h1>iter-034 — tolerant parse_filler_config</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-034-filler-config</code></span> · <span>commit: <code>fd5eda6</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-034-filler-config</code> (merged ff to main, commit <code>fd5eda6</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -120,7 +165,7 @@ table.iter-table th { background: var(--panel); }
 <ul><li><code>TestEmptyOrMissing</code> — defaults for empty / None / non-mapping; result list is independent of <code>FILLER_DEFAULTS</code> (no shared reference that future callers could corrupt).</li><li><code>TestHappyPath</code> — well-formed input passes through; int threshold coerced to float.</li><li><code>TestFillersListInputForms</code> — <code>fillers</code> as string / dict / int / None / empty list all return empty texts list.</li><li><code>TestNonStringItemsDropped</code> — list with mixed types drops non-strings; empty / whitespace-only strings dropped; whitespace stripped from valid items.</li><li><code>TestIdleThresholdInputForms</code> — string / negative / zero / None all fall back to default 0.6.</li><li><code>TestPartialConfig</code> — partial configs with only one key; combined with unrelated chat keys (<code>vad</code>, etc.) — no interference.</li></ul>
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>457 passed in 18.3s</strong> (434 existing + 23 new).</p>
 <p>Notes:</p>
-<ul><li>Pattern: tolerant config parsing (iter-020 + iter-034). When user-supplied YAML touches a config field, the parser should fall back to a sensible default rather than crash. The user finds the misbehavior fast enough to debug. Crashing during <code>__init__</code> blocks the entire app, including the parts that <em>don&#x27;t</em> depend on this config.</li><li>One could argue <code>chat.fillers: &quot;hi&quot;</code> should warn the user to fix their config. Accepted trade-off for now: silence trumps noise. If a user complains &quot;fillers don&#x27;t work&quot;, the misconfig is easy to spot in the YAML.</li><li>iter-034 doesn&#x27;t touch <code>parse_vad_config</code> since it already works the same way. Could in future: a <code>parse_chat_section</code> umbrella that delegates to per-section parsers, then <code>mic_chat</code> just unpacks one structured result. For now two parsers in sequence is fine.</li></ul><nav><a href="index.html">← Index</a><a href="iter-033.html">← iter-033</a></nav>
+<ul><li>Pattern: tolerant config parsing (iter-020 + iter-034). When user-supplied YAML touches a config field, the parser should fall back to a sensible default rather than crash. The user finds the misbehavior fast enough to debug. Crashing during <code>__init__</code> blocks the entire app, including the parts that <em>don&#x27;t</em> depend on this config.</li><li>One could argue <code>chat.fillers: &quot;hi&quot;</code> should warn the user to fix their config. Accepted trade-off for now: silence trumps noise. If a user complains &quot;fillers don&#x27;t work&quot;, the misconfig is easy to spot in the YAML.</li><li>iter-034 doesn&#x27;t touch <code>parse_vad_config</code> since it already works the same way. Could in future: a <code>parse_chat_section</code> umbrella that delegates to per-section parsers, then <code>mic_chat</code> just unpacks one structured result. For now two parsers in sequence is fine.</li></ul><nav><a href="index.html">← Index</a><a href="iter-033.html">← iter-033</a><a href="testing.html">Testing →</a></nav>
 </div>
 </body>
 </html>

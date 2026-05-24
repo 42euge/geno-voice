@@ -99,12 +99,57 @@ table.iter-table th { background: var(--panel); }
   font-size: 11px;
   margin-left: 8px;
 }
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
 
 </style>
 </head>
 <body>
 <div class="container">
-<header><h1>geno-voice iteration log</h1><div class="meta">Generated from ITERATION_LOG.md</div></header><p>34 iterations shipped.</p><div class="iter-card">
+<header><h1>geno-voice iteration log</h1><div class="meta">Generated from ITERATION_LOG.md</div></header><nav><a href="testing.html">Testing →</a></nav><p>34 iterations shipped.</p><div class="iter-card">
 <a href="iter-001.html">
 <div class="title">iter-001 — fix bugs #1 and #2, extract testable helpers</div>
 <div class="meta">2026-05-23 · commit 1a2656a</div>

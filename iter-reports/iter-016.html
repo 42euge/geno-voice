@@ -99,12 +99,57 @@ table.iter-table th { background: var(--panel); }
   font-size: 11px;
   margin-left: 8px;
 }
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-015.html">← iter-015</a><a href="iter-017.html">iter-017 →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-015.html">← iter-015</a><a href="iter-017.html">iter-017 →</a><a href="testing.html">Testing →</a></nav><header>
 <h1>iter-016 — abbreviation-aware sentence splitter</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-016-splitter</code></span> · <span>commit: <code>f475a12</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-016-splitter</code> (merged ff to main, commit <code>f475a12</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -121,7 +166,7 @@ table.iter-table th { background: var(--panel); }
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>223 passed in 12s</strong> (212 existing + 11 new).</p>
 <p>Notes:</p>
 <ul><li>The abbreviation set is intentionally conservative. Adding more is cheap (just append to the frozenset). The current ~70 entries cover the abbreviations a typical English-language LLM might emit in voice context.</li><li>Multi-period abbreviations work because <code>_word_before_period</code> walks back over both letters and periods, building &quot;i.e&quot;, &quot;u.s.a&quot;, &quot;ph.d&quot;, etc. — these match the set entries directly.</li><li>Limitation: an abbreviation inside a longer made-up word (e.g. &quot;etcaholic.&quot;) would still get matched as <code>etcaholic</code> not in the set → splits normally. That&#x27;s correct behavior; we only want to match true abbreviations.</li><li>The implementation runs <code>finditer</code> once on the buffer instead of <code>split</code> then post-process. Same work; cleaner code.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-015.html">← iter-015</a><a href="iter-017.html">iter-017 →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-015.html">← iter-015</a><a href="iter-017.html">iter-017 →</a><a href="testing.html">Testing →</a></nav>
 </div>
 </body>
 </html>

@@ -99,12 +99,57 @@ table.iter-table th { background: var(--panel); }
   font-size: 11px;
   margin-left: 8px;
 }
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-001.html">← iter-001</a><a href="iter-003.html">iter-003 →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-001.html">← iter-001</a><a href="iter-003.html">iter-003 →</a><a href="testing.html">Testing →</a></nav><header>
 <h1>iter-002 — fix bug #3 (mic buffer not flushed after LLM error)</h1>
 <div class="meta"><span>2026-05-23</span> · <span>branch: <code>iter-002-bug-3</code></span> · <span>commit: <code>795a3aa</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-002-bug-3</code> (merged ff to main, commit <code>795a3aa</code>) <strong>Date:</strong> 2026-05-23</p>
@@ -115,7 +160,7 @@ table.iter-table th { background: var(--panel); }
 <ul><li>Cannot end-to-end test the actual pyaudio path on x86_64 Linux without hardware. The FakeStream contract matches pyaudio&#x27;s two methods exactly, so the unit tests give us solid coverage of the drain logic. A future on-device smoke test would close the gap.</li></ul>
 <p>Next:</p>
 <ul><li>iter-003: bug #4 (preview reprint wraps when text exceeds terminal width). Wire <code>format_preview_line</code> into <code>record_utterance_streaming</code>, use <code>shutil.get_terminal_size()</code> to pick the width, and add a test with a fake stdout that asserts no wraparound.</li><li>iter-004: split <code>record_utterance_streaming</code> into pure VAD logic (testable) + thin pyaudio glue. The VAD state machine is the most fragile part of the loop and currently has zero tests.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-001.html">← iter-001</a><a href="iter-003.html">iter-003 →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-001.html">← iter-001</a><a href="iter-003.html">iter-003 →</a><a href="testing.html">Testing →</a></nav>
 </div>
 </body>
 </html>

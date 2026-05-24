@@ -99,12 +99,57 @@ table.iter-table th { background: var(--panel); }
   font-size: 11px;
   margin-left: 8px;
 }
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-016.html">← iter-016</a><a href="iter-018.html">iter-018 →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-016.html">← iter-016</a><a href="iter-018.html">iter-018 →</a><a href="testing.html">Testing →</a></nav><header>
 <h1>iter-017 — extract print_session_summary, fix median, add a.m./p.m.</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-017-session-summary</code></span> · <span>commit: <code>f4c04cb</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-017-session-summary</code> (merged ff to main, commit <code>f4c04cb</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -130,7 +175,7 @@ table.iter-table th { background: var(--panel); }
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>242 passed in 12s</strong> (223 existing + 19 new).</p>
 <p>Notes:</p>
 <ul><li>The first attempt at the 4-sentence test had wrong expectations for the trailing &quot;Yes.&quot; (no whitespace after → stays in remainder). Fixed in place; added a parallel test with trailing space that DOES split both. Both behaviors documented.</li><li><code>_median_ms</code> returns ms (not seconds) so it composes naturally with the f-string formatters used by callers.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-016.html">← iter-016</a><a href="iter-018.html">iter-018 →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-016.html">← iter-016</a><a href="iter-018.html">iter-018 →</a><a href="testing.html">Testing →</a></nav>
 </div>
 </body>
 </html>

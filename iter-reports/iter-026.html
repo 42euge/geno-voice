@@ -99,12 +99,57 @@ table.iter-table th { background: var(--panel); }
   font-size: 11px;
   margin-left: 8px;
 }
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-025.html">← iter-025</a><a href="iter-027.html">iter-027 →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-025.html">← iter-025</a><a href="iter-027.html">iter-027 →</a><a href="testing.html">Testing →</a></nav><header>
 <h1>iter-026 — skip post-loop token flush when play cancelled</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-026-cancel-flush</code></span> · <span>commit: <code>42d16b0</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-026-cancel-flush</code> (merged ff to main, commit <code>42d16b0</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -122,7 +167,7 @@ Visible output:   &#x27;hello world TRAILING&#x27;   ← BUG: TRAILING shouldn&#
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>351 passed in 18s</strong> (347 existing + 4 new).</p>
 <p>Notes:</p>
 <ul><li>&quot;Trailing tokens&quot; exist when the TTS engine emits tokens whose <code>start_ts</code> exceeds synthesized audio duration — uncommon but kokoro does it occasionally.</li><li>Two control tests catch any future regression that re-enables the unconditional flush. Cheap insurance.</li><li>This bug is the kind that&#x27;s invisible without a barge-in scenario in the test corpus. The iter-009/010 orchestration tests use cancellable_play that doesn&#x27;t have trailing tokens, so they didn&#x27;t exercise this path. iter-026&#x27;s targeted tests fill that gap.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-025.html">← iter-025</a><a href="iter-027.html">iter-027 →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-025.html">← iter-025</a><a href="iter-027.html">iter-027 →</a><a href="testing.html">Testing →</a></nav>
 </div>
 </body>
 </html>

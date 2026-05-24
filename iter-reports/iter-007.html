@@ -99,12 +99,57 @@ table.iter-table th { background: var(--panel); }
   font-size: 11px;
   margin-left: 8px;
 }
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-006.html">← iter-006</a><a href="iter-008.html">iter-008 →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-006.html">← iter-006</a><a href="iter-008.html">iter-008 →</a><a href="testing.html">Testing →</a></nav><header>
 <h1>iter-007 — extract play_aligned to pyaudio-free module</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-007-playback-extract</code></span> · <span>commit: <code>3005fde</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-007-playback-extract</code> (merged ff to main, commit <code>3005fde</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -117,7 +162,7 @@ table.iter-table th { background: var(--panel); }
 <ul><li>Two iters to extract two functions. Now every primitive the chat loop touches — VAD, audio flush, recording, playback, render- preview, sentence-split, history-trim — is testable on x86_64 Linux. The chat loop&#x27;s remaining <code>pyaudio</code> calls are confined to <code>run_chat</code>&#x27;s setup/teardown plus the two thin wrappers.</li><li>The loopback test is a tiny but meaningful proof point: writing to a <code>VirtualSpeakerStream</code> whose <code>loopback_to</code> is set pushes the exact same int16 samples into the paired mic. That&#x27;s the primitive iter-009 barge-in needs — bot speaks, mic sees the speech, VAD watches the mic.</li></ul>
 <p>Next:</p>
 <ul><li>iter-008: streaming LLM → TTS overlap. Pull the in-loop synth + play_aligned calls out into a <code>SentenceWorker</code> thread that pulls complete sentences from a <code>Queue</code>. The main thread keeps the LLM stream open so token receipt isn&#x27;t blocked by audio playback. Holds a single persistent speaker stream — open in the worker&#x27;s setup, close in its teardown. Test by feeding a fixed list of sentences into the queue, watching the speaker accumulate audio, and asserting the worker runs ahead of the simulated LLM clock.</li><li>iter-009: barge-in. Mic-side <code>VadState</code> runs in parallel with the worker. On <code>DONE_OK</code> from the mic, signal the worker to drop the sentence queue and stop the speaker, return control. Test using loopback paired with a &quot;user injection&quot; feeder that pushes a user-speech burst into the same mic the worker is listening to.</li><li>iter-010: filler-word generation. While <code>metrics.llm_first_token</code> is high, emit a pre-rendered &quot;hmm…&quot; or &quot;let me think…&quot; via TTS before the real first sentence. Cheap latency-perception win. Configurable via <code>config.local.yaml</code>.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-006.html">← iter-006</a><a href="iter-008.html">iter-008 →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-006.html">← iter-006</a><a href="iter-008.html">iter-008 →</a><a href="testing.html">Testing →</a></nav>
 </div>
 </body>
 </html>

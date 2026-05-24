@@ -99,12 +99,57 @@ table.iter-table th { background: var(--panel); }
   font-size: 11px;
   margin-left: 8px;
 }
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-022.html">← iter-022</a><a href="iter-024.html">iter-024 →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-022.html">← iter-022</a><a href="iter-024.html">iter-024 →</a><a href="testing.html">Testing →</a></nav><header>
 <h1>iter-023 — introspect play_fn signature once, fix double-call bug</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-023-typeerror</code></span> · <span>commit: <code>8be4532</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-023-typeerror</code> (merged ff to main, commit <code>8be4532</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -126,7 +171,7 @@ Expected 2048 bytes (one call&#x27;s worth of partial audio)</code></pre>
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>332 passed in 17s</strong> (321 existing + 11 new).</p>
 <p>Notes:</p>
 <ul><li><code>inspect.signature</code> has a small one-time cost at construction — negligible for the iter-008 + iter-023 design where workers are short-lived (one per turn).</li><li>This is the kind of bug that&#x27;s easy to miss in code review — <code>try/except TypeError</code> &quot;looks defensive&quot; but silently masks real failures. Worth remembering: <code>try/except</code> on a too-broad exception class is a code smell; introspect what you actually care about.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-022.html">← iter-022</a><a href="iter-024.html">iter-024 →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-022.html">← iter-022</a><a href="iter-024.html">iter-024 →</a><a href="testing.html">Testing →</a></nav>
 </div>
 </body>
 </html>

@@ -99,12 +99,57 @@ table.iter-table th { background: var(--panel); }
   font-size: 11px;
   margin-left: 8px;
 }
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-026.html">← iter-026</a><a href="iter-028.html">iter-028 →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-026.html">← iter-026</a><a href="iter-028.html">iter-028 →</a><a href="testing.html">Testing →</a></nav><header>
 <h1>iter-027 — stop worker+watcher in run_one_turn finally</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-027-keyboardinterrupt</code></span> · <span>commit: <code>3f68dc0</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-027-keyboardinterrupt</code> (merged ff to main, commit <code>3f68dc0</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -122,7 +167,7 @@ After iter-027:
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>354 passed in 17s</strong> (351 existing + 3 new).</p>
 <p>Notes:</p>
 <ul><li>The finally now does four cleanup operations: <code>llm_gen.close</code>, <code>watcher.stop</code>, <code>worker.stop</code>, all wrapped in <code>try/except</code> so a failure in one doesn&#x27;t cascade. Order: close LLM first (release HTTP socket promptly), stop worker last (give synth/play a moment to wind down).</li><li><code>BaseException</code> vs <code>Exception</code> distinction is one of those Python details easy to miss. <code>except Exception</code> is good defensively (won&#x27;t catch system-level signals) but you have to plan for the propagation path through <code>finally</code>.</li><li>Pattern: any background thread spawned in a function should have stop calls in the function&#x27;s finally block, not just in the success path. KeyboardInterrupt and other BaseExceptions take you straight there.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-026.html">← iter-026</a><a href="iter-028.html">iter-028 →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-026.html">← iter-026</a><a href="iter-028.html">iter-028 →</a><a href="testing.html">Testing →</a></nav>
 </div>
 </body>
 </html>

@@ -99,12 +99,57 @@ table.iter-table th { background: var(--panel); }
   font-size: 11px;
   margin-left: 8px;
 }
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-017.html">← iter-017</a><a href="iter-019.html">iter-019 →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-017.html">← iter-017</a><a href="iter-019.html">iter-019 →</a><a href="testing.html">Testing →</a></nav><header>
 <h1>iter-018 — extract + validate config parsing</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-018-config</code></span> · <span>commit: <code>81a1879</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-018-config</code> (merged ff to main, commit <code>81a1879</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -127,7 +172,7 @@ table.iter-table th { background: var(--panel); }
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>277 passed in 11s</strong> (242 existing + 35 new).</p>
 <p>Notes:</p>
 <ul><li>The &quot;empty placeholder&quot; / &quot;no closing brace&quot; / &quot;partial template&quot; tests document edge cases that were previously ambiguous. Now the contract is explicit: only the FULL value matching <code>${VAR}</code> resolves; anything else is literal.</li><li>The parametrized 3×3 required-field tests give 9 cases for ~3 lines of test code. Great for regression coverage if a future iter adds another required field.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-017.html">← iter-017</a><a href="iter-019.html">iter-019 →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-017.html">← iter-017</a><a href="iter-019.html">iter-019 →</a><a href="testing.html">Testing →</a></nav>
 </div>
 </body>
 </html>

@@ -99,12 +99,57 @@ table.iter-table th { background: var(--panel); }
   font-size: 11px;
   margin-left: 8px;
 }
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-011.html">← iter-011</a><a href="iter-013.html">iter-013 →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-011.html">← iter-011</a><a href="iter-013.html">iter-013 →</a><a href="testing.html">Testing →</a></nav><header>
 <h1>iter-012 — extend barge-in across the LLM-streaming phase</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-012-llm-stream-barge</code></span> · <span>commit: <code>f1e7a4e</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-012-llm-stream-barge</code> (merged ff to main, commit <code>f1e7a4e</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -118,7 +163,7 @@ table.iter-table th { background: var(--panel); }
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>172 passed in 11s</strong> (155 existing + 17 new).</p>
 <p>Notes:</p>
 <ul><li>The faked-LLM orchestration test runs in 150ms. Production behavior is identical because the same components compose the same way — the test just stubs out the HTTP transport.</li><li>The &quot;event set before cancel returns&quot; test was tricky to write deterministically. The current approach uses a concurrent reader thread that polls <code>is_set()</code> while the trigger runs; the assertion fails if the worker.cancel blocks the event-set call. Real production cancel paths do their own join, so this guards against accidentally reordering the cascade.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-011.html">← iter-011</a><a href="iter-013.html">iter-013 →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-011.html">← iter-011</a><a href="iter-013.html">iter-013 →</a><a href="testing.html">Testing →</a></nav>
 </div>
 </body>
 </html>

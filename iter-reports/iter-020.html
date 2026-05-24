@@ -99,12 +99,57 @@ table.iter-table th { background: var(--panel); }
   font-size: 11px;
   margin-left: 8px;
 }
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-019.html">← iter-019</a><a href="iter-021.html">iter-021 →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-019.html">← iter-019</a><a href="iter-021.html">iter-021 →</a><a href="testing.html">Testing →</a></nav><header>
 <h1>iter-020 — configurable VAD via chat.vad config section</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-020-vad-config</code></span> · <span>commit: <code>75ba389</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-020-vad-config</code> (merged ff to main, commit <code>75ba389</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -129,7 +174,7 @@ table.iter-table th { background: var(--panel); }
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>305 passed in 18s</strong> (289 existing + 16 new).</p>
 <p>Notes:</p>
 <ul><li>Tolerant validation pattern matches <code>parse_chat_config</code> from iter-018: never raise on bad input, just fall back. The chat loop is more useful with bad VAD config than dead.</li><li>The &quot;compared to default 0.8s window&quot; test uses two parallel mic streams pushing the same audio — clean way to verify behavioral difference without timing assertions.</li><li><code>VAD_DEFAULTS</code> is exposed as a module attribute so tests can assert against it directly (rather than the recording-module constants we want callers to be insulated from).</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-019.html">← iter-019</a><a href="iter-021.html">iter-021 →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-019.html">← iter-019</a><a href="iter-021.html">iter-021 →</a><a href="testing.html">Testing →</a></nav>
 </div>
 </body>
 </html>

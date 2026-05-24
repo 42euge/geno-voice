@@ -99,12 +99,57 @@ table.iter-table th { background: var(--panel); }
   font-size: 11px;
   margin-left: 8px;
 }
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-021.html">← iter-021</a><a href="iter-023.html">iter-023 →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-021.html">← iter-021</a><a href="iter-023.html">iter-023 →</a><a href="testing.html">Testing →</a></nav><header>
 <h1>iter-022 — split when terminator is followed by closing quote</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-022-quoted-speech</code></span> · <span>commit: <code>390978e</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-022-quoted-speech</code> (merged ff to main, commit <code>390978e</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -132,7 +177,7 @@ table.iter-table th { background: var(--panel); }
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>321 passed in 17s</strong> (313 existing + 8 new).</p>
 <p>Notes:</p>
 <ul><li>The two-branch lookbehind costs marginally more regex work but the match buffer is small (one in-progress bot reply token-by-token), so cost is negligible.</li><li>Bot-emitted smart quotes are common in modern LLM output: Claude/GPT formatted dialogue often uses <code>“…”</code> not straight <code>&quot;…&quot;</code>. Including smart quotes by default catches that without needing the bot&#x27;s prompt to special-case it.</li><li>The &quot;abbreviation OUTSIDE + quote INSIDE&quot; combined test is the regression-cover that catches future refactors that try to simplify the walk-back logic.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-021.html">← iter-021</a><a href="iter-023.html">iter-023 →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-021.html">← iter-021</a><a href="iter-023.html">iter-023 →</a><a href="testing.html">Testing →</a></nav>
 </div>
 </body>
 </html>

@@ -99,12 +99,57 @@ table.iter-table th { background: var(--panel); }
   font-size: 11px;
   margin-left: 8px;
 }
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-014.html">← iter-014</a><a href="iter-016.html">iter-016 →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-014.html">← iter-014</a><a href="iter-016.html">iter-016 →</a><a href="testing.html">Testing →</a></nav><header>
 <h1>iter-015 — extract ChatLoop class, real production path now tested</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-015-chat-loop</code></span> · <span>commit: <code>82a8e7b</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-015-chat-loop</code> (merged ff to main, commit <code>82a8e7b</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -127,7 +172,7 @@ table.iter-table th { background: var(--panel); }
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>212 passed in 11s</strong> (204 existing + 8 new).</p>
 <p>Notes:</p>
 <ul><li>The first attempt at the LLM-error-with-barge-in test failed for an instructive reason: the watcher fires <code>coord.trigger</code> before the LLM raises, so the for-loop&#x27;s <code>if coord.is_set(): break</code> exits cleanly without ever raising. The test&#x27;s premise (both error path AND watcher detection observable in the result) is impossible to engineer deterministically. Documented in the replacement test&#x27;s comment so future contributors don&#x27;t try the same dead end.</li><li>The extraction reduced <code>mic_chat.py</code> from a ~280-line per-turn block to a ~15-line caller. Almost everything moved into <code>_chat_loop.py</code>. The trade-off: one more module to navigate, but every other module in the project now imports cleanly without pyaudio at module scope. Test reach is the big win.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-014.html">← iter-014</a><a href="iter-016.html">iter-016 →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-014.html">← iter-014</a><a href="iter-016.html">iter-016 →</a><a href="testing.html">Testing →</a></nav>
 </div>
 </body>
 </html>

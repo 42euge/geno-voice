@@ -99,12 +99,57 @@ table.iter-table th { background: var(--panel); }
   font-size: 11px;
   margin-left: 8px;
 }
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-032.html">← iter-032</a><a href="iter-034.html">iter-034 →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-032.html">← iter-032</a><a href="iter-034.html">iter-034 →</a><a href="testing.html">Testing →</a></nav><header>
 <h1>iter-033 — split sentences after terminator+closing-paren / bracket</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-033-closing-parens</code></span> · <span>commit: <code>298bac2</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-033-closing-parens</code> (merged ff to main, commit <code>298bac2</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -122,7 +167,7 @@ table.iter-table th { background: var(--panel); }
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>434 passed in 17.5s</strong> (413 existing + 21 new).</p>
 <p>Notes:</p>
 <ul><li>Pattern reused from iter-022: when a sentence-boundary feature has multiple natural variants (quotes, parens, brackets), the cleanest approach is one constant + re.escape so each variant is data, not code.</li><li>Did NOT add <code>&gt;</code> (closing angle / blockquote marker). LLM output rarely uses it as a closing-after-terminator and it&#x27;d risk false positives in HTML-flavored content. Same reasoning for <code>&gt;&gt;</code> and <code>}}</code>.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-032.html">← iter-032</a><a href="iter-034.html">iter-034 →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-032.html">← iter-032</a><a href="iter-034.html">iter-034 →</a><a href="testing.html">Testing →</a></nav>
 </div>
 </body>
 </html>

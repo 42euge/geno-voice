@@ -99,12 +99,57 @@ table.iter-table th { background: var(--panel); }
   font-size: 11px;
   margin-left: 8px;
 }
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
 
 </style>
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-010.html">← iter-010</a><a href="iter-012.html">iter-012 →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-010.html">← iter-010</a><a href="iter-012.html">iter-012 →</a><a href="testing.html">Testing →</a></nav><header>
 <h1>iter-011 — filler-word generation in SentenceWorker</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-011-fillers</code></span> · <span>commit: <code>12b718b</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-011-fillers</code> (merged ff to main, commit <code>12b718b</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -117,7 +162,7 @@ table.iter-table th { background: var(--panel); }
 <p>Verification: <code>python -m pytest tests/unit/</code> → <strong>155 passed in 11s</strong> (143 existing + 12 new).</p>
 <p>Notes:</p>
 <ul><li>The <code>_play_clip</code> extraction made the diff bigger but is the right shape going forward — fillers, sentences, and any future audio output (e.g. confirmation tones) all share the same path.</li><li>One filler per run is intentional. A tempting extension is &quot;play another filler if the LLM stalls mid-stream too,&quot; but that adds a watchdog timer and a bunch of edge cases. Skipping for now; the first-token-latency mask is where 90% of the win is.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-010.html">← iter-010</a><a href="iter-012.html">iter-012 →</a></nav>
+<hr><nav><a href="index.html">← Index</a><a href="iter-010.html">← iter-010</a><a href="iter-012.html">iter-012 →</a><a href="testing.html">Testing →</a></nav>
 </div>
 </body>
 </html>
