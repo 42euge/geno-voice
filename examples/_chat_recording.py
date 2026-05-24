@@ -112,6 +112,9 @@ def record_utterance_streaming(
     clock: Callable[[], float] = time.monotonic,
     output=None,
     primed_frames: list[bytes] | None = None,
+    silence_threshold: float = SILENCE_THRESHOLD,
+    silence_duration: float = SILENCE_DURATION,
+    min_speech_duration: float = MIN_SPEECH_DURATION,
 ) -> tuple[bytes, float, float]:
     """Record one utterance with live STT preview.
 
@@ -143,6 +146,11 @@ def record_utterance_streaming(
         is fed virtual timestamps that advance at audio rate so its
         time-based logic (silence-window) matches what would happen
         with live mic reads.
+      ``silence_threshold`` / ``silence_duration`` / ``min_speech_duration`` —
+        VAD tuning knobs (iter-020). Default to the module-level
+        constants. Override per-call to handle noisy environments
+        (raise threshold), faster turn-taking (shorten silence_duration),
+        or stricter speech detection (raise min_speech_duration).
     """
     if transcribe_fn is None:
         transcribe_fn = lambda wav: _transcribe_quick(stt_engine, wav)
@@ -153,9 +161,9 @@ def record_utterance_streaming(
     last_inference_at = 0.0
     preview_text = ""
     vad = VadState(
-        silence_threshold=SILENCE_THRESHOLD,
-        silence_duration=SILENCE_DURATION,
-        min_speech_duration=MIN_SPEECH_DURATION,
+        silence_threshold=silence_threshold,
+        silence_duration=silence_duration,
+        min_speech_duration=min_speech_duration,
     )
     too_short = False
 

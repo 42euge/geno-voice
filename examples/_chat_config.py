@@ -153,3 +153,50 @@ def parse_chat_config(cfg: Any) -> dict:
     if not isinstance(chat, Mapping):
         return {}
     return dict(chat)
+
+
+# iter-020: VAD tuning config. The defaults match the
+# ``_chat_recording`` module constants — same values that have
+# served fine on a quiet desk mic. Users with noisier environments
+# bump ``silence_threshold``; users who want faster turn-taking
+# shorten ``silence_duration``.
+VAD_DEFAULTS = {
+    "silence_threshold": 0.02,
+    "silence_duration": 0.8,
+    "min_speech_duration": 0.3,
+}
+
+
+def parse_vad_config(chat_cfg: Any) -> dict:
+    """Extract + validate the optional ``vad`` section of a parsed
+    chat config (i.e. the dict returned by ``parse_chat_config``).
+
+    Returns a dict with always-present keys
+    (``silence_threshold``, ``silence_duration``,
+    ``min_speech_duration``) backfilled from
+    ``VAD_DEFAULTS`` for any missing/invalid entries.
+
+    Tolerant — a malformed ``vad`` section (wrong type, bad value)
+    falls back to defaults rather than raising. The reasoning:
+    typo'd VAD config shouldn't take down the chat loop, just
+    silently use the safe defaults. Users see misbehavior fast
+    enough to debug.
+
+    Caveat for callers writing tests: passing in a dict with
+    out-of-range values (e.g. ``silence_threshold=10.0``) is
+    accepted as-is. The parser only sanity-checks types and
+    positivity; semantic validity is up to the caller / runtime.
+    """
+    out = dict(VAD_DEFAULTS)
+    if not isinstance(chat_cfg, Mapping):
+        return out
+    vad = chat_cfg.get("vad")
+    if not isinstance(vad, Mapping):
+        return out
+    for key, default in VAD_DEFAULTS.items():
+        val = vad.get(key, default)
+        if isinstance(val, (int, float)) and val > 0:
+            out[key] = float(val)
+        # else fall through to default — bad type / non-positive
+        # number / missing key all hit the default.
+    return out

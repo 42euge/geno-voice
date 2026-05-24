@@ -208,6 +208,11 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
     chat_cfg = load_chat_config()
     filler_texts: list[str] = list(chat_cfg.get("fillers") or [])
     filler_idle_threshold: float = float(chat_cfg.get("fillers_idle_threshold", 0.6))
+    # iter-020: optional VAD tuning. parse_vad_config defaults
+    # match the _chat_recording module constants and tolerates
+    # malformed user input.
+    from examples._chat_config import parse_vad_config
+    vad_cfg = parse_vad_config(chat_cfg)
     rendered_fillers: list[tuple] = []
     if filler_texts:
         t_fill = time.monotonic()
@@ -258,7 +263,9 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
         speaker_factory=_speaker_factory,
         rate=RATE,
         chunk=CHUNK,
-        silence_duration=SILENCE_DURATION,
+        silence_threshold=vad_cfg["silence_threshold"],
+        silence_duration=vad_cfg["silence_duration"],
+        min_speech_duration=vad_cfg["min_speech_duration"],
         stt_engine=stt_engine,
         llm_stream_fn=llm_stream,
         llm_config=llm_config,

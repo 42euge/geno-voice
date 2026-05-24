@@ -50,8 +50,10 @@ from examples._chat_pipeline import (
 )
 from examples._chat_recording import (
     CHUNK,
+    MIN_SPEECH_DURATION,
     RATE,
     SILENCE_DURATION,
+    SILENCE_THRESHOLD,
     record_utterance_streaming,
 )
 
@@ -104,7 +106,11 @@ class ChatLoop:
         speaker_factory: Callable[[], object],
         rate: int = RATE,
         chunk: int = CHUNK,
+        # VAD tuning (iter-020). silence_duration also used to
+        # compute speech_ended_at for TTFS measurement.
+        silence_threshold: float = SILENCE_THRESHOLD,
         silence_duration: float = SILENCE_DURATION,
+        min_speech_duration: float = MIN_SPEECH_DURATION,
         # STT
         stt_engine,
         transcribe_fn: Optional[Callable[[bytes], Optional[str]]] = None,
@@ -127,7 +133,9 @@ class ChatLoop:
         self._speaker_factory = speaker_factory
         self._rate = rate
         self._chunk = chunk
+        self._silence_threshold = silence_threshold
         self._silence_duration = silence_duration
+        self._min_speech_duration = min_speech_duration
 
         self._stt_engine = stt_engine
         self._transcribe_fn = transcribe_fn
@@ -183,6 +191,9 @@ class ChatLoop:
             clock=self._clock,
             output=self._output,
             primed_frames=primed_frames,
+            silence_threshold=self._silence_threshold,
+            silence_duration=self._silence_duration,
+            min_speech_duration=self._min_speech_duration,
         )
         if not wav_bytes:
             return TurnResult(metrics=None, next_primed_frames=None)
