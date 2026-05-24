@@ -1221,6 +1221,23 @@ def render_performance_page(perf_payload: dict | None, history: list[dict] | Non
         x_label="ms",
         color="#f7768e",
     )
+    # iter-042: barge-in latency chart, only emitted if at least one
+    # scenario has a measurement (>0). Otherwise we'd show all-zero
+    # bars, which is misleading.
+    barge_rows = [
+        (s["name"], s.get("barge_in_latency_ms", 0.0))
+        for s in scenarios
+    ]
+    has_barge_data = any(v > 0 for _, v in barge_rows)
+    if has_barge_data:
+        chart_barge = _svg_horizontal_bars(
+            barge_rows,
+            title="Barge-in latency by scenario",
+            x_label="ms (lower is better; >200ms feels broken)",
+            color="#f7c453",
+        )
+    else:
+        chart_barge = ""
 
     # Scenario description table for context.
     rows_html: list[str] = []
@@ -1261,6 +1278,11 @@ def render_performance_page(perf_payload: dict | None, history: list[dict] | Non
         + '<h3>TTS time</h3>' + chart_tts
         + '<h3>LLM first-token</h3>' + chart_llm
         + '<h3>Wall-clock turn time</h3>' + chart_wall
+        + (
+            '<h3>Barge-in latency</h3>' + chart_barge
+            if chart_barge
+            else ''
+        )
         + _render_perf_history_section(history or [])
         + '<h2>Refresh the data</h2>'
         '<pre class="code-block"><code>python -m pytest tests/performance/'
@@ -1323,6 +1345,22 @@ def _render_perf_history_section(history: list[dict]) -> str:
     chart_stt = _svg_multi_line_chart(
         _build("stt_ms"), title="STT over iterations", y_label="ms",
     )
+    # iter-042: barge-in latency time series. Only emit when at
+    # least one iteration captured a non-zero measurement —
+    # otherwise the chart would be all-zero or empty.
+    barge_series = _build("barge_in_latency_ms")
+    has_barge_history = any(
+        any(v > 0 for _, v in pts) for pts in barge_series.values()
+    )
+    chart_barge = (
+        _svg_multi_line_chart(
+            barge_series,
+            title="Barge-in latency over iterations",
+            y_label="ms",
+        )
+        if has_barge_history
+        else ""
+    )
 
     return (
         '<h2>Across iterations</h2>'
@@ -1333,6 +1371,11 @@ def _render_perf_history_section(history: list[dict]) -> str:
         + '<h3>Wall-clock turn time</h3>' + chart_wall
         + '<h3>TTS</h3>' + chart_tts
         + '<h3>STT</h3>' + chart_stt
+        + (
+            '<h3>Barge-in latency</h3>' + chart_barge
+            if chart_barge
+            else ''
+        )
     )
 
 

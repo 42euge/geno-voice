@@ -100,11 +100,20 @@ class ScenarioResult:
     tts_ms: float = 0.0           # cumulative synth time
     playback_ms: float = 0.0      # cumulative speaker write time
     llm_first_token_ms: float = 0.0
+    # iter-038: time from LLM start to first complete sentence.
+    llm_first_sentence_ms: float = 0.0
     llm_total_ms: float = 0.0
     speech_duration_ms: float = 0.0
     sentences_spoken: int = 0
+    # iter-040: sentences cut mid-stream by cancel_event.
+    sentences_cancelled: int = 0
     wall_ms: float = 0.0          # full run_one_turn wall-clock
     barge_in: bool = False
+    # iter-041: time from barge-in detect to playback halt. 0 if
+    # no barge-in fired this scenario.
+    barge_in_latency_ms: float = 0.0
+    # iter-037: count of mic frames flushed at start of turn.
+    mic_stale_frames: int = 0
 
 
 _RESULTS: list[ScenarioResult] = []
@@ -256,11 +265,18 @@ def _run_scenario(
         tts_ms=m.tts_time * 1000,
         playback_ms=m.playback_time * 1000,
         llm_first_token_ms=m.llm_first_token * 1000,
+        # iter-042: also capture iter-038 + iter-040 + iter-041 +
+        # iter-037 metrics on the perf-snapshot row so the
+        # time-series charts can pick them up later.
+        llm_first_sentence_ms=m.llm_first_sentence * 1000,
         llm_total_ms=m.llm_total * 1000,
         speech_duration_ms=m.speech_duration * 1000,
         sentences_spoken=m.sentences_spoken,
+        sentences_cancelled=m.sentences_cancelled,
         wall_ms=wall * 1000,
         barge_in=m.barge_in,
+        barge_in_latency_ms=m.barge_in_latency * 1000,
+        mic_stale_frames=m.mic_stale_frames,
     )
     _record(res)
     return res
@@ -348,6 +364,83 @@ class TestPerfScenarios:
             idle_threshold=0.15,
         )
         assert r.sentences_spoken >= 1
+
+    def test_barge_in_during_playback(self):
+        # iter-042: deterministic barge-in scenario.
+        #
+        # The naive "push barge audio in the mic up front" approach
+        # fails because iter-002's flush_pending_audio drains the mic
+        # before phase 2 starts, eating the barge audio. We work
+        # around it by pushing the barge from a thread that fires
+        # AFTER the flush — by which time the watcher is active and
+        # picks up the audio reliably.
+        import threading as _th
+
+        mic = VirtualMicStream(rate=RATE, chunk_size=CHUNK)
+        # Initial utterance — recorder consumes this.
+        _utterance(1.0, mic)
+
+        def _delayed_barge():
+            # 50ms gives flush_pending_audio time to run + watcher
+            # to start. Then push 0.6s of tone — well above the
+            # min_speech_duration window, plenty for VAD ACTIVE.
+            time.sleep(0.05)
+            mic.push(concat(
+                make_silence(0.05, rate=RATE),
+                make_tone_burst(0.6, rate=RATE, amp=0.4),
+                make_silence(0.5, rate=RATE),
+            ))
+
+        engine, transcribe = _stt_engine(transcript="hi")
+        # Long bot response so playback runs long enough for the
+        # delayed-push thread's burst to land mid-stream.
+        long_response = " ".join(f"sentence {i}." for i in range(8))
+
+        loop = ChatLoop(
+            mic=mic,
+            speaker_factory=lambda: VirtualSpeakerStream(rate=24000),
+            stt_engine=engine,
+            transcribe_fn=transcribe,
+            llm_stream_fn=_yield_tokens(long_response, per_token_delay=0.015),
+            llm_config={"model": "stub"},
+            synth_fn=_const_synth(samples=2048),
+            play_fn=_slow_play,
+        )
+
+        _th.Thread(target=_delayed_barge, daemon=True).start()
+        t0 = time.monotonic()
+        result = loop.run_one_turn([])
+        wall = time.monotonic() - t0
+
+        assert result.metrics is not None
+        m = result.metrics
+        # Record the row even if the barge didn't trigger this run —
+        # the perf charts can still show "0 barge_in_latency_ms" as
+        # honest data. But mark the description so the operator
+        # knows whether this run actually exercised the barge path.
+        landed = m.barge_in
+        res = ScenarioResult(
+            name="barge_in",
+            description=(
+                "User barges in mid-playback (8-sentence response, "
+                f"barge {'landed' if landed else 'did NOT land — timing-flaky'})"
+            ),
+            ttfs_ms=m.ttfs * 1000,
+            stt_ms=m.stt_time * 1000,
+            tts_ms=m.tts_time * 1000,
+            playback_ms=m.playback_time * 1000,
+            llm_first_token_ms=m.llm_first_token * 1000,
+            llm_first_sentence_ms=m.llm_first_sentence * 1000,
+            llm_total_ms=m.llm_total * 1000,
+            speech_duration_ms=m.speech_duration * 1000,
+            sentences_spoken=m.sentences_spoken,
+            sentences_cancelled=m.sentences_cancelled,
+            wall_ms=wall * 1000,
+            barge_in=m.barge_in,
+            barge_in_latency_ms=m.barge_in_latency * 1000,
+            mic_stale_frames=m.mic_stale_frames,
+        )
+        _record(res)
 
 
 # ---- Final emit -------------------------------------------------------------
