@@ -167,7 +167,7 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-034.html">← iter-034</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-034.html">← iter-034</a><a href="iter-036.html">iter-036 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
 <h1>iter-035 — integration test suite + testing report with plots</h1>
 <div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-035-testing-report</code></span> · <span>commit: <code>0a30a55</code></span></div>
 </header><p><strong>Branch:</strong> <code>iter-035-testing-report</code> (merged ff to main, commit <code>0a30a55</code>) <strong>Date:</strong> 2026-05-24</p>
@@ -186,7 +186,8 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 <ul><li><code>TestRuntimeParsing</code> — decimal seconds, integer seconds, no-seconds yields 0.0.</li><li><code>TestSvgLineChart</code> — empty placeholder, single-point, multi-point path commands and dots, HTML-escape on title.</li><li><code>TestSvgBarChart</code> — empty placeholder, bars-per-data-point, iter-NNN axis labels.</li><li><code>TestCountTestFiles</code> — mixed unit/integration counts; missing dirs return zero (no crash).</li><li><code>TestRenderTestingPage</code> — three charts present, run instructions emitted, links back to index, runtime chart handles zero-runtime iters and all-zero placeholder.</li><li><code>TestIterPageHasTestingLink</code> / <code>TestIndexHasTestingLink</code> — nav link wired to iter pages and index.</li></ul>
 <p>Verification: <code>python -m pytest tests/unit/ tests/integration/</code> → <strong>481 passed, 1 skipped in 17.9s</strong> (457 existing + 19 testing-report + 5 integration; 1 skipped is the timing-flaky barge-in).</p>
 <p>Notes:</p>
-<ul><li>Going forward each iter&#x27;s ship process should run <code>python scripts/generate_iteration_reports.py</code> after appending the summary; testing.html refreshes automatically. This was already established in iter-029 — iter-035 only adds the new output file, no workflow change.</li><li>The runtime chart will sparsen as more old iterations are considered (early iters had no seconds in the verification line). That&#x27;s fine — the chart explicitly notes this in its caption.</li><li>The &quot;+22 tests&quot; first-iter spike is real (iter-001 introduced the unit suite). It dominates the bar chart; that&#x27;s a faithful picture of the real growth.</li></ul><nav><a href="index.html">← Index</a><a href="iter-034.html">← iter-034</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li>Going forward each iter&#x27;s ship process should run <code>python scripts/generate_iteration_reports.py</code> after appending the summary; testing.html refreshes automatically. This was already established in iter-029 — iter-035 only adds the new output file, no workflow change.</li><li>The runtime chart will sparsen as more old iterations are considered (early iters had no seconds in the verification line). That&#x27;s fine — the chart explicitly notes this in its caption.</li><li>The &quot;+22 tests&quot; first-iter spike is real (iter-001 introduced the unit suite). It dominates the bar chart; that&#x27;s a faithful picture of the real growth.</li></ul>
+<hr><nav><a href="index.html">← Index</a><a href="iter-034.html">← iter-034</a><a href="iter-036.html">iter-036 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

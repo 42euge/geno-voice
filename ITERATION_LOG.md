@@ -2729,3 +2729,102 @@ Notes:
 - The "+22 tests" first-iter spike is real (iter-001 introduced the
   unit suite). It dominates the bar chart; that's a faithful
   picture of the real growth.
+
+---
+
+## iter-036 — performance integration suite + perf page + metrics taxonomy
+
+**Branch:** `iter-036-perf` (merged ff to main, commit `73ac030`)
+**Date:** 2026-05-24
+
+User asked for a "performance integration test (see TTFS for different
+scenarios, time to TTS or STT)" linked from the testing report, plus a
+brainstorm of new metrics worth tracking ("standard, architecture-specific,
+novel"). iter-036 ships all of that.
+
+**1. `tests/performance/`** — drives `ChatLoop.run_one_turn` across
+eight scenarios with stub LLM / TTS / STT (so the numbers reflect
+pipeline overhead, not neural-net latency):
+
+- `short_short` — 1s utterance + 5-token reply (best-case baseline).
+- `short_long` — 8-sentence reply (exercises streaming overlap).
+- `long_short` — 3s utterance, short reply (STT path-length scaling).
+- `tts_50ms_per_sentence` — kokoro-shaped TTS latency.
+- `stt_100ms` — whisper-shaped STT latency.
+- `slow_llm_300ms` — 300ms first-token (real-LLM dominant cost).
+- `fillers_on` — pre-rendered filler triggers during LLM stall.
+- A final `test_results_written` row that asserts the JSON schema
+  is intact (canary against future changes breaking the renderer).
+
+Results dump to `iter-reports/perf-results.json` after each run.
+The dump happens incrementally — if a later scenario crashes, the
+earlier rows still land in the file.
+
+**2. `iter-reports/performance.html`** — generator reads the JSON
+and renders five horizontal-bar charts:
+
+- TTFS by scenario
+- STT time by scenario
+- TTS time by scenario
+- LLM first-token by scenario
+- Wall-clock turn time
+
+Plus a scenario description table (sentences spoken, barge-in flag).
+When `perf-results.json` doesn't exist, the page shows a
+"run the suite" placeholder rather than 404'ing.
+
+**3. `docs/perf-metrics-taxonomy.md`** — research deliverable from a
+sub-agent. ~46 metrics in three buckets:
+
+- *Standard* (20 metrics): S2S latency, EoT detection, WER,
+  STT/TTS RTF, turn-taking jitter, false/missed-trigger rates,
+  audio under/overruns, cold-start penalty, etc.
+- *Architecture-specific* (24 metrics): streaming-overlap ratio,
+  first-sentence overlap savings, filler-mask success/false-positive
+  rates, sentence-split coverage, worker queue depth, speaker-open
+  overhead, barge-in latency by phase, primed-frames replay duration,
+  LLM stream cancel-to-close, mic-flush stale-frame count, VAD-config
+  consistency, etc.
+- *Novel/speculative* (22 metrics): naturalness gap (200-400ms
+  sweet spot), conversation rhythm score, regret rate
+  (barge-in within 200ms of bot first audio), recovery quality,
+  pre-empted-content loss, FT-A gap, sub-second-turn rate,
+  phantom-sentence rate, etc.
+
+Each entry has a definition, instrumentation site (referencing real
+modules in the codebase), UX/perf rationale, and computation formula.
+The taxonomy is the source list for future iterations to pull from
+when adding instrumentation — pick a metric, instrument it, expose
+it via TurnMetrics, plot it on the perf page.
+
+Generator extensions in `scripts/generate_iteration_reports.py`:
+- `_svg_horizontal_bars` helper (pure SVG, no deps).
+- `_load_perf_results` loader (graceful None on missing/invalid).
+- `render_performance_page(payload)` — placeholder + full mode.
+- Performance nav link added to iter pages, index, testing page.
+
+Tests (16 new in `tests/unit/test_performance_report.py`):
+- `TestHorizontalBars` — empty placeholder, single/multi rows,
+  HTML escape on labels.
+- `TestLoadPerfResults` — missing file, valid JSON, malformed JSON.
+- `TestRenderPerformancePage` — placeholder modes, five-chart
+  composition, scenario table, captured_at, navigation.
+- `TestPerformanceLinkWired` — nav link in iter pages, index,
+  testing page.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **505 passed, 1 skipped in 35s** (481 existing
++ 16 perf-report + 8 perf scenarios; 1 skipped is the timing-flaky
+barge-in from iter-035).
+
+Notes:
+- The taxonomy file is a reading list, not a wiring spec. Future
+  iterations should treat it as a backlog: pick a metric, instrument
+  it with one PR, validate it appears in TurnMetrics + the perf
+  scenarios, then move on.
+- Performance numbers from stub-driven scenarios are NOT comparable
+  across hardware. The page is for cross-scenario shape comparison
+  on a single machine. Real-engine perf (kokoro + mlx-whisper +
+  actual LLM) needs a separate "live" suite — out of scope here.
+- The performance page link is now on every iter page so a reader
+  reviewing iter-NNN can jump straight to the perf snapshot.

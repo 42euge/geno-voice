@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-036 — performance integration suite + perf page + metrics taxonomy</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-035.html">← iter-035</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-036 — performance integration suite + perf page + metrics taxonomy</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-036-perf</code></span> · <span>commit: <code>73ac030</code></span></div>
+</header><p><strong>Branch:</strong> <code>iter-036-perf</code> (merged ff to main, commit <code>73ac030</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>User asked for a &quot;performance integration test (see TTFS for different scenarios, time to TTS or STT)&quot; linked from the testing report, plus a brainstorm of new metrics worth tracking (&quot;standard, architecture-specific, novel&quot;). iter-036 ships all of that.</p>
+<p><strong>1. <code>tests/performance/</code></strong> — drives <code>ChatLoop.run_one_turn</code> across eight scenarios with stub LLM / TTS / STT (so the numbers reflect pipeline overhead, not neural-net latency):</p>
+<ul><li><code>short_short</code> — 1s utterance + 5-token reply (best-case baseline).</li><li><code>short_long</code> — 8-sentence reply (exercises streaming overlap).</li><li><code>long_short</code> — 3s utterance, short reply (STT path-length scaling).</li><li><code>tts_50ms_per_sentence</code> — kokoro-shaped TTS latency.</li><li><code>stt_100ms</code> — whisper-shaped STT latency.</li><li><code>slow_llm_300ms</code> — 300ms first-token (real-LLM dominant cost).</li><li><code>fillers_on</code> — pre-rendered filler triggers during LLM stall.</li><li>A final <code>test_results_written</code> row that asserts the JSON schema is intact (canary against future changes breaking the renderer).</li></ul>
+<p>Results dump to <code>iter-reports/perf-results.json</code> after each run. The dump happens incrementally — if a later scenario crashes, the earlier rows still land in the file.</p>
+<p><strong>2. <code>iter-reports/performance.html</code></strong> — generator reads the JSON and renders five horizontal-bar charts:</p>
+<ul><li>TTFS by scenario</li><li>STT time by scenario</li><li>TTS time by scenario</li><li>LLM first-token by scenario</li><li>Wall-clock turn time</li></ul>
+<p>Plus a scenario description table (sentences spoken, barge-in flag). When <code>perf-results.json</code> doesn&#x27;t exist, the page shows a &quot;run the suite&quot; placeholder rather than 404&#x27;ing.</p>
+<p><strong>3. <code>docs/perf-metrics-taxonomy.md</code></strong> — research deliverable from a sub-agent. ~46 metrics in three buckets:</p>
+<ul><li><em>Standard</em> (20 metrics): S2S latency, EoT detection, WER, STT/TTS RTF, turn-taking jitter, false/missed-trigger rates, audio under/overruns, cold-start penalty, etc.</li><li><em>Architecture-specific</em> (24 metrics): streaming-overlap ratio, first-sentence overlap savings, filler-mask success/false-positive rates, sentence-split coverage, worker queue depth, speaker-open overhead, barge-in latency by phase, primed-frames replay duration, LLM stream cancel-to-close, mic-flush stale-frame count, VAD-config consistency, etc.</li><li><em>Novel/speculative</em> (22 metrics): naturalness gap (200-400ms sweet spot), conversation rhythm score, regret rate (barge-in within 200ms of bot first audio), recovery quality, pre-empted-content loss, FT-A gap, sub-second-turn rate, phantom-sentence rate, etc.</li></ul>
+<p>Each entry has a definition, instrumentation site (referencing real modules in the codebase), UX/perf rationale, and computation formula. The taxonomy is the source list for future iterations to pull from when adding instrumentation — pick a metric, instrument it, expose it via TurnMetrics, plot it on the perf page.</p>
+<p>Generator extensions in <code>scripts/generate_iteration_reports.py</code>:</p>
+<ul><li><code>_svg_horizontal_bars</code> helper (pure SVG, no deps).</li><li><code>_load_perf_results</code> loader (graceful None on missing/invalid).</li><li><code>render_performance_page(payload)</code> — placeholder + full mode.</li><li>Performance nav link added to iter pages, index, testing page.</li></ul>
+<p>Tests (16 new in <code>tests/unit/test_performance_report.py</code>):</p>
+<ul><li><code>TestHorizontalBars</code> — empty placeholder, single/multi rows, HTML escape on labels.</li><li><code>TestLoadPerfResults</code> — missing file, valid JSON, malformed JSON.</li><li><code>TestRenderPerformancePage</code> — placeholder modes, five-chart composition, scenario table, captured_at, navigation.</li><li><code>TestPerformanceLinkWired</code> — nav link in iter pages, index, testing page.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>505 passed, 1 skipped in 35s</strong> (481 existing + 16 perf-report + 8 perf scenarios; 1 skipped is the timing-flaky barge-in from iter-035).</p>
+<p>Notes:</p>
+<ul><li>The taxonomy file is a reading list, not a wiring spec. Future iterations should treat it as a backlog: pick a metric, instrument it with one PR, validate it appears in TurnMetrics + the perf scenarios, then move on.</li><li>Performance numbers from stub-driven scenarios are NOT comparable across hardware. The page is for cross-scenario shape comparison on a single machine. Real-engine perf (kokoro + mlx-whisper + actual LLM) needs a separate &quot;live&quot; suite — out of scope here.</li><li>The performance page link is now on every iter page so a reader reviewing iter-NNN can jump straight to the perf snapshot.</li></ul><nav><a href="index.html">← Index</a><a href="iter-035.html">← iter-035</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>
