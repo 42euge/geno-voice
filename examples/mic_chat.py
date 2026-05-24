@@ -29,6 +29,7 @@ from tts import get_engine as get_tts_engine
 # Pure helpers — extracted for testability, see examples/_chat_helpers.py.
 from examples._chat_helpers import (
     SENTENCE_END,
+    flush_pending_audio,
     split_complete_sentences,
     trim_history,
 )
@@ -494,6 +495,15 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
             except Exception as e:
                 print(f"\n  {YELLOW}LLM error: {e}{RESET}")
                 messages.pop()
+                # The mic stream has been silently buffering during the
+                # (possibly long) failed LLM call. Drain it so we don't
+                # immediately trigger STT on stale audio. Bug #3.
+                drained = flush_pending_audio(mic, chunk_size=CHUNK)
+                if drained:
+                    print(
+                        f"  {DIM}flushed {drained} stale audio frames "
+                        f"({drained / RATE:.1f}s){RESET}"
+                    )
                 continue
 
             metrics.print(turn + 1)

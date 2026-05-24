@@ -18,10 +18,43 @@ sys.path.insert(0, str(ROOT))
 from examples._chat_helpers import (  # noqa: E402
     SENTENCE_END,
     TurnTimings,
+    flush_pending_audio,
     format_preview_line,
     split_complete_sentences,
     trim_history,
 )
+
+
+class FakeStream:
+    """Minimal pyaudio-like stream for testing flush_pending_audio.
+
+    Mirrors the two methods we depend on:
+        - get_read_available() -> int
+        - read(n_frames, exception_on_overflow=False) -> bytes
+
+    Tracks every read for assertion in tests.
+    """
+
+    def __init__(self, available_frames: int = 0):
+        self._available = available_frames
+        self.reads: list[int] = []
+        self.get_calls = 0
+        self.raise_on_get = False
+        self.raise_on_read = False
+
+    def get_read_available(self) -> int:
+        self.get_calls += 1
+        if self.raise_on_get:
+            raise OSError("input overflowed")
+        return self._available
+
+    def read(self, n_frames: int, exception_on_overflow: bool = False) -> bytes:
+        if self.raise_on_read:
+            raise OSError("input overflowed")
+        actual = min(n_frames, self._available)
+        self._available -= actual
+        self.reads.append(actual)
+        return b"\x00\x00" * actual
 
 
 class TestSplitCompleteSentences:
@@ -158,3 +191,62 @@ class TestFormatPreviewLine:
         out = format_preview_line("x" * 50, max_width=5, prefix_len=7)
         assert out.endswith("…")
         assert len(out) == 10
+
+
+class TestFlushPendingAudio:
+    def test_empty_stream_no_reads(self):
+        s = FakeStream(available_frames=0)
+        drained = flush_pending_audio(s, chunk_size=1024)
+        assert drained == 0
+        assert s.reads == []
+
+    def test_drains_exactly_full_chunks(self):
+        # 3 full chunks + 200 leftover < chunk_size → only 3 chunks consumed.
+        s = FakeStream(available_frames=3 * 1024 + 200)
+        drained = flush_pending_audio(s, chunk_size=1024)
+        assert drained == 3 * 1024
+        assert s.reads == [1024, 1024, 1024]
+        # 200 frames remain — by design, we don't read partial chunks.
+        assert s._available == 200
+
+    def test_stops_when_below_chunk_size(self):
+        s = FakeStream(available_frames=500)  # less than one chunk
+        drained = flush_pending_audio(s, chunk_size=1024)
+        assert drained == 0
+        assert s.reads == []
+        assert s._available == 500
+
+    def test_max_iterations_safety_cap(self):
+        # If the stream lies and always reports plenty available,
+        # we must not loop forever.
+        class LyingStream(FakeStream):
+            def read(self, n_frames, exception_on_overflow=False):
+                self.reads.append(n_frames)
+                # never decrement _available
+                return b"\x00" * (n_frames * 2)
+
+        s = LyingStream(available_frames=10**9)
+        drained = flush_pending_audio(s, chunk_size=1024, max_iterations=5)
+        assert drained == 5 * 1024
+        assert len(s.reads) == 5
+
+    def test_handles_get_read_available_exception(self):
+        s = FakeStream(available_frames=10 * 1024)
+        s.raise_on_get = True
+        drained = flush_pending_audio(s, chunk_size=1024)
+        assert drained == 0
+        assert s.reads == []
+
+    def test_handles_read_exception_mid_drain(self):
+        s = FakeStream(available_frames=10 * 1024)
+        s.raise_on_read = True
+        drained = flush_pending_audio(s, chunk_size=1024)
+        # First get_read_available succeeds, first read raises → bail out clean.
+        assert drained == 0
+        assert s.reads == []
+
+    def test_chunk_size_parameter_respected(self):
+        s = FakeStream(available_frames=8000)
+        drained = flush_pending_audio(s, chunk_size=2000)
+        assert drained == 8000
+        assert s.reads == [2000, 2000, 2000, 2000]

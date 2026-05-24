@@ -111,6 +111,45 @@ class TurnTimings:
         return True
 
 
+def flush_pending_audio(stream, chunk_size: int = 1024, max_iterations: int = 1024) -> int:
+    """Drain any audio frames currently buffered in `stream`, non-blocking.
+
+    `stream` must expose:
+        - get_read_available() -> int  (number of frames waiting)
+        - read(n_frames, exception_on_overflow: bool = False) -> bytes
+
+    PyAudio's input stream satisfies both. The fake-stream tests in
+    tests/unit/test_chat_helpers.py mimic the same shape.
+
+    Returns the total number of frames drained. Stops when:
+      - get_read_available() reports fewer than chunk_size frames, OR
+      - max_iterations is reached (safety cap so a misbehaving stream
+        can't trap us in an infinite drain loop).
+
+    This is the fix for bug #3: when the LLM call fails after a long
+    timeout, the mic stream has been silently filling. Without a flush,
+    the next call to record_utterance_streaming() reads that backlog
+    immediately, triggers the VAD as "speech," and feeds garbage into
+    STT.
+    """
+    drained = 0
+    for _ in range(max_iterations):
+        try:
+            available = stream.get_read_available()
+        except Exception:
+            # If we can't even ask the stream how much it has buffered,
+            # there's nothing safe to do here — just stop.
+            break
+        if available < chunk_size:
+            break
+        try:
+            stream.read(chunk_size, exception_on_overflow=False)
+        except Exception:
+            break
+        drained += chunk_size
+    return drained
+
+
 def format_preview_line(text: str, max_width: int = 80, prefix_len: int = 7) -> str:
     """Truncate a live STT preview so it fits on one terminal row.
 
