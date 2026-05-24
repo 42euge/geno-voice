@@ -7,10 +7,16 @@ CI runners).
 
 Same pattern as iter-006/007 — pull pure-Python primitives out of
 the pyaudio-bound entry point.
+
+Also hosts ``print_session_summary`` (iter-017): the
+KeyboardInterrupt summary block previously inlined in
+``mic_chat.run_chat``, now testable + using ``statistics.median``
+for proper even-length handling.
 """
 
 from __future__ import annotations
 
+import statistics
 from dataclasses import dataclass
 
 # ANSI codes — duplicated from mic_chat so this module remains a
@@ -80,3 +86,66 @@ class TurnMetrics:
         )
         print(f"  {_DIM}{'─' * 56}{_RESET}")
         print()
+
+
+def _median_ms(values: list[float]) -> float:
+    """Return the median of `values` in milliseconds.
+
+    Uses ``statistics.median`` so even-length lists return the
+    average of the two middle elements (rather than the upper
+    median that ``sorted[len//2]`` produces — see iter-017 for
+    why that mattered).
+    """
+    if not values:
+        return 0.0
+    return statistics.median(values) * 1000
+
+
+def print_session_summary(metrics_list: list[TurnMetrics], llm_config: dict, *, file=None) -> None:
+    """Print a multi-line session summary on KeyboardInterrupt.
+
+    Was inlined inside ``mic_chat.run_chat``'s KeyboardInterrupt
+    handler with two issues iter-017 fixes:
+      - ``sorted[len//2]`` reports the upper median for even-length
+        lists, biasing 2-turn (and other small) sessions.
+      - It was untestable without instantiating mic_chat.
+
+    `file` defaults to ``sys.stdout`` (via ``print``); tests pass
+    a ``StringIO`` to inspect the output.
+    """
+    def _emit(line: str = "") -> None:
+        if file is None:
+            print(line)
+        else:
+            file.write(line + "\n")
+
+    _emit()
+    _emit()
+    _emit(f"{_DIM}{'─' * 56}{_RESET}")
+    if not metrics_list:
+        _emit(f"{_BOLD}  Session ended (no completed turns){_RESET}")
+        _emit()
+        return
+
+    n = len(metrics_list)
+    stt_times = [m.stt_time for m in metrics_list]
+    llm_ft = [m.llm_first_token for m in metrics_list]
+    tts_times = [m.tts_time for m in metrics_list]
+    ttfs_times = [m.ttfs for m in metrics_list]
+    fillers_total = sum(m.fillers_played for m in metrics_list)
+    barges_total = sum(1 for m in metrics_list if m.barge_in)
+
+    _emit(f"{_BOLD}  Session Summary ({n} turn{'' if n == 1 else 's'}){_RESET}")
+    _emit(f"    Median STT:       {_median_ms(stt_times):.0f}ms")
+    _emit(f"    Median LLM 1st:   {_median_ms(llm_ft):.0f}ms")
+    _emit(f"    Median TTS:       {_median_ms(tts_times):.0f}ms")
+    _emit(
+        f"    {_BOLD}Median TTFS:      {_median_ms(ttfs_times):.0f}ms{_RESET}"
+    )
+    _emit(f"    Best TTFS:        {min(ttfs_times) * 1000:.0f}ms")
+    if fillers_total:
+        _emit(f"    Fillers played:   {fillers_total}")
+    if barges_total:
+        _emit(f"    Barge-ins:        {barges_total}")
+    _emit(f"    Model:            {llm_config.get('model', 'unknown')}")
+    _emit()

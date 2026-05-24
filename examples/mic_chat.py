@@ -298,20 +298,11 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
             messages = ChatLoop.trim_messages(messages, max_user_assistant=20)
 
     except KeyboardInterrupt:
-        print(f"\n\n{DIM}{'─' * 56}{RESET}")
-        if all_metrics:
-            stt_times = [m.stt_time for m in all_metrics]
-            llm_ft = [m.llm_first_token for m in all_metrics]
-            tts_times = [m.tts_time for m in all_metrics]
-            ttfs_times = [m.ttfs for m in all_metrics]
-            print(f"{BOLD}  Session Summary ({len(all_metrics)} turns){RESET}")
-            print(f"    Median STT:       {sorted(stt_times)[len(stt_times)//2]*1000:.0f}ms")
-            print(f"    Median LLM 1st:   {sorted(llm_ft)[len(llm_ft)//2]*1000:.0f}ms")
-            print(f"    Median TTS:       {sorted(tts_times)[len(tts_times)//2]*1000:.0f}ms")
-            print(f"    {BOLD}Median TTFS:      {sorted(ttfs_times)[len(ttfs_times)//2]*1000:.0f}ms{RESET}")
-            print(f"    Best TTFS:        {min(ttfs_times)*1000:.0f}ms")
-            print(f"    Model:            {llm_config['model']}")
-        print()
+        # iter-017: extracted to _chat_metrics.print_session_summary
+        # so it's testable and uses statistics.median (proper
+        # even-length handling).
+        from examples._chat_metrics import print_session_summary
+        print_session_summary(all_metrics, llm_config)
     finally:
         mic.stop_stream()
         mic.close()

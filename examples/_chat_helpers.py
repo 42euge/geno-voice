@@ -39,6 +39,8 @@ NON_TERMINATING_ABBREVIATIONS = frozenset({
     "oct", "nov", "dec",
     "mon", "tue", "tues", "wed", "thu", "thur", "thurs", "fri",
     "sat", "sun",
+    # Time of day (iter-017): "9:30 a.m. Hi." should not split.
+    "a.m", "p.m",
     # Misc
     "no", "nos", "vol", "p", "pp", "fig", "figs", "approx", "incl",
     "min", "mins", "max", "sec", "secs", "hr", "hrs",
