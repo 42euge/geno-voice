@@ -3398,3 +3398,61 @@ Notes:
   cancel + barge picture for interaction quality.
 - Next candidates: 1.13 (bot WPM), 2.6 (sentence-split fragmentation),
   2.20 (loopback echo barge-in rate).
+
+---
+
+## iter-045 — sentence-split fragmentation metric (taxonomy 2.6)
+
+**Branch:** `iter-045-sentence-len` (merged ff to main, commit `3a675ab`)
+**Date:** 2026-05-24
+
+Seventh metric pulled from `docs/perf-metrics-taxonomy.md`. **Metric
+2.6 — Sentence-split fragmentation**, "Architecture-specific" bucket.
+
+Mean character length of sentences submitted to the worker per turn.
+The taxonomy notes:
+- mean ≪ ~30 chars: over-fragmented, defeats streaming-overlap
+  because TTS finishes the short sentence before the next arrives.
+- mean ≫ ~150 chars: under-fragmented, increases TTFS because
+  the first complete sentence arrives too late.
+- mean 50-100: healthy LLM voice output.
+
+Combined with iter-043 (overlap) + iter-044 (idle gap), the splitter
+side of the pipeline is now observable: if overlap is low and idle
+gap is high, look at fragmentation — short sentences would explain
+it (worker keeps starving).
+
+Implementation:
+- ChatLoop accumulates `sentence_chars_total + sentence_chars_count`
+  across the for-token loop (and the trailing-remainder submit).
+- `TurnMetrics.mean_sentence_chars: float = 0.0` (new field).
+- Per-turn print appends `", avg N chars"` inside the existing TTS
+  suffix — compact, no new line.
+- Session summary: `Mean sentence: N chars` averaged across turns
+  where any sentence was submitted (>0 filter, parallel to
+  iter-031's TTFS).
+- `ScenarioResult.mean_sentence_chars` on perf snapshots.
+
+Tests (10 in `tests/unit/test_sentence_fragmentation.py`):
+- Default 0; per-turn print zero/nonzero; session aggregate
+  zero/some-data/filter-zeros.
+- ChatLoop wires:
+  - Short sentences ("Yes.", "OK.", "Done.") → mean < 10.
+  - Normal sentences (~50 chars) → mean 30-70.
+  - No-terminator stream → trailing-remainder submit captures
+    the fragment, so mean > 0 (not 0). Documents the actual
+    behavior of the chat loop.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **607 passed, 1 skipped in 22s** (597
+existing + 10 new).
+
+Notes:
+- Seven metrics from the taxonomy now live (2.19 / 1.10 / 2.18 /
+  2.10 / 2.1 / 2.16 / 2.6). The full picture per turn:
+  speech → STT → LLM 1st token / 1st sentence → idle gap → TTS
+  (with fragmentation) → playback → TTFS → barge (with cancel
+  shape + latency) → mic stale frames. Pretty complete diagnostic
+  surface.
+- Next candidates: 1.13 (bot WPM), 2.20 (loopback echo barge-in
+  rate), 1.4 (VAD false-trigger rate).
