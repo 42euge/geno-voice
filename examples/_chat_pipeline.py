@@ -408,6 +408,7 @@ class BargeInWatcher:
         trigger_on: str = "active",
         clock: Callable[[], float] = time.monotonic,
         poll_interval: float = 0.005,
+        lead_in_chunks: int = 0,
     ):
         # Local imports keep this module independent of the helpers
         # / recording module import paths during type-checking.
@@ -430,6 +431,16 @@ class BargeInWatcher:
         self._clock = clock
         self._poll = poll_interval
         self._VadEvent = VadEvent
+
+        # iter-025: ring buffer of the most recent N pre-detection
+        # frames. When detection fires, the ring buffer's contents
+        # are flushed into ``frames`` followed by all subsequent
+        # frames. Default 0 means no pre-detection capture — only
+        # the detection frame and onwards are stored.
+        if lead_in_chunks < 0:
+            raise ValueError("lead_in_chunks must be >= 0")
+        self._lead_in_chunks = lead_in_chunks
+        self._lead_in_buffer: list[bytes] = []
 
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -486,26 +497,45 @@ class BargeInWatcher:
             if not data:
                 continue
 
-            self.frames.append(data)
             audio = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
-            # iter-024: use the centralized rms() helper instead of
-            # inlining the same expression. The two implementations
-            # were always equivalent (both have the iter-014
-            # NaN-on-empty guard), but consolidating prevents a
-            # future fix in one place from missing the other.
+            # iter-024: centralized rms helper (single source of truth
+            # with _chat_recording.rms; same iter-014 NaN-empty guard).
             level = self._rms(audio)
             now = self._clock()
             event = self._vad.feed(level, now)
             self.events.append(event)
 
-            if not self.detected and self._trigger_matches(event):
+            # iter-025: only store frames from detection onwards
+            # (plus an optional pre-detection lead-in maintained as
+            # a ring buffer). Pre-detection frames in production are
+            # likely bot acoustic feedback or silence — feeding them
+            # into the next record_utterance via primed_frames would
+            # have STT transcribe bot voice as user speech.
+            if self.detected:
+                self.frames.append(data)
+            elif self._trigger_matches(event):
+                # Trigger frame: flush lead-in buffer (pre-detection
+                # context) followed by this frame (the one that
+                # actually crossed threshold). Order matters —
+                # trigger frame is the user's first audible syllable.
                 self.detected = True
                 self.frame_idx_at_trigger = frame_idx
+                self.frames.extend(self._lead_in_buffer)
+                self.frames.append(data)
+                self._lead_in_buffer.clear()
                 try:
                     self._callback()
                 except Exception:
                     # Caller's callback shouldn't take down the watcher.
                     pass
+            else:
+                # Pre-detection, no trigger this frame: maintain the
+                # ring buffer. When detection eventually fires, the
+                # buffer's contents will be flushed.
+                if self._lead_in_chunks > 0:
+                    self._lead_in_buffer.append(data)
+                    if len(self._lead_in_buffer) > self._lead_in_chunks:
+                        self._lead_in_buffer.pop(0)
 
             frame_idx += 1
 
