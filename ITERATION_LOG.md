@@ -597,3 +597,93 @@ Next:
   watchdog timer: if the queue has been empty for >600ms while
   `submit_done` hasn't been called, play one filler clip. Hide
   behind `config.local.yaml` flag.
+
+---
+
+## iter-010 — wire barge-in into chat loop, primed_frames replay
+
+**Branch:** `iter-010-bargein-wiring` (merged ff to main, commit `9279220`)
+**Date:** 2026-05-24
+
+Closes the loop iter-009 started. The cancel/watcher primitives are
+now actually used by `mic_chat.run_chat`, and the user's barge-in
+audio is preserved into the next record turn instead of dropped.
+
+What changed:
+
+- `examples/_chat_recording.py`:
+  - `record_utterance_streaming` gained a `primed_frames` kwarg.
+    Each primed frame is fed through the VAD before any live mic
+    reads, in order. Each frame's bytes are appended to the
+    output wav as if read live.
+  - **Refactored time accounting**: the function uses a single
+    virtual clock anchored at function entry —
+    `now = t_origin + frame_idx * (CHUNK / RATE)`. The previous
+    `clock()`-per-frame approach had two failure modes that the
+    primed-frames tests surfaced: (1) primed frames served in
+    microseconds made the silence window appear to close instantly;
+    (2) with a per-call test FrameClock, the first live read's
+    timestamp could land *before* the last primed timestamp,
+    corrupting `last_speech_duration`. The unified virtual clock
+    keeps time monotonic at audio rate regardless of clock
+    provider. Production behavior is identical because PyAudio
+    reads already block at audio rate.
+
+- `examples/mic_chat.py`:
+  - `run_chat` carries `primed_frames` across iterations of the
+    while loop. After `worker.wait_done` returns, if
+    `watcher.detected`, `watcher.frames` is captured into
+    `primed_frames` and fed to the next `record_utterance` call.
+    Reset to None after consumption.
+  - Spawns a `BargeInWatcher` pointed at the same mic the
+    recorder uses, with `worker.cancel` as the callback. Watcher
+    starts after `worker.start`; stops after `worker.wait_done`.
+    Mic is flushed (bug-3 helper from iter-002) right before the
+    watcher starts so audio buffered during the LLM phase isn't
+    misread as user speech.
+  - LLM-error path also stops the watcher so we don't leak a
+    thread.
+
+Tests (9 new):
+- `tests/unit/test_chat_recording.py` — 6 priming tests:
+  - None / `[]` are no-ops; speech burst appears in wav; silence
+    falls through to live mic; too-short blip yields
+    `DONE_TOO_SHORT`; pedantic frame-count check.
+- `tests/unit/test_bargein_orchestration.py` — 3 full-loop tests:
+  - Bot speaks → user barges in on virtual mic → watcher fires
+    `worker.cancel` → `primed_frames` go into next record call →
+    valid wav covers user audio. Closes the loop end to end.
+  - No-barge-in path: full sentence plays, no priming.
+  - 5-sentence queue: barge-in during sentence 1 drops the
+    remaining 4.
+
+Verification: `python -m pytest tests/unit/` → **143 passed in 10s**
+(134 existing + 9 new).
+
+Notes:
+- The per-frame `clock()` bug was hidden under the simple iter-006
+  case (live-only reads through FrameClock) and only surfaced when
+  primed and live frames coexisted. The fix (`t_origin` + frame
+  counter) is also conceptually cleaner — the function's view of
+  time is now invariant to how the underlying clock behaves.
+- The orchestration tests are as close as we get on x86_64 Linux
+  to "the real chat loop is working." Deterministic in 0.2s using
+  only virtual audio. That's the payoff for everything iter-005
+  through iter-009 built up.
+
+Next:
+- iter-011: filler-word generation (carried over from iter-009
+  plan). Pre-render short clips ("hmm", "let me think") at
+  startup. Worker grows an idle-watchdog timer: if queue stays
+  empty for >600ms while `submit_done` hasn't been called, play
+  one filler. Behind a `config.local.yaml` flag.
+- iter-012: optional — keep the `BargeInWatcher` running across
+  the LLM-streaming phase too, not just during play. Currently
+  if the user starts talking while the LLM is still streaming
+  the first response token, we miss those early frames. Doable
+  but requires reasoning carefully about who owns the mic when.
+- iter-013: real-mic CI smoke test using ALSA loopback. Pipe
+  TTS-rendered audio through `aplay` into `arecord`, then run
+  the chat loop end-to-end on the actual PyAudio stack. Optional
+  — closes the gap between virtual-audio tests and real
+  hardware, but may not be worth the maintenance burden pre-1.0.
