@@ -101,3 +101,48 @@ Next:
 - iter-004: split `record_utterance_streaming` into pure VAD logic
   (testable) + thin pyaudio glue. The VAD state machine is the most
   fragile part of the loop and currently has zero tests.
+
+---
+
+## iter-003 — fix bug #4 (preview reprint wraps on long utterances)
+
+**Branch:** `iter-003-bug-4` (merged ff to main, commit `7349fb7`)
+**Date:** 2026-05-23
+
+What changed:
+- Added `render_preview(text, *, max_width, prefix, file, dim)` to
+  `examples/_chat_helpers.py`. Wraps the existing
+  `format_preview_line` truncation, prepends `\r\033[2K`, optionally
+  wraps the body in dim ANSI, and writes-then-flushes to any
+  file-like object. Returns the exact emitted string so tests can
+  assert on visible width without faking terminal I/O.
+- `record_utterance_streaming` in `mic_chat.py` now calls
+  `shutil.get_terminal_size(fallback=(80, 24)).columns` and passes
+  that into `render_preview` instead of writing the format string by
+  hand. So even on a narrow terminal (or one resized mid-utterance),
+  the live preview clamps to the current width.
+- 7 new tests with `io.StringIO` and a counting buffer test double:
+  short-text passthrough, long-text truncation with ellipsis, leading
+  `\r + CLEAR_LINE`, write+flush behavior, `dim=False` strips dim
+  ANSI, custom-prefix width math, back-to-back rewrite contract.
+
+Verification: `python -m pytest tests/unit/` → **36 passed in 0.03s**.
+
+All four originally-listed mic_chat.py bugs are now fixed:
+  ✓ Bug #1 (iter-001) — duplicate "Bot:" lines
+  ✓ Bug #2 (iter-001) — absurd llm_total values
+  ✓ Bug #3 (iter-002) — mic buffer not flushed after LLM error
+  ✓ Bug #4 (iter-003) — preview reprint wraps on long utterances
+
+Next:
+- iter-004: extract VAD state machine into a pure helper. Currently
+  the silence/speech detection is inlined in
+  `record_utterance_streaming` with monotonic timestamps and ad-hoc
+  state — moving it to `vad_state.feed(level, now) -> Event` makes
+  it testable without audio hardware. This is also the prerequisite
+  for the architecture goals (streaming overlap, barge-in).
+- iter-005: streaming LLM → TTS overlap. Right now sentences
+  synthesize and play synchronously inside the for-loop, blocking
+  the next token receipt. A producer/consumer queue with the LLM
+  streaming on the main thread and TTS+playback on a worker would
+  cut median TTFS substantially.
