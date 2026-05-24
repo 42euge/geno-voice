@@ -29,20 +29,27 @@ from tts import get_engine as get_tts_engine
 # Pure helpers — extracted for testability, see examples/_chat_helpers.py.
 from examples._chat_helpers import (
     SENTENCE_END,
-    VadEvent,
-    VadState,
     flush_pending_audio,
-    render_preview,
     split_complete_sentences,
     trim_history,
 )
 
-RATE = 16000
-CHANNELS = 1
-CHUNK = 1024
-SILENCE_THRESHOLD = 0.02
-SILENCE_DURATION = 0.8
-MIN_SPEECH_DURATION = 0.3
+# Recording loop — extracted to a pyaudio-free module so tests can drive
+# it with examples.virtual_audio.VirtualMicStream + a stub transcriber.
+from examples._chat_recording import (
+    CHANNELS,
+    CHUNK,
+    CLEAR_LINE,
+    INFERENCE_INTERVAL,
+    MIN_SPEECH_DURATION,
+    RATE,
+    SILENCE_DURATION,
+    SILENCE_THRESHOLD,
+    _buffer_to_wav,
+    _transcribe_quick,
+    record_utterance_streaming,
+    rms,
+)
 
 DIM = "\033[2m"
 BOLD = "\033[1m"
@@ -115,10 +122,6 @@ def llm_stream(messages: list[dict], config: dict):
             continue
 
 
-def rms(frame: np.ndarray) -> float:
-    return float(np.sqrt(np.mean(frame ** 2)))
-
-
 @dataclass
 class TurnMetrics:
     speech_duration: float = 0.0
@@ -154,108 +157,6 @@ class TurnMetrics:
         print(f"  {DIM}└─{RESET} {BOLD}Total turn:{RESET}      {total_color}{self.total_e2e*1000:>7.0f}ms{RESET}")
         print(f"  {DIM}{'─' * 56}{RESET}")
         print()
-
-
-CLEAR_LINE = "\033[2K"
-INFERENCE_INTERVAL = 1.0
-
-
-def _buffer_to_wav(frames: list[bytes]) -> bytes:
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wf:
-        wf.setnchannels(CHANNELS)
-        wf.setsampwidth(2)
-        wf.setframerate(RATE)
-        wf.writeframes(b"".join(frames))
-    return buf.getvalue()
-
-
-def _transcribe_quick(engine, wav_bytes):
-    """Run transcription, return text or None."""
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-        f.write(wav_bytes)
-        tmp = f.name
-    try:
-        import mlx_whisper
-        result = mlx_whisper.transcribe(tmp, path_or_hf_repo=engine.model_repo)
-        return result["text"].strip()
-    except Exception:
-        return None
-    finally:
-        os.unlink(tmp)
-
-
-def record_utterance_streaming(stream, stt_engine) -> tuple[bytes, float, float]:
-    """Record with live STT preview. Returns (wav_bytes, speech_duration, stt_time).
-
-    Shows dim speculative text while recording, then finalizes on silence.
-    """
-    frames: list[bytes] = []
-    last_inference_at = 0.0
-    preview_text = ""
-    vad = VadState(
-        silence_threshold=SILENCE_THRESHOLD,
-        silence_duration=SILENCE_DURATION,
-        min_speech_duration=MIN_SPEECH_DURATION,
-    )
-    too_short = False
-
-    while True:
-        data = stream.read(CHUNK, exception_on_overflow=False)
-        audio = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
-        level = rms(audio)
-        now = time.monotonic()
-
-        event = vad.feed(level, now)
-
-        if event is VadEvent.IDLE:
-            continue
-
-        # ACTIVE / DONE_OK / DONE_TOO_SHORT all include this frame in the
-        # buffer (original mic_chat.py appended before its break check).
-        frames.append(data)
-        if last_inference_at == 0.0:
-            last_inference_at = now
-
-        if event is VadEvent.DONE_OK:
-            break
-        if event is VadEvent.DONE_TOO_SHORT:
-            too_short = True
-            break
-
-        # Periodic STT preview while speaking.
-        if frames and (now - last_inference_at) >= INFERENCE_INTERVAL:
-            last_inference_at = now
-            wav = _buffer_to_wav(frames)
-            text = _transcribe_quick(stt_engine, wav)
-            if text and text != preview_text:
-                preview_text = text
-                # Width-clamp the preview so a long utterance doesn't wrap
-                # to a second row (which breaks the next \r rewrite). Bug #4.
-                import shutil
-                term_cols = shutil.get_terminal_size(fallback=(80, 24)).columns
-                render_preview(preview_text, max_width=term_cols, prefix="  You: ")
-
-    if too_short:
-        sys.stdout.write(f"\r{CLEAR_LINE}")
-        sys.stdout.flush()
-        return b"", 0.0, 0.0
-
-    speech_duration = vad.last_speech_duration
-
-    # Final transcription on full audio
-    wav_bytes = _buffer_to_wav(frames)
-    t = time.monotonic()
-    final_text = _transcribe_quick(stt_engine, wav_bytes)
-    stt_time = time.monotonic() - t
-
-    if final_text:
-        sys.stdout.write(f"\r{CLEAR_LINE}  {BOLD}You:{RESET} \"{final_text}\"\n")
-        sys.stdout.flush()
-
-    # Stash the final text on the wav_bytes (hack: return via engine attribute)
-    stt_engine._last_text = final_text
-    return wav_bytes, speech_duration, stt_time
 
 
 TTS_RATE = 24000
