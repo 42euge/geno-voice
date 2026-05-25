@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-100 — A/B perf scenarios for auto_aggressive_threshold</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-099.html">← iter-099</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-100 — A/B perf scenarios for auto_aggressive_threshold</h1>
+<div class="meta"></div>
+</header><p><strong>Goal:</strong> Third pair-scenario in three iterations (after iter-098, iter-099). Validates iter-093&#x27;s auto-aggressive-on-stall logic empirically and cements the pair-scenario pattern as the default shape for opt-in feature validation.</p>
+<p>iter-093 watches the inter-token LLM gap and flips the splitter to aggressive mode mid-stream when the gap exceeds the configured threshold AND no complete sentence has been emitted yet. The existing unit tests in <code>tests/unit/test_chat_loop.py</code> verify the flip mechanics; this iteration measures the TTFS impact.</p>
+<p><strong>Change:</strong> Extended the perf-suite stub <code>_yield_tokens</code> with an optional <code>stall_after</code>/<code>stall_seconds</code> pair that injects a long pause AFTER yielding the first token containing a substring. Then two new scenarios drive the same <code>_STALLED_PREAMBLE</code> response twice — once with <code>auto_aggressive_threshold=0.0</code> (off, pre-093 behavior), once with <code>0.3</code> (flips on the 500ms stall).</p>
+<pre class="code-block"><code>_STALLED_PREAMBLE = (
+    &quot;Well let me think about this for a moment, &quot;
+    &quot;the answer is twelve. &quot;
+    &quot;And the reason is straightforward.&quot;
+)
+
+# Stall fires AFTER yielding the &quot;moment,&quot; token, so the gap is
+# observed when the next token (the post-stall &quot;the&quot;) arrives.
+stall_after=&quot;moment,&quot;, stall_seconds=0.5</code></pre>
+<p><code>_run_scenario</code> grew two new kwargs (<code>auto_aggressive_threshold</code>, <code>stall_after</code>/<code>stall_seconds</code>) — small surface-area expansion; the existing pair-scenario shape carries over unchanged.</p>
+<p><strong>Empirical A/B</strong> (this run, x86_64 Linux stub pipeline, per-token delay 10ms):</p>
+<table class="iter-table"><thead><tr><th>Metric</th><th>threshold=0.0 (off)</th><th>threshold=0.3 (on)</th><th>Δ</th></tr></thead><tbody><tr><td>TTFS</td><td>1431.7 ms</td><td>1401.5 ms</td><td>-30 ms</td></tr><tr><td>llm_first_sentence</td><td>631.3 ms</td><td>601.1 ms</td><td>-30 ms</td></tr><tr><td>max_token_gap</td><td>510.1 ms</td><td>510.1 ms</td><td>0</td></tr><tr><td>mean_sentence_chars</td><td>49.0</td><td>32.3</td><td>-17</td></tr></tbody></table>
+<p>Both runs see the same 510ms <code>max_token_gap</code> — the stall fires identically. The mean_chars drop from 49→32 confirms the auto-flip worked: with the splitter strict, the first sentence had to grow to &quot;Well let me think about this for a moment, the answer is twelve.&quot; (49 chars); with the auto-flip, it sliced at the comma to &quot;Well let me think about this for a moment,&quot; (~32 chars after trim).</p>
+<p>The 30ms TTFS savings is modest because the stub LLM streams tokens at 10ms each — only ~3-4 tokens between the comma and the period. On a real LLM with 50ms/token (the iter-052 baseline), this would scale to ~150-200ms savings. On a 100ms/token slow LLM (our <code>slow_llm_300ms</code> scenario), ~300-400ms.</p>
+<p>Verification: <code>python -m pytest tests/performance/ -q</code> → <strong>15 passed in 4.9s</strong> (was 13, +2 new). Full unit + integration suite: <code>tests/ --ignore=tests/performance --ignore=tests/test_session.py --ignore=tests/e2e -q</code> → <strong>1148 passed, 1 skipped</strong> (identical to main).</p>
+<p>Notes:</p>
+<ul><li><strong>Three pair-scenarios — the pattern is the default now.</strong> iter-098 (aggressive splitter), iter-099 (filler threshold), iter-100 (auto-aggressive). All share the same shape: a single <code>_FIXTURE</code> response or clip, two scenario methods that vary exactly one kwarg, and a TTFS / behavior-marker delta. Future opt-in features should default to this template.</li><li><strong>Stub-vs-real scaling.</strong> The savings ratio (30ms / 1431ms ≈ 2%) understates the real-world benefit. The stall is fixed at 500ms, but the <em>post-stall path-length</em> depends on per-token-delay (which is 10ms in the stub vs 50-100ms in production). A future variant could parameterize per-token-delay across [0.01, 0.05, 0.1] to plot the savings curve.</li><li><strong>stall_after as a building block.</strong> This stub feature isn&#x27;t iter-100-specific — any future scenario that wants to test mid-stream behavior (cancel handling, queue depth under stall, context-token billing on retry) can compose it. Worth keeping in mind as the perf suite grows.</li><li>Next directions: savings curve as a function of token speed. long-context session — would round out the four user-facing opt-ins.<ul><li>Per-token-delay grid (3-5 values) for iter-100 to surface the</li><li>Pair scenarios for <code>max_user_assistant</code> cap (5 vs 20) on a</li><li>Extract <code>_emit_recording_block</code> (still pending from iter-097).</li><li>WER fixture (1.6) heavyweight iteration.</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-099.html">← iter-099</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>
