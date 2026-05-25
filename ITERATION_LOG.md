@@ -6412,3 +6412,76 @@ Notes:
     range, iter-059 split coverage).
   - Architecture: combine iter-085 + iter-088 → auto-aggressive
     splitter on detected stall.
+
+## iter-093 — auto-aggressive splitter on stall (architecture)
+
+**Branch:** iter-093-auto-aggressive  **Commit:** 0c8a118  **Date:** 2026-05-25
+
+Combines two existing pieces into a real behavior change:
+- **iter-085** tracks max inter-token gap during the LLM stream.
+- **iter-088** implements aggressive comma-split for the first
+  sentence (opt-in static config).
+
+iter-093 wires them together: when the LLM stalls past a
+configurable threshold AND no sentence has emerged yet, ChatLoop
+flips `aggressive_active=True` mid-turn so the NEXT splitter call
+can comma-split for earlier audio recovery.
+
+Rationale: the user has waited longer than expected; getting some
+audio out faster (with imperfect prosody) beats continued silence.
+A 500-1000ms threshold sits comfortably above normal token-
+streaming jitter (~50ms inter-token gap) but well below the user's
+"is this broken" threshold (~2s).
+
+Opt-in via `chat.auto_aggressive_threshold` in `config.local.yaml`
+(0 = disabled, recommend 0.5-1.0s when enabled).
+
+Implementation:
+- `ChatLoop.__init__` gains `auto_aggressive_threshold: float =
+  0.0`.
+- Inside the for-token loop, after the gap update:
+  ```python
+  if (
+      self._auto_aggressive_threshold > 0
+      and gap > self._auto_aggressive_threshold
+      and not aggressive_active
+      and first_sentence_at is None
+  ):
+      aggressive_active = True
+  ```
+- Static `aggressive_first_sentence=True` path is unaffected by
+  the auto-flip (the `not aggressive_active` guard short-circuits).
+- mic_chat reads `chat_cfg.get("auto_aggressive_threshold", 0.0)`.
+
+Tests (7 in `tests/unit/test_auto_aggressive.py`):
+- Disabled-default behavior unchanged.
+- Threshold set + no stall → no flip.
+- Threshold + qualifying stall → flips, produces 2 sentences
+  (preamble + tail).
+- iter-085 metric still records the stall correctly.
+- Sub-threshold stall doesn't flip.
+- Post-first-sentence stall ignored (audio is already flowing).
+- Static + auto coexist without double-flip.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **1122 passed, 1 skipped in 29s** (1115
+existing + 7 new).
+
+Notes:
+- This is the first iteration that **uses** previously-instrumented
+  metrics to drive a behavior change, not just measure or report.
+  iter-085's `max_token_gap` was originally a passive observation;
+  iter-093 makes it actionable.
+- The pattern generalizes — other instrumented signals could
+  drive other auto-tuning behaviors:
+  - iter-051's filler false-positive rate could auto-tune
+    `idle_threshold` over time.
+  - iter-077's `context_tokens` growth could auto-trim more
+    aggressively.
+  - iter-072's `stt_preview_divergence` could auto-disable the
+    preview line when consistently misleading.
+- Next directions:
+  - Continue refactor: extract `_emit_wpm_block` (iter-046+064).
+  - Continue auto-tuning: filler idle_threshold based on observed
+    LLM TTFT distribution.
+  - Investigate the WER fixture (1.6) as a heavyweight iteration.
