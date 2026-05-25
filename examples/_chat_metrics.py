@@ -198,6 +198,14 @@ class TurnMetrics:
     # happen on healthy turns). Metric 2.8 in the perf-metrics
     # taxonomy.
     speaker_open_seconds: float = 0.0
+    # iter-062: peak SentenceWorker queue depth observed during this
+    # turn. 1 = healthy (each sentence drained before the next
+    # arrived). >1 = the LLM produced sentences faster than synth
+    # could keep up; the bot will eventually catch up but if depth
+    # grows large, synth is the bottleneck and streaming-overlap
+    # can't fully mask it. Inverse of ``worker_idle_gap_total``
+    # (worker starved). Metric 2.7 in the perf-metrics taxonomy.
+    max_queue_depth: int = 0
     transcript: str = ""
     response: str = ""
     model: str = ""
@@ -281,6 +289,17 @@ class TurnMetrics:
                 f"  {_DIM}│{_RESET}  Speaker open:  "
                 f"{color}{ms:>6.0f}ms{_RESET}  "
                 f"({_DIM}device init{_RESET})"
+            )
+        # iter-062: peak worker queue depth. Skip when ≤1 (healthy
+        # case — producer/consumer kept pace). Yellow when ≥3:
+        # synth is falling behind enough that mid-turn latency may
+        # accumulate visibly.
+        if self.max_queue_depth > 1:
+            color = _YELLOW if self.max_queue_depth >= 3 else _DIM
+            print(
+                f"  {_DIM}│{_RESET}  Queue depth:   "
+                f"{color}{self.max_queue_depth:>6d}{_RESET}  "
+                f"({_DIM}synth backlog peak{_RESET})"
             )
         # iter-046: bot WPM. Skip if 0 (no audio / no tokens). Color:
         # green if 130-200 (around the UX-research sweet spot 150-180),
@@ -582,6 +601,14 @@ def print_session_summary(
         for m in metrics_list
         if m.speaker_open_seconds > 0
     ]
+    # iter-062: peak queue depth across all turns. The relevant
+    # statistic is the WORST observation — a single turn that piled
+    # up sentences is the bottleneck signal we care about. Filter
+    # out ≤1 (healthy turns); the line itself only emits when at
+    # least one turn backed up.
+    queue_peaks = [
+        m.max_queue_depth for m in metrics_list if m.max_queue_depth > 1
+    ]
 
     # iter-054: include session duration in the header when known.
     # Format the duration human-readably:
@@ -785,6 +812,20 @@ def print_session_summary(
     if bot_wpms:
         median_wpm = statistics.median(bot_wpms)
         _emit(f"    Median bot WPM:   {median_wpm:.0f}")
+    # iter-062: worst queue depth across the session. Skip when no
+    # turn backed up (≤1) — clean sessions don't need the line.
+    # When multiple turns backed up, show how many to differentiate
+    # "one bad turn" from "synth is chronically behind."
+    if queue_peaks:
+        worst = max(queue_peaks)
+        n_backed = len(queue_peaks)
+        if n_backed == 1:
+            _emit(f"    Worst queue:      {worst} (1 turn backed up)")
+        else:
+            _emit(
+                f"    Worst queue:      {worst} "
+                f"({n_backed}/{n} turns backed up)"
+            )
     # iter-061: speaker-open overhead. Median + worst across measured
     # turns. >50ms median is "the persistent-speaker win is slipping" —
     # the iter-008 design assumes opens are cheap because they happen

@@ -188,6 +188,15 @@ class SentenceWorker:
         # (taxonomy 2.8). Validates the iter-008 win — if this
         # creeps back, TTFS regresses silently.
         self.speaker_open_seconds: float = 0.0
+        # iter-062: peak queue depth observed during the turn —
+        # number of sentences waiting for synth at the moment of
+        # the deepest backlog. >1 means the producer (LLM splitter)
+        # got ahead of the consumer (synth+play); high values mean
+        # synth is the bottleneck and streaming-overlap can't keep
+        # up with token rate. Inverse of iter-044's idle_gap (which
+        # measures the worker STARVED). Metric 2.7 in the perf-
+        # metrics taxonomy.
+        self.max_queue_depth: int = 0
         self.first_audio_at: Optional[float] = None
         self.errors: list[Exception] = []
 
@@ -211,6 +220,14 @@ class SentenceWorker:
         if self._stop_event.is_set() or self._submit_done_called:
             return
         self._queue.put(sentence)
+        # iter-062: peak queue-depth tracker. ``qsize()`` is documented
+        # as approximate but the only race is with the consumer thread,
+        # which only DRAINS — so reads here are at most a slight
+        # over-count, fine for a peak metric. Sample after put so the
+        # just-queued sentence is included in the depth.
+        depth = self._queue.qsize()
+        if depth > self.max_queue_depth:
+            self.max_queue_depth = depth
 
     def submit_done(self) -> None:
         """Signal that no more sentences will be submitted. The worker

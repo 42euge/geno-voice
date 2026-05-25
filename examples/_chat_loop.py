@@ -455,6 +455,9 @@ class ChatLoop:
             # only opens the speaker once (first turn) — on later turns
             # it's a no-op and the field stays at 0.0 for those metrics.
             metrics.speaker_open_seconds = worker.speaker_open_seconds
+            # iter-062: peak queue depth (taxonomy 2.7). Sampled in
+            # SentenceWorker.submit() after each put.
+            metrics.max_queue_depth = worker.max_queue_depth
             metrics.sentences_spoken = worker.sentences_spoken
             # iter-040: count of sentences cut mid-stream by cancel_event.
             metrics.sentences_cancelled = worker.cancelled_sentences

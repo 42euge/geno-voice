@@ -140,6 +140,8 @@ class ScenarioResult:
     mic_stale_frames: int = 0
     # iter-061: time inside speaker_factory() in the worker.
     speaker_open_ms: float = 0.0
+    # iter-062: peak SentenceWorker queue depth observed.
+    max_queue_depth: int = 0
 
 
 _RESULTS: list[ScenarioResult] = []
@@ -316,6 +318,7 @@ def _run_scenario(
         primed_frames_seconds=m.primed_frames_seconds,
         mic_stale_frames=m.mic_stale_frames,
         speaker_open_ms=m.speaker_open_seconds * 1000,
+        max_queue_depth=m.max_queue_depth,
     )
     _record(res)
     return res
@@ -491,6 +494,7 @@ class TestPerfScenarios:
         primed_frames_seconds=m.primed_frames_seconds,
             mic_stale_frames=m.mic_stale_frames,
             speaker_open_ms=m.speaker_open_seconds * 1000,
+            max_queue_depth=m.max_queue_depth,
         )
         _record(res)
 
