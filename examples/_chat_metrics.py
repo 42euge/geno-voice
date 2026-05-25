@@ -1030,6 +1030,87 @@ def _emit_filler_block(emit, stats: FillerStats) -> None:
 
 
 @dataclass
+class ErrorStats:
+    """iter-092: aggregated error / failure-mode counters consumed
+    by ``_emit_errors_block``. Bundles three related signals:
+
+      ``llm_errors`` (iter-058): turn-fatal LLM exceptions (the
+        whole turn was lost).
+      ``worker_errors_total`` (iter-058): per-turn synth/play
+        exceptions (turn may have produced partial audio).
+      ``error_turns_with_audio`` (iter-067): worker-error turns
+        where ttfs > 0 — silent partial degradation count.
+      ``error_turns_total`` (iter-067): all turns where
+        worker_errors > 0 — denominator for the recovery rate.
+      ``n`` (iter-058): total completed turns.
+      ``false_triggers`` (iter-058): VAD false-trigger count
+        (also part of the "Errors:" attempts denominator).
+      ``silent_turns`` (iter-079): turns where transcript was
+        captured but ttfs == 0 — bot stayed silent despite
+        successful STT.
+    """
+
+    llm_errors: int = 0
+    worker_errors_total: int = 0
+    error_turns_with_audio: int = 0
+    error_turns_total: int = 0
+    n: int = 0
+    false_triggers: int = 0
+    silent_turns: int = 0
+
+
+def _emit_errors_block(emit, stats: ErrorStats) -> None:
+    """iter-092: extracted from print_session_summary's errors and
+    silent-turn block.
+
+    Renders:
+      - "Errors: N LLM, M worker (over X attempts)" (iter-058)
+        when any error fired.
+      - "Worker recovery: M/N turns produced audio (X%)"
+        (iter-067) when any worker error fired.
+      - "Silent turns: M/N (X%) — bot produced no audio"
+        (iter-079) when any silent turn occurred.
+
+    Behavior-preserving: byte-for-byte identical to the inline
+    version.
+    """
+    # iter-058: error rate per stage. Show only when at least
+    # one error happened.
+    if stats.llm_errors > 0 or stats.worker_errors_total > 0:
+        attempts = stats.n + stats.llm_errors + stats.false_triggers
+        bits = []
+        if stats.llm_errors > 0:
+            bits.append(f"{stats.llm_errors} LLM")
+        if stats.worker_errors_total > 0:
+            bits.append(f"{stats.worker_errors_total} worker")
+        emit(
+            f"    Errors:           "
+            f"{', '.join(bits)} "
+            f"(over {attempts} attempt{'' if attempts == 1 else 's'})"
+        )
+        # iter-067: worker error-recovery success rate.
+        if stats.error_turns_total > 0:
+            pct = (
+                stats.error_turns_with_audio / stats.error_turns_total
+            ) * 100
+            emit(
+                f"    Worker recovery:  "
+                f"{stats.error_turns_with_audio}/{stats.error_turns_total} "
+                f"turns produced audio "
+                f"({pct:.0f}%) — partial degradation"
+            )
+    # iter-079: silent-turn rate. Distinct from worker errors —
+    # no exception fired, the worker just didn't manage to play
+    # anything.
+    if stats.silent_turns > 0 and stats.n > 0:
+        pct = (stats.silent_turns / stats.n) * 100
+        emit(
+            f"    Silent turns:     "
+            f"{stats.silent_turns}/{stats.n} ({pct:.0f}%) — bot produced no audio"
+        )
+
+
+@dataclass
 class SessionMeta:
     """iter-086: session-level signals collected by the driver
     (mic_chat) and passed into ``print_session_summary`` as a
@@ -1524,56 +1605,23 @@ def print_session_summary(
     # (kill the turn outright); worker errors are per-turn (partial
     # turn — some sentences synthed, others raised). Show only when
     # at least one error happened.
-    if llm_errors > 0 or worker_errors_total > 0:
-        attempts = n + llm_errors + false_triggers
-        bits = []
-        if llm_errors > 0:
-            bits.append(f"{llm_errors} LLM")
-        if worker_errors_total > 0:
-            bits.append(f"{worker_errors_total} worker")
-        _emit(
-            f"    Errors:           "
-            f"{', '.join(bits)} "
-            f"(over {attempts} attempt{'' if attempts == 1 else 's'})"
-        )
-        # iter-067: worker error-recovery success rate. Of the turns
-        # where the SentenceWorker raised at least one synth/play
-        # exception, what fraction still produced audio (ttfs > 0)?
-        # 100% recovery is silent partial degradation — the user
-        # heard a complete-sounding response but a sentence inside
-        # was dropped. 0% recovery means every error knocked out
-        # the whole turn (loud failure — user notices). Surface so
-        # the operator can spot bugs that were swallowed by the
-        # worker's per-sentence error isolation.
-        error_turns = [m for m in metrics_list if m.worker_errors > 0]
-        if error_turns:
-            recovered = sum(1 for m in error_turns if m.ttfs > 0)
-            pct = (recovered / len(error_turns)) * 100
-            _emit(
-                f"    Worker recovery:  "
-                f"{recovered}/{len(error_turns)} turns produced audio "
-                f"({pct:.0f}%) — partial degradation"
-            )
-    # iter-079: silent-turn rate. Turns where the user spoke
-    # (transcript captured) but the bot produced no audio
-    # (ttfs == 0). Distinct from worker errors — no exception
-    # fired, the worker just didn't manage to play anything.
-    # The user's experience: "I said something and got silence."
-    # Common causes: worker.errors took out every sentence, LLM
-    # returned an empty response, all sentences were pre-empted
-    # by a barge that landed before first_audio_at, the LLM
-    # produced no terminator-bearing tokens (no synth submissions).
-    # Only emit when the rate is non-zero — clean sessions don't
-    # need a "0 silent turns" line.
+    # iter-092: errors block extracted to _emit_errors_block helper.
+    error_turns = [m for m in metrics_list if m.worker_errors > 0]
     silent_turns = sum(
         1 for m in metrics_list if m.transcript and m.ttfs == 0
     )
-    if silent_turns > 0 and n > 0:
-        pct = (silent_turns / n) * 100
-        _emit(
-            f"    Silent turns:     "
-            f"{silent_turns}/{n} ({pct:.0f}%) — bot produced no audio"
-        )
+    _emit_errors_block(
+        _emit,
+        ErrorStats(
+            llm_errors=llm_errors,
+            worker_errors_total=worker_errors_total,
+            error_turns_with_audio=sum(1 for m in error_turns if m.ttfs > 0),
+            error_turns_total=len(error_turns),
+            n=n,
+            false_triggers=false_triggers,
+            silent_turns=silent_turns,
+        ),
+    )
     if stale_total:
         # iter-037: surface aggregate stale-frame total so a "session
         # had constant echo" pattern is visible at the end of the run.
