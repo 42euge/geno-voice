@@ -4414,3 +4414,61 @@ Notes:
   the contract.
 - Next candidates: 2.7 (worker queue depth), 2.8 (speaker open
   overhead), 1.5 (VAD missed-speech rate — needs ground truth).
+
+## iter-061 — speaker open overhead metric (taxonomy 2.8)
+
+**Branch:** iter-061-speaker-open  **Commit:** 67e96c3  **Date:** 2026-05-24
+
+Added `speaker_open_seconds` — time the SentenceWorker thread spends
+inside `speaker_factory()` opening the per-turn persistent output device.
+The iter-008 win was holding ONE speaker across all sentences of a
+turn (vs reopening per sentence). If open cost balloons (driver change,
+Bluetooth pairing, SDL/PortAudio init) TTFS regresses silently. This
+metric makes the regression visible.
+
+Implementation:
+- `SentenceWorker.speaker_open_seconds: float = 0.0` (new field).
+  `_run()` now wraps the `speaker_factory()` call with `clock()`
+  reads on either side and assigns the delta after a successful
+  open. On the failure path (factory raises) the field stays at 0.0
+  — the early-return happens before the post-open clock read. That
+  contract is pinned by `test_factory_failure_leaves_zero`.
+- `TurnMetrics.speaker_open_seconds: float = 0.0` and ChatLoop
+  transfer alongside the other worker-→-metrics assignments.
+- Per-turn print: "Speaker open: NNms (device init)" only when
+  >0. Yellow if >50ms; the iter-008 design assumes opens are cheap
+  because they happen once per turn rather than once per sentence.
+- Session summary: "Speaker open: median NNms / worst NNms" with
+  zero-filter (turns whose worker exited before opening — error
+  paths — don't bias the aggregate). Single-turn sessions emit a
+  raw "NNms" without median/worst decoration.
+- `ScenarioResult.speaker_open_ms` on perf snapshots, time-series
+  ready for the report generator.
+
+Tests (12 in `tests/unit/test_speaker_open.py`):
+- Defaults: TurnMetrics + SentenceWorker both 0.
+- Per-turn print: zero omitted, non-zero shown, above-threshold path.
+- Session aggregate: no-data omitted, single-value no-decoration,
+  multi-value median+worst, zero-filter.
+- Worker timing: real `time.sleep` inside factory captured (with
+  generous tolerance for CI scheduler jitter); factory failure
+  leaves the field at 0.0 + appends the error.
+- ChatLoop wiring: a deliberately slow `speaker_factory` (40ms
+  sleep) bubbles through all the way to TurnMetrics.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **780 passed, 1 skipped in 22s** (768 existing
++ 12 new).
+
+Notes:
+- **Twenty-three metrics live (50% of the 46-metric taxonomy).**
+- The output-stage dimension is now measured at every layer:
+  open cost (this), synth time (`tts_time`), playback time
+  (`playback_time`), audio output rate (`bot_wpm`), realtime
+  factor (`tts_rtf`), filler frequency (`fillers_played`),
+  speaker write rate (implicit in `playback_time`). A regression
+  anywhere on the output path will surface in at least one of
+  these without needing manual ad-hoc instrumentation.
+- Next candidates: 2.7 (worker queue depth), 2.9 (persistent-
+  speaker open count per session), 1.5 (VAD missed-speech rate
+  — needs ground truth), 1.2 (EoT detection latency).
