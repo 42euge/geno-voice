@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-093 — auto-aggressive splitter on stall (architecture)</title>
+<title>iter-094 — extract _emit_wpm_block helper</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,22 +168,19 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-092.html">← iter-092</a><a href="iter-094.html">iter-094 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-093 — auto-aggressive splitter on stall (architecture)</h1>
-<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+7</code> (total 1122)</span></div>
-</header><p><strong>Branch:</strong> iter-093-auto-aggressive  <strong>Commit:</strong> 0c8a118  <strong>Date:</strong> 2026-05-25</p>
-<p>Combines two existing pieces into a real behavior change:</p>
-<ul><li><strong>iter-085</strong> tracks max inter-token gap during the LLM stream.</li><li><strong>iter-088</strong> implements aggressive comma-split for the first sentence (opt-in static config).</li></ul>
-<p>iter-093 wires them together: when the LLM stalls past a configurable threshold AND no sentence has emerged yet, ChatLoop flips <code>aggressive_active=True</code> mid-turn so the NEXT splitter call can comma-split for earlier audio recovery.</p>
-<p>Rationale: the user has waited longer than expected; getting some audio out faster (with imperfect prosody) beats continued silence. A 500-1000ms threshold sits comfortably above normal token- streaming jitter (~50ms inter-token gap) but well below the user&#x27;s &quot;is this broken&quot; threshold (~2s).</p>
-<p>Opt-in via <code>chat.auto_aggressive_threshold</code> in <code>config.local.yaml</code> (0 = disabled, recommend 0.5-1.0s when enabled).</p>
-<p>Implementation:</p>
-<ul><li><code>ChatLoop.__init__</code> gains `auto_aggressive_threshold: float = 0.0`.</li><li>Inside the for-token loop, after the gap update: ```python if ( self._auto_aggressive_threshold &gt; 0 and gap &gt; self._auto_aggressive_threshold and not aggressive_active and first_sentence_at is None ): aggressive_active = True ```</li><li>Static <code>aggressive_first_sentence=True</code> path is unaffected by the auto-flip (the <code>not aggressive_active</code> guard short-circuits).</li><li>mic_chat reads <code>chat_cfg.get(&quot;auto_aggressive_threshold&quot;, 0.0)</code>.</li></ul>
-<p>Tests (7 in <code>tests/unit/test_auto_aggressive.py</code>):</p>
-<ul><li>Disabled-default behavior unchanged.</li><li>Threshold set + no stall → no flip.</li><li>Threshold + qualifying stall → flips, produces 2 sentences (preamble + tail).</li><li>iter-085 metric still records the stall correctly.</li><li>Sub-threshold stall doesn&#x27;t flip.</li><li>Post-first-sentence stall ignored (audio is already flowing).</li><li>Static + auto coexist without double-flip.</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>1122 passed, 1 skipped in 29s</strong> (1115 existing + 7 new).</p>
+<nav><a href="index.html">← Index</a><a href="iter-093.html">← iter-093</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-094 — extract _emit_wpm_block helper</h1>
+<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+7</code> (total 1129)</span></div>
+</header><p><strong>Branch:</strong> iter-094-wpm-helper  <strong>Commit:</strong> 570b375  <strong>Date:</strong> 2026-05-25</p>
+<p>Continues the refactor pattern. The WPM block of <code>print_session_summary</code> was 14 lines covering three lines:</p>
+<ul><li>&quot;Median user WPM: NNN&quot; (iter-064).</li><li>&quot;Median bot WPM: NNN&quot; (iter-046).</li><li>&quot;Mirror gap: ±NN WPM (bot − user)&quot; (iter-064) when both measurable.</li></ul>
+<p>Extracted to <code>_emit_wpm_block(emit, stats: WpmStats)</code> backed by a 2-field <code>WpmStats</code> dataclass.</p>
+<p>Behavior-preserving: byte-for-byte identical output. The 1122 prior tests pass unchanged.</p>
+<p>Tests (7 in <code>tests/unit/test_emit_wpm_block.py</code>):</p>
+<ul><li><code>WpmStats</code> defaults to empty lists.</li><li>No-data → no emit.</li><li>User-only / bot-only → only the relevant median, no mirror gap.</li><li>Both → all three lines with correct gap sign.</li><li>Negative mirror gap rendering.</li><li>Ordering invariant: user → bot → gap.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>1129 passed, 1 skipped in 27s</strong> (1122 existing + 7 new).</p>
 <p>Notes:</p>
-<ul><li>This is the first iteration that <strong>uses</strong> previously-instrumented metrics to drive a behavior change, not just measure or report. iter-085&#x27;s <code>max_token_gap</code> was originally a passive observation; iter-093 makes it actionable.</li><li>The pattern generalizes — other instrumented signals could drive other auto-tuning behaviors: <code>idle_threshold</code> over time. aggressively. preview line when consistently misleading.<ul><li>iter-051&#x27;s filler false-positive rate could auto-tune</li><li>iter-077&#x27;s <code>context_tokens</code> growth could auto-trim more</li><li>iter-072&#x27;s <code>stt_preview_divergence</code> could auto-disable the</li></ul></li><li>Next directions: LLM TTFT distribution.<ul><li>Continue refactor: extract <code>_emit_wpm_block</code> (iter-046+064).</li><li>Continue auto-tuning: filler idle_threshold based on observed</li><li>Investigate the WER fixture (1.6) as a heavyweight iteration.</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-092.html">← iter-092</a><a href="iter-094.html">iter-094 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li><code>print_session_summary</code> is now ~1280 lines (down from 1500 pre-iter-089). Block extractions: TTFS (-80), Barge (-76), Filler (-32), Errors (-50), WPM (-12) = -250 lines reduced.</li><li>The <code>*Stats</code> dataclass + <code>_emit_*_block</code> helper pattern is consistent across 5 helpers now. Adding a new metric to any of these blocks is a 1-2 line dataclass extension instead of growing a kwarg list.</li><li>Next directions: iter-070 sentence range, iter-059 split coverage). iter-051 false-positive distribution (suggest, don&#x27;t auto- apply, mid-session).<ul><li>Extract <code>_emit_sentence_block</code> (iter-045 mean_sentence_chars,</li><li>Continue auto-tuning lane: filler idle_threshold based on</li><li>Investigate the WER fixture (1.6) as a heavyweight iteration.</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-093.html">← iter-093</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

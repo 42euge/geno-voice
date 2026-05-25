@@ -6485,3 +6485,48 @@ Notes:
   - Continue auto-tuning: filler idle_threshold based on observed
     LLM TTFT distribution.
   - Investigate the WER fixture (1.6) as a heavyweight iteration.
+
+## iter-094 — extract _emit_wpm_block helper
+
+**Branch:** iter-094-wpm-helper  **Commit:** 570b375  **Date:** 2026-05-25
+
+Continues the refactor pattern. The WPM block of
+`print_session_summary` was 14 lines covering three lines:
+- "Median user WPM: NNN" (iter-064).
+- "Median bot WPM: NNN" (iter-046).
+- "Mirror gap: ±NN WPM (bot − user)" (iter-064) when both
+  measurable.
+
+Extracted to `_emit_wpm_block(emit, stats: WpmStats)` backed by a
+2-field `WpmStats` dataclass.
+
+Behavior-preserving: byte-for-byte identical output. The 1122
+prior tests pass unchanged.
+
+Tests (7 in `tests/unit/test_emit_wpm_block.py`):
+- `WpmStats` defaults to empty lists.
+- No-data → no emit.
+- User-only / bot-only → only the relevant median, no mirror gap.
+- Both → all three lines with correct gap sign.
+- Negative mirror gap rendering.
+- Ordering invariant: user → bot → gap.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **1129 passed, 1 skipped in 27s** (1122
+existing + 7 new).
+
+Notes:
+- `print_session_summary` is now ~1280 lines (down from 1500
+  pre-iter-089). Block extractions: TTFS (-80), Barge (-76),
+  Filler (-32), Errors (-50), WPM (-12) = -250 lines reduced.
+- The `*Stats` dataclass + `_emit_*_block` helper pattern is
+  consistent across 5 helpers now. Adding a new metric to any of
+  these blocks is a 1-2 line dataclass extension instead of
+  growing a kwarg list.
+- Next directions:
+  - Extract `_emit_sentence_block` (iter-045 mean_sentence_chars,
+    iter-070 sentence range, iter-059 split coverage).
+  - Continue auto-tuning lane: filler idle_threshold based on
+    iter-051 false-positive distribution (suggest, don't auto-
+    apply, mid-session).
+  - Investigate the WER fixture (1.6) as a heavyweight iteration.
