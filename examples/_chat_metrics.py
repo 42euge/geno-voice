@@ -346,6 +346,7 @@ def print_session_summary(
     *,
     file=None,
     false_triggers: int = 0,
+    session_seconds: float = 0.0,
 ) -> None:
     """Print a multi-line session summary on KeyboardInterrupt.
 
@@ -461,7 +462,36 @@ def print_session_summary(
     # iter-046: bot WPM across measurable turns.
     bot_wpms = [m.bot_wpm for m in metrics_list if m.bot_wpm > 0]
 
-    _emit(f"{_BOLD}  Session Summary ({n} turn{'' if n == 1 else 's'}){_RESET}")
+    # iter-054: include session duration in the header when known.
+    # Format the duration human-readably:
+    #   <60s  → "Ns"
+    #   <1h   → "Mm Ns" or "Mm"
+    #   ≥1h   → "Hh Mm"
+    if session_seconds > 0:
+        if session_seconds < 60:
+            duration_str = f" over {session_seconds:.0f}s"
+        elif session_seconds < 3600:
+            mins = int(session_seconds // 60)
+            secs = int(session_seconds % 60)
+            duration_str = (
+                f" over {mins}m {secs}s" if secs else f" over {mins}m"
+            )
+        else:
+            hours = int(session_seconds // 3600)
+            mins = int((session_seconds % 3600) // 60)
+            duration_str = f" over {hours}h {mins}m"
+    else:
+        duration_str = ""
+    _emit(
+        f"{_BOLD}  Session Summary "
+        f"({n} turn{'' if n == 1 else 's'}{duration_str}){_RESET}"
+    )
+    # iter-054: turns/minute as a useful denominator for rate metrics.
+    # Only emit when session_seconds was provided AND >= a reasonable
+    # threshold (avoid divide-by-tiny on unit-test-shaped sessions).
+    if session_seconds >= 1.0 and n > 0:
+        tpm = (n / session_seconds) * 60.0
+        _emit(f"    Turns/min:        {tpm:.1f}")
     _emit(f"    Median STT:       {_median_ms(stt_times):.0f}ms")
     if stt_rtfs:
         _emit(f"    Median STT RTF:   {statistics.median(stt_rtfs):.2f}x")

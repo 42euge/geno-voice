@@ -287,6 +287,9 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
     # min_speech_duration up.
     false_triggers = 0
     primed_frames: list[bytes] | None = None
+    # iter-054: track session start so the summary can report
+    # total wall-clock + turns/min.
+    session_start = time.monotonic()
 
     try:
         turn = 0
@@ -312,7 +315,9 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
         # even-length handling).
         from examples._chat_metrics import print_session_summary
         print_session_summary(
-            all_metrics, llm_config, false_triggers=false_triggers,
+            all_metrics, llm_config,
+            false_triggers=false_triggers,
+            session_seconds=time.monotonic() - session_start,
         )
     finally:
         mic.stop_stream()
