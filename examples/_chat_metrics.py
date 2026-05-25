@@ -898,6 +898,24 @@ def print_session_summary(
             f"{', '.join(bits)} "
             f"(over {attempts} attempt{'' if attempts == 1 else 's'})"
         )
+        # iter-067: worker error-recovery success rate. Of the turns
+        # where the SentenceWorker raised at least one synth/play
+        # exception, what fraction still produced audio (ttfs > 0)?
+        # 100% recovery is silent partial degradation — the user
+        # heard a complete-sounding response but a sentence inside
+        # was dropped. 0% recovery means every error knocked out
+        # the whole turn (loud failure — user notices). Surface so
+        # the operator can spot bugs that were swallowed by the
+        # worker's per-sentence error isolation.
+        error_turns = [m for m in metrics_list if m.worker_errors > 0]
+        if error_turns:
+            recovered = sum(1 for m in error_turns if m.ttfs > 0)
+            pct = (recovered / len(error_turns)) * 100
+            _emit(
+                f"    Worker recovery:  "
+                f"{recovered}/{len(error_turns)} turns produced audio "
+                f"({pct:.0f}%) — partial degradation"
+            )
     if stale_total:
         # iter-037: surface aggregate stale-frame total so a "session
         # had constant echo" pattern is visible at the end of the run.
