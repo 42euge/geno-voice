@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-066 — cold-start latency penalty metric (taxonomy 1.20)</title>
+<title>iter-067 — worker error-recovery success rate (taxonomy 2.15)</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,18 +168,20 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-065.html">← iter-065</a><a href="iter-067.html">iter-067 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-066 — cold-start latency penalty metric (taxonomy 1.20)</h1>
-<div class="meta"><span>2026-05-24</span> · <span>tests: <code>+11</code> (total 842)</span></div>
-</header><p><strong>Branch:</strong> iter-066-cold-start  <strong>Commit:</strong> 0f34530  <strong>Date:</strong> 2026-05-24</p>
-<p>Added cold-start latency penalty — <code>metrics_list[0].ttfs - median(m.ttfs for m in metrics_list[1:] if m.ttfs &gt; 0)</code>. Captures lazy initialization that hits turn 1 disproportionately — model load, speaker open, TTS warmup, lazy imports — and would otherwise get buried in the overall TTFS median. Critical because users judge the entire session by its first impression.</p>
+<nav><a href="index.html">← Index</a><a href="iter-066.html">← iter-066</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-067 — worker error-recovery success rate (taxonomy 2.15)</h1>
+<div class="meta"><span>2026-05-24</span> · <span>tests: <code>+7</code> (total 849)</span></div>
+</header><p><strong>Branch:</strong> iter-067-error-recovery  <strong>Commit:</strong> 3ffa740  <strong>Date:</strong> 2026-05-24</p>
+<p>Added worker error-recovery success rate — of the turns where the SentenceWorker raised at least one synth/play exception, what fraction still produced audio (<code>ttfs &gt; 0</code>). The metric captures <strong>silent partial degradation</strong>: a sentence inside the turn failed but the rest covered for it, so externally the turn looked fine. That&#x27;s the most insidious failure mode — the user heard a complete-sounding response, the operator saw &quot;successful turn,&quot; and the underlying bug got swallowed.</p>
 <p>Implementation:</p>
-<ul><li>Pure derivation in <code>print_session_summary</code>; no new TurnMetrics field needed (everything is computable from existing per-turn TTFS values). Sits alongside the rhythm-score block in the per-session output.</li><li>Guards: absent first turn). turn-to-turn variation alone produces ~30-40ms swings.<ul><li>Turn 1 must have measurable TTFS (otherwise comparing an</li><li>At least 1 steady-state turn (turns 2:N) must have TTFS &gt; 0.</li><li><code>|penalty|</code> must exceed the 50ms jitter floor — natural</li></ul></li><li>Sign preserved on output. Positive (typical): turn 1 was slower. Negative (rare): turn 1 was faster — could indicate post-turn-1 GC pauses, cache pollution, or otherwise-warm subsystems going cold (the inverse of what we&#x27;d usually see).</li><li>Output: &quot;Cold start: +NNms vs steady state&quot;.</li></ul>
-<p>Tests (11 in <code>tests/unit/test_cold_start.py</code>):</p>
-<ul><li>No-emit boundaries: 1-turn / 0-turn sessions, turn 1 with no TTFS, no steady-state turns, sub-jitter penalty.</li><li>Positive penalty: 2-turn minimum / multi-turn median / steady- state zero filtering.</li><li>Negative penalty: turn 1 faster than steady state, sign rendered with leading &quot;-&quot;.</li><li>Threshold: just-below-floor omits, just-above emits.</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>842 passed, 1 skipped in 23s</strong> (831 existing + 11 new).</p>
+<ul><li>Pure derivation in <code>print_session_summary</code>; no new TurnMetrics field (reuses iter-058&#x27;s <code>worker_errors</code> + existing <code>ttfs</code>).</li><li>Sits inside the existing iter-058 Errors block — only emits when the block is already showing.</li><li>Counts denominator as &quot;turns where any worker error happened,&quot; not &quot;total error count&quot; — a single turn with 5 errors is still one turn for the recovery rate.</li><li>Output: &quot;Worker recovery: M/N turns produced audio (X%) — partial degradation&quot;.</li></ul>
+<p>Interpretation:</p>
+<ul><li>100% recovery → silent partial degradation (worst): the per-sentence error isolation is masking real bugs.</li><li>0% recovery → loud failure: every error knocks out the whole turn (user notices and complains).</li><li>Mixed → both modes present; investigate the recovered turns for swallowed-bug patterns.</li></ul>
+<p>Tests (7 in <code>tests/unit/test_worker_recovery.py</code>):</p>
+<ul><li>No-emit boundaries: clean session, only LLM errors (no worker).</li><li>Full recovery (silent partial degradation marker), zero recovery (loud failure), mixed.</li><li>Denominator excludes clean turns (only error turns count).</li><li>Multiple errors per turn count as one turn.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>849 passed, 1 skipped in 23s</strong> (842 existing + 7 new).</p>
 <p>Notes:</p>
-<ul><li><strong>Twenty-eight metrics live (61% of the 46-metric taxonomy).</strong></li><li>This is the second purely session-level metric (after iter-055&#x27;s rhythm score). Both decompose information that&#x27;s already in the per-turn record but only becomes meaningful in aggregate.</li><li>Cold-start penalty completes the &quot;first impression&quot; picture alongside iter-061&#x27;s <code>speaker_open_seconds</code> (which on turn 1 is the speaker open cost, on later turns is 0): now the operator can attribute turn-1 lag to specific subsystems.</li><li>Next candidates: 2.15 (worker error-recovery success: turns where worker.errors is non-empty but ttfs &gt; 0 — silent partial degradation), 1.12 (turn-taking jitter: stdev of TTFS — already implicitly in rhythm score, could promote to its own line), 1.6 (WER, needs ground truth corpus).</li></ul><nav><a href="index.html">← Index</a><a href="iter-065.html">← iter-065</a><a href="iter-067.html">iter-067 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li><strong>Twenty-nine metrics live (63% of the 46-metric taxonomy.)</strong></li><li>This is the third session-level-only metric (after iter-055 rhythm score and iter-066 cold-start). The pattern of &quot;compute in print_session_summary from existing per-turn fields&quot; scales cheaply — 5-15 lines of code per metric and no plumbing churn.</li><li>The error story is now fully bilateral:<ul><li>LLM errors (turn-fatal, session-level count from iter-058)</li><li>Worker errors (per-turn count from iter-058)</li><li>Recovery rate (this) — the bridge between the two</li></ul></li><li>Next candidates: 1.12 (turn-taking jitter: stdev of TTFS — could promote from rhythm score&#x27;s internal computation to its own line), 1.6 (WER, needs ground truth corpus), 1.18 (interruption rate: barge_in count / turns — already implicitly visible in the Barge-ins line, could add the rate explicitly).</li></ul><nav><a href="index.html">← Index</a><a href="iter-066.html">← iter-066</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

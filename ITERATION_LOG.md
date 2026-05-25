@@ -4784,3 +4784,62 @@ Notes:
   degradation), 1.12 (turn-taking jitter: stdev of TTFS — already
   implicitly in rhythm score, could promote to its own line),
   1.6 (WER, needs ground truth corpus).
+
+## iter-067 — worker error-recovery success rate (taxonomy 2.15)
+
+**Branch:** iter-067-error-recovery  **Commit:** 3ffa740  **Date:** 2026-05-24
+
+Added worker error-recovery success rate — of the turns where the
+SentenceWorker raised at least one synth/play exception, what
+fraction still produced audio (`ttfs > 0`). The metric captures
+**silent partial degradation**: a sentence inside the turn failed
+but the rest covered for it, so externally the turn looked fine.
+That's the most insidious failure mode — the user heard a
+complete-sounding response, the operator saw "successful turn,"
+and the underlying bug got swallowed.
+
+Implementation:
+- Pure derivation in `print_session_summary`; no new TurnMetrics
+  field (reuses iter-058's `worker_errors` + existing `ttfs`).
+- Sits inside the existing iter-058 Errors block — only emits when
+  the block is already showing.
+- Counts denominator as "turns where any worker error happened,"
+  not "total error count" — a single turn with 5 errors is still
+  one turn for the recovery rate.
+- Output: "Worker recovery: M/N turns produced audio (X%) —
+  partial degradation".
+
+Interpretation:
+- 100% recovery → silent partial degradation (worst): the
+  per-sentence error isolation is masking real bugs.
+- 0% recovery → loud failure: every error knocks out the whole
+  turn (user notices and complains).
+- Mixed → both modes present; investigate the recovered turns
+  for swallowed-bug patterns.
+
+Tests (7 in `tests/unit/test_worker_recovery.py`):
+- No-emit boundaries: clean session, only LLM errors (no worker).
+- Full recovery (silent partial degradation marker), zero
+  recovery (loud failure), mixed.
+- Denominator excludes clean turns (only error turns count).
+- Multiple errors per turn count as one turn.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **849 passed, 1 skipped in 23s** (842 existing
++ 7 new).
+
+Notes:
+- **Twenty-nine metrics live (63% of the 46-metric taxonomy.)**
+- This is the third session-level-only metric (after iter-055
+  rhythm score and iter-066 cold-start). The pattern of "compute
+  in print_session_summary from existing per-turn fields" scales
+  cheaply — 5-15 lines of code per metric and no plumbing churn.
+- The error story is now fully bilateral:
+  - LLM errors (turn-fatal, session-level count from iter-058)
+  - Worker errors (per-turn count from iter-058)
+  - Recovery rate (this) — the bridge between the two
+- Next candidates: 1.12 (turn-taking jitter: stdev of TTFS — could
+  promote from rhythm score's internal computation to its own
+  line), 1.6 (WER, needs ground truth corpus), 1.18 (interruption
+  rate: barge_in count / turns — already implicitly visible in
+  the Barge-ins line, could add the rate explicitly).
