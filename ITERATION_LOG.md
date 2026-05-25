@@ -5360,3 +5360,70 @@ Notes:
   rate), OR the iter-073 sentence-first-audio path-length
   decomposition (taxonomy 2.22) which would surface the 7
   per-turn timestamps as a structured trace line.
+
+## iter-076 — TTFS attribution breakdown (taxonomy 2.22)
+
+**Branch:** iter-076-ttfs-attribution  **Commit:** 9b9bdf4  **Date:** 2026-05-25
+
+Added `synth_dispatch_seconds` and a TTFS attribution display.
+The breakdown decomposes TTFS into three accounting buckets that
+sum to 100%:
+- **STT**: speech-end → STT done.
+- **LLM**: STT done → first complete sentence reaches the worker.
+- **synth+dispatch**: first sentence at worker → first audio
+  played (covers synth, queue dispatch, audio device buffering).
+
+The synth_dispatch term is the residual:
+```python
+synth_dispatch_seconds = max(0, ttfs - stt_time - llm_first_sentence)
+```
+The clamp is defensive against microsecond clock-skew producing
+tiny negative residuals (the recorder and loop use independent
+clocks).
+
+Implementation:
+- `TurnMetrics.synth_dispatch_seconds: float = 0.0` (new field).
+- ChatLoop computes the residual immediately after `metrics.ttfs`
+  is set, using the locally-available `first_sentence_at` and
+  `llm_start` instead of the `metrics.llm_first_sentence` field
+  which gets assigned later in the same block.
+- Per-turn print emits "Attribution: STT N% + LLM N% + synth N%"
+  only when all three legs are measurable. Renders as floored
+  ints so the visible sum stays ≤ 100% (vs `round`, which can
+  produce 101%).
+- Session summary emits "TTFS breakdown: STT N% + LLM N% +
+  synth N%" with median percentages across turns where all three
+  legs landed.
+- `ScenarioResult.synth_dispatch_ms` on perf snapshots.
+
+Tests (11 in `tests/unit/test_ttfs_attribution.py`):
+- Default zero / per-turn print: zero omits, partial-data omits,
+  full breakdown emits with correct percentages.
+- ChatLoop arithmetic: residual non-negative (clamp works);
+  residual ≤ ttfs; three legs sum to ≤ ttfs (within 50ms of ttfs
+  in real traces — clock skew tolerance).
+- Session aggregate: no-data / partial-data / uniform / mixed
+  (zero-leg turns excluded from median).
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **950 passed, 1 skipped in 24s** (939 existing
++ 11 new).
+
+Notes:
+- **Thirty-seven metrics live (80% of the 46-metric taxonomy).**
+- The TTFS dimension now has six lenses:
+  - `ttfs` — single number (the budget).
+  - `naturalness_bucket` (iter-053) — qualitative (rushed/natural/slow).
+  - `cold_start_penalty` (iter-066) — turn-1 vs steady-state.
+  - `rhythm_score` + `ttfs_jitter` (iter-055/068) — consistency.
+  - `synth_dispatch_seconds` (this) — leg attribution residual.
+  - Plus the discrete leg metrics (stt_time, llm_first_sentence,
+    first_synth_overlap_seconds).
+- The breakdown turns "TTFS is 850ms" into "850ms = 200ms STT +
+  500ms LLM + 150ms synth — LLM is the bottleneck." Operator
+  can read which leg dominates without cross-referencing six
+  separate metrics.
+- Next candidates: 1.6 (WER, needs ground truth corpus), 1.17
+  (audio device underrun/overrun count), 2.13 (primed-frames
+  STT contribution — needs offline ablation), 2.20 (loopback /
+  acoustic-echo barge rate — needs cross-correlation).

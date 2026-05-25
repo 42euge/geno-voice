@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-075 — refactor _play_clip kwargs into dynamic dict (cleanup)</title>
+<title>iter-076 — TTFS attribution breakdown (taxonomy 2.22)</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,34 +168,22 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-074.html">← iter-074</a><a href="iter-076.html">iter-076 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-075 — refactor _play_clip kwargs into dynamic dict (cleanup)</h1>
-<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+6</code> (total 939)</span></div>
-</header><p><strong>Branch:</strong> iter-075-play-kwargs  <strong>Commit:</strong> 68611a1  <strong>Date:</strong> 2026-05-25</p>
-<p>iter-071 flagged that the play_fn invocation in <code>SentenceWorker._play_clip</code> had grown to a 4-branch <code>if/elif</code> chain on <code>cancel_event × lag_out</code>. Each new optional kwarg would double the branch count.</p>
-<p>This iteration replaces the chain with a single dynamically-built kwargs dict. Each play_fn-supported kwarg adds one entry; unsupported kwargs are omitted entirely. Preserves the iter-023 contract that the worker only passes kwargs the play_fn signature accepts (so old/minimal play_fns continue to work without churn).</p>
-<p>Before:</p>
-<pre class="code-block"><code>if self._play_fn_supports_cancel and lag_out is not None:
-    elapsed = self._play_fn(speaker, audio_np, tokens, ...)
-elif self._play_fn_supports_cancel:
-    elapsed = self._play_fn(speaker, audio_np, tokens, ...)
-elif lag_out is not None:
-    elapsed = self._play_fn(speaker, audio_np, tokens, ...)
-else:
-    elapsed = self._play_fn(speaker, audio_np, tokens, ...)</code></pre>
-<p>After:</p>
-<pre class="code-block"><code>base_kwargs = {&quot;is_first_sentence&quot;: is_first}
-if self._play_fn_supports_cancel:
-    base_kwargs[&quot;cancel_event&quot;] = self._cancel_event
-if lag_out is not None:
-    base_kwargs[&quot;lag_out&quot;] = lag_out
-elapsed = self._play_fn(speaker, audio_np, tokens, **base_kwargs)</code></pre>
-<p>Adding a third optional kwarg is now an O(1) edit — one new sniff helper + one new conditional dict-set.</p>
-<p>Tests:</p>
-<ul><li>6 new tests in <code>test_play_kwargs_assembly.py</code> pinning the kwargs assembly across each signature shape (minimal / cancel_only / lag_only / both / **kwargs). Covers the case the old branching protected against — TypeError when passing unsupported kwargs to a minimal signature.</li><li>All 933 prior tests continue to pass — the refactor is behavior-preserving.</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>939 passed, 1 skipped in 24s</strong> (933 existing + 6 new).</p>
+<nav><a href="index.html">← Index</a><a href="iter-075.html">← iter-075</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-076 — TTFS attribution breakdown (taxonomy 2.22)</h1>
+<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+11</code> (total 950)</span></div>
+</header><p><strong>Branch:</strong> iter-076-ttfs-attribution  <strong>Commit:</strong> 9b9bdf4  <strong>Date:</strong> 2026-05-25</p>
+<p>Added <code>synth_dispatch_seconds</code> and a TTFS attribution display. The breakdown decomposes TTFS into three accounting buckets that sum to 100%:</p>
+<ul><li><strong>STT</strong>: speech-end → STT done.</li><li><strong>LLM</strong>: STT done → first complete sentence reaches the worker.</li><li><strong>synth+dispatch</strong>: first sentence at worker → first audio played (covers synth, queue dispatch, audio device buffering).</li></ul>
+<p>The synth_dispatch term is the residual:</p>
+<pre class="code-block"><code>synth_dispatch_seconds = max(0, ttfs - stt_time - llm_first_sentence)</code></pre>
+<p>The clamp is defensive against microsecond clock-skew producing tiny negative residuals (the recorder and loop use independent clocks).</p>
+<p>Implementation:</p>
+<ul><li><code>TurnMetrics.synth_dispatch_seconds: float = 0.0</code> (new field).</li><li>ChatLoop computes the residual immediately after <code>metrics.ttfs</code> is set, using the locally-available <code>first_sentence_at</code> and <code>llm_start</code> instead of the <code>metrics.llm_first_sentence</code> field which gets assigned later in the same block.</li><li>Per-turn print emits &quot;Attribution: STT N% + LLM N% + synth N%&quot; only when all three legs are measurable. Renders as floored ints so the visible sum stays ≤ 100% (vs <code>round</code>, which can produce 101%).</li><li>Session summary emits &quot;TTFS breakdown: STT N% + LLM N% + synth N%&quot; with median percentages across turns where all three legs landed.</li><li><code>ScenarioResult.synth_dispatch_ms</code> on perf snapshots.</li></ul>
+<p>Tests (11 in <code>tests/unit/test_ttfs_attribution.py</code>):</p>
+<ul><li>Default zero / per-turn print: zero omits, partial-data omits, full breakdown emits with correct percentages.</li><li>ChatLoop arithmetic: residual non-negative (clamp works); residual ≤ ttfs; three legs sum to ≤ ttfs (within 50ms of ttfs in real traces — clock skew tolerance).</li><li>Session aggregate: no-data / partial-data / uniform / mixed (zero-leg turns excluded from median).</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>950 passed, 1 skipped in 24s</strong> (939 existing + 11 new).</p>
 <p>Notes:</p>
-<ul><li>This is the project&#x27;s first dedicated cleanup iteration since metric instrumentation work began. The pattern of &quot;each iter adds a metric and surfaces a small refactor opportunity for the next&quot; has been working — both compound interest (metric coverage now 78% of taxonomy) and code health stay positive.</li><li>Next candidates: continuing with metrics (1.6 WER needs ground truth, 1.17 audio underrun/overrun, 2.20 loopback echo barge rate), OR the iter-073 sentence-first-audio path-length decomposition (taxonomy 2.22) which would surface the 7 per-turn timestamps as a structured trace line.</li></ul><nav><a href="index.html">← Index</a><a href="iter-074.html">← iter-074</a><a href="iter-076.html">iter-076 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li><strong>Thirty-seven metrics live (80% of the 46-metric taxonomy).</strong></li><li>The TTFS dimension now has six lenses: first_synth_overlap_seconds).<ul><li><code>ttfs</code> — single number (the budget).</li><li><code>naturalness_bucket</code> (iter-053) — qualitative (rushed/natural/slow).</li><li><code>cold_start_penalty</code> (iter-066) — turn-1 vs steady-state.</li><li><code>rhythm_score</code> + <code>ttfs_jitter</code> (iter-055/068) — consistency.</li><li><code>synth_dispatch_seconds</code> (this) — leg attribution residual.</li><li>Plus the discrete leg metrics (stt_time, llm_first_sentence,</li></ul></li><li>The breakdown turns &quot;TTFS is 850ms&quot; into &quot;850ms = 200ms STT + 500ms LLM + 150ms synth — LLM is the bottleneck.&quot; Operator can read which leg dominates without cross-referencing six separate metrics.</li><li>Next candidates: 1.6 (WER, needs ground truth corpus), 1.17 (audio device underrun/overrun count), 2.13 (primed-frames STT contribution — needs offline ablation), 2.20 (loopback / acoustic-echo barge rate — needs cross-correlation).</li></ul><nav><a href="index.html">← Index</a><a href="iter-075.html">← iter-075</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>
