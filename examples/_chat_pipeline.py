@@ -184,6 +184,10 @@ class SentenceWorker:
         self.fillers_played: int = 0
         self.tts_time: float = 0.0
         self.playback_time: float = 0.0
+        # iter-061: time spent opening the persistent speaker
+        # (taxonomy 2.8). Validates the iter-008 win — if this
+        # creeps back, TTFS regresses silently.
+        self.speaker_open_seconds: float = 0.0
         self.first_audio_at: Optional[float] = None
         self.errors: list[Exception] = []
 
@@ -320,11 +324,17 @@ class SentenceWorker:
     def _run(self) -> None:
         # Open the persistent speaker. If this fails (no audio device,
         # virtual interface terminated, etc.) record the error and exit.
+        # iter-061: time the open so the chat loop can surface
+        # speaker-open overhead per turn. Validates the iter-008
+        # persistent-speaker win — if this creeps back (driver
+        # change, Bluetooth, SDL), TTFS regresses silently.
+        open_t0 = self._clock()
         try:
             speaker = self._speaker_factory()
         except Exception as e:  # pragma: no cover — exercised by test
             self.errors.append(e)
             return
+        self.speaker_open_seconds = self._clock() - open_t0
 
         # Tracks "have we written any audio output yet" — drives the
         # is_first_sentence flag for the play_fn (controls the "Bot:"

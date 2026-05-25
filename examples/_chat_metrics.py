@@ -188,6 +188,16 @@ class TurnMetrics:
     # OS loopback / Bluetooth duplex / acoustic echo. A reliable
     # signal that echo cancellation is needed in the user's setup.
     mic_stale_frames: int = 0
+    # iter-061: time spent inside speaker_factory() inside the
+    # SentenceWorker thread, opening the per-turn persistent output
+    # device. iter-008's win was holding ONE speaker across all
+    # sentences of a turn (vs reopening per sentence). A creep here
+    # (driver change, Bluetooth pairing, SDL/PortAudio init) directly
+    # delays TTFS for every turn. Yellow flag if >50ms. 0.0 on turns
+    # where the worker exited before opening the speaker (shouldn't
+    # happen on healthy turns). Metric 2.8 in the perf-metrics
+    # taxonomy.
+    speaker_open_seconds: float = 0.0
     transcript: str = ""
     response: str = ""
     model: str = ""
@@ -260,6 +270,18 @@ class TurnMetrics:
             tts_suffix += f"  ({rtf_color}RTF {self.tts_rtf:.2f}x{_RESET})"
         print(f"  {_DIM}│{_RESET}  TTS:           {self.tts_time*1000:>7.0f}ms  {tts_suffix}")
         print(f"  {_DIM}│{_RESET}  Playback:      {self.playback_time*1000:>7.0f}ms")
+        # iter-061: speaker-open overhead. Skip on the common case
+        # of 0 (subsequent turns reuse the persistent speaker — no
+        # second open). Yellow flag when >50ms; the iter-008 win
+        # was about avoiding per-sentence opens in the hot path.
+        if self.speaker_open_seconds > 0:
+            ms = self.speaker_open_seconds * 1000
+            color = _YELLOW if ms > 50 else _DIM
+            print(
+                f"  {_DIM}│{_RESET}  Speaker open:  "
+                f"{color}{ms:>6.0f}ms{_RESET}  "
+                f"({_DIM}device init{_RESET})"
+            )
         # iter-046: bot WPM. Skip if 0 (no audio / no tokens). Color:
         # green if 130-200 (around the UX-research sweet spot 150-180),
         # yellow otherwise (too fast or too slow).
@@ -551,6 +573,15 @@ def print_session_summary(
     ]
     # iter-046: bot WPM across measurable turns.
     bot_wpms = [m.bot_wpm for m in metrics_list if m.bot_wpm > 0]
+    # iter-061: speaker-open seconds across turns where it was set.
+    # Filter out 0s — those represent turns whose worker exited before
+    # ever opening the speaker (early error path). Healthy turns
+    # always set this >0.
+    speaker_opens = [
+        m.speaker_open_seconds
+        for m in metrics_list
+        if m.speaker_open_seconds > 0
+    ]
 
     # iter-054: include session duration in the header when known.
     # Format the duration human-readably:
@@ -754,5 +785,21 @@ def print_session_summary(
     if bot_wpms:
         median_wpm = statistics.median(bot_wpms)
         _emit(f"    Median bot WPM:   {median_wpm:.0f}")
+    # iter-061: speaker-open overhead. Median + worst across measured
+    # turns. >50ms median is "the persistent-speaker win is slipping" —
+    # the iter-008 design assumes opens are cheap because they happen
+    # once per turn rather than once per sentence; if they get expensive
+    # we lose the headroom. Single-turn sessions show just the one
+    # value.
+    if speaker_opens:
+        worst_ms = max(speaker_opens) * 1000
+        if len(speaker_opens) > 1:
+            med_ms = statistics.median(speaker_opens) * 1000
+            _emit(
+                f"    Speaker open:     "
+                f"median {med_ms:.0f}ms / worst {worst_ms:.0f}ms"
+            )
+        else:
+            _emit(f"    Speaker open:     {worst_ms:.0f}ms")
     _emit(f"    Model:            {llm_config.get('model', 'unknown')}")
     _emit()

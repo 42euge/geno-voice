@@ -451,6 +451,10 @@ class ChatLoop:
             if worker.audio_seconds_total > 0:
                 metrics.tts_rtf = worker.tts_time / worker.audio_seconds_total
             metrics.playback_time = worker.playback_time
+            # iter-061: speaker-open overhead (taxonomy 2.8). The worker
+            # only opens the speaker once (first turn) — on later turns
+            # it's a no-op and the field stays at 0.0 for those metrics.
+            metrics.speaker_open_seconds = worker.speaker_open_seconds
             metrics.sentences_spoken = worker.sentences_spoken
             # iter-040: count of sentences cut mid-stream by cancel_event.
             metrics.sentences_cancelled = worker.cancelled_sentences
