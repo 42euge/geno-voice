@@ -5427,3 +5427,66 @@ Notes:
   (audio device underrun/overrun count), 2.13 (primed-frames
   STT contribution — needs offline ablation), 2.20 (loopback /
   acoustic-echo barge rate — needs cross-correlation).
+
+## iter-077 — conversation history grow rate (taxonomy 2.23)
+
+**Branch:** iter-077-context-tokens  **Commit:** 17f2859  **Date:** 2026-05-25
+
+Added `context_tokens` — approximate count of context tokens being
+sent to the LLM each turn. Whitespace-split is a rough estimator
+(real tokenizer counts vary by model) but the per-turn TREND is
+what matters: late-session turns get progressively slower as
+context grows, so a creep here predicts an `llm_first_token`
+regression even before the latency itself measurably worsens.
+
+Pairs with iter-024's `trim_history(max_user_assistant=20)` — if
+context keeps growing despite the trim cap, system-prompt bloat
+is the culprit.
+
+Implementation:
+- `TurnMetrics.context_tokens: int = 0` (new field).
+- ChatLoop counts immediately after the user message is appended
+  to the messages list, BEFORE the LLM call:
+  ```python
+  metrics.context_tokens = sum(
+      len(str(m.get("content", "")).split())
+      for m in messages
+  )
+  ```
+- Per-turn print: appends "N ctx" suffix to the LLM total line
+  alongside the existing TPS suffix:
+  `LLM total: 500ms (qwen-2.5-7b, 45 tps, 120 ctx)`.
+- Session summary:
+  - "Context tokens: N median, M max" (always when measurable).
+  - "Context growth: ±N tokens (turn 1 → turn N)" when ≥3 turns
+    have measurable context — the first-vs-last delta is a quick
+    growth sentinel without needing a least-squares slope.
+- `ScenarioResult.context_tokens` on perf snapshots.
+
+Tests (12 in `tests/unit/test_context_tokens.py`):
+- Default zero, per-turn print: zero omits suffix, non-zero
+  appends, combines with TPS.
+- Session aggregate: no-data, 2-turn (median+max but no growth
+  line), 3-turn (median+max+growth), negative growth (trim
+  aggressive), zero filtering.
+- ChatLoop arithmetic: short transcript yields exact word count,
+  long transcript scales correctly, prefilled history adds to
+  total.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **962 passed, 1 skipped in 25s** (950 existing
++ 12 new).
+
+Notes:
+- **Thirty-eight metrics live (83% of the 46-metric taxonomy).**
+- The conversation-state dimension is now measurable — context
+  size predicts LLM TTFB before the latency itself shows it.
+  Pairs with iter-076's TTFS attribution: a creeping LLM% in the
+  attribution + a growing context_tokens points squarely at
+  prompt bloat, not LLM slowness.
+- Next candidates: 2.24 (trim event rate — paired with this;
+  fires when trim_history actually evicts), 3.7 (pre-empted-
+  content loss — bot tokens generated but never spoken on
+  barge-in turns), 3.11 (silent-turn rate — turns where
+  transcript exists but ttfs == 0), 1.6 (WER, needs ground
+  truth corpus).

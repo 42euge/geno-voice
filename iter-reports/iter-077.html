@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-076 — TTFS attribution breakdown (taxonomy 2.22)</title>
+<title>iter-077 — conversation history grow rate (taxonomy 2.23)</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,22 +168,19 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-075.html">← iter-075</a><a href="iter-077.html">iter-077 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-076 — TTFS attribution breakdown (taxonomy 2.22)</h1>
-<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+11</code> (total 950)</span></div>
-</header><p><strong>Branch:</strong> iter-076-ttfs-attribution  <strong>Commit:</strong> 9b9bdf4  <strong>Date:</strong> 2026-05-25</p>
-<p>Added <code>synth_dispatch_seconds</code> and a TTFS attribution display. The breakdown decomposes TTFS into three accounting buckets that sum to 100%:</p>
-<ul><li><strong>STT</strong>: speech-end → STT done.</li><li><strong>LLM</strong>: STT done → first complete sentence reaches the worker.</li><li><strong>synth+dispatch</strong>: first sentence at worker → first audio played (covers synth, queue dispatch, audio device buffering).</li></ul>
-<p>The synth_dispatch term is the residual:</p>
-<pre class="code-block"><code>synth_dispatch_seconds = max(0, ttfs - stt_time - llm_first_sentence)</code></pre>
-<p>The clamp is defensive against microsecond clock-skew producing tiny negative residuals (the recorder and loop use independent clocks).</p>
+<nav><a href="index.html">← Index</a><a href="iter-076.html">← iter-076</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-077 — conversation history grow rate (taxonomy 2.23)</h1>
+<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+12</code> (total 962)</span></div>
+</header><p><strong>Branch:</strong> iter-077-context-tokens  <strong>Commit:</strong> 17f2859  <strong>Date:</strong> 2026-05-25</p>
+<p>Added <code>context_tokens</code> — approximate count of context tokens being sent to the LLM each turn. Whitespace-split is a rough estimator (real tokenizer counts vary by model) but the per-turn TREND is what matters: late-session turns get progressively slower as context grows, so a creep here predicts an <code>llm_first_token</code> regression even before the latency itself measurably worsens.</p>
+<p>Pairs with iter-024&#x27;s <code>trim_history(max_user_assistant=20)</code> — if context keeps growing despite the trim cap, system-prompt bloat is the culprit.</p>
 <p>Implementation:</p>
-<ul><li><code>TurnMetrics.synth_dispatch_seconds: float = 0.0</code> (new field).</li><li>ChatLoop computes the residual immediately after <code>metrics.ttfs</code> is set, using the locally-available <code>first_sentence_at</code> and <code>llm_start</code> instead of the <code>metrics.llm_first_sentence</code> field which gets assigned later in the same block.</li><li>Per-turn print emits &quot;Attribution: STT N% + LLM N% + synth N%&quot; only when all three legs are measurable. Renders as floored ints so the visible sum stays ≤ 100% (vs <code>round</code>, which can produce 101%).</li><li>Session summary emits &quot;TTFS breakdown: STT N% + LLM N% + synth N%&quot; with median percentages across turns where all three legs landed.</li><li><code>ScenarioResult.synth_dispatch_ms</code> on perf snapshots.</li></ul>
-<p>Tests (11 in <code>tests/unit/test_ttfs_attribution.py</code>):</p>
-<ul><li>Default zero / per-turn print: zero omits, partial-data omits, full breakdown emits with correct percentages.</li><li>ChatLoop arithmetic: residual non-negative (clamp works); residual ≤ ttfs; three legs sum to ≤ ttfs (within 50ms of ttfs in real traces — clock skew tolerance).</li><li>Session aggregate: no-data / partial-data / uniform / mixed (zero-leg turns excluded from median).</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>950 passed, 1 skipped in 24s</strong> (939 existing + 11 new).</p>
+<ul><li><code>TurnMetrics.context_tokens: int = 0</code> (new field).</li><li>ChatLoop counts immediately after the user message is appended to the messages list, BEFORE the LLM call: ```python metrics.context_tokens = sum( len(str(m.get(&quot;content&quot;, &quot;&quot;)).split()) for m in messages ) ```</li><li>Per-turn print: appends &quot;N ctx&quot; suffix to the LLM total line alongside the existing TPS suffix: <code>LLM total: 500ms (qwen-2.5-7b, 45 tps, 120 ctx)</code>.</li><li>Session summary: have measurable context — the first-vs-last delta is a quick growth sentinel without needing a least-squares slope.<ul><li>&quot;Context tokens: N median, M max&quot; (always when measurable).</li><li>&quot;Context growth: ±N tokens (turn 1 → turn N)&quot; when ≥3 turns</li></ul></li><li><code>ScenarioResult.context_tokens</code> on perf snapshots.</li></ul>
+<p>Tests (12 in <code>tests/unit/test_context_tokens.py</code>):</p>
+<ul><li>Default zero, per-turn print: zero omits suffix, non-zero appends, combines with TPS.</li><li>Session aggregate: no-data, 2-turn (median+max but no growth line), 3-turn (median+max+growth), negative growth (trim aggressive), zero filtering.</li><li>ChatLoop arithmetic: short transcript yields exact word count, long transcript scales correctly, prefilled history adds to total.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>962 passed, 1 skipped in 25s</strong> (950 existing + 12 new).</p>
 <p>Notes:</p>
-<ul><li><strong>Thirty-seven metrics live (80% of the 46-metric taxonomy).</strong></li><li>The TTFS dimension now has six lenses: first_synth_overlap_seconds).<ul><li><code>ttfs</code> — single number (the budget).</li><li><code>naturalness_bucket</code> (iter-053) — qualitative (rushed/natural/slow).</li><li><code>cold_start_penalty</code> (iter-066) — turn-1 vs steady-state.</li><li><code>rhythm_score</code> + <code>ttfs_jitter</code> (iter-055/068) — consistency.</li><li><code>synth_dispatch_seconds</code> (this) — leg attribution residual.</li><li>Plus the discrete leg metrics (stt_time, llm_first_sentence,</li></ul></li><li>The breakdown turns &quot;TTFS is 850ms&quot; into &quot;850ms = 200ms STT + 500ms LLM + 150ms synth — LLM is the bottleneck.&quot; Operator can read which leg dominates without cross-referencing six separate metrics.</li><li>Next candidates: 1.6 (WER, needs ground truth corpus), 1.17 (audio device underrun/overrun count), 2.13 (primed-frames STT contribution — needs offline ablation), 2.20 (loopback / acoustic-echo barge rate — needs cross-correlation).</li></ul><nav><a href="index.html">← Index</a><a href="iter-075.html">← iter-075</a><a href="iter-077.html">iter-077 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li><strong>Thirty-eight metrics live (83% of the 46-metric taxonomy).</strong></li><li>The conversation-state dimension is now measurable — context size predicts LLM TTFB before the latency itself shows it. Pairs with iter-076&#x27;s TTFS attribution: a creeping LLM% in the attribution + a growing context_tokens points squarely at prompt bloat, not LLM slowness.</li><li>Next candidates: 2.24 (trim event rate — paired with this; fires when trim_history actually evicts), 3.7 (pre-empted- content loss — bot tokens generated but never spoken on barge-in turns), 3.11 (silent-turn rate — turns where transcript exists but ttfs == 0), 1.6 (WER, needs ground truth corpus).</li></ul><nav><a href="index.html">← Index</a><a href="iter-076.html">← iter-076</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>
