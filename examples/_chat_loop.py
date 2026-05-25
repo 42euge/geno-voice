@@ -184,6 +184,10 @@ class ChatLoop:
         frames for the next turn, and an error flag.
         """
         # ---- Phase 1: record user utterance ----
+        # iter-063: collect side-band metrics (currently EoT detection
+        # latency) via the new ``out_metrics`` parameter. Old return
+        # signature is unchanged.
+        rec_metrics: dict = {}
         wav_bytes, speech_dur, stt_time = record_utterance_streaming(
             self._mic,
             self._stt_engine,
@@ -194,6 +198,7 @@ class ChatLoop:
             silence_threshold=self._silence_threshold,
             silence_duration=self._silence_duration,
             min_speech_duration=self._min_speech_duration,
+            out_metrics=rec_metrics,
         )
         if not wav_bytes:
             return TurnResult(metrics=None, next_primed_frames=None)
@@ -207,6 +212,11 @@ class ChatLoop:
             speech_duration=speech_dur,
             model=self._llm_config.get("model", ""),
         )
+        # iter-063: copy the EoT detection latency over from
+        # record_utterance_streaming's side-band dict. Defaults to 0.0
+        # when the recorder didn't emit (DONE_TOO_SHORT path), which
+        # the per-turn print + session aggregate both filter on.
+        metrics.eot_latency = float(rec_metrics.get("eot_latency", 0.0))
         speech_ended_at = self._clock() - self._silence_duration
         turn_start = self._clock()
         metrics.stt_time = stt_time

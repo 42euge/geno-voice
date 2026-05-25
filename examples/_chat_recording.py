@@ -115,6 +115,7 @@ def record_utterance_streaming(
     silence_threshold: float = SILENCE_THRESHOLD,
     silence_duration: float = SILENCE_DURATION,
     min_speech_duration: float = MIN_SPEECH_DURATION,
+    out_metrics: dict | None = None,
 ) -> tuple[bytes, float, float]:
     """Record one utterance with live STT preview.
 
@@ -151,6 +152,12 @@ def record_utterance_streaming(
         constants. Override per-call to handle noisy environments
         (raise threshold), faster turn-taking (shorten silence_duration),
         or stricter speech detection (raise min_speech_duration).
+      ``out_metrics`` — optional dict that, if provided, is populated
+        with extra measurements that don't fit the return tuple
+        (iter-063). Currently emits ``"eot_latency"`` (seconds from
+        the user's last in-speech frame to ``DONE_OK`` firing). Only
+        populated on the success path; ``DONE_TOO_SHORT`` returns
+        early without writing.
     """
     if transcribe_fn is None:
         transcribe_fn = lambda wav: _transcribe_quick(stt_engine, wav)
@@ -188,6 +195,15 @@ def record_utterance_streaming(
     t_origin = clock()
     frame_dt = CHUNK / RATE
     frame_idx = 0
+    # iter-063: track the timestamp of the last frame whose RMS level
+    # crossed ``silence_threshold`` — i.e. the last frame the VAD
+    # actually heard speech. The gap between this and DONE_OK firing
+    # is the user-perceived EoT latency. Lower bound is roughly
+    # ``silence_duration`` (the VAD has to wait that long); the gap
+    # above that is implementation overhead (chunk granularity,
+    # processing). Stays None when the loop exits via DONE_TOO_SHORT
+    # or never sees speech.
+    last_speech_at: float | None = None
 
     while True:
         if primed_idx < len(primed):
@@ -199,6 +215,13 @@ def record_utterance_streaming(
         frame_idx += 1
         audio = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
         level = rms(audio)
+
+        # iter-063: record this frame as "in speech" before the VAD
+        # event branch so DONE_OK can read the latest value. Any
+        # frame above the threshold counts, regardless of which
+        # VadEvent it produces.
+        if level > silence_threshold:
+            last_speech_at = now
 
         event = vad.feed(level, now)
 
@@ -213,6 +236,14 @@ def record_utterance_streaming(
             last_inference_at = now
 
         if event is VadEvent.DONE_OK:
+            # iter-063: populate eot_latency on the success path.
+            # DONE_OK is fired by VadState.feed when silence has
+            # persisted >= silence_duration AND speech_duration was
+            # large enough; ``last_speech_at`` is guaranteed non-None
+            # here because we only reach DONE_OK after at least one
+            # speaking frame (the speech_start latch in VadState).
+            if out_metrics is not None and last_speech_at is not None:
+                out_metrics["eot_latency"] = now - last_speech_at
             break
         if event is VadEvent.DONE_TOO_SHORT:
             too_short = True

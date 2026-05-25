@@ -206,6 +206,15 @@ class TurnMetrics:
     # can't fully mask it. Inverse of ``worker_idle_gap_total``
     # (worker starved). Metric 2.7 in the perf-metrics taxonomy.
     max_queue_depth: int = 0
+    # iter-063: time from the user's last in-speech frame to the
+    # VAD declaring DONE_OK. Lower bound is roughly
+    # ``silence_duration`` (the VAD has to wait that long before
+    # deciding the user really stopped); the gap above that is
+    # implementation overhead (chunk granularity, processing).
+    # 0.0 on turns where the recorder didn't emit (DONE_TOO_SHORT
+    # path, no transcription). Metric 1.2 in the perf-metrics
+    # taxonomy — dominates "the agent feels slow" complaints.
+    eot_latency: float = 0.0
     transcript: str = ""
     response: str = ""
     model: str = ""
@@ -218,6 +227,19 @@ class TurnMetrics:
         print()
         print(f"  {_DIM}┌─ PIPELINE{_RESET}")
         print(f"  {_DIM}│{_RESET}  Speech:        {self.speech_duration*1000:>7.0f}ms")
+        # iter-063: EoT detection latency. Skip when 0 (recorder
+        # didn't emit — DONE_TOO_SHORT path or test stub bypass).
+        # Yellow when >1.0s — the user has stopped talking but the
+        # agent is still waiting; the silence_duration knob is
+        # tunable down to ~500ms in noisy rooms.
+        if self.eot_latency > 0:
+            ms = self.eot_latency * 1000
+            color = _YELLOW if ms > 1000 else _DIM
+            print(
+                f"  {_DIM}│{_RESET}  EoT detect:    "
+                f"{color}{ms:>7.0f}ms{_RESET}  "
+                f"({_DIM}silence wait{_RESET})"
+            )
         # iter-049: append STT RTF when measurable.
         if self.stt_rtf > 0:
             rtf_color = _GREEN if self.stt_rtf < 1.0 else _YELLOW
@@ -609,6 +631,10 @@ def print_session_summary(
     queue_peaks = [
         m.max_queue_depth for m in metrics_list if m.max_queue_depth > 1
     ]
+    # iter-063: EoT detection latencies across turns where the
+    # recorder emitted. Filter zeros (DONE_TOO_SHORT / no-transcription
+    # turns leave the field at default).
+    eot_latencies = [m.eot_latency for m in metrics_list if m.eot_latency > 0]
 
     # iter-054: include session duration in the header when known.
     # Format the duration human-readably:
@@ -640,6 +666,16 @@ def print_session_summary(
     if session_seconds >= 1.0 and n > 0:
         tpm = (n / session_seconds) * 60.0
         _emit(f"    Turns/min:        {tpm:.1f}")
+    # iter-063: EoT detection latency — emit before STT to mirror
+    # the per-turn pipeline order (speech → EoT → STT → LLM → ...).
+    # The relevant statistic is the median: it tells the operator
+    # how long the user is left hanging on average after they stop
+    # talking. Worst is also useful — a single 2s outlier feels
+    # broken even if the median is fine.
+    if eot_latencies:
+        _emit(f"    Median EoT:       {_median_ms(eot_latencies):.0f}ms")
+        if len(eot_latencies) >= 2 and max(eot_latencies) > min(eot_latencies):
+            _emit(f"    Worst EoT:        {max(eot_latencies) * 1000:.0f}ms")
     _emit(f"    Median STT:       {_median_ms(stt_times):.0f}ms")
     if stt_rtfs:
         _emit(f"    Median STT RTF:   {statistics.median(stt_rtfs):.2f}x")

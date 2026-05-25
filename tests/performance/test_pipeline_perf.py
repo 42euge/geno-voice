@@ -142,6 +142,8 @@ class ScenarioResult:
     speaker_open_ms: float = 0.0
     # iter-062: peak SentenceWorker queue depth observed.
     max_queue_depth: int = 0
+    # iter-063: EoT detection latency (last-speech → DONE_OK), ms.
+    eot_latency_ms: float = 0.0
 
 
 _RESULTS: list[ScenarioResult] = []
@@ -319,6 +321,7 @@ def _run_scenario(
         mic_stale_frames=m.mic_stale_frames,
         speaker_open_ms=m.speaker_open_seconds * 1000,
         max_queue_depth=m.max_queue_depth,
+        eot_latency_ms=m.eot_latency * 1000,
     )
     _record(res)
     return res
@@ -495,6 +498,7 @@ class TestPerfScenarios:
             mic_stale_frames=m.mic_stale_frames,
             speaker_open_ms=m.speaker_open_seconds * 1000,
             max_queue_depth=m.max_queue_depth,
+            eot_latency_ms=m.eot_latency * 1000,
         )
         _record(res)
 
