@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-097 — extract _emit_history_block helper</title>
+<title>iter-098 — A/B perf scenarios for aggressive first-sentence splitter</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,17 +168,25 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-096.html">← iter-096</a><a href="iter-098.html">iter-098 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-097 — extract _emit_history_block helper</h1>
-<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+10</code> (total 1157)</span></div>
-</header><p><strong>Branch:</strong> iter-097-history-helper  <strong>Commit:</strong> 76d4e2e  <strong>Date:</strong> 2026-05-25</p>
-<p>Combines iter-077 context-tokens and iter-078 trim-events into a single <code>_emit_history_block</code> helper — both about conversation- history management (history grows → trim caps it). The two iter-blocks were inline-adjacent in <code>print_session_summary</code>; combining them into one helper reflects their semantic relationship.</p>
-<p><code>HistoryStats</code> dataclass with 3 fields (<code>context_token_counts</code>, <code>trim_events</code>, <code>trim_messages_evicted</code>). Behavior-preserving: byte-for-byte identical output. The 1147 prior tests pass unchanged.</p>
-<p>Tests (10 in <code>tests/unit/test_emit_history_block.py</code>):</p>
-<ul><li><code>HistoryStats</code> defaults (empty / 0).</li><li>No-data → no emit.</li><li>Context tokens: 2-turn (median+max only, no growth), 3-turn (growth line emits), negative growth.</li><li>Trim events: emit with ratio, omit when zero, steady-state 1.0/event.</li><li>Independence: trim can emit without context data.</li><li>Ordering: context → growth → trim.</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>1157 passed, 1 skipped in 28s</strong> (1147 existing + 10 new).</p>
+<nav><a href="index.html">← Index</a><a href="iter-097.html">← iter-097</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-098 — A/B perf scenarios for aggressive first-sentence splitter</h1>
+<div class="meta"></div>
+</header><p><strong>Goal:</strong> Validate iter-088&#x27;s TTFS-reducing claim with empirical numbers in the perf time-series chart, not just unit tests.</p>
+<p>iter-088 added the <code>aggressive_first_sentence</code> opt-in that slices the first sentence on a comma boundary (≥20 chars) instead of waiting for the period. The unit tests in <code>tests/unit/test_chat_helpers.py</code> verify the split behavior, and iter-093 added the auto-aggressive-on-stall trigger, but neither told the operator how much TTFS the splitter actually saves on a realistic long-preamble response. That number lives only in the perf suite.</p>
+<p><strong>Change:</strong> Two new perf scenarios driving the same long-preamble response twice — one with <code>aggressive_first_sentence=False</code>, one with <code>True</code>. The shared <code>_LONG_PREAMBLE</code> is structured exactly the way the splitter benefits most: a 41-char clause with a comma before the first period.</p>
+<pre class="code-block"><code>_LONG_PREAMBLE = (
+    &quot;Well let me think about this for a moment, &quot;
+    &quot;the answer is twelve. &quot;
+    &quot;And the reason is straightforward. &quot;
+    &quot;It just is.&quot;
+)</code></pre>
+<p><code>_run_scenario</code> grew one new kwarg (<code>aggressive_first_sentence</code>) that forwards directly to <code>ChatLoop.__init__</code>. No other plumbing changes — the existing rich <code>ScenarioResult</code> schema already captures TTFS, llm_first_sentence, and mean_sentence_chars.</p>
+<p><strong>Empirical A/B</strong> (this run, x86_64 Linux stub pipeline):</p>
+<table class="iter-table"><thead><tr><th>Metric</th><th>aggressive=False</th><th>aggressive=True</th><th>Δ</th></tr></thead><tbody><tr><td>TTFS</td><td>931.6 ms</td><td>891.1 ms</td><td>-40 ms</td></tr><tr><td>llm_first_sentence</td><td>131.0 ms</td><td>90.6 ms</td><td>-40 ms</td></tr><tr><td>mean_sentence_chars</td><td>36.3</td><td>27.0</td><td>-9</td></tr></tbody></table>
+<p>The mean_chars drop from 36→27 confirms the splitter actually fired (otherwise both columns would match). The TTFS savings matches the llm_first_sentence savings near-perfectly because synth + dispatch are deterministic in the stub pipeline — the only variable here is <em>when</em> the first complete fragment is handed to the worker.</p>
+<p>Verification: <code>python -m pytest tests/performance/ -q</code> → <strong>11 passed in 2.4s</strong> (was 9, +2 new). Full unit + integration suite: <code>tests/ --ignore=tests/performance --ignore=tests/test_session.py --ignore=tests/e2e -q</code> → <strong>1148 passed, 1 skipped</strong> (identical to main; the test_session.py + e2e errors are pre-existing audio- fixture infra issues, unrelated).</p>
 <p>Notes:</p>
-<ul><li><strong>Seven block helpers extracted</strong> so far: TTFS, Barge, Filler, Errors, WPM, Sentence, History. <code>print_session_summary</code> is now ~1230 lines (down from 1500 pre-iter-089). Cumulative -310 lines reduced.</li><li>The semantic-grouping pattern (combining adjacent related blocks rather than one-per-iter-block) starts paying off — iter-077 and iter-078 share a dataclass call site, reducing the helper overhead.</li><li>Next directions: VAD false-trigger + iter-074 bargeable + iter-057 primed audio). tighter <code>max_user_assistant</code> cap when trim_events stays at 0 despite measurable growth.<ul><li>Extract <code>_emit_recording_block</code> (iter-037 mic-stale + iter-048</li><li>More auto-tuning: context-tokens growth could recommend a</li><li>WER fixture (1.6) heavyweight iteration.</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-096.html">← iter-096</a><a href="iter-098.html">iter-098 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li><strong>Pattern: pair-scenarios for opt-in features.</strong> iter-088 + iter-093 are both opt-in flags. Adding paired scenarios (off vs on) on the <em>same</em> response gives a clean ratio that survives hardware-dependent absolute numbers — a 50% TTFS reduction reads the same on a M1 and a stub, even if the absolute ms differ.</li><li><strong>Future A/B candidates with the same shape:</strong> dominated by filler start vs LLM TTFB). response (per-token-delay &gt; threshold flips mid-stream). growth → LLM TTFB scaling).<ul><li>Filler <code>idle_threshold=0.6</code> vs <code>0.15</code> on a slow LLM (TTFS</li><li><code>auto_aggressive_threshold=0.0</code> vs <code>0.5</code> on a stalled</li><li><code>max_user_assistant=20</code> vs <code>5</code> on a long session (context</li></ul></li><li>Each pair adds 2 rows to the perf time-series; the chart generator already plots them as separate lines, so the visual comparison is free.</li><li>Next directions: sensitivity test).<ul><li>Pair scenarios for filler idle_threshold (iter-051</li><li>Extract <code>_emit_recording_block</code> (still pending from iter-097).</li><li>WER fixture (1.6) heavyweight iteration.</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-097.html">← iter-097</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>
