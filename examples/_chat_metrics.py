@@ -777,6 +777,84 @@ def _median_ms(values: list[float]) -> float:
     return statistics.median(values) * 1000
 
 
+def _emit_ttfs_block(
+    emit,
+    ttfs_times: list[float],
+    metrics_list: list,
+    naturalness_counts: dict[str, int],
+) -> None:
+    """iter-089: extracted from print_session_summary's TTFS block.
+
+    Renders all TTFS-related session-summary lines:
+      - Median TTFS / Best TTFS (or n/a placeholders if empty).
+      - Sub-second TTFS rate (iter-084).
+      - Rhythm score + TTFS jitter (iter-055/068, ≥2 turns).
+      - Cold-start penalty (iter-066, ≥2 turns + turn-1 has TTFS).
+      - Naturalness distribution (iter-053).
+
+    Behavior-preserving: output is byte-for-byte identical to the
+    inline version that lived in print_session_summary before
+    iter-089. ``emit`` is the same callable used by
+    print_session_summary (writes to file or print()).
+    """
+    if not ttfs_times:
+        # All turns ended without audio. Emit a placeholder rather
+        # than a misleading "0ms" so the user knows it isn't a
+        # win, it's an absence of data.
+        emit(f"    {_BOLD}Median TTFS:      n/a{_RESET}")
+        emit(f"    Best TTFS:        n/a")
+        return
+
+    emit(f"    {_BOLD}Median TTFS:      {_median_ms(ttfs_times):.0f}ms{_RESET}")
+    emit(f"    Best TTFS:        {min(ttfs_times) * 1000:.0f}ms")
+    # iter-084: sub-second turn rate. Single human-feel
+    # threshold — what fraction of turns hit the snappy bar.
+    sub_second = sum(1 for t in ttfs_times if t < 1.0)
+    sub_pct = (sub_second / len(ttfs_times)) * 100
+    emit(
+        f"    Sub-second TTFS:  "
+        f"{sub_second}/{len(ttfs_times)} ({sub_pct:.0f}%)"
+    )
+    # iter-055: conversation rhythm score. Needs ≥2 turns for
+    # stdev. Clamp to [0, 1] since high-variance sessions can
+    # produce stdev > median → negative raw score.
+    if len(ttfs_times) >= 2:
+        med = statistics.median(ttfs_times)
+        sd = statistics.stdev(ttfs_times)
+        raw = 1.0 - sd / max(med, 1e-6)
+        rhythm = max(0.0, min(1.0, raw))
+        emit(f"    Rhythm score:     {rhythm:.2f}")
+        # iter-068: raw stdev as TTFS jitter alongside the
+        # normalized rhythm score.
+        emit(f"    TTFS jitter:      ±{sd * 1000:.0f}ms")
+    # iter-066: cold-start latency penalty. Needs ≥2 turns AND
+    # turn-1 must have measurable TTFS.
+    first_turn_ttfs = (
+        metrics_list[0].ttfs if metrics_list[0].ttfs > 0 else 0.0
+    )
+    steady_ttfs = [
+        m.ttfs for m in metrics_list[1:] if m.ttfs > 0
+    ]
+    if first_turn_ttfs > 0 and len(steady_ttfs) >= 1:
+        penalty = first_turn_ttfs - statistics.median(steady_ttfs)
+        if abs(penalty) > 0.050:  # >50ms — above jitter floor
+            ms = penalty * 1000
+            emit(
+                f"    Cold start:       {ms:+.0f}ms "
+                f"vs steady state"
+            )
+    # iter-053: naturalness distribution. Show only when at
+    # least one turn was bucketed.
+    n_total = sum(naturalness_counts.values())
+    if n_total > 0:
+        emit(
+            f"    Naturalness:      "
+            f"{naturalness_counts['rushed']} rushed, "
+            f"{naturalness_counts['natural']} natural, "
+            f"{naturalness_counts['slow']} slow"
+        )
+
+
 @dataclass
 class SessionMeta:
     """iter-086: session-level signals collected by the driver
@@ -1217,87 +1295,12 @@ def print_session_summary(
     _emit(f"    Median TTS:       {_median_ms(tts_times):.0f}ms")
     if tts_rtfs:
         _emit(f"    Median TTS RTF:   {statistics.median(tts_rtfs):.2f}x")
-    if ttfs_times:
-        _emit(
-            f"    {_BOLD}Median TTFS:      {_median_ms(ttfs_times):.0f}ms{_RESET}"
-        )
-        _emit(f"    Best TTFS:        {min(ttfs_times) * 1000:.0f}ms")
-        # iter-084: sub-second turn rate. Single human-feel
-        # threshold — what fraction of turns hit the snappy bar.
-        # Easier to track than median when comparing across
-        # sessions or model swaps. <1.0s feels "instant" to most
-        # users. Always emit when there's at least one TTFS
-        # observation — the rate itself is informative even at 0%.
-        sub_second = sum(1 for t in ttfs_times if t < 1.0)
-        sub_pct = (sub_second / len(ttfs_times)) * 100
-        _emit(
-            f"    Sub-second TTFS:  "
-            f"{sub_second}/{len(ttfs_times)} ({sub_pct:.0f}%)"
-        )
-        # iter-055: conversation rhythm score. 1 - (stdev / median).
-        # Higher = more consistent cadence (feels like a personality).
-        # Lower = jittery (feels like a system). Needs ≥2 turns
-        # for stdev to be defined; clamp to [0, 1] since high-variance
-        # sessions can produce stdev > median → negative raw score.
-        if len(ttfs_times) >= 2:
-            med = statistics.median(ttfs_times)
-            sd = statistics.stdev(ttfs_times)
-            raw = 1.0 - sd / max(med, 1e-6)
-            rhythm = max(0.0, min(1.0, raw))
-            _emit(f"    Rhythm score:     {rhythm:.2f}")
-            # iter-068: promote the raw stdev to its own line. The
-            # rhythm score is a normalized [0,1] number useful for
-            # at-a-glance comparison; the jitter in milliseconds is
-            # more actionable when tuning. Humans tolerate consistent
-            # slow turn-taking better than inconsistent fast turn-
-            # taking — a 250ms jitter at 600ms median feels more
-            # broken than a steady 750ms median.
-            _emit(f"    TTFS jitter:      ±{sd * 1000:.0f}ms")
-        # iter-066: cold-start latency penalty. The turn-1 TTFS minus
-        # the steady-state median (turns 2:N). Captures lazy
-        # initialization that hits turn 1 disproportionately — model
-        # load, speaker open, TTS warmup, lazy imports — and gets
-        # buried in the overall median. Needs ≥2 turns with measurable
-        # TTFS, AND turn 1 must have measurable TTFS (otherwise we'd
-        # be comparing an absent first turn). Skip emit when penalty
-        # is below the chunk-noise floor (±50ms): turn-to-turn jitter
-        # from playback timing alone can produce that gap on healthy
-        # systems.
-        first_turn_ttfs = (
-            metrics_list[0].ttfs if metrics_list[0].ttfs > 0 else 0.0
-        )
-        steady_ttfs = [
-            m.ttfs for m in metrics_list[1:] if m.ttfs > 0
-        ]
-        if first_turn_ttfs > 0 and len(steady_ttfs) >= 1:
-            penalty = first_turn_ttfs - statistics.median(steady_ttfs)
-            if abs(penalty) > 0.050:  # >50ms — above jitter floor
-                ms = penalty * 1000
-                # Sign matters: positive means turn 1 was slower
-                # (the typical cold-start case); negative means
-                # turn 1 was faster (rare — could be cache warming
-                # in subsequent turns going wrong, or bot reaching
-                # GC pauses post-turn-1).
-                _emit(
-                    f"    Cold start:       {ms:+.0f}ms "
-                    f"vs steady state"
-                )
-        # iter-053: naturalness distribution. Total = sum of all
-        # buckets. Show only when at least one turn was bucketed.
-        n_total = sum(naturalness_counts.values())
-        if n_total > 0:
-            _emit(
-                f"    Naturalness:      "
-                f"{naturalness_counts['rushed']} rushed, "
-                f"{naturalness_counts['natural']} natural, "
-                f"{naturalness_counts['slow']} slow"
-            )
-    else:
-        # All turns ended without audio. Emit a placeholder rather
-        # than a misleading "0ms" so the user knows it isn't a
-        # win, it's an absence of data.
-        _emit(f"    {_BOLD}Median TTFS:      n/a{_RESET}")
-        _emit(f"    Best TTFS:        n/a")
+    # iter-089: TTFS block extracted to _emit_ttfs_block helper —
+    # 80 lines of co-emitted lines (median, best, sub-second,
+    # rhythm, jitter, cold-start, naturalness) collapsed into one
+    # call. Behavior-preserving: output is byte-for-byte identical
+    # to the inline version.
+    _emit_ttfs_block(_emit, ttfs_times, metrics_list, naturalness_counts)
     if fillers_total:
         _emit(f"    Fillers played:   {fillers_total}")
         # iter-051: false-positive rate among the turns where a
