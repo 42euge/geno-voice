@@ -1109,6 +1109,18 @@ def print_session_summary(
             f"    {_BOLD}Median TTFS:      {_median_ms(ttfs_times):.0f}ms{_RESET}"
         )
         _emit(f"    Best TTFS:        {min(ttfs_times) * 1000:.0f}ms")
+        # iter-084: sub-second turn rate. Single human-feel
+        # threshold — what fraction of turns hit the snappy bar.
+        # Easier to track than median when comparing across
+        # sessions or model swaps. <1.0s feels "instant" to most
+        # users. Always emit when there's at least one TTFS
+        # observation — the rate itself is informative even at 0%.
+        sub_second = sum(1 for t in ttfs_times if t < 1.0)
+        sub_pct = (sub_second / len(ttfs_times)) * 100
+        _emit(
+            f"    Sub-second TTFS:  "
+            f"{sub_second}/{len(ttfs_times)} ({sub_pct:.0f}%)"
+        )
         # iter-055: conversation rhythm score. 1 - (stdev / median).
         # Higher = more consistent cadence (feels like a personality).
         # Lower = jittery (feels like a system). Needs ≥2 turns
