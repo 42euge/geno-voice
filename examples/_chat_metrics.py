@@ -1167,6 +1167,26 @@ def print_session_summary(
                 f"{recovered}/{len(error_turns)} turns produced audio "
                 f"({pct:.0f}%) — partial degradation"
             )
+    # iter-079: silent-turn rate. Turns where the user spoke
+    # (transcript captured) but the bot produced no audio
+    # (ttfs == 0). Distinct from worker errors — no exception
+    # fired, the worker just didn't manage to play anything.
+    # The user's experience: "I said something and got silence."
+    # Common causes: worker.errors took out every sentence, LLM
+    # returned an empty response, all sentences were pre-empted
+    # by a barge that landed before first_audio_at, the LLM
+    # produced no terminator-bearing tokens (no synth submissions).
+    # Only emit when the rate is non-zero — clean sessions don't
+    # need a "0 silent turns" line.
+    silent_turns = sum(
+        1 for m in metrics_list if m.transcript and m.ttfs == 0
+    )
+    if silent_turns > 0 and n > 0:
+        pct = (silent_turns / n) * 100
+        _emit(
+            f"    Silent turns:     "
+            f"{silent_turns}/{n} ({pct:.0f}%) — bot produced no audio"
+        )
     if stale_total:
         # iter-037: surface aggregate stale-frame total so a "session
         # had constant echo" pattern is visible at the end of the run.
