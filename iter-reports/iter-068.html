@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-067 — worker error-recovery success rate (taxonomy 2.15)</title>
+<title>iter-068 — TTFS jitter / turn-taking jitter (taxonomy 1.12)</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,20 +168,18 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-066.html">← iter-066</a><a href="iter-068.html">iter-068 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-067 — worker error-recovery success rate (taxonomy 2.15)</h1>
-<div class="meta"><span>2026-05-24</span> · <span>tests: <code>+7</code> (total 849)</span></div>
-</header><p><strong>Branch:</strong> iter-067-error-recovery  <strong>Commit:</strong> 3ffa740  <strong>Date:</strong> 2026-05-24</p>
-<p>Added worker error-recovery success rate — of the turns where the SentenceWorker raised at least one synth/play exception, what fraction still produced audio (<code>ttfs &gt; 0</code>). The metric captures <strong>silent partial degradation</strong>: a sentence inside the turn failed but the rest covered for it, so externally the turn looked fine. That&#x27;s the most insidious failure mode — the user heard a complete-sounding response, the operator saw &quot;successful turn,&quot; and the underlying bug got swallowed.</p>
+<nav><a href="index.html">← Index</a><a href="iter-067.html">← iter-067</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-068 — TTFS jitter / turn-taking jitter (taxonomy 1.12)</h1>
+<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+9</code> (total 858)</span></div>
+</header><p><strong>Branch:</strong> iter-068-jitter  <strong>Commit:</strong> 5c9cbfc  <strong>Date:</strong> 2026-05-25</p>
+<p>Added <code>TTFS jitter</code> — <code>stdev(ttfs for ttfs in metrics_list if ttfs &gt; 0)</code> promoted from iter-055&#x27;s rhythm-score internal computation to its own line. The rhythm score is a normalized [0,1] number useful for at-a-glance health comparison; the raw jitter in milliseconds is the more actionable number when tuning. Humans tolerate consistent slow turn-taking better than inconsistent fast turn-taking — a 250ms jitter at 600ms median feels more broken than a steady 750ms median.</p>
 <p>Implementation:</p>
-<ul><li>Pure derivation in <code>print_session_summary</code>; no new TurnMetrics field (reuses iter-058&#x27;s <code>worker_errors</code> + existing <code>ttfs</code>).</li><li>Sits inside the existing iter-058 Errors block — only emits when the block is already showing.</li><li>Counts denominator as &quot;turns where any worker error happened,&quot; not &quot;total error count&quot; — a single turn with 5 errors is still one turn for the recovery rate.</li><li>Output: &quot;Worker recovery: M/N turns produced audio (X%) — partial degradation&quot;.</li></ul>
-<p>Interpretation:</p>
-<ul><li>100% recovery → silent partial degradation (worst): the per-sentence error isolation is masking real bugs.</li><li>0% recovery → loud failure: every error knocks out the whole turn (user notices and complains).</li><li>Mixed → both modes present; investigate the recovered turns for swallowed-bug patterns.</li></ul>
-<p>Tests (7 in <code>tests/unit/test_worker_recovery.py</code>):</p>
-<ul><li>No-emit boundaries: clean session, only LLM errors (no worker).</li><li>Full recovery (silent partial degradation marker), zero recovery (loud failure), mixed.</li><li>Denominator excludes clean turns (only error turns count).</li><li>Multiple errors per turn count as one turn.</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>849 passed, 1 skipped in 23s</strong> (842 existing + 7 new).</p>
+<ul><li>Pure derivation in <code>print_session_summary</code>; reuses the same <code>sd = statistics.stdev(ttfs_times)</code> line that feeds the rhythm score, just emits the value as ms.</li><li>Same gating as the rhythm score: needs ≥2 measurable TTFS values. Inserted right after the rhythm-score line so the two sit visually adjacent.</li><li>Output: &quot;TTFS jitter: ±NNms&quot;.</li></ul>
+<p>Tests (9 in <code>tests/unit/test_ttfs_jitter.py</code>):</p>
+<ul><li>No-emit boundaries: 0-turn, 1-turn, all-no-audio sessions.</li><li>Emit cases: two-turn arithmetic check, uniform values yield ±0ms, high-variance multi-turn, zero-TTFS turns excluded from the sample.</li><li>Co-emission: jitter and rhythm score appear together when ≥2 turns; both omitted otherwise.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>858 passed, 1 skipped in 23s</strong> (849 existing + 9 new).</p>
 <p>Notes:</p>
-<ul><li><strong>Twenty-nine metrics live (63% of the 46-metric taxonomy.)</strong></li><li>This is the third session-level-only metric (after iter-055 rhythm score and iter-066 cold-start). The pattern of &quot;compute in print_session_summary from existing per-turn fields&quot; scales cheaply — 5-15 lines of code per metric and no plumbing churn.</li><li>The error story is now fully bilateral:<ul><li>LLM errors (turn-fatal, session-level count from iter-058)</li><li>Worker errors (per-turn count from iter-058)</li><li>Recovery rate (this) — the bridge between the two</li></ul></li><li>Next candidates: 1.12 (turn-taking jitter: stdev of TTFS — could promote from rhythm score&#x27;s internal computation to its own line), 1.6 (WER, needs ground truth corpus), 1.18 (interruption rate: barge_in count / turns — already implicitly visible in the Barge-ins line, could add the rate explicitly).</li></ul><nav><a href="index.html">← Index</a><a href="iter-066.html">← iter-066</a><a href="iter-068.html">iter-068 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li><strong>Thirty metrics live (65% of the 46-metric taxonomy.)</strong></li><li>The TTFS dimension now has four orthogonal lenses: median (the central tendency), best (the floor — what&#x27;s achievable on a good turn), jitter (the spread — this iteration), rhythm score (the normalized inverse for at-a-glance comparison). Plus iter-066&#x27;s cold-start penalty isolating turn 1.</li><li>Next candidates: 1.18 (interruption rate as explicit %, already shown as raw count), 2.6 (sentence-length histogram, currently emitted as mean), 1.6 (WER, needs ground truth corpus).</li></ul><nav><a href="index.html">← Index</a><a href="iter-067.html">← iter-067</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

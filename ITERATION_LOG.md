@@ -4843,3 +4843,48 @@ Notes:
   line), 1.6 (WER, needs ground truth corpus), 1.18 (interruption
   rate: barge_in count / turns — already implicitly visible in
   the Barge-ins line, could add the rate explicitly).
+
+## iter-068 — TTFS jitter / turn-taking jitter (taxonomy 1.12)
+
+**Branch:** iter-068-jitter  **Commit:** 5c9cbfc  **Date:** 2026-05-25
+
+Added `TTFS jitter` — `stdev(ttfs for ttfs in metrics_list if ttfs > 0)`
+promoted from iter-055's rhythm-score internal computation to its
+own line. The rhythm score is a normalized [0,1] number useful for
+at-a-glance health comparison; the raw jitter in milliseconds is
+the more actionable number when tuning. Humans tolerate consistent
+slow turn-taking better than inconsistent fast turn-taking — a
+250ms jitter at 600ms median feels more broken than a steady 750ms
+median.
+
+Implementation:
+- Pure derivation in `print_session_summary`; reuses the same
+  `sd = statistics.stdev(ttfs_times)` line that feeds the rhythm
+  score, just emits the value as ms.
+- Same gating as the rhythm score: needs ≥2 measurable TTFS
+  values. Inserted right after the rhythm-score line so the two
+  sit visually adjacent.
+- Output: "TTFS jitter: ±NNms".
+
+Tests (9 in `tests/unit/test_ttfs_jitter.py`):
+- No-emit boundaries: 0-turn, 1-turn, all-no-audio sessions.
+- Emit cases: two-turn arithmetic check, uniform values yield
+  ±0ms, high-variance multi-turn, zero-TTFS turns excluded from
+  the sample.
+- Co-emission: jitter and rhythm score appear together when
+  ≥2 turns; both omitted otherwise.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **858 passed, 1 skipped in 23s** (849 existing
++ 9 new).
+
+Notes:
+- **Thirty metrics live (65% of the 46-metric taxonomy.)**
+- The TTFS dimension now has four orthogonal lenses: median (the
+  central tendency), best (the floor — what's achievable on a
+  good turn), jitter (the spread — this iteration), rhythm score
+  (the normalized inverse for at-a-glance comparison). Plus
+  iter-066's cold-start penalty isolating turn 1.
+- Next candidates: 1.18 (interruption rate as explicit %, already
+  shown as raw count), 2.6 (sentence-length histogram, currently
+  emitted as mean), 1.6 (WER, needs ground truth corpus).
