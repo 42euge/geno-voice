@@ -508,6 +508,17 @@ def print_session_summary(
             f"    {_BOLD}Median TTFS:      {_median_ms(ttfs_times):.0f}ms{_RESET}"
         )
         _emit(f"    Best TTFS:        {min(ttfs_times) * 1000:.0f}ms")
+        # iter-055: conversation rhythm score. 1 - (stdev / median).
+        # Higher = more consistent cadence (feels like a personality).
+        # Lower = jittery (feels like a system). Needs ≥2 turns
+        # for stdev to be defined; clamp to [0, 1] since high-variance
+        # sessions can produce stdev > median → negative raw score.
+        if len(ttfs_times) >= 2:
+            med = statistics.median(ttfs_times)
+            sd = statistics.stdev(ttfs_times)
+            raw = 1.0 - sd / max(med, 1e-6)
+            rhythm = max(0.0, min(1.0, raw))
+            _emit(f"    Rhythm score:     {rhythm:.2f}")
         # iter-053: naturalness distribution. Total = sum of all
         # buckets. Show only when at least one turn was bucketed.
         n_total = sum(naturalness_counts.values())
