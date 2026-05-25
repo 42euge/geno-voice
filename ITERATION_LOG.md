@@ -6196,3 +6196,59 @@ Notes:
     mode that flips the aggressive flag mid-turn if a long stall
     is detected (combines iter-085 max_token_gap signal with
     iter-088 splitter behavior).
+
+## iter-089 — extract _emit_ttfs_block helper
+
+**Branch:** iter-089-ttfs-helper  **Commit:** dca7298  **Date:** 2026-05-25
+
+`print_session_summary`'s TTFS block was 80 lines of co-emitted
+session-summary output (Median TTFS, Best TTFS, sub-second rate,
+rhythm, jitter, cold-start, naturalness) — all gated on
+`ttfs_times` being non-empty AND various sub-conditions.
+
+Extracted to a standalone `_emit_ttfs_block(emit, ttfs_times,
+metrics_list, naturalness_counts)` helper. Behavior-preserving:
+output is byte-for-byte identical (1073 prior tests pass unchanged
+without modification).
+
+This sets the pattern for further teardown. `print_session_summary`
+is currently 1500+ lines; future iterations can extract Errors,
+Barge, Filler, etc. blocks the same way:
+1. Identify a contiguous block of lines that share gating
+   conditions.
+2. Pull the lines + the data they read from into a helper.
+3. Replace the inline block with a single call.
+4. Verify the existing tests still pass (regression sentinel).
+5. Add direct tests on the helper for faster, more focused
+   coverage.
+
+Tests (9 in `tests/unit/test_emit_ttfs_block.py`):
+- Empty ttfs_times → n/a placeholders.
+- Single-turn → only the lines that don't need ≥2 turns
+  (rhythm/jitter/cold-start gated, skipped).
+- Multi-turn → rhythm + jitter emit.
+- Cold-start emits when penalty > 50ms; skipped below.
+- Naturalness emits only when any bucket set.
+- Ordering invariant: median → best → sub-second → rhythm →
+  jitter → cold-start → naturalness in stable order.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **1082 passed, 1 skipped in 25s** (1073
+existing + 9 new). The 1073 prior tests are the regression
+sentinel — they pass unchanged because the helper produces
+byte-for-byte identical output.
+
+Notes:
+- The "test the helper directly" pattern is faster (sub-millisecond
+  per test vs ~25ms going through the full session-summary path)
+  and more focused (no setup of unrelated metrics). Future
+  per-block helpers should follow this pattern.
+- `print_session_summary` is now 1500 → 1426 lines, a modest
+  reduction. Each future block extraction will compound.
+- Next directions:
+  - Continue refactoring: extract _emit_barge_block (the iter-040/
+    041/047/056/057/060/080 cluster — substantial size).
+  - Continue architecture: combine iter-085 (max_token_gap) and
+    iter-088 (aggressive splitter) into "auto-aggressive" — flip
+    splitter to aggressive mid-turn if a stall is detected.
+  - WER ground-truth fixture as a heavyweight iteration.
