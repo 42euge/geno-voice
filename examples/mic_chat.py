@@ -286,6 +286,9 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
     # error). High count → tune silence_threshold up or
     # min_speech_duration up.
     false_triggers = 0
+    # iter-058: count LLM errors at session level so the summary
+    # can report a per-stage error rate.
+    llm_errors = 0
     primed_frames: list[bytes] | None = None
     # iter-054: track session start so the summary can report
     # total wall-clock + turns/min.
@@ -298,6 +301,8 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
             result = chat_loop.run_one_turn(messages, primed_frames=primed_frames)
             primed_frames = result.next_primed_frames
             if result.had_error:
+                # iter-058: record LLM-error turn.
+                llm_errors += 1
                 continue
             if result.metrics is None:
                 # iter-048: no metrics + no error = false trigger.
@@ -318,6 +323,7 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
             all_metrics, llm_config,
             false_triggers=false_triggers,
             session_seconds=time.monotonic() - session_start,
+            llm_errors=llm_errors,
         )
     finally:
         mic.stop_stream()

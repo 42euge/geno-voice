@@ -106,6 +106,13 @@ class TurnMetrics:
     # watcher's frame buffer. 0 on non-barge turns. Metric 2.12 in
     # the perf-metrics taxonomy.
     primed_frames_seconds: float = 0.0
+    # iter-058: count of worker errors observed during this turn —
+    # synth failures, play_fn raises, speaker_factory crashes. Lifted
+    # from len(worker.errors) at turn end. A non-zero count means
+    # the turn produced PARTIAL audio (some sentences succeeded,
+    # others raised). Distinct from session-level LLM errors which
+    # kill the entire turn. Metric 1.16 in the perf-metrics taxonomy.
+    worker_errors: int = 0
     total_e2e: float = 0.0
     sentences_spoken: int = 0
     # iter-045: mean character length of sentences submitted to the
@@ -374,6 +381,7 @@ def print_session_summary(
     file=None,
     false_triggers: int = 0,
     session_seconds: float = 0.0,
+    llm_errors: int = 0,
 ) -> None:
     """Print a multi-line session summary on KeyboardInterrupt.
 
@@ -462,6 +470,9 @@ def print_session_summary(
     # first audio. High count = end-of-turn detection misjudges.
     regret_barges = sum(1 for m in metrics_list if m.barge_in_regret)
     # iter-057: total seconds of audio carried over via primed frames.
+    # iter-058: total worker errors across the session (sum of
+    # per-turn worker_errors counts).
+    worker_errors_total = sum(m.worker_errors for m in metrics_list)
     primed_seconds_total = sum(
         m.primed_frames_seconds for m in metrics_list
     )
@@ -635,6 +646,22 @@ def print_session_summary(
             f"    Primed audio:     "
             f"{primed_seconds_total:.1f}s "
             f"(carried into next turn — validates iter-025)"
+        )
+    # iter-058: error rate per stage. LLM errors are session-level
+    # (kill the turn outright); worker errors are per-turn (partial
+    # turn — some sentences synthed, others raised). Show only when
+    # at least one error happened.
+    if llm_errors > 0 or worker_errors_total > 0:
+        attempts = n + llm_errors + false_triggers
+        bits = []
+        if llm_errors > 0:
+            bits.append(f"{llm_errors} LLM")
+        if worker_errors_total > 0:
+            bits.append(f"{worker_errors_total} worker")
+        _emit(
+            f"    Errors:           "
+            f"{', '.join(bits)} "
+            f"(over {attempts} attempt{'' if attempts == 1 else 's'})"
         )
     if stale_total:
         # iter-037: surface aggregate stale-frame total so a "session

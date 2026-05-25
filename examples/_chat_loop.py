@@ -480,6 +480,8 @@ class ChatLoop:
 
             messages.append({"role": "assistant", "content": metrics.response})
 
+            # iter-058: lift worker error count to TurnMetrics.
+            metrics.worker_errors = len(worker.errors)
             for err in worker.errors:
                 self._print(f"  {_YELLOW}worker error: {err}{_RESET}")
 
