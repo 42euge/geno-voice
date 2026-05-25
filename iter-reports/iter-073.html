@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-073 — first-sentence overlap savings (taxonomy 2.2)</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-072.html">← iter-072</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-073 — first-sentence overlap savings (taxonomy 2.2)</h1>
+<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+14</code> (total 918)</span></div>
+</header><p><strong>Branch:</strong> iter-073-first-overlap  <strong>Commit:</strong> 8926bcf  <strong>Date:</strong> 2026-05-25</p>
+<p>Added <code>first_synth_overlap_seconds</code> — seconds of first-sentence synth that ran concurrently with LLM streaming. Distinct from iter-043&#x27;s <code>streaming_overlap_ratio</code> (whole-stream ratio): this scopes specifically to the FIRST sentence because that&#x27;s what gates TTFS. The metric directly quantifies the user-perceived win from iter-008&#x27;s streaming-sentence-dispatch design.</p>
+<p>Implementation:</p>
+<ul><li><code>SentenceWorker</code> latches <code>first_synth_start_at</code> and <code>first_synth_done_at</code> on the FIRST <strong>successful</strong> synth call. Failed first synths don&#x27;t latch — the next successful synth becomes &quot;first&quot; for accounting purposes (matches the user&#x27;s perception: a synth that raised never produced audio that gates TTFS).</li><li>ChatLoop computes the standard interval overlap: ```python overlap = max(0, min(synth_done, llm_done) - max(synth_start, llm_start)) ``` Stored on <code>TurnMetrics.first_synth_overlap_seconds</code>. 0 means first synth ran entirely after LLM finished (sequential — no TTFS savings); equal to first-synth duration means first synth ran entirely under LLM streaming (best case).</li><li>Per-turn print: &quot;1st-synth save: NNms (TTFS shaved by streaming)&quot; when &gt;0. Green when &gt;100ms (meaningful TTFS win).</li><li>Session summary: &quot;1st-synth saved: NNms median&quot; filtered for &gt;0.</li><li><code>ScenarioResult.first_synth_overlap_ms</code> on perf snapshots.</li></ul>
+<p>Tests (14 in <code>tests/unit/test_first_synth_overlap.py</code>):</p>
+<ul><li>Defaults zero / None.</li><li>Per-turn print: zero omits, low-value emits dim, meaningful emits green.</li><li>Session aggregate: no-data, median, zero-filter.</li><li>ChatLoop wiring: slow-LLM + slow-synth produces measurable overlap; quick response produces a sane bounded value; field always non-negative.</li><li>Worker timing: latched once on first successful synth; unset when zero submissions; failed first synth doesn&#x27;t latch (next successful one does).</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>918 passed, 1 skipped in 24s</strong> (904 existing + 14 new).</p>
+<p>Notes:</p>
+<ul><li><strong>Thirty-five metrics live (76% of the 46-metric taxonomy).</strong></li><li>The streaming-overlap dimension is now bilateral: &quot;did the bot speak before the LLM finished, ever?&quot; &quot;how many ms did parallelism shave off the first sentence?&quot;<ul><li><code>streaming_overlap_ratio</code> (iter-043) — whole-stream view,</li><li><code>first_synth_overlap_seconds</code> (iter-073) — TTFS-specific,</li></ul></li><li>Together they decompose the iter-008 streaming-overlap design&#x27;s payoff into a &quot;did it help at all&quot; header + a &quot;by how much for TTFS&quot; detail.</li><li>Next candidates: 1.6 (WER, needs ground truth corpus), 1.17 (audio device underrun/overrun count), 1.19 (bargeable-time fraction — portion of bot speech where barge-in is even possible; needs BargeInWatcher.start_at + stop_at exposed).</li></ul><nav><a href="index.html">← Index</a><a href="iter-072.html">← iter-072</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>

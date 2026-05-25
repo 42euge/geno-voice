@@ -5156,3 +5156,65 @@ Notes:
   overlap savings: how much of the first sentence's tts_time
   happened before llm_stream_done — distinct from iter-043's
   ratio which covers the whole stream).
+
+## iter-073 — first-sentence overlap savings (taxonomy 2.2)
+
+**Branch:** iter-073-first-overlap  **Commit:** 8926bcf  **Date:** 2026-05-25
+
+Added `first_synth_overlap_seconds` — seconds of first-sentence
+synth that ran concurrently with LLM streaming. Distinct from
+iter-043's `streaming_overlap_ratio` (whole-stream ratio): this
+scopes specifically to the FIRST sentence because that's what
+gates TTFS. The metric directly quantifies the user-perceived win
+from iter-008's streaming-sentence-dispatch design.
+
+Implementation:
+- `SentenceWorker` latches `first_synth_start_at` and
+  `first_synth_done_at` on the FIRST **successful** synth call.
+  Failed first synths don't latch — the next successful synth
+  becomes "first" for accounting purposes (matches the user's
+  perception: a synth that raised never produced audio that
+  gates TTFS).
+- ChatLoop computes the standard interval overlap:
+  ```python
+  overlap = max(0, min(synth_done, llm_done) - max(synth_start, llm_start))
+  ```
+  Stored on `TurnMetrics.first_synth_overlap_seconds`. 0 means
+  first synth ran entirely after LLM finished (sequential — no
+  TTFS savings); equal to first-synth duration means first synth
+  ran entirely under LLM streaming (best case).
+- Per-turn print: "1st-synth save: NNms (TTFS shaved by streaming)"
+  when >0. Green when >100ms (meaningful TTFS win).
+- Session summary: "1st-synth saved: NNms median" filtered for >0.
+- `ScenarioResult.first_synth_overlap_ms` on perf snapshots.
+
+Tests (14 in `tests/unit/test_first_synth_overlap.py`):
+- Defaults zero / None.
+- Per-turn print: zero omits, low-value emits dim, meaningful
+  emits green.
+- Session aggregate: no-data, median, zero-filter.
+- ChatLoop wiring: slow-LLM + slow-synth produces measurable
+  overlap; quick response produces a sane bounded value; field
+  always non-negative.
+- Worker timing: latched once on first successful synth;
+  unset when zero submissions; failed first synth doesn't latch
+  (next successful one does).
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **918 passed, 1 skipped in 24s** (904 existing
++ 14 new).
+
+Notes:
+- **Thirty-five metrics live (76% of the 46-metric taxonomy).**
+- The streaming-overlap dimension is now bilateral:
+  - `streaming_overlap_ratio` (iter-043) — whole-stream view,
+    "did the bot speak before the LLM finished, ever?"
+  - `first_synth_overlap_seconds` (iter-073) — TTFS-specific,
+    "how many ms did parallelism shave off the first sentence?"
+- Together they decompose the iter-008 streaming-overlap design's
+  payoff into a "did it help at all" header + a "by how much for
+  TTFS" detail.
+- Next candidates: 1.6 (WER, needs ground truth corpus), 1.17
+  (audio device underrun/overrun count), 1.19 (bargeable-time
+  fraction — portion of bot speech where barge-in is even
+  possible; needs BargeInWatcher.start_at + stop_at exposed).
