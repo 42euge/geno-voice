@@ -503,6 +503,17 @@ class ChatLoop:
             metrics.llm_first_token = (
                 (first_token_at - llm_start) if first_token_at else 0
             )
+            # iter-083: first-token-to-audio gap. Both ends must
+            # exist — first_token_at (LLM produced anything) AND
+            # worker.first_audio_at (any sentence reached the
+            # speaker). Clamp to 0 against tiny clock-skew negatives.
+            if (
+                first_token_at is not None
+                and worker.first_audio_at is not None
+            ):
+                metrics.first_token_to_audio = max(
+                    0.0, worker.first_audio_at - first_token_at
+                )
             # iter-052: LLM TPS — tokens/sec measured AFTER first
             # token (excludes first-token wait). Need ≥2 tokens
             # AND a positive interval. (token_count - 1) tokens

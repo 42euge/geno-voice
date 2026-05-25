@@ -133,6 +133,8 @@ class ScenarioResult:
     last_filler_id: int = 0
     # iter-082: TTC (cross-turn) — ms.
     time_to_comprehension_ms: float = 0.0
+    # iter-083: first-token-to-audio gap, ms.
+    first_token_to_audio_ms: float = 0.0
     # iter-044: cumulative between-sentence worker idle gap.
     worker_idle_gap_ms: float = 0.0
     # iter-045: mean character length of sentences submitted.
@@ -342,6 +344,7 @@ def _run_scenario(
         preempted_words=m.preempted_words,
         last_filler_id=m.last_filler_id,
         time_to_comprehension_ms=m.time_to_comprehension * 1000,
+        first_token_to_audio_ms=m.first_token_to_audio * 1000,
         worker_idle_gap_ms=m.worker_idle_gap_total * 1000,
         mean_sentence_chars=m.mean_sentence_chars,
         sentence_split_coverage=m.sentence_split_coverage,
@@ -533,6 +536,7 @@ class TestPerfScenarios:
         preempted_words=m.preempted_words,
         last_filler_id=m.last_filler_id,
         time_to_comprehension_ms=m.time_to_comprehension * 1000,
+        first_token_to_audio_ms=m.first_token_to_audio * 1000,
         worker_idle_gap_ms=m.worker_idle_gap_total * 1000,
         mean_sentence_chars=m.mean_sentence_chars,
         sentence_split_coverage=m.sentence_split_coverage,

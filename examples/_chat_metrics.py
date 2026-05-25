@@ -332,6 +332,18 @@ class TurnMetrics:
     # prior turn produced no audio. Metric 3.14 in the perf-metrics
     # taxonomy ("Novel/speculative").
     time_to_comprehension: float = 0.0
+    # iter-083: first-token-to-audio gap (FT-A). Time from when the
+    # LLM's first token landed at the splitter to when the worker
+    # played its first audio chunk: ``worker.first_audio_at -
+    # first_token_at``. Complementary to ``llm_first_token`` —
+    # together they decompose TTFS into "LLM-side" (tts_first_token)
+    # and "post-LLM-side" (FT-A) halves. High FT-A = sentence-split
+    # + TTS is the bottleneck (bot has tokens but can't speak yet).
+    # High llm_first_token = LLM is the bottleneck. Tells you which
+    # side to invest in. 0 on turns where either timestamp is
+    # missing. Metric 3.18 in the perf-metrics taxonomy
+    # ("Novel/speculative").
+    first_token_to_audio: float = 0.0
     transcript: str = ""
     response: str = ""
     model: str = ""
@@ -420,7 +432,18 @@ class TurnMetrics:
             )
         else:
             print(f"  {_DIM}│{_RESET}  STT:           {self.stt_time*1000:>7.0f}ms")
-        print(f"  {_DIM}│{_RESET}  LLM 1st tok:   {self.llm_first_token*1000:>7.0f}ms")
+        # iter-083: append FT-A (first-token-to-audio) to the LLM
+        # 1st-token line as a complementary "right side" diagnostic.
+        # Together, llm_first_token and FT-A bracket where TTFS time
+        # was spent. Skip the suffix when FT-A is 0 (rare error path).
+        if self.first_token_to_audio > 0:
+            fta_str = f"  ({_DIM}+{self.first_token_to_audio*1000:.0f}ms → audio{_RESET})"
+        else:
+            fta_str = ""
+        print(
+            f"  {_DIM}│{_RESET}  LLM 1st tok:   "
+            f"{self.llm_first_token*1000:>7.0f}ms{fta_str}"
+        )
         # iter-038: TTFsent — time-to-first-sentence. Show the gap
         # between first-token and first-sentence in parens so the
         # user sees how much "preamble lag" the splitter waited
@@ -802,6 +825,13 @@ def print_session_summary(
         if m.stt_preview_divergence > 0
     ]
     llm_ft = [m.llm_first_token for m in metrics_list]
+    # iter-083: FT-A across turns where both timestamps existed
+    # (filter zeros — turn errored before LLM or before audio).
+    fta_values = [
+        m.first_token_to_audio
+        for m in metrics_list
+        if m.first_token_to_audio > 0
+    ]
     # iter-052: LLM TPS over turns where it was measurable.
     llm_tpses = [m.llm_tps for m in metrics_list if m.llm_tps > 0]
     # iter-038: median TTFsent over turns where a sentence actually
@@ -1062,6 +1092,11 @@ def print_session_summary(
         med_div_pct = statistics.median(stt_div_values) * 100
         _emit(f"    STT preview Δ:    {med_div_pct:.0f}% (median)")
     _emit(f"    Median LLM 1st:   {_median_ms(llm_ft):.0f}ms")
+    # iter-083: median FT-A. Together with Median LLM 1st, the
+    # operator can see at a glance which side of TTFS dominates
+    # (LLM-bound vs synth/dispatch-bound).
+    if fta_values:
+        _emit(f"    Median FT-A:      {_median_ms(fta_values):.0f}ms")
     if llm_tpses:
         _emit(f"    Median LLM TPS:   {statistics.median(llm_tpses):.0f}")
     if llm_fs:
