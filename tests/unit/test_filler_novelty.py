@@ -111,17 +111,24 @@ class TestWorkerLatch:
         assert w.last_filler_id == id(clip)
 
     def test_filler_picker_picks_one(self):
-        # 3 fillers available, picker returns the second. Latch
-        # should match THAT clip's id, not the others.
+        # 3 fillers available. picker returns the LAST item in
+        # whatever list it sees so iter-087's multi-shot path
+        # (which filters out already-played clips) is observable:
+        # first fire picks clips[2]; second fire's filtered list is
+        # [clips[0], clips[1]] → picks clips[1]. ``last_filler_id``
+        # ends up at the last played, which is clips[1].
         clips = [
             (np.full(8, 0.1, dtype=np.float32), []),
             (np.full(8, 0.2, dtype=np.float32), []),
             (np.full(8, 0.3, dtype=np.float32), []),
         ]
-        w = self._make_worker(fillers=clips, picker=lambda lst: lst[1])
+        w = self._make_worker(fillers=clips, picker=lambda lst: lst[-1])
         self._run_with_filler(w)
-        assert w.last_filler_id == id(clips[1])
-        assert w.last_filler_id != id(clips[0])
+        # last_filler_id must be one of the picked clips. Allow
+        # either single-shot (clips[2]) or multi-shot (clips[1])
+        # outcomes — both are valid depending on how the timing
+        # raced inside the 50ms wait window.
+        assert w.last_filler_id in {id(clips[1]), id(clips[2])}
 
 
 # ---- Session aggregate ----------------------------------------

@@ -428,18 +428,32 @@ class SentenceWorker:
         # is_first_sentence flag for the play_fn (controls the "Bot:"
         # prefix). Includes both fillers and real sentences.
         is_first_audio = True
-        filler_used = False
+        # iter-087: track filler clip ids played this turn so the
+        # picker can pick from the still-unplayed subset on the
+        # second attempt. Cap at MAX_FILLERS to avoid stacking.
+        played_filler_ids: set[int] = set()
+        MAX_FILLERS = 2
 
         try:
             while True:
+                # iter-087: filler can still fire if we haven't hit
+                # MAX_FILLERS AND there's at least one clip the
+                # picker hasn't seen yet. Single-shot turns that
+                # play one filler then receive a real sentence
+                # naturally exit this branch — sentences_spoken > 0
+                # below disables the timeout.
+                filler_can_fire = (
+                    bool(self._fillers)
+                    and len(played_filler_ids) < MAX_FILLERS
+                    and len(played_filler_ids) < len(self._fillers)
+                )
                 # Decide whether to wait with a timeout so we can play
                 # a filler if the LLM stalls. Only applies before the
                 # first real sentence and only if fillers are
                 # configured.
                 use_filler_timeout = (
-                    bool(self._fillers)
+                    filler_can_fire
                     and self._idle_threshold > 0
-                    and not filler_used
                     and self.sentences_spoken == 0
                     and not self._submit_done_called
                 )
@@ -454,27 +468,41 @@ class SentenceWorker:
                     else:
                         item = self._queue.get()
                 except Empty:
-                    # Idle threshold hit before any sentence arrived —
-                    # play one filler clip to mask LLM first-token
-                    # latency. Only happens once per worker run.
-                    if self._fillers and not filler_used:
-                        clip = self._filler_picker(self._fillers)
+                    # iter-087: idle threshold hit before any sentence
+                    # arrived. Play a filler clip to mask LLM first-
+                    # token latency. Up to MAX_FILLERS fire per turn,
+                    # picking from clips not already played to avoid
+                    # repetition (the "umm umm" pattern).
+                    if filler_can_fire:
+                        available = [
+                            c for c in self._fillers
+                            if id(c) not in played_filler_ids
+                        ]
+                        if not available:
+                            # Defensive: filler_can_fire said yes but
+                            # filtering left nothing. Skip this round.
+                            continue
+                        clip = self._filler_picker(available)
                         audio_np, tokens = clip
                         played = self._play_clip(
                             speaker, audio_np, tokens, is_first=is_first_audio,
                         )
+                        # Whether or not it played, record this clip
+                        # as "attempted" so the next loop iteration
+                        # picks something different.
+                        played_filler_ids.add(id(clip))
                         if played:
                             is_first_audio = False
                             self.fillers_played += 1
                             # iter-081: record which filler we picked
                             # (by tuple id, stable across workers
                             # because mic_chat holds the canonical
-                            # rendered_fillers list).
+                            # rendered_fillers list). Multi-shot
+                            # iter-087: this remains the LAST filler
+                            # played; session-wide diversity comes
+                            # from print_session_summary aggregating
+                            # across turns.
                             self.last_filler_id = id(clip)
-                        # Whether or not it played, mark used so we
-                        # don't loop forever choosing the same idle
-                        # path again.
-                        filler_used = True
                     continue
 
                 if item is _SENTINEL:
