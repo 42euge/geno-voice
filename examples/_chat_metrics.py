@@ -990,6 +990,11 @@ class FillerStats:
     filler_turns: int = 0
     filler_false_positives: int = 0
     unique_filler_count: int = 0
+    # iter-096: when filler false positives fired AND we have a
+    # current idle_threshold AND llm_first_token observations,
+    # this carries a recommended new threshold. >0 = render the
+    # value next to the "tune up" suggestion; 0.0 = omit.
+    recommended_idle_threshold: float = 0.0
 
 
 def _emit_filler_block(emit, stats: FillerStats) -> None:
@@ -998,12 +1003,14 @@ def _emit_filler_block(emit, stats: FillerStats) -> None:
 
     Renders:
       - "Fillers played: N" (iter-014).
-      - "Filler FP rate: M/K (X%)" (iter-051) when any FP fired.
+      - "Filler FP rate: M/K (X%)" (iter-051) when any FP fired,
+        with iter-096 recommended threshold appended when set.
       - "Filler novelty: M unique / N (X%)" (iter-081) when
         ≥2 fillers played (single-play is trivially 100%).
 
-    Behavior-preserving: byte-for-byte identical to the inline
-    version.
+    Behavior-preserving when ``recommended_idle_threshold == 0.0``:
+    byte-for-byte identical to the iter-091 inline version. When
+    set, appends "(try N.Ns)" to the FP-rate line.
     """
     if stats.fillers_total <= 0:
         return
@@ -1013,10 +1020,20 @@ def _emit_filler_block(emit, stats: FillerStats) -> None:
     # emits when at least one false positive fired.
     if stats.filler_turns > 0 and stats.filler_false_positives > 0:
         fp_pct = (stats.filler_false_positives / stats.filler_turns) * 100
+        # iter-096: append a concrete recommended value when the
+        # caller computed one. Keeps the legacy text suffix when
+        # not provided (regression-safe for existing tests).
+        if stats.recommended_idle_threshold > 0:
+            tail = (
+                f" — tune idle_threshold up to "
+                f"{stats.recommended_idle_threshold:.1f}s"
+            )
+        else:
+            tail = " — tune idle_threshold up"
         emit(
             f"    Filler FP rate:   "
             f"{stats.filler_false_positives}/{stats.filler_turns} "
-            f"({fp_pct:.0f}%) — tune idle_threshold up"
+            f"({fp_pct:.0f}%){tail}"
         )
     # iter-081: filler novelty index — distinct clips / total
     # plays. Skip on single-play sessions (1/1 = 100% trivially).
@@ -1237,6 +1254,12 @@ class SessionMeta:
     llm_errors: int = 0
     trim_events: int = 0
     trim_messages_evicted: int = 0
+    # iter-096: filler idle_threshold the chat loop ran with
+    # (passed by mic_chat). When non-zero AND filler false
+    # positives fired, print_session_summary computes a
+    # recommended new value from the observed llm_first_token
+    # distribution and surfaces it on the FP-rate line.
+    idle_threshold: float = 0.0
 
 
 def print_session_summary(
@@ -1302,6 +1325,9 @@ def print_session_summary(
             trim_messages_evicted=(
                 meta.trim_messages_evicted or trim_messages_evicted
             ),
+            # iter-096: idle_threshold has no legacy kwarg path —
+            # only flows through SessionMeta.
+            idle_threshold=meta.idle_threshold,
         )
     else:
         meta_eff = SessionMeta(
@@ -1657,6 +1683,32 @@ def print_session_summary(
         m.last_filler_id for m in metrics_list
         if m.last_filler_id != 0
     }
+    # iter-096: compute a recommended idle_threshold when FPs are
+    # firing AND the caller passed the current threshold via
+    # SessionMeta AND we have observed llm_first_token data. The
+    # recommendation is the larger of:
+    #   (a) 1.2x the current threshold — modest bump.
+    #   (b) 75th percentile of observed first-token times + 100ms
+    #       safety margin — covers most real first-token waits
+    #       while still allowing fillers on the slow tail.
+    # 0.0 = "no recommendation" (don't render).
+    recommended_idle = 0.0
+    if (
+        filler_false_positives > 0
+        and meta_eff.idle_threshold > 0
+        and len([m.llm_first_token for m in metrics_list
+                 if m.llm_first_token > 0]) >= 2
+    ):
+        positives = sorted(
+            m.llm_first_token for m in metrics_list
+            if m.llm_first_token > 0
+        )
+        # 75th percentile via the standard inclusive method.
+        idx = max(0, int(round(0.75 * (len(positives) - 1))))
+        p75 = positives[idx]
+        recommended_idle = max(meta_eff.idle_threshold * 1.2, p75 + 0.1)
+        # Round to one decimal so the rendered value is clean.
+        recommended_idle = round(recommended_idle, 1)
     _emit_filler_block(
         _emit,
         FillerStats(
@@ -1664,6 +1716,7 @@ def print_session_summary(
             filler_turns=filler_turns,
             filler_false_positives=filler_false_positives,
             unique_filler_count=len(unique_filler_ids),
+            recommended_idle_threshold=recommended_idle,
         ),
     )
     # iter-090: barge block extracted to _emit_barge_block helper.

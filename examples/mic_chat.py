@@ -363,6 +363,9 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
                 llm_errors=llm_errors,
                 trim_events=trim_events,
                 trim_messages_evicted=trim_messages_evicted,
+                # iter-096: pass the configured idle_threshold so
+                # the FP-rate line can recommend a value.
+                idle_threshold=filler_idle_threshold,
             ),
         )
     finally:
