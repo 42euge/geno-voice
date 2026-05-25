@@ -96,6 +96,8 @@ class ScenarioResult:
     name: str
     description: str
     ttfs_ms: float = 0.0          # time from speech end to first audio
+    # iter-053: naturalness bucket — "rushed" / "natural" / "slow" / "".
+    naturalness_bucket: str = ""
     stt_ms: float = 0.0
     # iter-049: STT real-time factor.
     stt_rtf: float = 0.0
@@ -277,6 +279,7 @@ def _run_scenario(
         name=name,
         description=description,
         ttfs_ms=m.ttfs * 1000,
+        naturalness_bucket=m.naturalness_bucket,
         stt_ms=m.stt_time * 1000,
         stt_rtf=m.stt_rtf,
         tts_rtf=m.tts_rtf,
@@ -450,6 +453,7 @@ class TestPerfScenarios:
                 f"barge {'landed' if landed else 'did NOT land — timing-flaky'})"
             ),
             ttfs_ms=m.ttfs * 1000,
+        naturalness_bucket=m.naturalness_bucket,
             stt_ms=m.stt_time * 1000,
         stt_rtf=m.stt_rtf,
         tts_rtf=m.tts_rtf,

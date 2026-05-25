@@ -342,6 +342,17 @@ class ChatLoop:
             # Populate metrics from the worker.
             if worker.first_audio_at is not None:
                 metrics.ttfs = worker.first_audio_at - speech_ended_at
+                # iter-053: bucket TTFS against the human-conversation
+                # sweet spot. <200ms feels rushed (bot interrupted the
+                # natural pause); 200-400ms is comfortable; >400ms is
+                # noticeable lag.
+                ttfs_ms = metrics.ttfs * 1000
+                if ttfs_ms < 200:
+                    metrics.naturalness_bucket = "rushed"
+                elif ttfs_ms <= 400:
+                    metrics.naturalness_bucket = "natural"
+                else:
+                    metrics.naturalness_bucket = "slow"
             metrics.llm_first_token = (
                 (first_token_at - llm_start) if first_token_at else 0
             )

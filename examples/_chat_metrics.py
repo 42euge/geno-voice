@@ -83,6 +83,14 @@ class TurnMetrics:
     # perf-metrics taxonomy.
     worker_idle_gap_total: float = 0.0
     ttfs: float = 0.0
+    # iter-053: TTFS bucketed against the human-conversation
+    # sweet spot. "rushed" (<200ms): bot interrupted natural
+    # turn-taking pause; "natural" (200-400ms): matches human
+    # conversational rhythm; "slow" (>400ms): user notices
+    # latency. Counter-intuitive: lower TTFS isn't always better.
+    # "" when no audio played this turn. Metric 3.1 in the
+    # perf-metrics taxonomy ("Novel/speculative").
+    naturalness_bucket: str = ""
     total_e2e: float = 0.0
     sentences_spoken: int = 0
     # iter-045: mean character length of sentences submitted to the
@@ -298,10 +306,17 @@ class TurnMetrics:
             )
         print(f"  {_DIM}│{_RESET}")
         ttfs_color = _GREEN if self.ttfs < 3.0 else _YELLOW
+        # iter-053: append naturalness bucket as a parenthetical
+        # tag. "(natural)" is the sweet spot; "(rushed)" /
+        # "(slow)" call out off-target turns.
+        if self.naturalness_bucket:
+            bucket_tag = f", {self.naturalness_bucket}"
+        else:
+            bucket_tag = ""
         print(
             f"  {_DIM}├─{_RESET} {_BOLD}TTFS:{_RESET}            "
             f"{ttfs_color}{self.ttfs*1000:>7.0f}ms{_RESET}  "
-            f"(speech stop → speaker)"
+            f"(speech stop → speaker{bucket_tag})"
         )
         total_color = _GREEN if self.total_e2e < 6.0 else _YELLOW
         print(
@@ -386,6 +401,11 @@ def print_session_summary(
     # TTFS: 0ms" appear, which is misleading — TTFS only has
     # meaning for turns that actually played audio. Filter.
     ttfs_times = [m.ttfs for m in metrics_list if m.ttfs > 0]
+    # iter-053: naturalness distribution — count turns in each bucket.
+    naturalness_counts = {"rushed": 0, "natural": 0, "slow": 0}
+    for m in metrics_list:
+        if m.naturalness_bucket in naturalness_counts:
+            naturalness_counts[m.naturalness_bucket] += 1
     fillers_total = sum(m.fillers_played for m in metrics_list)
     # iter-051: filler false-positive count + denominator (turns
     # where any filler played).
@@ -458,6 +478,16 @@ def print_session_summary(
             f"    {_BOLD}Median TTFS:      {_median_ms(ttfs_times):.0f}ms{_RESET}"
         )
         _emit(f"    Best TTFS:        {min(ttfs_times) * 1000:.0f}ms")
+        # iter-053: naturalness distribution. Total = sum of all
+        # buckets. Show only when at least one turn was bucketed.
+        n_total = sum(naturalness_counts.values())
+        if n_total > 0:
+            _emit(
+                f"    Naturalness:      "
+                f"{naturalness_counts['rushed']} rushed, "
+                f"{naturalness_counts['natural']} natural, "
+                f"{naturalness_counts['slow']} slow"
+            )
     else:
         # All turns ended without audio. Emit a placeholder rather
         # than a misleading "0ms" so the user knows it isn't a
