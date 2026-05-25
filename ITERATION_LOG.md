@@ -5295,3 +5295,68 @@ Notes:
   acoustic-echo barge-in rate — barges triggered by the bot's
   own audio; needs cross-correlation between barge timestamps
   and bot-audio-active intervals).
+
+## iter-075 — refactor _play_clip kwargs into dynamic dict (cleanup)
+
+**Branch:** iter-075-play-kwargs  **Commit:** 68611a1  **Date:** 2026-05-25
+
+iter-071 flagged that the play_fn invocation in
+`SentenceWorker._play_clip` had grown to a 4-branch `if/elif`
+chain on `cancel_event × lag_out`. Each new optional kwarg
+would double the branch count.
+
+This iteration replaces the chain with a single dynamically-built
+kwargs dict. Each play_fn-supported kwarg adds one entry; unsupported
+kwargs are omitted entirely. Preserves the iter-023 contract that
+the worker only passes kwargs the play_fn signature accepts (so
+old/minimal play_fns continue to work without churn).
+
+Before:
+```python
+if self._play_fn_supports_cancel and lag_out is not None:
+    elapsed = self._play_fn(speaker, audio_np, tokens, ...)
+elif self._play_fn_supports_cancel:
+    elapsed = self._play_fn(speaker, audio_np, tokens, ...)
+elif lag_out is not None:
+    elapsed = self._play_fn(speaker, audio_np, tokens, ...)
+else:
+    elapsed = self._play_fn(speaker, audio_np, tokens, ...)
+```
+
+After:
+```python
+base_kwargs = {"is_first_sentence": is_first}
+if self._play_fn_supports_cancel:
+    base_kwargs["cancel_event"] = self._cancel_event
+if lag_out is not None:
+    base_kwargs["lag_out"] = lag_out
+elapsed = self._play_fn(speaker, audio_np, tokens, **base_kwargs)
+```
+
+Adding a third optional kwarg is now an O(1) edit — one new
+sniff helper + one new conditional dict-set.
+
+Tests:
+- 6 new tests in `test_play_kwargs_assembly.py` pinning the
+  kwargs assembly across each signature shape (minimal /
+  cancel_only / lag_only / both / **kwargs). Covers the case
+  the old branching protected against — TypeError when passing
+  unsupported kwargs to a minimal signature.
+- All 933 prior tests continue to pass — the refactor is
+  behavior-preserving.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **939 passed, 1 skipped in 24s** (933 existing
++ 6 new).
+
+Notes:
+- This is the project's first dedicated cleanup iteration since
+  metric instrumentation work began. The pattern of "each iter
+  adds a metric and surfaces a small refactor opportunity for
+  the next" has been working — both compound interest (metric
+  coverage now 78% of taxonomy) and code health stay positive.
+- Next candidates: continuing with metrics (1.6 WER needs ground
+  truth, 1.17 audio underrun/overrun, 2.20 loopback echo barge
+  rate), OR the iter-073 sentence-first-audio path-length
+  decomposition (taxonomy 2.22) which would surface the 7
+  per-turn timestamps as a structured trace line.

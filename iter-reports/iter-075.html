@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-074 — bargeable-time fraction metric (taxonomy 1.19)</title>
+<title>iter-075 — refactor _play_clip kwargs into dynamic dict (cleanup)</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,22 +168,34 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-073.html">← iter-073</a><a href="iter-075.html">iter-075 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-074 — bargeable-time fraction metric (taxonomy 1.19)</h1>
-<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+15</code> (total 933)</span></div>
-</header><p><strong>Branch:</strong> iter-074-bargeable-time  <strong>Commit:</strong> 3e39c26  <strong>Date:</strong> 2026-05-25</p>
-<p>Added <code>bargeable_fraction</code> — of the time the bot was producing audio, what fraction was the BargeInWatcher active (i.e. barge-in was actually possible)?</p>
-<p>fraction = intersection(watcher_window, bot_speech_window) / bot_speech_duration</p>
-<p>1.0 is the architectural default — watcher.start precedes worker.first_audio_at and watcher.stop is called right after worker.wait_done. Anything below 1.0 means the bot was functionally uninterruptible for some fraction of its speech.</p>
-<p>Implementation:</p>
-<ul><li><code>BargeInWatcher</code> gained <code>started_at</code> and <code>stopped_at</code> (new public attributes). Latched in <code>start()</code> (before launching the thread) and <code>stop()</code> (after the thread joins) so they bookend the actual listening window.</li><li>ChatLoop computes the standard interval overlap right after <code>watcher.stop()</code>: ```python inter_start = max(watcher.started_at, worker.first_audio_at) inter_end = watcher.stopped_at intersection = max(0.0, inter_end - inter_start) fraction = min(1.0, intersection / bot_speech_dur) ``` Stored on <code>TurnMetrics.bargeable_fraction</code>. 0 means no audio played this turn (or watcher lifecycle didn&#x27;t fire).</li><li>Per-turn print: emits &quot;Bargeable: NN% (watcher coverage of bot speech)&quot; only when 0 &lt; value &lt; 0.99 — alarm-only. 1.0 is the healthy default and stays clutter-free.</li><li>Session summary: emits &quot;Bargeable: NN% worst (M/N turns &lt; 99%) — watcher coverage regression&quot; only when at least one turn dropped below threshold.</li><li><code>ScenarioResult.bargeable_fraction</code> on perf snapshots.</li></ul>
-<p><strong>Sentinel role:</strong></p>
-<ul><li>Currently lands at 1.0 in clean sessions (the watcher always fully covers bot speech in the iter-074 architecture).</li><li>A future change that pauses the watcher mid-turn — e.g. during filler playback to avoid self-detection, or during a &quot;polite silence&quot; guard — would push this below 1.0 and the alarm becomes visible immediately.</li><li>Pairs with iter-067&#x27;s worker recovery rate as another &quot;silent partial degradation&quot; sentinel: both expose UX regressions that individual happy-path turns wouldn&#x27;t reveal.</li></ul>
-<p>Tests (15 in <code>tests/unit/test_bargeable_fraction.py</code>):</p>
-<ul><li>Watcher timestamps: defaults None; start stamps <code>started_at</code> immediately; stop stamps <code>stopped_at</code> after join; stop without start leaves both None.</li><li>Per-turn print: 0 omits, 1.0 omits, just-under (85%) emits, low (40%) emits.</li><li>Session aggregate: no-data, all-perfect, one-below-threshold, multiple-below.</li><li>ChatLoop wiring: clean turn lands at 1.0 (architectural default); always in [0, 1].</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>933 passed, 1 skipped in 25s</strong> (918 existing + 15 new).</p>
+<nav><a href="index.html">← Index</a><a href="iter-074.html">← iter-074</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-075 — refactor _play_clip kwargs into dynamic dict (cleanup)</h1>
+<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+6</code> (total 939)</span></div>
+</header><p><strong>Branch:</strong> iter-075-play-kwargs  <strong>Commit:</strong> 68611a1  <strong>Date:</strong> 2026-05-25</p>
+<p>iter-071 flagged that the play_fn invocation in <code>SentenceWorker._play_clip</code> had grown to a 4-branch <code>if/elif</code> chain on <code>cancel_event × lag_out</code>. Each new optional kwarg would double the branch count.</p>
+<p>This iteration replaces the chain with a single dynamically-built kwargs dict. Each play_fn-supported kwarg adds one entry; unsupported kwargs are omitted entirely. Preserves the iter-023 contract that the worker only passes kwargs the play_fn signature accepts (so old/minimal play_fns continue to work without churn).</p>
+<p>Before:</p>
+<pre class="code-block"><code>if self._play_fn_supports_cancel and lag_out is not None:
+    elapsed = self._play_fn(speaker, audio_np, tokens, ...)
+elif self._play_fn_supports_cancel:
+    elapsed = self._play_fn(speaker, audio_np, tokens, ...)
+elif lag_out is not None:
+    elapsed = self._play_fn(speaker, audio_np, tokens, ...)
+else:
+    elapsed = self._play_fn(speaker, audio_np, tokens, ...)</code></pre>
+<p>After:</p>
+<pre class="code-block"><code>base_kwargs = {&quot;is_first_sentence&quot;: is_first}
+if self._play_fn_supports_cancel:
+    base_kwargs[&quot;cancel_event&quot;] = self._cancel_event
+if lag_out is not None:
+    base_kwargs[&quot;lag_out&quot;] = lag_out
+elapsed = self._play_fn(speaker, audio_np, tokens, **base_kwargs)</code></pre>
+<p>Adding a third optional kwarg is now an O(1) edit — one new sniff helper + one new conditional dict-set.</p>
+<p>Tests:</p>
+<ul><li>6 new tests in <code>test_play_kwargs_assembly.py</code> pinning the kwargs assembly across each signature shape (minimal / cancel_only / lag_only / both / **kwargs). Covers the case the old branching protected against — TypeError when passing unsupported kwargs to a minimal signature.</li><li>All 933 prior tests continue to pass — the refactor is behavior-preserving.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>939 passed, 1 skipped in 24s</strong> (933 existing + 6 new).</p>
 <p>Notes:</p>
-<ul><li><strong>Thirty-six metrics live (78% of the 46-metric taxonomy).</strong></li><li>The &quot;regression sentinel&quot; pattern continues to scale: this is the third metric (after iter-062 worker queue depth and iter-067 worker recovery rate) whose value in healthy sessions is uniform but whose deviation surfaces architectural drift immediately.</li><li>Next candidates: 1.6 (WER, needs ground truth corpus), 1.17 (audio device underrun/overrun count), 2.20 (loopback / acoustic-echo barge-in rate — barges triggered by the bot&#x27;s own audio; needs cross-correlation between barge timestamps and bot-audio-active intervals).</li></ul><nav><a href="index.html">← Index</a><a href="iter-073.html">← iter-073</a><a href="iter-075.html">iter-075 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li>This is the project&#x27;s first dedicated cleanup iteration since metric instrumentation work began. The pattern of &quot;each iter adds a metric and surfaces a small refactor opportunity for the next&quot; has been working — both compound interest (metric coverage now 78% of taxonomy) and code health stay positive.</li><li>Next candidates: continuing with metrics (1.6 WER needs ground truth, 1.17 audio underrun/overrun, 2.20 loopback echo barge rate), OR the iter-073 sentence-first-audio path-length decomposition (taxonomy 2.22) which would surface the 7 per-turn timestamps as a structured trace line.</li></ul><nav><a href="index.html">← Index</a><a href="iter-074.html">← iter-074</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>
