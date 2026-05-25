@@ -168,7 +168,7 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-069.html">← iter-069</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-069.html">← iter-069</a><a href="iter-071.html">iter-071 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
 <h1>iter-070 — sentence-length min/max range (taxonomy 2.6)</h1>
 <div class="meta"><span>2026-05-25</span> · <span>tests: <code>+11</code> (total 876)</span></div>
 </header><p><strong>Branch:</strong> iter-070-sentence-range  <strong>Commit:</strong> 512bdf8  <strong>Date:</strong> 2026-05-25</p>
@@ -181,7 +181,7 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 <ul><li>Defaults zero.</li><li>Per-turn print: no-mean omits range; uniform omits range; diverging emits &quot;[min..max]&quot;; min=0 (unset signal) skips.</li><li>Session aggregate: no-data / uniform / divergent / zero-filter.</li><li>ChatLoop wiring: bimodal LLM response (&quot;Yes.&quot; + long sentence) produces min&lt;10, max&gt;50; single-sentence response produces min == max.</li></ul>
 <p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>876 passed, 1 skipped in 24s</strong> (865 existing + 11 new).</p>
 <p>Notes:</p>
-<ul><li><strong>Thirty-two metrics live (70% of the 46-metric taxonomy).</strong></li><li>The fragmentation dimension is now fully measured: mean (iter-045 — central tendency), min/max (this — distribution shape), split coverage (iter-059 — what fraction made it as a complete sentence). A regression in any one shows up independently.</li><li>Next candidates: 1.6 (WER, needs ground truth corpus), 1.17 (audio device underrun/overrun count — would require surfacing PyAudio&#x27;s overflow flag), 2.17 (token-reveal lag — measures the text-vs-audio sync; needs play_aligned instrumentation).</li></ul><nav><a href="index.html">← Index</a><a href="iter-069.html">← iter-069</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li><strong>Thirty-two metrics live (70% of the 46-metric taxonomy).</strong></li><li>The fragmentation dimension is now fully measured: mean (iter-045 — central tendency), min/max (this — distribution shape), split coverage (iter-059 — what fraction made it as a complete sentence). A regression in any one shows up independently.</li><li>Next candidates: 1.6 (WER, needs ground truth corpus), 1.17 (audio device underrun/overrun count — would require surfacing PyAudio&#x27;s overflow flag), 2.17 (token-reveal lag — measures the text-vs-audio sync; needs play_aligned instrumentation).</li></ul><nav><a href="index.html">← Index</a><a href="iter-069.html">← iter-069</a><a href="iter-071.html">iter-071 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

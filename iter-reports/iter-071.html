@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-071 — token-reveal lag metric (taxonomy 2.17)</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-070.html">← iter-070</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-071 — token-reveal lag metric (taxonomy 2.17)</h1>
+<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+16</code> (total 892)</span></div>
+</header><p><strong>Branch:</strong> iter-071-token-lag  <strong>Commit:</strong> 66bebd3  <strong>Date:</strong> 2026-05-25</p>
+<p>Added per-token reveal-lag tracking — the wall-clock offset between when a token is printed and the audio second its <code>start</code> field claims:</p>
+<p>lag = (clock_at_emit - t0) - token[&quot;start&quot;]</p>
+<p>Positive lag = text falls behind audio (UX feels broken — text becomes &quot;late subtitles&quot;). Negative lag = text leads audio (spoils the bot before it speaks). Per-turn mean and max.</p>
+<p>Implementation:</p>
+<ul><li><code>play_aligned()</code> gained an optional <code>lag_out: dict | None = None</code> kwarg. When provided AND at least one token emits, populates <code>{&quot;sum&quot;: float, &quot;count&quot;: int, &quot;max&quot;: float}</code>. <code>max</code> is the single-token observation with the largest <strong>absolute</strong> value (sign preserved).</li><li>New <code>_play_fn_accepts_lag_out()</code> helper in <code>_chat_pipeline.py</code>, parallel to existing <code>_play_fn_accepts_cancel_event</code>. Called once at SentenceWorker construction; the worker only passes the kwarg when supported, so old/minimal play_fns continue to work without churn.</li><li><code>SentenceWorker</code> exposes <code>token_reveal_lag_sum</code>, <code>token_reveal_lag_count</code>, <code>token_reveal_lag_max</code>. Per call: pass a fresh dict, fold into totals. The play call site grew from 2 branches to 4 because there are now two independent kwargs to multiplex; further additions will need a small refactor.</li><li><code>TurnMetrics.mean_token_reveal_lag</code> + <code>max_token_reveal_lag</code> (new fields). ChatLoop computes the mean at the turn boundary (<code>worker.token_reveal_lag_sum / worker.token_reveal_lag_count</code>) so the denominator is stable.</li><li><code>mic_chat.py</code>&#x27;s production <code>_play</code> wrapper forwards <code>lag_out</code> through to <code>_play_aligned_core</code> so the metric lights up in live sessions.</li><li>Per-turn print: &quot;Token-reveal: ±NNms mean, ±MMms peak&quot; sign preserved; yellow when <code>|mean| &gt; 100ms</code>.</li><li>Session summary: &quot;Token lag: ±NNms median, ±MMms worst peak&quot; — worst-peak chosen across turns by largest absolute value.</li><li><code>ScenarioResult.mean_token_reveal_lag_ms</code> + <code>max_token_reveal_lag_ms</code> on perf snapshots.</li></ul>
+<p>Tests (16 in <code>tests/unit/test_token_reveal_lag.py</code>):</p>
+<ul><li>play_aligned contract: kwarg optional; populated correctly with tokens; empty dict signals &quot;no data&quot; when no tokens emit.</li><li>Worker sniff helper: explicit kwarg / **kwargs / no support all detected correctly.</li><li>Worker accumulation: no-support play_fn leaves zero; sums and counts add across multiple calls; max picks largest absolute value (negative-bigger wins over positive-smaller).</li><li>TurnMetrics + per-turn print: defaults zero, omitted when both fields zero, sign-preserved render for positive and negative.</li><li>Session aggregate: no-data omitted, median + worst-peak with positive values, worst-peak picks largest absolute (negative).</li></ul>
+<p><strong>Bug fix bundled:</strong> the iter-064 Mirror-gap line ended up inside an iter-071 block during the edits; restored it under the <code>bot_wpms</code> scope where it belongs. Caught by the existing iter-064 tests during the full-suite run, fixed before merge.</p>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>892 passed, 1 skipped in 25s</strong> (876 existing + 16 new).</p>
+<p>Notes:</p>
+<ul><li><strong>Thirty-three metrics live (72% of the 46-metric taxonomy).</strong></li><li>The text/audio-sync dimension is now exposed end-to-end. The metric makes a real bug class visible: speakers that buffer ahead of the worker&#x27;s <code>samples_played</code> cursor will produce positive lag that grows linearly across the turn — a regression pattern previously invisible.</li><li>The play_fn <code>_chat_pipeline._play_clip</code> call site now branches on <code>cancel_event × lag_out</code>. A future iter that adds a third optional kwarg should refactor into a kwargs-dict approach.</li><li>Next candidates: 1.6 (WER, needs ground truth corpus), 1.17 (audio device underrun/overrun count — would require surfacing PyAudio&#x27;s overflow flag instead of swallowing it), 2.21 (VAD- config consistency between recorder and watcher — already enforced by iter-028&#x27;s plumbing; promote to a regression sentinel).</li></ul><nav><a href="index.html">← Index</a><a href="iter-070.html">← iter-070</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>

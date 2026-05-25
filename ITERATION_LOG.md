@@ -4996,3 +4996,86 @@ Notes:
   (audio device underrun/overrun count — would require surfacing
   PyAudio's overflow flag), 2.17 (token-reveal lag — measures the
   text-vs-audio sync; needs play_aligned instrumentation).
+
+## iter-071 — token-reveal lag metric (taxonomy 2.17)
+
+**Branch:** iter-071-token-lag  **Commit:** 66bebd3  **Date:** 2026-05-25
+
+Added per-token reveal-lag tracking — the wall-clock offset between
+when a token is printed and the audio second its `start` field
+claims:
+
+    lag = (clock_at_emit - t0) - token["start"]
+
+Positive lag = text falls behind audio (UX feels broken — text
+becomes "late subtitles"). Negative lag = text leads audio (spoils
+the bot before it speaks). Per-turn mean and max.
+
+Implementation:
+- `play_aligned()` gained an optional `lag_out: dict | None = None`
+  kwarg. When provided AND at least one token emits, populates
+  `{"sum": float, "count": int, "max": float}`. `max` is the
+  single-token observation with the largest **absolute** value
+  (sign preserved).
+- New `_play_fn_accepts_lag_out()` helper in `_chat_pipeline.py`,
+  parallel to existing `_play_fn_accepts_cancel_event`. Called
+  once at SentenceWorker construction; the worker only passes the
+  kwarg when supported, so old/minimal play_fns continue to work
+  without churn.
+- `SentenceWorker` exposes `token_reveal_lag_sum`,
+  `token_reveal_lag_count`, `token_reveal_lag_max`. Per call: pass
+  a fresh dict, fold into totals. The play call site grew from 2
+  branches to 4 because there are now two independent kwargs to
+  multiplex; further additions will need a small refactor.
+- `TurnMetrics.mean_token_reveal_lag` + `max_token_reveal_lag`
+  (new fields). ChatLoop computes the mean at the turn boundary
+  (`worker.token_reveal_lag_sum / worker.token_reveal_lag_count`)
+  so the denominator is stable.
+- `mic_chat.py`'s production `_play` wrapper forwards `lag_out`
+  through to `_play_aligned_core` so the metric lights up in live
+  sessions.
+- Per-turn print: "Token-reveal: ±NNms mean, ±MMms peak" sign
+  preserved; yellow when `|mean| > 100ms`.
+- Session summary: "Token lag: ±NNms median, ±MMms worst peak" —
+  worst-peak chosen across turns by largest absolute value.
+- `ScenarioResult.mean_token_reveal_lag_ms` + `max_token_reveal_lag_ms`
+  on perf snapshots.
+
+Tests (16 in `tests/unit/test_token_reveal_lag.py`):
+- play_aligned contract: kwarg optional; populated correctly with
+  tokens; empty dict signals "no data" when no tokens emit.
+- Worker sniff helper: explicit kwarg / **kwargs / no support all
+  detected correctly.
+- Worker accumulation: no-support play_fn leaves zero; sums and
+  counts add across multiple calls; max picks largest absolute
+  value (negative-bigger wins over positive-smaller).
+- TurnMetrics + per-turn print: defaults zero, omitted when both
+  fields zero, sign-preserved render for positive and negative.
+- Session aggregate: no-data omitted, median + worst-peak with
+  positive values, worst-peak picks largest absolute (negative).
+
+**Bug fix bundled:** the iter-064 Mirror-gap line ended up inside
+an iter-071 block during the edits; restored it under the
+`bot_wpms` scope where it belongs. Caught by the existing iter-064
+tests during the full-suite run, fixed before merge.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **892 passed, 1 skipped in 25s** (876 existing
++ 16 new).
+
+Notes:
+- **Thirty-three metrics live (72% of the 46-metric taxonomy).**
+- The text/audio-sync dimension is now exposed end-to-end. The
+  metric makes a real bug class visible: speakers that buffer
+  ahead of the worker's `samples_played` cursor will produce
+  positive lag that grows linearly across the turn — a regression
+  pattern previously invisible.
+- The play_fn `_chat_pipeline._play_clip` call site now branches
+  on `cancel_event × lag_out`. A future iter that adds a third
+  optional kwarg should refactor into a kwargs-dict approach.
+- Next candidates: 1.6 (WER, needs ground truth corpus), 1.17
+  (audio device underrun/overrun count — would require surfacing
+  PyAudio's overflow flag instead of swallowing it), 2.21 (VAD-
+  config consistency between recorder and watcher — already
+  enforced by iter-028's plumbing; promote to a regression
+  sentinel).
