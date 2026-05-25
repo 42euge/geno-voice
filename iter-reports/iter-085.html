@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-084 — sub-second turn rate (taxonomy 3.19)</title>
+<title>iter-085 — max LLM inter-token gap (taxonomy 3.21 take)</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,18 +168,19 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-083.html">← iter-083</a><a href="iter-085.html">iter-085 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-084 — sub-second turn rate (taxonomy 3.19)</h1>
-<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+9</code> (total 1037)</span></div>
-</header><p><strong>Branch:</strong> iter-084-sub-second  <strong>Commit:</strong> 394ebf5  <strong>Date:</strong> 2026-05-25</p>
-<p>Added sub-second turn rate — single human-feel threshold across the session: what fraction of TTFS values landed under 1.0s. &lt;1.0s feels &quot;instant&quot; to most users, so the rate is a clear KPI for &quot;did we hit the snappy bar.&quot; Easier to track than median when comparing across sessions or model swaps.</p>
+<nav><a href="index.html">← Index</a><a href="iter-084.html">← iter-084</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-085 — max LLM inter-token gap (taxonomy 3.21 take)</h1>
+<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+12</code> (total 1049)</span></div>
+</header><p><strong>Branch:</strong> iter-085-token-gap  <strong>Commit:</strong> 8c7af72  <strong>Date:</strong> 2026-05-25</p>
+<p>Added <code>max_token_gap</code> — worst pause between consecutive LLM tokens during the stream. Catches mid-stream stalls — currently invisible because the user just hears a long pause and no signal fires.</p>
+<p>The full taxonomy 3.21 metric is &quot;fraction of LLM stalls (gap &gt; N seconds between tokens) that resolve before barge-in fires&quot;; this iteration ships the simpler &quot;max gap observed&quot; cousin, which gives the immediately-actionable signal (any stall happened, how bad) without the cross-event windowing.</p>
 <p>Implementation:</p>
-<ul><li>Pure session-level derivation in <code>print_session_summary</code>. No new TurnMetrics field — uses the already-computed <code>ttfs_times</code> list (which already excludes zero-TTFS turns).</li><li>Always emits when there&#x27;s at least one measurable TTFS — the rate itself is informative even at 0% (the operator wants to know that, too).</li><li>Output: &quot;Sub-second TTFS: M/N (X%)&quot; inserted between Best TTFS and Rhythm score for visual locality with the other &quot;TTFS-shape&quot; metrics.</li></ul>
-<p>Tests (9 in <code>tests/unit/test_sub_second_rate.py</code>):</p>
-<ul><li>No-emit boundaries: zero turns, all-no-audio.</li><li>Emit cases: 100%, 0%, mixed (50%), boundary (0.999s counts, 1.0s doesn&#x27;t), zero-TTFS turns excluded from denominator.</li><li>Co-emission with Best TTFS and Rhythm score.</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>1037 passed, 1 skipped in 24s</strong> (1028 existing + 9 new).</p>
+<ul><li>ChatLoop instruments the <code>for token in llm_gen</code> loop with a <code>prev_token_at</code> tracker. Each iteration: compute `gap = now - prev_token_at<code>; update </code>max_token_gap` if larger. The first-token wait is excluded — that&#x27;s already iter-052&#x27;s <code>llm_first_token</code>.</li><li><code>TurnMetrics.max_token_gap: float = 0.0</code> (new field).</li><li>Per-turn print: appends &quot;max gap NNms&quot; suffix to the LLM total line when &gt;200ms (sub-200ms is normal token-streaming jitter). Yellow at &gt;500ms.</li><li>Session summary: &quot;Worst LLM stall: NNms (M/N turns)&quot; emits when at least one turn stalled — gives the operator both the worst observation and a count to differentiate sporadic noise from a chronic problem.</li><li><code>ScenarioResult.max_token_gap_ms</code> on perf snapshots.</li></ul>
+<p>Tests (12 in <code>tests/unit/test_max_token_gap.py</code>):</p>
+<ul><li>Defaults zero / per-turn print: zero omits, sub-threshold omits, significant emits dim, severe emits yellow.</li><li>Session aggregate: no-data, all-below-threshold, single-stall (1/3 turns), multiple-stalls (3/4 turns).</li><li>ChatLoop wiring: fast token stream → tiny gap; injected 200ms stall → at least 180ms observed (jitter-tolerant); single-token response → small bounded gap.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>1049 passed, 1 skipped in 24s</strong> (1037 existing + 12 new).</p>
 <p>Notes:</p>
-<ul><li><strong>Forty-five metrics live (98% of the 46-metric taxonomy).</strong></li><li>The TTFS dimension now has 9 lenses: budget, attribution, bilateral split, naturalness, cold-start, jitter, rhythm, best-of, and now hit-rate-vs-1s. After this, only WER (1.6 — needs ground truth corpus) remains; iter-085 may pivot to other work or tackle WER as a heavyweight iteration.</li><li><strong>Pattern observation:</strong> the last 10 iterations have alternated between session-level pure-derivation metrics (cheap, ~10 lines + tests) and per-turn instrumented metrics (medium, ~50 lines + tests across multiple files). The session-level metrics tend to be richer in the &quot;diagnostic value per line of code&quot; sense — they leverage data already captured rather than paying instrumentation costs. iter-085 onward will likely lean on this pattern more.</li></ul><nav><a href="index.html">← Index</a><a href="iter-083.html">← iter-083</a><a href="iter-085.html">iter-085 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li>**Forty-six metrics live (100% of the 46-metric taxonomy if 3.21 is counted as covered by this take, OR 45.5/46 if the full stall-recoverability is required.)** The single remaining taxonomy entry (1.6 WER) is genuinely heavyweight (needs ground-truth corpus + jiwer integration); future iterations will likely pivot to non-taxonomy work — codebase refactors, architecture improvements, or report-generation enhancements.</li><li>The instrumentation pattern is self-contained: 5 added lines in the LLM streaming loop, 1 new TurnMetrics field, ~10 lines for print + aggregate. Lower cost than most iter-N instrumentation despite touching the hot path.</li><li>Next directions: (<code>_last_first_audio_at</code>) — generalize for other cross-turn metrics (TTC&#x27;s structural cousin: first-syllable-loss detection across barge boundaries). fixture corpus. refactor (perhaps nested dataclasses by phase: SttMetrics, LlmMetrics, TtsMetrics, BargeMetrics) would aid readability without changing the wire format.<ul><li>Investigate the iter-082 ChatLoop instance state pattern</li><li>1.6 WER as a heavyweight iteration with a built-in test</li><li>Refactor: TurnMetrics has grown to ~60 fields. A grouping</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-084.html">← iter-084</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

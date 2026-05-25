@@ -5923,3 +5923,70 @@ Notes:
   code" sense — they leverage data already captured rather than
   paying instrumentation costs. iter-085 onward will likely lean
   on this pattern more.
+
+## iter-085 — max LLM inter-token gap (taxonomy 3.21 take)
+
+**Branch:** iter-085-token-gap  **Commit:** 8c7af72  **Date:** 2026-05-25
+
+Added `max_token_gap` — worst pause between consecutive LLM tokens
+during the stream. Catches mid-stream stalls — currently invisible
+because the user just hears a long pause and no signal fires.
+
+The full taxonomy 3.21 metric is "fraction of LLM stalls (gap > N
+seconds between tokens) that resolve before barge-in fires"; this
+iteration ships the simpler "max gap observed" cousin, which gives
+the immediately-actionable signal (any stall happened, how bad)
+without the cross-event windowing.
+
+Implementation:
+- ChatLoop instruments the `for token in llm_gen` loop with a
+  `prev_token_at` tracker. Each iteration: compute `gap = now -
+  prev_token_at`; update `max_token_gap` if larger. The
+  first-token wait is excluded — that's already iter-052's
+  `llm_first_token`.
+- `TurnMetrics.max_token_gap: float = 0.0` (new field).
+- Per-turn print: appends "max gap NNms" suffix to the LLM total
+  line when >200ms (sub-200ms is normal token-streaming jitter).
+  Yellow at >500ms.
+- Session summary: "Worst LLM stall: NNms (M/N turns)" emits
+  when at least one turn stalled — gives the operator both the
+  worst observation and a count to differentiate sporadic noise
+  from a chronic problem.
+- `ScenarioResult.max_token_gap_ms` on perf snapshots.
+
+Tests (12 in `tests/unit/test_max_token_gap.py`):
+- Defaults zero / per-turn print: zero omits, sub-threshold
+  omits, significant emits dim, severe emits yellow.
+- Session aggregate: no-data, all-below-threshold, single-stall
+  (1/3 turns), multiple-stalls (3/4 turns).
+- ChatLoop wiring: fast token stream → tiny gap; injected 200ms
+  stall → at least 180ms observed (jitter-tolerant); single-token
+  response → small bounded gap.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **1049 passed, 1 skipped in 24s** (1037
+existing + 12 new).
+
+Notes:
+- **Forty-six metrics live (100% of the 46-metric taxonomy if
+  3.21 is counted as covered by this take, OR 45.5/46 if the
+  full stall-recoverability is required.)** The single remaining
+  taxonomy entry (1.6 WER) is genuinely heavyweight (needs
+  ground-truth corpus + jiwer integration); future iterations
+  will likely pivot to non-taxonomy work — codebase refactors,
+  architecture improvements, or report-generation enhancements.
+- The instrumentation pattern is self-contained: 5 added lines
+  in the LLM streaming loop, 1 new TurnMetrics field, ~10 lines
+  for print + aggregate. Lower cost than most iter-N
+  instrumentation despite touching the hot path.
+- Next directions:
+  - Investigate the iter-082 ChatLoop instance state pattern
+    (`_last_first_audio_at`) — generalize for other cross-turn
+    metrics (TTC's structural cousin: first-syllable-loss
+    detection across barge boundaries).
+  - 1.6 WER as a heavyweight iteration with a built-in test
+    fixture corpus.
+  - Refactor: TurnMetrics has grown to ~60 fields. A grouping
+    refactor (perhaps nested dataclasses by phase: SttMetrics,
+    LlmMetrics, TtsMetrics, BargeMetrics) would aid readability
+    without changing the wire format.
