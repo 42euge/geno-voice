@@ -344,6 +344,17 @@ class TurnMetrics:
     # missing. Metric 3.18 in the perf-metrics taxonomy
     # ("Novel/speculative").
     first_token_to_audio: float = 0.0
+    # iter-085: maximum inter-token gap observed during the LLM
+    # stream this turn (excludes the first-token wait, which is
+    # iter-052's llm_first_token). Catches mid-stream stalls —
+    # currently invisible to operators because the user just
+    # hears a long pause and no signal fires. >500ms is "the LLM
+    # stalled noticeably mid-response"; >2s is "the user
+    # definitely thought the bot was broken." 0 on single-token
+    # turns. Metric 3.21 in the perf-metrics taxonomy
+    # ("Novel/speculative") — the simpler "max gap" cousin of the
+    # full stall-recoverability calculation.
+    max_token_gap: float = 0.0
     transcript: str = ""
     response: str = ""
     model: str = ""
@@ -468,10 +479,21 @@ class TurnMetrics:
             ctx_str = f", {self.context_tokens} ctx"
         else:
             ctx_str = ""
+        # iter-085: append max token gap when significant (>200ms).
+        # Smaller gaps are normal token-streaming jitter; larger
+        # ones reveal mid-stream stalls.
+        if self.max_token_gap > 0.2:
+            gap_color = _YELLOW if self.max_token_gap > 0.5 else _DIM
+            gap_str = (
+                f", {gap_color}max gap "
+                f"{self.max_token_gap*1000:.0f}ms{_RESET}"
+            )
+        else:
+            gap_str = ""
         print(
             f"  {_DIM}│{_RESET}  LLM total:     "
             f"{self.llm_total*1000:>7.0f}ms  "
-            f"({self.model}{tps_str}{ctx_str})"
+            f"({self.model}{tps_str}{ctx_str}{gap_str})"
         )
         tts_suffix = f"({self.sentences_spoken} sentences"
         if self.fillers_played > 0:
@@ -834,6 +856,13 @@ def print_session_summary(
     ]
     # iter-052: LLM TPS over turns where it was measurable.
     llm_tpses = [m.llm_tps for m in metrics_list if m.llm_tps > 0]
+    # iter-085: max-token-gap values across turns where the metric
+    # was meaningful. Filter zeros (single-token responses) AND
+    # sub-200ms gaps (normal jitter). Emitting only meaningful
+    # stalls keeps clean sessions clutter-free.
+    stall_gaps = [
+        m.max_token_gap for m in metrics_list if m.max_token_gap > 0.2
+    ]
     # iter-038: median TTFsent over turns where a sentence actually
     # emerged. Filter out 0s (parallel to iter-031's TTFS-zero filter)
     # so a turn with no complete sentence doesn't bias the median.
@@ -1099,6 +1128,17 @@ def print_session_summary(
         _emit(f"    Median FT-A:      {_median_ms(fta_values):.0f}ms")
     if llm_tpses:
         _emit(f"    Median LLM TPS:   {statistics.median(llm_tpses):.0f}")
+    # iter-085: surface the WORST stall observed across the
+    # session + how many turns showed any stall. The worst is
+    # the operator-actionable signal (one bad turn ruins the
+    # demo); the count tells you whether stalls are persistent
+    # (fix the endpoint) or sporadic (noise).
+    if stall_gaps:
+        worst_ms = max(stall_gaps) * 1000
+        _emit(
+            f"    Worst LLM stall:  "
+            f"{worst_ms:.0f}ms ({len(stall_gaps)}/{n} turns)"
+        )
     if llm_fs:
         _emit(f"    Median LLM sent:  {_median_ms(llm_fs):.0f}ms")
     _emit(f"    Median TTS:       {_median_ms(tts_times):.0f}ms")

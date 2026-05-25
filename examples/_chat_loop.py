@@ -365,13 +365,30 @@ class ChatLoop:
         # iter-052: count tokens received from the LLM. Used to
         # compute TPS (tokens/sec) post-stream.
         token_count = 0
+        # iter-085: track inter-token gap to catch mid-stream LLM
+        # stalls. Only the FIRST gap (first_token wait) is excluded
+        # — that's already covered by iter-052's llm_first_token.
+        # All subsequent gaps feed into max_token_gap.
+        prev_token_at: Optional[float] = None
+        max_token_gap = 0.0
 
         try:
             for token in llm_gen:
                 if coord.is_set():
                     break  # iter-012: barge-in during LLM streaming
+                now = self._clock()
                 if first_token_at is None:
-                    first_token_at = self._clock()
+                    first_token_at = now
+                else:
+                    # iter-085: gap between consecutive tokens.
+                    # Skipped for the first token (prev is None
+                    # at that point — first_token_at has the
+                    # initial timestamp instead).
+                    if prev_token_at is not None:
+                        gap = now - prev_token_at
+                        if gap > max_token_gap:
+                            max_token_gap = gap
+                prev_token_at = now
                 token_buffer += token
                 full_response += token
                 token_count += 1
@@ -514,6 +531,10 @@ class ChatLoop:
                 metrics.first_token_to_audio = max(
                     0.0, worker.first_audio_at - first_token_at
                 )
+            # iter-085: max inter-token gap during the LLM stream.
+            # Only meaningful when token_count >= 2 (need at least
+            # two tokens to have a gap). 0 on single-token responses.
+            metrics.max_token_gap = max_token_gap
             # iter-052: LLM TPS — tokens/sec measured AFTER first
             # token (excludes first-token wait). Need ≥2 tokens
             # AND a positive interval. (token_count - 1) tokens
