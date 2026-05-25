@@ -293,6 +293,7 @@ def _run_scenario(
     per_token_delay: float = 0.0,
     fillers: list | None = None,
     idle_threshold: float = 0.0,
+    aggressive_first_sentence: bool = False,
 ) -> ScenarioResult:
     mic = VirtualMicStream(rate=RATE, chunk_size=CHUNK)
     _utterance(speech_seconds, mic)
@@ -309,6 +310,7 @@ def _run_scenario(
         play_fn=_slow_play,
         fillers=fillers,
         idle_threshold=idle_threshold,
+        aggressive_first_sentence=aggressive_first_sentence,
     )
 
     t0 = time.monotonic()
@@ -453,6 +455,44 @@ class TestPerfScenarios:
             per_token_delay=0.1,  # slow so filler triggers
             fillers=[filler],
             idle_threshold=0.15,
+        )
+        assert r.sentences_spoken >= 1
+
+    # iter-098: A/B for the aggressive first-sentence splitter
+    # (iter-088). The same long-preamble response is run twice —
+    # once with the splitter off, once on. The time-series chart
+    # then shows the TTFS delta empirically rather than relying on
+    # the synthetic helpers tests in tests/unit/test_chat_helpers.
+    #
+    # Long-preamble = a clause >20 chars with a comma BEFORE the
+    # first period. Aggressive splitter slices on the comma; the
+    # default splitter waits for the period.
+    _LONG_PREAMBLE = (
+        "Well let me think about this for a moment, "
+        "the answer is twelve. "
+        "And the reason is straightforward. "
+        "It just is."
+    )
+
+    def test_long_preamble_aggressive_off(self):
+        r = _run_scenario(
+            "long_preamble_aggressive_off",
+            "Long preamble, splitter off — TTFS waits for first period",
+            speech_seconds=1.0,
+            response=self._LONG_PREAMBLE,
+            per_token_delay=0.01,
+            aggressive_first_sentence=False,
+        )
+        assert r.sentences_spoken >= 1
+
+    def test_long_preamble_aggressive_on(self):
+        r = _run_scenario(
+            "long_preamble_aggressive_on",
+            "Long preamble, splitter on — slices on early comma (iter-088)",
+            speech_seconds=1.0,
+            response=self._LONG_PREAMBLE,
+            per_token_delay=0.01,
+            aggressive_first_sentence=True,
         )
         assert r.sentences_spoken >= 1
 

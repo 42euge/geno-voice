@@ -6701,3 +6701,82 @@ Notes:
     tighter `max_user_assistant` cap when trim_events stays at 0
     despite measurable growth.
   - WER fixture (1.6) heavyweight iteration.
+
+## iter-098 — A/B perf scenarios for aggressive first-sentence splitter
+
+**Goal:** Validate iter-088's TTFS-reducing claim with empirical
+numbers in the perf time-series chart, not just unit tests.
+
+iter-088 added the `aggressive_first_sentence` opt-in that slices
+the first sentence on a comma boundary (≥20 chars) instead of
+waiting for the period. The unit tests in
+`tests/unit/test_chat_helpers.py` verify the split behavior, and
+iter-093 added the auto-aggressive-on-stall trigger, but neither
+told the operator how much TTFS the splitter actually saves on a
+realistic long-preamble response. That number lives only in the
+perf suite.
+
+**Change:** Two new perf scenarios driving the same long-preamble
+response twice — one with `aggressive_first_sentence=False`, one
+with `True`. The shared `_LONG_PREAMBLE` is structured exactly
+the way the splitter benefits most: a 41-char clause with a comma
+before the first period.
+
+```python
+_LONG_PREAMBLE = (
+    "Well let me think about this for a moment, "
+    "the answer is twelve. "
+    "And the reason is straightforward. "
+    "It just is."
+)
+```
+
+`_run_scenario` grew one new kwarg (`aggressive_first_sentence`)
+that forwards directly to `ChatLoop.__init__`. No other plumbing
+changes — the existing rich `ScenarioResult` schema already
+captures TTFS, llm_first_sentence, and mean_sentence_chars.
+
+**Empirical A/B** (this run, x86_64 Linux stub pipeline):
+
+| Metric                 | aggressive=False | aggressive=True | Δ      |
+|------------------------|------------------|-----------------|--------|
+| TTFS                   | 931.6 ms         | 891.1 ms        | -40 ms |
+| llm_first_sentence     | 131.0 ms         | 90.6 ms         | -40 ms |
+| mean_sentence_chars    | 36.3             | 27.0            | -9     |
+
+The mean_chars drop from 36→27 confirms the splitter actually
+fired (otherwise both columns would match). The TTFS savings
+matches the llm_first_sentence savings near-perfectly because
+synth + dispatch are deterministic in the stub pipeline — the
+only variable here is *when* the first complete fragment is
+handed to the worker.
+
+Verification: `python -m pytest tests/performance/ -q` → **11
+passed in 2.4s** (was 9, +2 new). Full unit + integration suite:
+`tests/ --ignore=tests/performance --ignore=tests/test_session.py
+--ignore=tests/e2e -q` → **1148 passed, 1 skipped** (identical to
+main; the test_session.py + e2e errors are pre-existing audio-
+fixture infra issues, unrelated).
+
+Notes:
+- **Pattern: pair-scenarios for opt-in features.** iter-088 +
+  iter-093 are both opt-in flags. Adding paired scenarios (off vs
+  on) on the *same* response gives a clean ratio that survives
+  hardware-dependent absolute numbers — a 50% TTFS reduction
+  reads the same on a M1 and a stub, even if the absolute ms
+  differ.
+- **Future A/B candidates with the same shape:**
+  - Filler `idle_threshold=0.6` vs `0.15` on a slow LLM (TTFS
+    dominated by filler start vs LLM TTFB).
+  - `auto_aggressive_threshold=0.0` vs `0.5` on a stalled
+    response (per-token-delay > threshold flips mid-stream).
+  - `max_user_assistant=20` vs `5` on a long session (context
+    growth → LLM TTFB scaling).
+- Each pair adds 2 rows to the perf time-series; the chart
+  generator already plots them as separate lines, so the visual
+  comparison is free.
+- Next directions:
+  - Pair scenarios for filler idle_threshold (iter-051
+    sensitivity test).
+  - Extract `_emit_recording_block` (still pending from iter-097).
+  - WER fixture (1.6) heavyweight iteration.
