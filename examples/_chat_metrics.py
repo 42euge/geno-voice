@@ -1224,6 +1224,70 @@ def _emit_sentence_block(emit, stats: SentenceStats) -> None:
 
 
 @dataclass
+class HistoryStats:
+    """iter-097: conversation-history management signals consumed
+    by ``_emit_history_block``. Bundles iter-077 context size and
+    iter-078 trim-event tracking — both about how the messages
+    list grows and gets capped over a session.
+
+    Fields:
+      ``context_token_counts`` (iter-077): per-turn approximate
+        context tokens sent to the LLM (filtered to >0).
+      ``trim_events`` (iter-078): count of times trim_history
+        actually evicted ≥1 message.
+      ``trim_messages_evicted`` (iter-078): cumulative evicted
+        message count across all trim_events.
+    """
+
+    context_token_counts: list = field(default_factory=list)
+    trim_events: int = 0
+    trim_messages_evicted: int = 0
+
+
+def _emit_history_block(emit, stats: HistoryStats) -> None:
+    """iter-097: extracted from print_session_summary's history
+    block (iter-077 context tokens + iter-078 trim events).
+
+    Renders:
+      - "Context tokens: NN median, MM max" (iter-077) when any
+        turn produced a count.
+      - "Context growth: ±NN tokens (turn 1 → turn N)" (iter-077)
+        when ≥3 turns have measurable context.
+      - "Trim events: N (M evicted, X.X/event)" (iter-078) when
+        any trim fired.
+
+    Behavior-preserving: byte-for-byte identical to the inline
+    version that lived in print_session_summary.
+    """
+    # iter-077: context size summary. Median = typical per-call
+    # cost; max = worst case. If max ≫ median, late turns blew
+    # up — likely a trim regression.
+    if stats.context_token_counts:
+        med_ctx = statistics.median(stats.context_token_counts)
+        max_ctx = max(stats.context_token_counts)
+        emit(f"    Context tokens:   {med_ctx:.0f} median, {max_ctx} max")
+        if len(stats.context_token_counts) >= 3:
+            growth = (
+                stats.context_token_counts[-1]
+                - stats.context_token_counts[0]
+            )
+            emit(
+                f"    Context growth:   "
+                f"{growth:+d} tokens (turn 1 → turn {len(stats.context_token_counts)})"
+            )
+    # iter-078: trim event rate. evicted/events ratio surfaces
+    # severity (1.0 = steady-state one-eviction-per-trim;
+    # higher = catching up after a longer interval).
+    if stats.trim_events > 0:
+        ratio = stats.trim_messages_evicted / stats.trim_events
+        emit(
+            f"    Trim events:      "
+            f"{stats.trim_events} ({stats.trim_messages_evicted} evicted, "
+            f"{ratio:.1f}/event)"
+        )
+
+
+@dataclass
 class SessionMeta:
     """iter-086: session-level signals collected by the driver
     (mic_chat) and passed into ``print_session_summary`` as a
@@ -1868,32 +1932,15 @@ def print_session_summary(
     # but needs paired indices, not just values; emit it only
     # when ≥3 turns have the metric (least-squares is overkill;
     # just first-vs-last delta gives a quick signal).
-    if context_token_counts:
-        med_ctx = statistics.median(context_token_counts)
-        max_ctx = max(context_token_counts)
-        _emit(f"    Context tokens:   {med_ctx:.0f} median, {max_ctx} max")
-        if len(context_token_counts) >= 3:
-            growth = context_token_counts[-1] - context_token_counts[0]
-            _emit(
-                f"    Context growth:   "
-                f"{growth:+d} tokens (turn 1 → turn {len(context_token_counts)})"
-            )
-    # iter-078: trim event rate. Skip the line on sessions where
-    # trim never fired (early sessions, or trim threshold so high
-    # it's never tripped — the latter is a calibration issue
-    # surfaced by ``Context tokens: max`` keeping growing). The
-    # ratio of evicted/events surfaces the per-trim severity:
-    # evicted/events == 1 means each trim cap was a steady-state
-    # one-message eviction; >1 means the trim is catching up
-    # after a longer interval (might happen if max_user_assistant
-    # was lowered mid-session).
-    if trim_events > 0:
-        ratio = trim_messages_evicted / trim_events
-        _emit(
-            f"    Trim events:      "
-            f"{trim_events} ({trim_messages_evicted} evicted, "
-            f"{ratio:.1f}/event)"
-        )
+    # iter-097: history block extracted to _emit_history_block.
+    _emit_history_block(
+        _emit,
+        HistoryStats(
+            context_token_counts=context_token_counts,
+            trim_events=trim_events,
+            trim_messages_evicted=trim_messages_evicted,
+        ),
+    )
     # iter-071: median mean-lag + worst peak across the session.
     # Sign-preserved on output. >50ms median is "the user notices
     # the desync"; >300ms peak on any one token is a visible glitch
