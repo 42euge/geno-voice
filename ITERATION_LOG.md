@@ -5218,3 +5218,80 @@ Notes:
   (audio device underrun/overrun count), 1.19 (bargeable-time
   fraction — portion of bot speech where barge-in is even
   possible; needs BargeInWatcher.start_at + stop_at exposed).
+
+## iter-074 — bargeable-time fraction metric (taxonomy 1.19)
+
+**Branch:** iter-074-bargeable-time  **Commit:** 3e39c26  **Date:** 2026-05-25
+
+Added `bargeable_fraction` — of the time the bot was producing
+audio, what fraction was the BargeInWatcher active (i.e. barge-in
+was actually possible)?
+
+    fraction = intersection(watcher_window, bot_speech_window) / bot_speech_duration
+
+1.0 is the architectural default — watcher.start precedes
+worker.first_audio_at and watcher.stop is called right after
+worker.wait_done. Anything below 1.0 means the bot was functionally
+uninterruptible for some fraction of its speech.
+
+Implementation:
+- `BargeInWatcher` gained `started_at` and `stopped_at` (new public
+  attributes). Latched in `start()` (before launching the thread)
+  and `stop()` (after the thread joins) so they bookend the actual
+  listening window.
+- ChatLoop computes the standard interval overlap right after
+  `watcher.stop()`:
+  ```python
+  inter_start = max(watcher.started_at, worker.first_audio_at)
+  inter_end = watcher.stopped_at
+  intersection = max(0.0, inter_end - inter_start)
+  fraction = min(1.0, intersection / bot_speech_dur)
+  ```
+  Stored on `TurnMetrics.bargeable_fraction`. 0 means no audio
+  played this turn (or watcher lifecycle didn't fire).
+- Per-turn print: emits "Bargeable: NN% (watcher coverage of
+  bot speech)" only when 0 < value < 0.99 — alarm-only. 1.0 is
+  the healthy default and stays clutter-free.
+- Session summary: emits "Bargeable: NN% worst (M/N turns < 99%)
+  — watcher coverage regression" only when at least one turn
+  dropped below threshold.
+- `ScenarioResult.bargeable_fraction` on perf snapshots.
+
+**Sentinel role:**
+- Currently lands at 1.0 in clean sessions (the watcher always
+  fully covers bot speech in the iter-074 architecture).
+- A future change that pauses the watcher mid-turn — e.g. during
+  filler playback to avoid self-detection, or during a "polite
+  silence" guard — would push this below 1.0 and the alarm
+  becomes visible immediately.
+- Pairs with iter-067's worker recovery rate as another "silent
+  partial degradation" sentinel: both expose UX regressions that
+  individual happy-path turns wouldn't reveal.
+
+Tests (15 in `tests/unit/test_bargeable_fraction.py`):
+- Watcher timestamps: defaults None; start stamps `started_at`
+  immediately; stop stamps `stopped_at` after join; stop without
+  start leaves both None.
+- Per-turn print: 0 omits, 1.0 omits, just-under (85%) emits,
+  low (40%) emits.
+- Session aggregate: no-data, all-perfect, one-below-threshold,
+  multiple-below.
+- ChatLoop wiring: clean turn lands at 1.0 (architectural
+  default); always in [0, 1].
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **933 passed, 1 skipped in 25s** (918 existing
++ 15 new).
+
+Notes:
+- **Thirty-six metrics live (78% of the 46-metric taxonomy).**
+- The "regression sentinel" pattern continues to scale: this is
+  the third metric (after iter-062 worker queue depth and iter-067
+  worker recovery rate) whose value in healthy sessions is
+  uniform but whose deviation surfaces architectural drift
+  immediately.
+- Next candidates: 1.6 (WER, needs ground truth corpus), 1.17
+  (audio device underrun/overrun count), 2.20 (loopback /
+  acoustic-echo barge-in rate — barges triggered by the bot's
+  own audio; needs cross-correlation between barge timestamps
+  and bot-audio-active intervals).
