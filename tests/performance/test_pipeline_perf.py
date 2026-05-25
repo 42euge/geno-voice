@@ -121,6 +121,9 @@ class ScenarioResult:
     worker_idle_gap_ms: float = 0.0
     # iter-045: mean character length of sentences submitted.
     mean_sentence_chars: float = 0.0
+    # iter-070: per-turn min/max sentence lengths.
+    min_sentence_chars: int = 0
+    max_sentence_chars: int = 0
     # iter-059: sentence-split coverage (0.0–1.0).
     sentence_split_coverage: float = 0.0
     # iter-046: bot speaking rate (words per minute).
@@ -328,6 +331,8 @@ def _run_scenario(
         eot_latency_ms=m.eot_latency * 1000,
         user_wpm=m.user_wpm,
         eot_overhead_ms=m.eot_overhead * 1000,
+        min_sentence_chars=m.min_sentence_chars,
+        max_sentence_chars=m.max_sentence_chars,
     )
     _record(res)
     return res
@@ -507,6 +512,8 @@ class TestPerfScenarios:
             eot_latency_ms=m.eot_latency * 1000,
             user_wpm=m.user_wpm,
             eot_overhead_ms=m.eot_overhead * 1000,
+            min_sentence_chars=m.min_sentence_chars,
+            max_sentence_chars=m.max_sentence_chars,
         )
         _record(res)
 

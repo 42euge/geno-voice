@@ -312,6 +312,13 @@ class ChatLoop:
         # + count separately so the average is computed once at end.
         sentence_chars_total = 0
         sentence_chars_count = 0
+        # iter-070: also track min/max for the per-turn range. Mean
+        # alone hides bimodal patterns ("Yes." + a 150-char sentence
+        # both look fine at mean=80). ``None`` for min until the
+        # first sentence so the first observation can land regardless
+        # of size.
+        sentence_min_chars: int | None = None
+        sentence_max_chars = 0
         # iter-059: split coverage — chars submitted as complete
         # sentences (overlap-friendly) vs the trailing remainder
         # forced through at end-of-stream (can't overlap).
@@ -337,6 +344,12 @@ class ChatLoop:
                 for sentence in complete:
                     sentence_chars_total += len(sentence)
                     sentence_chars_count += 1
+                    # iter-070: per-turn min/max range tracking.
+                    n = len(sentence)
+                    if sentence_min_chars is None or n < sentence_min_chars:
+                        sentence_min_chars = n
+                    if n > sentence_max_chars:
+                        sentence_max_chars = n
                     # iter-059: track complete-sentence chars
                     # separately to compute split coverage at end.
                     complete_sentence_chars += len(sentence)
@@ -349,6 +362,14 @@ class ChatLoop:
                 if remaining:
                     sentence_chars_total += len(remaining)
                     sentence_chars_count += 1
+                    # iter-070: include the trailing remainder in
+                    # range tracking — it's a real submitted unit
+                    # the worker has to synthesize.
+                    n = len(remaining)
+                    if sentence_min_chars is None or n < sentence_min_chars:
+                        sentence_min_chars = n
+                    if n > sentence_max_chars:
+                        sentence_max_chars = n
                     # iter-059: trailing remainder — can't overlap
                     # with anything (synth happens after stream done).
                     remainder_chars += len(remaining)
@@ -455,6 +476,15 @@ class ChatLoop:
                 metrics.mean_sentence_chars = (
                     sentence_chars_total / sentence_chars_count
                 )
+            # iter-070: per-turn min/max sentence lengths. Both
+            # default to 0; populating only when at least one
+            # sentence was submitted keeps the "no submissions"
+            # signal distinguishable from "all submissions had
+            # length 0" (which can't happen — empty sentences are
+            # filtered upstream).
+            if sentence_min_chars is not None:
+                metrics.min_sentence_chars = sentence_min_chars
+                metrics.max_sentence_chars = sentence_max_chars
             # iter-059: sentence-split coverage. Only meaningful
             # when at least some chars were submitted to the worker.
             total_submitted = complete_sentence_chars + remainder_chars

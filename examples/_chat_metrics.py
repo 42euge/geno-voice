@@ -130,6 +130,14 @@ class TurnMetrics:
     # in voice context lands ~50-100 chars / sentence. Metric 2.6
     # in the perf-metrics taxonomy.
     mean_sentence_chars: float = 0.0
+    # iter-070: min and max sentence length submitted this turn.
+    # The mean alone hides bimodal patterns ("Yes." + a 150-char
+    # sentence both look fine at mean=80). Range = max - min surfaces
+    # those — a wide range with a centered mean tells a different
+    # story than a narrow range. 0 on turns with no submissions.
+    # Metric 2.6 in the perf-metrics taxonomy (histogram form).
+    min_sentence_chars: int = 0
+    max_sentence_chars: int = 0
     # iter-059: fraction of LLM token chars submitted to the worker
     # as part of a complete sentence (terminator + whitespace) vs
     # flushed as the trailing remainder at end-of-stream. 1.0 = LLM
@@ -332,6 +340,16 @@ class TurnMetrics:
         # delaying TTFS).
         if self.mean_sentence_chars > 0:
             tts_suffix += f", avg {self.mean_sentence_chars:.0f} chars"
+            # iter-070: append range when min/max actually diverge.
+            # A wide range with a centered mean is the classic
+            # bimodal-fragmentation signal (one short interjection
+            # + one long sentence). Skip when min == max — adding
+            # "[X..X]" is just noise.
+            if (self.max_sentence_chars > self.min_sentence_chars
+                    and self.min_sentence_chars > 0):
+                tts_suffix += (
+                    f" [{self.min_sentence_chars}..{self.max_sentence_chars}]"
+                )
         # iter-059: split coverage as a percentage. Only emit on
         # turns where it's < 1.0 — a perfect 100% split is the
         # expected case and shouldn't clutter the line.
@@ -967,6 +985,25 @@ def print_session_summary(
         # iter-045: mean across the per-turn means.
         avg_chars = sum(sentence_lens) / len(sentence_lens)
         _emit(f"    Mean sentence:    {avg_chars:.0f} chars")
+        # iter-070: longest sentence observed across the session.
+        # >150 chars is "under-fragmented run-on" — delays TTFS
+        # because synth waits on the full sentence. Operator can
+        # spot a single bad turn that the mean alone hides.
+        longest = max(
+            (m.max_sentence_chars for m in metrics_list
+             if m.max_sentence_chars > 0),
+            default=0,
+        )
+        shortest = min(
+            (m.min_sentence_chars for m in metrics_list
+             if m.min_sentence_chars > 0),
+            default=0,
+        )
+        if longest > 0 and longest != shortest:
+            _emit(
+                f"    Sentence range:   "
+                f"[{shortest}..{longest}] chars (session)"
+            )
     if coverage_values:
         # iter-059: median split coverage across turns. <90% is a
         # signal the LLM isn't ending its responses with punctuation
