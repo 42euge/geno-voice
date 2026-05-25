@@ -6653,3 +6653,51 @@ Notes:
   - More auto-tuning recommendations following the iter-096
     pattern.
   - WER fixture (1.6) heavyweight iteration.
+
+## iter-097 — extract _emit_history_block helper
+
+**Branch:** iter-097-history-helper  **Commit:** 76d4e2e  **Date:** 2026-05-25
+
+Combines iter-077 context-tokens and iter-078 trim-events into a
+single `_emit_history_block` helper — both about conversation-
+history management (history grows → trim caps it). The two
+iter-blocks were inline-adjacent in `print_session_summary`;
+combining them into one helper reflects their semantic
+relationship.
+
+`HistoryStats` dataclass with 3 fields
+(`context_token_counts`, `trim_events`, `trim_messages_evicted`).
+Behavior-preserving: byte-for-byte identical output. The 1147
+prior tests pass unchanged.
+
+Tests (10 in `tests/unit/test_emit_history_block.py`):
+- `HistoryStats` defaults (empty / 0).
+- No-data → no emit.
+- Context tokens: 2-turn (median+max only, no growth), 3-turn
+  (growth line emits), negative growth.
+- Trim events: emit with ratio, omit when zero, steady-state
+  1.0/event.
+- Independence: trim can emit without context data.
+- Ordering: context → growth → trim.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **1157 passed, 1 skipped in 28s** (1147
+existing + 10 new).
+
+Notes:
+- **Seven block helpers extracted** so far: TTFS, Barge, Filler,
+  Errors, WPM, Sentence, History. `print_session_summary` is now
+  ~1230 lines (down from 1500 pre-iter-089). Cumulative -310
+  lines reduced.
+- The semantic-grouping pattern (combining adjacent related blocks
+  rather than one-per-iter-block) starts paying off — iter-077
+  and iter-078 share a dataclass call site, reducing the helper
+  overhead.
+- Next directions:
+  - Extract `_emit_recording_block` (iter-037 mic-stale + iter-048
+    VAD false-trigger + iter-074 bargeable + iter-057 primed
+    audio).
+  - More auto-tuning: context-tokens growth could recommend a
+    tighter `max_user_assistant` cap when trim_events stays at 0
+    despite measurable growth.
+  - WER fixture (1.6) heavyweight iteration.

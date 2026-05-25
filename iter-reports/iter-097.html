@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-096 — filler idle_threshold recommendation (auto-tuning)</title>
+<title>iter-097 — extract _emit_history_block helper</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,23 +168,17 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-095.html">← iter-095</a><a href="iter-097.html">iter-097 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-096 — filler idle_threshold recommendation (auto-tuning)</h1>
-<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+9</code> (total 1147)</span></div>
-</header><p><strong>Branch:</strong> iter-096-idle-recommend  <strong>Commit:</strong> dc600da  <strong>Date:</strong> 2026-05-25</p>
-<p>When filler false positives are firing, the FP-rate session line previously said &quot;tune idle_threshold up&quot; without a specific target. iter-096 computes a recommended value from the observed <code>llm_first_token</code> distribution and surfaces it inline:</p>
-<p>Filler FP rate:   2/4 (50%) — tune idle_threshold up to 1.2s</p>
-<p>Recommendation formula:</p>
-<p>recommended = max(current * 1.2, p75(first_token) + 100ms)</p>
-<p>Rounded to 1 decimal. The 1.2× current ensures a meaningful bump even when first-token times cluster near the existing threshold; the p75 + 100ms ensures we cover most real first-token waits while still firing fillers on the slow tail.</p>
-<p>Implementation:</p>
-<ul><li><code>SessionMeta</code> gains <code>idle_threshold: float = 0.0</code> (no legacy kwarg path — only flows through SessionMeta).</li><li><code>FillerStats</code> gains <code>recommended_idle_threshold: float = 0.0</code>.</li><li><code>print_session_summary</code> computes the recommendation when:<ul><li><code>filler_false_positives &gt; 0</code></li><li><code>meta.idle_threshold &gt; 0</code></li><li>At least 2 turns have measurable <code>llm_first_token</code></li></ul></li><li><code>_emit_filler_block</code> appends &quot;to N.Ns&quot; to the legacy &quot;tune up&quot; text when the recommendation is set.</li><li><code>mic_chat</code> passes <code>filler_idle_threshold</code> via SessionMeta.</li></ul>
-<p>Backwards-compat: when no recommendation is computed, the legacy &quot;tune idle_threshold up&quot; suffix is preserved unchanged. All 1138 prior tests pass.</p>
-<p>Tests (9 in <code>tests/unit/test_idle_threshold_recommend.py</code>):</p>
-<ul><li><code>FillerStats.recommended_idle_threshold</code> default zero.</li><li>Helper rendering: no recommendation → legacy suffix; non-zero → appended; no-FP → no FP-rate line at all (recommendation moot).</li><li>End-to-end via <code>print_session_summary</code>: no threshold → legacy text; with threshold + observations → 0.6s rendered; high first-token times → p75 path produces 2.1s; no first-token data → falls back to legacy; clean session → no FP line.</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>1147 passed, 1 skipped in 40s</strong> (1138 existing + 9 new).</p>
+<nav><a href="index.html">← Index</a><a href="iter-096.html">← iter-096</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-097 — extract _emit_history_block helper</h1>
+<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+10</code> (total 1157)</span></div>
+</header><p><strong>Branch:</strong> iter-097-history-helper  <strong>Commit:</strong> 76d4e2e  <strong>Date:</strong> 2026-05-25</p>
+<p>Combines iter-077 context-tokens and iter-078 trim-events into a single <code>_emit_history_block</code> helper — both about conversation- history management (history grows → trim caps it). The two iter-blocks were inline-adjacent in <code>print_session_summary</code>; combining them into one helper reflects their semantic relationship.</p>
+<p><code>HistoryStats</code> dataclass with 3 fields (<code>context_token_counts</code>, <code>trim_events</code>, <code>trim_messages_evicted</code>). Behavior-preserving: byte-for-byte identical output. The 1147 prior tests pass unchanged.</p>
+<p>Tests (10 in <code>tests/unit/test_emit_history_block.py</code>):</p>
+<ul><li><code>HistoryStats</code> defaults (empty / 0).</li><li>No-data → no emit.</li><li>Context tokens: 2-turn (median+max only, no growth), 3-turn (growth line emits), negative growth.</li><li>Trim events: emit with ratio, omit when zero, steady-state 1.0/event.</li><li>Independence: trim can emit without context data.</li><li>Ordering: context → growth → trim.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>1157 passed, 1 skipped in 28s</strong> (1147 existing + 10 new).</p>
 <p>Notes:</p>
-<ul><li>This is the <strong>second auto-tuning use of an instrumented metric</strong> after iter-093&#x27;s auto-aggressive splitter. iter-051 was a passive measurement (FP rate); iter-096 turns it into actionable advice (specific recommended value).</li><li>The recommendation is shown, not auto-applied — mid-session config mutation is too risky. Operator updates <code>config.local.yaml</code> for the next session and re-runs.</li><li>Pattern generalizes: <code>max_user_assistant</code> trim cap when growth is unbounded. the live preview when consistently misleading. when stdev grows large.<ul><li>iter-077 context tokens could recommend a tighter</li><li>iter-072 stt_preview_divergence could recommend disabling</li><li>iter-068 TTFS jitter could suggest investigating LLM endpoint</li></ul></li><li>Next directions: trigger, bargeable fraction). pattern.<ul><li>More extractions: <code>_emit_recording_block</code> (mic stale, false-</li><li>More auto-tuning recommendations following the iter-096</li><li>WER fixture (1.6) heavyweight iteration.</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-095.html">← iter-095</a><a href="iter-097.html">iter-097 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li><strong>Seven block helpers extracted</strong> so far: TTFS, Barge, Filler, Errors, WPM, Sentence, History. <code>print_session_summary</code> is now ~1230 lines (down from 1500 pre-iter-089). Cumulative -310 lines reduced.</li><li>The semantic-grouping pattern (combining adjacent related blocks rather than one-per-iter-block) starts paying off — iter-077 and iter-078 share a dataclass call site, reducing the helper overhead.</li><li>Next directions: VAD false-trigger + iter-074 bargeable + iter-057 primed audio). tighter <code>max_user_assistant</code> cap when trim_events stays at 0 despite measurable growth.<ul><li>Extract <code>_emit_recording_block</code> (iter-037 mic-stale + iter-048</li><li>More auto-tuning: context-tokens growth could recommend a</li><li>WER fixture (1.6) heavyweight iteration.</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-096.html">← iter-096</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>
