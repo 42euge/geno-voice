@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-098 — A/B perf scenarios for aggressive first-sentence splitter</title>
+<title>iter-099 — A/B perf scenarios for filler idle_threshold</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,25 +168,23 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-097.html">← iter-097</a><a href="iter-099.html">iter-099 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-098 — A/B perf scenarios for aggressive first-sentence splitter</h1>
+<nav><a href="index.html">← Index</a><a href="iter-098.html">← iter-098</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-099 — A/B perf scenarios for filler idle_threshold</h1>
 <div class="meta"></div>
-</header><p><strong>Goal:</strong> Validate iter-088&#x27;s TTFS-reducing claim with empirical numbers in the perf time-series chart, not just unit tests.</p>
-<p>iter-088 added the <code>aggressive_first_sentence</code> opt-in that slices the first sentence on a comma boundary (≥20 chars) instead of waiting for the period. The unit tests in <code>tests/unit/test_chat_helpers.py</code> verify the split behavior, and iter-093 added the auto-aggressive-on-stall trigger, but neither told the operator how much TTFS the splitter actually saves on a realistic long-preamble response. That number lives only in the perf suite.</p>
-<p><strong>Change:</strong> Two new perf scenarios driving the same long-preamble response twice — one with <code>aggressive_first_sentence=False</code>, one with <code>True</code>. The shared <code>_LONG_PREAMBLE</code> is structured exactly the way the splitter benefits most: a 41-char clause with a comma before the first period.</p>
-<pre class="code-block"><code>_LONG_PREAMBLE = (
-    &quot;Well let me think about this for a moment, &quot;
-    &quot;the answer is twelve. &quot;
-    &quot;And the reason is straightforward. &quot;
-    &quot;It just is.&quot;
-)</code></pre>
-<p><code>_run_scenario</code> grew one new kwarg (<code>aggressive_first_sentence</code>) that forwards directly to <code>ChatLoop.__init__</code>. No other plumbing changes — the existing rich <code>ScenarioResult</code> schema already captures TTFS, llm_first_sentence, and mean_sentence_chars.</p>
+</header><p><strong>Goal:</strong> Apply iter-098&#x27;s pair-scenario pattern to the filler <code>idle_threshold</code> (iter-011, sensitivity-tuned in iter-051, auto-recommended in iter-096) so the time-series chart can show how the threshold trades TTFS savings against false-positive filler fires.</p>
+<p><strong>Change:</strong> Two new perf scenarios driving the same slow-LLM response (per_token_delay=0.1) twice — one at the operator-default 0.6s threshold, one at the aggressive 0.15s threshold. Both share the existing <code>_FILLER_CLIP</code> (a 2048-sample constant tone) so the only variable is the threshold.</p>
+<pre class="code-block"><code>_FILLER_CLIP = (np.full(2048, 0.3, dtype=np.float32), [])
+
+def test_filler_threshold_default(self):    # 0.6s
+def test_filler_threshold_aggressive(self): # 0.15s</code></pre>
+<p>No plumbing changes needed — <code>_run_scenario</code> already accepts <code>fillers</code> + <code>idle_threshold</code> (added in iter-011 era).</p>
 <p><strong>Empirical A/B</strong> (this run, x86_64 Linux stub pipeline):</p>
-<table class="iter-table"><thead><tr><th>Metric</th><th>aggressive=False</th><th>aggressive=True</th><th>Δ</th></tr></thead><tbody><tr><td>TTFS</td><td>931.6 ms</td><td>891.1 ms</td><td>-40 ms</td></tr><tr><td>llm_first_sentence</td><td>131.0 ms</td><td>90.6 ms</td><td>-40 ms</td></tr><tr><td>mean_sentence_chars</td><td>36.3</td><td>27.0</td><td>-9</td></tr></tbody></table>
-<p>The mean_chars drop from 36→27 confirms the splitter actually fired (otherwise both columns would match). The TTFS savings matches the llm_first_sentence savings near-perfectly because synth + dispatch are deterministic in the stub pipeline — the only variable here is <em>when</em> the first complete fragment is handed to the worker.</p>
-<p>Verification: <code>python -m pytest tests/performance/ -q</code> → <strong>11 passed in 2.4s</strong> (was 9, +2 new). Full unit + integration suite: <code>tests/ --ignore=tests/performance --ignore=tests/test_session.py --ignore=tests/e2e -q</code> → <strong>1148 passed, 1 skipped</strong> (identical to main; the test_session.py + e2e errors are pre-existing audio- fixture infra issues, unrelated).</p>
+<table class="iter-table"><thead><tr><th>Metric</th><th>threshold=0.6 (default)</th><th>threshold=0.15 (aggressive)</th><th>Δ</th></tr></thead><tbody><tr><td>TTFS</td><td>1301.1 ms</td><td>950.3 ms</td><td>-351 ms</td></tr><tr><td>llm_first_token</td><td>100.1 ms</td><td>100.1 ms</td><td>0</td></tr><tr><td>last_filler_id</td><td>0 (no fire)</td><td>non-zero (fire)</td><td>—</td></tr></tbody></table>
+<p>The LLM TTFB is identical at 100ms in both runs (deterministic stub). The default 0.6s threshold sits <em>above</em> that TTFB, so the filler never triggers — TTFS is bounded by synth + first-sentence emission. The aggressive 0.15s threshold sits <em>below</em> the TTFB, so the filler fires while the LLM is still warming up — TTFS is bounded by the much faster filler-clip start.</p>
+<p>The 351ms savings is the entire LLM-warmup cost being masked. On a real LLM with 200-500ms TTFB the aggressive threshold would mask even more, but the operator pays for it with a filler clip on every turn (false-positive rate climbs as threshold falls).</p>
+<p>Verification: <code>python -m pytest tests/performance/ -q</code> → <strong>13 passed in 3.5s</strong> (was 11, +2 new). Full unit + integration suite: <code>tests/ --ignore=tests/performance --ignore=tests/test_session.py --ignore=tests/e2e -q</code> → <strong>1148 passed, 1 skipped</strong> (identical to main).</p>
 <p>Notes:</p>
-<ul><li><strong>Pattern: pair-scenarios for opt-in features.</strong> iter-088 + iter-093 are both opt-in flags. Adding paired scenarios (off vs on) on the <em>same</em> response gives a clean ratio that survives hardware-dependent absolute numbers — a 50% TTFS reduction reads the same on a M1 and a stub, even if the absolute ms differ.</li><li><strong>Future A/B candidates with the same shape:</strong> dominated by filler start vs LLM TTFB). response (per-token-delay &gt; threshold flips mid-stream). growth → LLM TTFB scaling).<ul><li>Filler <code>idle_threshold=0.6</code> vs <code>0.15</code> on a slow LLM (TTFS</li><li><code>auto_aggressive_threshold=0.0</code> vs <code>0.5</code> on a stalled</li><li><code>max_user_assistant=20</code> vs <code>5</code> on a long session (context</li></ul></li><li>Each pair adds 2 rows to the perf time-series; the chart generator already plots them as separate lines, so the visual comparison is free.</li><li>Next directions: sensitivity test).<ul><li>Pair scenarios for filler idle_threshold (iter-051</li><li>Extract <code>_emit_recording_block</code> (still pending from iter-097).</li><li>WER fixture (1.6) heavyweight iteration.</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-097.html">← iter-097</a><a href="iter-099.html">iter-099 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li><strong>Pair-scenario compounding.</strong> This is the second pair after iter-098. The pattern now has 2 instances and is starting to earn its keep — same data shape, same chart axes, same code path. A third pair (auto-aggressive threshold off vs on) would cement the pattern as the default.</li><li><strong>The TTFS difference is pure LLM-masking, not pipeline speedup.</strong> iter-098&#x27;s aggressive splitter cuts real synth+dispatch work; iter-099&#x27;s aggressive threshold just hides the LLM warmup behind a filler. The chart should label these distinctly so the operator doesn&#x27;t conflate them.</li><li><strong>iter-096 recommendation now has a calibration target.</strong> The session-summary line that recommends an <code>idle_threshold</code> value based on FP rate now has a perf-suite anchor: at 0.15s the filler fires deterministically on a 100ms TTFB. Future iter could grid-search threshold values across multiple TTFB shapes, picking the lowest threshold where FP rate &lt; 5%.</li><li><strong>Operational gotcha for live deployments:</strong> A 0.15s threshold on the live mic_chat path means <em>every</em> turn with a real LLM TTFB &gt; 150ms will fire a filler. That&#x27;s most turns. Operators who don&#x27;t want chatty fillers should keep the default 0.6s.</li><li>Next directions: off vs on with stalled LLM — third pair, validates iter-093 in the same way iter-098 validated iter-088. rate curve more precisely than a binary A/B.<ul><li>Pair scenario for <code>auto_aggressive_threshold</code> (iter-093)</li><li>Threshold grid-search (4-5 values) — would surface the FP</li><li>Extract <code>_emit_recording_block</code> (still pending from iter-097).</li><li>WER fixture (1.6) heavyweight iteration.</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-098.html">← iter-098</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>
