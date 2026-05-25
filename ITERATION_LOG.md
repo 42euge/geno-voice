@@ -5990,3 +5990,66 @@ Notes:
     refactor (perhaps nested dataclasses by phase: SttMetrics,
     LlmMetrics, TtsMetrics, BargeMetrics) would aid readability
     without changing the wire format.
+
+## iter-086 — SessionMeta dataclass refactor
+
+**Branch:** iter-086-session-meta  **Commit:** c91802e  **Date:** 2026-05-25
+
+`print_session_summary` had grown to take 5 session-level kwargs
+(`false_triggers`, `session_seconds`, `llm_errors`, `trim_events`,
+`trim_messages_evicted`), and each new session-level signal would
+extend the signature AND every call site.
+
+Refactor: wrap the 5 signals in a `SessionMeta` dataclass. Future
+session-level metrics extend the dataclass instead of the function
+signature. mic_chat now constructs SessionMeta and passes
+`meta=...`; `print_session_summary` prefers meta when given and
+falls back to legacy kwargs otherwise.
+
+Implementation:
+- New `SessionMeta` dataclass in `_chat_metrics.py`, defined right
+  above `print_session_summary`. Five fields mirror the existing
+  kwargs; all default to 0/0.0.
+- `print_session_summary` gained a `meta: Optional[SessionMeta] =
+  None` parameter. When provided, fields default-merge with legacy
+  kwargs (meta wins for any field it sets; kwargs fill gaps).
+- The legacy kwargs are still accepted — pure backwards-compat:
+  zero changes required for existing callers and tests.
+- mic_chat updated to use the SessionMeta path — single object
+  passed instead of 5 kwargs, future-proof against more
+  additions.
+
+Tests (8 in `tests/unit/test_session_meta.py`):
+- SessionMeta defaults are 0/0.0; constructor accepts all fields.
+- Legacy kwargs path produces correct output (regression cover).
+- Meta path produces output IDENTICAL to legacy — guards against
+  drift between the two equivalent code paths.
+- Partial meta (only some fields set) emits only those lines.
+- Mixed-mode (some via meta, some via legacy kwargs) merges
+  correctly: meta wins for fields it sets; kwargs fill gaps.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **1057 passed, 1 skipped in 25s** (1049
+existing + 8 new). Existing tests pass unchanged — backwards
+compat is real, not theoretical.
+
+Notes:
+- This is the second non-metric iteration after iter-075 (play_fn
+  kwargs refactor). The pattern of "extract growth to a dataclass
+  before the next addition forces the change" continues — both
+  iterations were preventive cleanup that reduces churn on
+  future additions.
+- The "produce output identical to legacy" test is the key
+  regression sentinel: if a future change introduces drift
+  between the two paths, the test catches it immediately rather
+  than silently letting one mode rot.
+- Next directions:
+  - Continue refactoring momentum: `print_session_summary` is
+    1500+ lines; extracting per-section helpers (TTFS block,
+    barge-in block, error block) would aid readability.
+  - WER (1.6) as the heavyweight remaining taxonomy entry — needs
+    ground-truth corpus + jiwer integration.
+  - Architecture: filler design improvements (multi-shot fillers
+    if first sentence still hasn't arrived after another idle
+    threshold), or aggressive first-sentence splitter (split on
+    comma for the first sentence to start synth earlier).
