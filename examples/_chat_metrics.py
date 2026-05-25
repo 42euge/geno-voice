@@ -1152,6 +1152,61 @@ def _emit_wpm_block(emit, stats: WpmStats) -> None:
 
 
 @dataclass
+class SentenceStats:
+    """iter-095: sentence-shape statistics consumed by
+    ``_emit_sentence_block``. Bundles three iter-045/070/059
+    signals tied to how the splitter chunked the LLM stream.
+
+    Fields:
+      ``sentence_lens`` (iter-045): per-turn mean sentence
+        character lengths (filtered to >0).
+      ``min_chars_seen`` (iter-070): shortest single sentence
+        across the session, or 0 if no measurable turns.
+      ``max_chars_seen`` (iter-070): longest single sentence
+        across the session, or 0 if no measurable turns.
+      ``coverage_values`` (iter-059): per-turn sentence-split
+        coverage ratios (filtered to >0).
+    """
+
+    sentence_lens: list = field(default_factory=list)
+    min_chars_seen: int = 0
+    max_chars_seen: int = 0
+    coverage_values: list = field(default_factory=list)
+
+
+def _emit_sentence_block(emit, stats: SentenceStats) -> None:
+    """iter-095: extracted from print_session_summary's sentence
+    section.
+
+    Renders:
+      - "Mean sentence: NN chars" (iter-045) when measurable.
+      - "Sentence range: [min..max] chars (session)" (iter-070)
+        when min != max.
+      - "Split coverage: NN%" (iter-059) when measurable.
+
+    Behavior-preserving: byte-for-byte identical to the inline
+    version that lived in print_session_summary.
+    """
+    if stats.sentence_lens:
+        # iter-045: mean across the per-turn means.
+        avg_chars = sum(stats.sentence_lens) / len(stats.sentence_lens)
+        emit(f"    Mean sentence:    {avg_chars:.0f} chars")
+        # iter-070: session-wide range. Skip when min == max
+        # (single observation, range degenerate).
+        if stats.max_chars_seen > 0 and stats.max_chars_seen != stats.min_chars_seen:
+            emit(
+                f"    Sentence range:   "
+                f"[{stats.min_chars_seen}..{stats.max_chars_seen}] chars (session)"
+            )
+    if stats.coverage_values:
+        # iter-059: median split coverage across turns. <90% is
+        # a signal the LLM isn't ending with punctuation often
+        # enough — system-prompt opportunity.
+        median_cov = statistics.median(stats.coverage_values) * 100
+        emit(f"    Split coverage:   {median_cov:.0f}%")
+
+
+@dataclass
 class SessionMeta:
     """iter-086: session-level signals collected by the driver
     (mic_chat) and passed into ``print_session_summary`` as a
@@ -1731,35 +1786,26 @@ def print_session_summary(
             f"({below_count}/{len(bargeable_values)} turns < 99%) — "
             f"watcher coverage regression"
         )
-    if sentence_lens:
-        # iter-045: mean across the per-turn means.
-        avg_chars = sum(sentence_lens) / len(sentence_lens)
-        _emit(f"    Mean sentence:    {avg_chars:.0f} chars")
-        # iter-070: longest sentence observed across the session.
-        # >150 chars is "under-fragmented run-on" — delays TTFS
-        # because synth waits on the full sentence. Operator can
-        # spot a single bad turn that the mean alone hides.
-        longest = max(
-            (m.max_sentence_chars for m in metrics_list
-             if m.max_sentence_chars > 0),
-            default=0,
-        )
-        shortest = min(
-            (m.min_sentence_chars for m in metrics_list
-             if m.min_sentence_chars > 0),
-            default=0,
-        )
-        if longest > 0 and longest != shortest:
-            _emit(
-                f"    Sentence range:   "
-                f"[{shortest}..{longest}] chars (session)"
-            )
-    if coverage_values:
-        # iter-059: median split coverage across turns. <90% is a
-        # signal the LLM isn't ending its responses with punctuation
-        # often enough — system-prompt opportunity.
-        median_cov = statistics.median(coverage_values) * 100
-        _emit(f"    Split coverage:   {median_cov:.0f}%")
+    # iter-095: sentence block extracted to _emit_sentence_block.
+    longest = max(
+        (m.max_sentence_chars for m in metrics_list
+         if m.max_sentence_chars > 0),
+        default=0,
+    )
+    shortest = min(
+        (m.min_sentence_chars for m in metrics_list
+         if m.min_sentence_chars > 0),
+        default=0,
+    )
+    _emit_sentence_block(
+        _emit,
+        SentenceStats(
+            sentence_lens=sentence_lens,
+            min_chars_seen=shortest,
+            max_chars_seen=longest,
+            coverage_values=coverage_values,
+        ),
+    )
     # iter-094: WPM block extracted to _emit_wpm_block helper.
     _emit_wpm_block(_emit, WpmStats(user_wpms=user_wpms, bot_wpms=bot_wpms))
     # iter-077: context size summary. The MEDIAN tells you the
