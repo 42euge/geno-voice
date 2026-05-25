@@ -4347,3 +4347,70 @@ Notes:
   without any terminator) that the false-positive cost is low.
 - Next candidates: 2.7 (worker queue depth — sampler daemon),
   2.14 (LLM stream cancel-to-close), 1.2 (EoT detection latency).
+
+---
+
+## iter-060 — LLM stream cancel-to-close metric (taxonomy 2.14)
+
+**Branch:** `iter-060-cancel-close` (merged ff to main, commit `e6280fc`)
+**Date:** 2026-05-24
+
+Twenty-second metric pulled from `docs/perf-metrics-taxonomy.md`.
+**Metric 2.14 — LLM stream cancel-to-close**, "Architecture-specific"
+bucket.
+
+    cancel_to_close = close_finished_at - coord.triggered_at
+
+Time from `BargeInCoordinator.trigger()` firing to `llm_gen.close()`
+returning. Only meaningful on barge turns. High values mean the
+upstream HTTP socket is taking a long time to wind down — wastes
+tokens we paid for and can block the next turn.
+
+Implementation:
+- `TurnMetrics.llm_cancel_to_close: float = 0.0` (new field).
+- ChatLoop's existing `finally` block (iter-013) already calls
+  `llm_gen.close()`. iter-060 wraps that with timestamps:
+  `close_started_at` / `close_finished_at` captured around the
+  call.
+- Field assigned **just before the post-`finally` success
+  return**, guarded by `coord.is_set()` AND `coord.triggered_at
+  is not None`. The except path returns inside the except block
+  before reaching this assignment, which is correct (no metrics
+  on error turns anyway).
+- Per-turn print: "LLM cancel: NNms (trigger → stream close)"
+  on barge turns when >0. Yellow >500ms.
+- Session summary: "Median LLM canc: NNms" filtered for >0.
+- `ScenarioResult.llm_cancel_to_close_ms` on perf snapshots.
+
+Tests (12 in `tests/unit/test_llm_cancel_close.py`):
+- Default 0.
+- Per-turn print: zero / non-zero / high-value cases.
+- Session aggregate: no-data / with-data / zero-filter.
+- ChatLoop wires: clean turn yields 0; deterministic barge scenario
+  yields >0 when barge landed.
+- Arithmetic boundaries: tiny gap, slow gap, negative gap clamps to 0
+  (defensive — shouldn't happen but documents the contract).
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **768 passed, 1 skipped in 23s** (756 existing
++ 12 new).
+
+Notes:
+- **Twenty-two metrics live (48% of the 46-metric taxonomy).**
+- The barge-in dimension is now exhaustively measured (six
+  orthogonal lenses):
+  - `barge_in` — fired or not
+  - `barge_in_phase` — LLM-stream vs playback
+  - `barge_in_latency` — detect → halt
+  - `sentences_cancelled` — mid-stream cuts
+  - `barge_in_regret` — bot pre-empted user
+  - **`llm_cancel_to_close`** — HTTP socket wind-down ← iter-060
+- Subtle code structure note: instrumenting in `finally` while
+  using on the success path required careful flow analysis. The
+  except path returns inside except (before reaching the post-
+  finally code that uses the timestamp); on success, the finally
+  runs first and stages the timestamp, then the post-finally
+  code reads + assigns. Captured in test_clamping which documents
+  the contract.
+- Next candidates: 2.7 (worker queue depth), 2.8 (speaker open
+  overhead), 1.5 (VAD missed-speech rate — needs ground truth).

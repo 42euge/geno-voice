@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-059 — sentence-split coverage metric (taxonomy 2.5)</title>
+<title>iter-060 — LLM stream cancel-to-close metric (taxonomy 2.14)</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,23 +168,20 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-058.html">← iter-058</a><a href="iter-060.html">iter-060 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-059 — sentence-split coverage metric (taxonomy 2.5)</h1>
-<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-059-split-coverage</code></span> · <span>commit: <code>1308417</code></span> · <span>tests: <code>+10</code> (total 756)</span></div>
-</header><p><strong>Branch:</strong> <code>iter-059-split-coverage</code> (merged ff to main, commit <code>1308417</code>) <strong>Date:</strong> 2026-05-24</p>
-<p>Twenty-first metric pulled from <code>docs/perf-metrics-taxonomy.md</code>. <strong>Metric 2.5 — Sentence-split coverage</strong>, &quot;Architecture-specific&quot; bucket.</p>
-<p>coverage = complete_sentence_chars / (complete + remainder)</p>
-<p>Range [0, 1]:</p>
-<ul><li><strong>1.0</strong>: LLM always ended responses with punctuation. Every char went to the worker as a complete sentence — fully overlap-friendly.</li><li><strong>0.5</strong>: half the chars came as remainder.</li><li><strong>0.0</strong>: LLM produced fragments only; all chars flushed as remainder.</li></ul>
-<p>Why it matters: the trailing remainder is the <code>worker.submit()</code> that happens AFTER <code>llm_stream_done_at</code>. There&#x27;s nothing for streaming overlap (iter-043&#x27;s metric) to pair with — the worker synthesizes that final piece while the user waits. High remainder share is operational waste of the iter-008 streaming-overlap design.</p>
+<nav><a href="index.html">← Index</a><a href="iter-059.html">← iter-059</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-060 — LLM stream cancel-to-close metric (taxonomy 2.14)</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-060-cancel-close</code></span> · <span>commit: <code>e6280fc</code></span> · <span>tests: <code>+12</code> (total 768)</span></div>
+</header><p><strong>Branch:</strong> <code>iter-060-cancel-close</code> (merged ff to main, commit <code>e6280fc</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>Twenty-second metric pulled from <code>docs/perf-metrics-taxonomy.md</code>. <strong>Metric 2.14 — LLM stream cancel-to-close</strong>, &quot;Architecture-specific&quot; bucket.</p>
+<p>cancel_to_close = close_finished_at - coord.triggered_at</p>
+<p>Time from <code>BargeInCoordinator.trigger()</code> firing to <code>llm_gen.close()</code> returning. Only meaningful on barge turns. High values mean the upstream HTTP socket is taking a long time to wind down — wastes tokens we paid for and can block the next turn.</p>
 <p>Implementation:</p>
-<ul><li><code>TurnMetrics.sentence_split_coverage: float = 0.0</code> (new field).</li><li>ChatLoop tracks <code>complete_sentence_chars</code> and <code>remainder_chars</code> separately, in addition to iter-045&#x27;s <code>sentence_chars_total</code> accumulator. Computes coverage when total &gt; 0.</li><li>Per-turn print: appends <code>, N% complete</code> to TTS suffix only when <code>0 &lt; coverage &lt; 1.0</code>. Perfect 100% (the expected case) doesn&#x27;t clutter the line.</li><li>Session summary: <code>Split coverage: N%</code> (median over turns where &gt;0).</li><li><code>ScenarioResult.sentence_split_coverage</code> on perf snapshots.</li></ul>
-<p>Tests (10 in <code>tests/unit/test_split_coverage.py</code>):</p>
-<ul><li>Default 0.</li><li>Per-turn print: perfect / zero / partial cases.</li><li>Session aggregate: no-data / with-data / zero-filter.</li><li>ChatLoop arithmetic:<ul><li><code>&quot;Hello world. &quot;</code> → 100% (clean terminator).</li><li><code>&quot;fragment without terminator&quot;</code> → 0% (all flushed as remainder).</li><li><code>&quot;Done. trailing&quot;</code> → 5/13 ≈ 38% (one complete + remainder).</li></ul></li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>756 passed, 1 skipped in 23s</strong> (746 existing + 10 new).</p>
+<ul><li><code>TurnMetrics.llm_cancel_to_close: float = 0.0</code> (new field).</li><li>ChatLoop&#x27;s existing <code>finally</code> block (iter-013) already calls <code>llm_gen.close()</code>. iter-060 wraps that with timestamps: <code>close_started_at</code> / <code>close_finished_at</code> captured around the call.</li><li>Field assigned **just before the post-<code>finally</code> success return**, guarded by <code>coord.is_set()</code> AND `coord.triggered_at is not None`. The except path returns inside the except block before reaching this assignment, which is correct (no metrics on error turns anyway).</li><li>Per-turn print: &quot;LLM cancel: NNms (trigger → stream close)&quot; on barge turns when &gt;0. Yellow &gt;500ms.</li><li>Session summary: &quot;Median LLM canc: NNms&quot; filtered for &gt;0.</li><li><code>ScenarioResult.llm_cancel_to_close_ms</code> on perf snapshots.</li></ul>
+<p>Tests (12 in <code>tests/unit/test_llm_cancel_close.py</code>):</p>
+<ul><li>Default 0.</li><li>Per-turn print: zero / non-zero / high-value cases.</li><li>Session aggregate: no-data / with-data / zero-filter.</li><li>ChatLoop wires: clean turn yields 0; deterministic barge scenario yields &gt;0 when barge landed.</li><li>Arithmetic boundaries: tiny gap, slow gap, negative gap clamps to 0 (defensive — shouldn&#x27;t happen but documents the contract).</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>768 passed, 1 skipped in 23s</strong> (756 existing + 12 new).</p>
 <p>Notes:</p>
-<ul><li><strong>Twenty-one metrics live (46% of the 46-metric taxonomy).</strong> Half the wishlist down. The tail metrics will be progressively harder (need new instrumentation, ablation studies, or external ground truth).</li><li>Combined with iter-043 (overlap ratio) and iter-038 (TTFsent), the streaming-overlap story is now fully observable: how much was the LLM keeping up (TTFsent), how much overlap actually happened (overlap ratio), and how much did the splitter waste via remainder (split coverage).</li><li>The 0.0 default ambiguity (&quot;no chars submitted&quot; vs &quot;all remainder&quot;) is documented in the test. In practice the session aggregate&#x27;s &gt;0 filter handles the no-chars case cleanly; the all-remainder case is rare enough (LLM yielding raw fragments without any terminator) that the false-positive cost is low.</li><li>Next candidates: 2.7 (worker queue depth — sampler daemon), 2.14 (LLM stream cancel-to-close), 1.2 (EoT detection latency).</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-058.html">← iter-058</a><a href="iter-060.html">iter-060 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li><strong>Twenty-two metrics live (48% of the 46-metric taxonomy).</strong></li><li>The barge-in dimension is now exhaustively measured (six orthogonal lenses):<ul><li><code>barge_in</code> — fired or not</li><li><code>barge_in_phase</code> — LLM-stream vs playback</li><li><code>barge_in_latency</code> — detect → halt</li><li><code>sentences_cancelled</code> — mid-stream cuts</li><li><code>barge_in_regret</code> — bot pre-empted user</li><li><strong><code>llm_cancel_to_close</code></strong> — HTTP socket wind-down ← iter-060</li></ul></li><li>Subtle code structure note: instrumenting in <code>finally</code> while using on the success path required careful flow analysis. The except path returns inside except (before reaching the post- finally code that uses the timestamp); on success, the finally runs first and stages the timestamp, then the post-finally code reads + assigns. Captured in test_clamping which documents the contract.</li><li>Next candidates: 2.7 (worker queue depth), 2.8 (speaker open overhead), 1.5 (VAD missed-speech rate — needs ground truth).</li></ul><nav><a href="index.html">← Index</a><a href="iter-059.html">← iter-059</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>
