@@ -17,7 +17,7 @@ for proper even-length handling.
 from __future__ import annotations
 
 import statistics
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 # ANSI codes — duplicated from mic_chat so this module remains a
@@ -856,6 +856,120 @@ def _emit_ttfs_block(
 
 
 @dataclass
+class BargeStats:
+    """iter-090: aggregated barge-in counters and latency lists
+    consumed by ``_emit_barge_block``. Bundling them into a
+    dataclass keeps the helper signature stable as more barge-
+    side metrics arrive — each new metric extends the dataclass.
+
+    Fields mirror the names in ``print_session_summary``'s body:
+      ``barges_total`` (iter-019): count of barge_in turns.
+      ``mid_cancels`` (iter-040): barges where a sentence was
+        cut mid-stream.
+      ``n`` (iter-019): total completed turns — denominator for
+        the iter-069 interruption rate.
+      ``barge_latencies`` (iter-041): per-turn detect→halt latencies.
+      ``cancel_close_lats`` (iter-060): trigger→stream-close gaps.
+      ``llm_phase_barges`` / ``playback_phase_barges`` (iter-047):
+        phase-distribution counters.
+      ``regret_barges`` (iter-056): barges firing within 200ms of
+        first audio.
+      ``preempted_total`` (iter-080): cumulative words pre-empted
+        by mid-content barges.
+      ``barge_turns_with_loss`` (iter-080): barges that lost
+        content (vs clean cuts between sentences).
+    """
+
+    barges_total: int = 0
+    mid_cancels: int = 0
+    n: int = 0
+    barge_latencies: list = field(default_factory=list)
+    cancel_close_lats: list = field(default_factory=list)
+    llm_phase_barges: int = 0
+    playback_phase_barges: int = 0
+    regret_barges: int = 0
+    preempted_total: int = 0
+    barge_turns_with_loss: int = 0
+
+
+def _emit_barge_block(emit, stats: BargeStats) -> None:
+    """iter-090: extracted from print_session_summary's barge block.
+
+    Renders all barge-in session-summary lines:
+      - Barge-ins: count + mid-stream % (iter-040).
+      - Interruption rate: barges/turns (iter-069).
+      - Median + worst barge latency (iter-041).
+      - Median LLM cancel-to-close (iter-060).
+      - Phase distribution (iter-047).
+      - Regret rate (iter-056).
+      - Pre-empted words total (iter-080).
+
+    Behavior-preserving: byte-for-byte identical to the inline
+    version. ``emit`` is the same callable used by
+    ``print_session_summary``.
+    """
+    if stats.barges_total <= 0:
+        return
+
+    # iter-040: count + mid-stream % vs cleanly-between-sentences.
+    if stats.mid_cancels:
+        pct = (stats.mid_cancels / stats.barges_total) * 100
+        emit(
+            f"    Barge-ins:        {stats.barges_total} "
+            f"({stats.mid_cancels} mid-stream, {pct:.0f}%)"
+        )
+    else:
+        emit(
+            f"    Barge-ins:        {stats.barges_total} "
+            f"(all between sentences)"
+        )
+    # iter-069: interruption rate as fraction of total turns.
+    if stats.n > 0:
+        int_pct = (stats.barges_total / stats.n) * 100
+        emit(
+            f"    Interruption rate: "
+            f"{stats.barges_total}/{stats.n} turns ({int_pct:.0f}%)"
+        )
+    # iter-041: median + worst barge-in latency.
+    if stats.barge_latencies:
+        emit(f"    Median barge:     {_median_ms(stats.barge_latencies):.0f}ms")
+        emit(
+            f"    Worst barge:      "
+            f"{max(stats.barge_latencies) * 1000:.0f}ms"
+        )
+    # iter-060: median LLM cancel-to-close across barge turns.
+    if stats.cancel_close_lats:
+        emit(
+            f"    Median LLM canc:  "
+            f"{_median_ms(stats.cancel_close_lats):.0f}ms"
+        )
+    # iter-047: phase distribution.
+    if stats.llm_phase_barges or stats.playback_phase_barges:
+        emit(
+            f"    Barge phases:     "
+            f"{stats.llm_phase_barges} LLM-stream, "
+            f"{stats.playback_phase_barges} playback"
+        )
+    # iter-056: regret rate.
+    if stats.regret_barges:
+        pct = (stats.regret_barges / stats.barges_total) * 100
+        emit(
+            f"    Regret rate:      "
+            f"{stats.regret_barges}/{stats.barges_total} ({pct:.0f}%) "
+            f"— bot may be pre-empting; raise silence_duration"
+        )
+    # iter-080: total words pre-empted across barge turns.
+    if stats.preempted_total > 0:
+        avg = stats.preempted_total / max(stats.barge_turns_with_loss, 1)
+        emit(
+            f"    Pre-empted words: "
+            f"{stats.preempted_total} total "
+            f"({stats.barge_turns_with_loss}/{stats.barges_total} barges, "
+            f"{avg:.0f} avg/loss)"
+        )
+
+
+@dataclass
 class SessionMeta:
     """iter-086: session-level signals collected by the driver
     (mic_chat) and passed into ``print_session_summary`` as a
@@ -1333,82 +1447,26 @@ def print_session_summary(
                 f"{unique_count} unique / {fillers_total} "
                 f"({novelty_pct:.0f}%)"
             )
-    if barges_total:
-        if mid_cancels:
-            pct = (mid_cancels / barges_total) * 100
-            _emit(
-                f"    Barge-ins:        {barges_total} "
-                f"({mid_cancels} mid-stream, {pct:.0f}%)"
-            )
-        else:
-            _emit(
-                f"    Barge-ins:        {barges_total} "
-                f"(all between sentences)"
-            )
-        # iter-069: interruption rate as a fraction of total turns.
-        # Distinct from the mid-stream % above (denominator is total
-        # barges, not turns). Industry single-number UX KPI: "what
-        # fraction of bot turns did the user feel they had to
-        # interrupt." High = bot is too verbose, slow, or wrong.
-        # Low = bot is well-tuned for this user. Metric 1.18 in the
-        # perf-metrics taxonomy.
-        if n > 0:
-            int_pct = (barges_total / n) * 100
-            _emit(
-                f"    Interruption rate: "
-                f"{barges_total}/{n} turns ({int_pct:.0f}%)"
-            )
-        # iter-041: median + worst barge-in latency. Useful for
-        # tuning the watcher's poll interval and the worker cancel
-        # path. >200ms median is a reliable "feels broken" signal.
-        if barge_latencies:
-            _emit(
-                f"    Median barge:     {_median_ms(barge_latencies):.0f}ms"
-            )
-            _emit(
-                f"    Worst barge:      "
-                f"{max(barge_latencies) * 1000:.0f}ms"
-            )
-        # iter-060: median LLM cancel-to-close across barge turns.
-        # >500ms median is a reliable "HTTP socket hangs."
-        if cancel_close_lats:
-            _emit(
-                f"    Median LLM canc:  "
-                f"{_median_ms(cancel_close_lats):.0f}ms"
-            )
-        # iter-047: phase distribution. Only show when at least one
-        # phase value was set; gives root-cause hint:
-        #   high LLM-phase = users impatient with TTFS — fix LLM TTFT.
-        #   high playback-phase = bot output is verbose / wrong —
-        #     fix system prompt or response quality.
-        if llm_phase_barges or playback_phase_barges:
-            _emit(
-                f"    Barge phases:     "
-                f"{llm_phase_barges} LLM-stream, "
-                f"{playback_phase_barges} playback"
-            )
-        # iter-056: regret rate. High = end-of-turn detection
-        # misjudges; consider raising silence_duration.
-        if regret_barges:
-            pct = (regret_barges / barges_total) * 100
-            _emit(
-                f"    Regret rate:      "
-                f"{regret_barges}/{barges_total} ({pct:.0f}%) "
-                f"— bot may be pre-empting; raise silence_duration"
-            )
-        # iter-080: total words pre-empted across barge turns.
-        # Useful denominator: barge_turns_with_loss / barges_total
-        # tells you what fraction of barges happened mid-content
-        # (vs cleanly between sentences). High mid-content fraction
-        # paired with high preempted_total = bot was being verbose.
-        if preempted_total > 0:
-            avg = preempted_total / max(barge_turns_with_loss, 1)
-            _emit(
-                f"    Pre-empted words: "
-                f"{preempted_total} total "
-                f"({barge_turns_with_loss}/{barges_total} barges, "
-                f"{avg:.0f} avg/loss)"
-            )
+    # iter-090: barge block extracted to _emit_barge_block helper.
+    # ~76 lines of co-emitted lines (count, interruption rate,
+    # latency, phase distribution, regret, pre-empted words)
+    # collapsed into one call. Behavior-preserving: byte-for-byte
+    # identical to the inline version.
+    _emit_barge_block(
+        _emit,
+        BargeStats(
+            barges_total=barges_total,
+            mid_cancels=mid_cancels,
+            n=n,
+            barge_latencies=barge_latencies,
+            cancel_close_lats=cancel_close_lats,
+            llm_phase_barges=llm_phase_barges,
+            playback_phase_barges=playback_phase_barges,
+            regret_barges=regret_barges,
+            preempted_total=preempted_total,
+            barge_turns_with_loss=barge_turns_with_loss,
+        ),
+    )
     # iter-057: total seconds of audio carried over by the watcher
     # via primed_frames. Report regardless of whether we computed
     # the barge-block above (the metric is technically only set on
