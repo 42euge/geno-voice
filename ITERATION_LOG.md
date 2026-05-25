@@ -3972,3 +3972,55 @@ Notes:
 - Next candidates: 1.15 (turn count + session length — derive in
   print_session_summary), 2.7 (worker queue depth — needs a
   sampler daemon), 3.2 (conversation rhythm score).
+
+---
+
+## iter-054 — session length + turns/min metric (taxonomy 1.15)
+
+**Branch:** `iter-054-session-len` (merged ff to main, commit `4ea23cf`)
+**Date:** 2026-05-24
+
+Sixteenth metric pulled from `docs/perf-metrics-taxonomy.md`.
+**Metric 1.15 — Turn count + session length**, "Standard" bucket.
+
+The taxonomy describes this as a "denominator metric" — useful
+not for its own value, but as the basis for normalizing any rate
+metric (e.g. "false triggers per minute" rather than just "N
+false triggers" — the rate is comparable across sessions of
+different lengths).
+
+Implementation:
+- `print_session_summary` gains `session_seconds: float = 0.0`
+  kwarg (back-compat default).
+- Header changes: `"Session Summary (3 turns)"` →
+  `"Session Summary (3 turns over 4m 30s)"` when seconds known.
+- Human-readable duration formatting:
+  - `<60s` → `Ns`
+  - `<1h` → `Mm` or `Mm Ns`
+  - `≥1h` → `Hh Mm`
+- New `Turns/min: N.N` line emitted when `session_seconds >= 1.0`
+  AND there are completed turns (avoids divide-by-tiny on test-
+  shaped sessions).
+- `mic_chat.run_chat` tracks `session_start = time.monotonic()`
+  at session entry; passes `(now - session_start)` on the
+  KeyboardInterrupt summary call.
+
+Tests (11 in `tests/unit/test_session_length.py`):
+- Header duration formatting across all four shape ranges
+  (omitted, sub-minute, round-minutes, minutes+seconds, hours).
+- Turns/min: omitted when not measurable, computed at common
+  rates, edge case of empty metrics_list (early-return takes
+  precedence over the rate line).
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **704 passed, 1 skipped in 24s** (693
+existing + 11 new). **Crossed the 700-test mark.**
+
+Notes:
+- Sixteen metrics live (35% of the 46-metric taxonomy).
+- The denominator-metric pattern unlocks future iters: anything
+  like "barges/min" or "FP/min" can now use `session_seconds`
+  as the timebase.
+- Session header now reads:
+  `Session Summary (3 turns over 5m 22s)`
+  followed by `Turns/min: 0.6`. Concrete and immediately scannable.
