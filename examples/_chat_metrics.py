@@ -112,6 +112,17 @@ class TurnMetrics:
     # perf-metrics taxonomy.
     worker_idle_gap_total: float = 0.0
     ttfs: float = 0.0
+    # iter-076: TTFS attribution residual — the part of TTFS not
+    # already accounted for by stt_time + llm_first_sentence.
+    # Captures everything from "first complete sentence reached
+    # the worker" through "first audio chunk played": synth time,
+    # speaker open, queue dispatch, audio device buffering.
+    # Computed as ``max(0, ttfs - stt_time - llm_first_sentence)``;
+    # the clamp is defensive against tiny clock-skew negatives.
+    # Combined with stt_time + llm_first_sentence, the three terms
+    # decompose TTFS into a 100% breakdown. Metric 2.22 in the
+    # perf-metrics taxonomy.
+    synth_dispatch_seconds: float = 0.0
     # iter-053: TTFS bucketed against the human-conversation
     # sweet spot. "rushed" (<200ms): bot interrupted natural
     # turn-taking pause; "natural" (200-400ms): matches human
@@ -599,6 +610,28 @@ class TurnMetrics:
             f"{ttfs_color}{self.ttfs*1000:>7.0f}ms{_RESET}  "
             f"(speech stop → speaker{bucket_tag})"
         )
+        # iter-076: TTFS attribution breakdown. Decompose into
+        # STT / LLM-to-first-sentence / synth+dispatch percentages.
+        # Skip when ttfs == 0 (no audio played) or when the
+        # underlying parts aren't measurable. The percentages can
+        # be slightly off-100 due to small floating-point
+        # residuals; render as floored integers so the visible
+        # sum stays ≤ 100.
+        if (
+            self.ttfs > 0
+            and self.stt_time > 0
+            and self.llm_first_sentence > 0
+            and self.synth_dispatch_seconds > 0
+        ):
+            stt_pct = int(self.stt_time / self.ttfs * 100)
+            llm_pct = int(self.llm_first_sentence / self.ttfs * 100)
+            synth_pct = int(self.synth_dispatch_seconds / self.ttfs * 100)
+            print(
+                f"  {_DIM}│{_RESET}  Attribution:   "
+                f"{_DIM}STT {stt_pct}% + "
+                f"LLM {llm_pct}% + "
+                f"synth {synth_pct}%{_RESET}"
+            )
         total_color = _GREEN if self.total_e2e < 6.0 else _YELLOW
         print(
             f"  {_DIM}└─{_RESET} {_BOLD}Total turn:{_RESET}      "
@@ -767,6 +800,16 @@ def print_session_summary(
         m.first_synth_overlap_seconds
         for m in metrics_list
         if m.first_synth_overlap_seconds > 0
+    ]
+    # iter-076: TTFS attribution percentages across turns where all
+    # three legs are measurable. Stored as ratios in [0, 1]; we'll
+    # render the medians as ints in the emit block.
+    attribution_turns = [
+        m for m in metrics_list
+        if m.ttfs > 0
+        and m.stt_time > 0
+        and m.llm_first_sentence > 0
+        and m.synth_dispatch_seconds > 0
     ]
     # iter-074: bargeable-time fractions across turns where audio
     # actually played (>0 in the field). The interesting statistic
@@ -1121,6 +1164,28 @@ def print_session_summary(
     if first_overlap_secs:
         med_save_ms = statistics.median(first_overlap_secs) * 1000
         _emit(f"    1st-synth saved:  {med_save_ms:.0f}ms median")
+    # iter-076: TTFS attribution medians. Tells the operator at
+    # session-summary glance which pipeline leg dominates: high
+    # STT% means transcription latency, high LLM% means first-
+    # sentence wait (preamble or low TPS), high synth% means
+    # TTS or dispatch overhead.
+    if attribution_turns:
+        stt_pcts = [
+            m.stt_time / m.ttfs for m in attribution_turns
+        ]
+        llm_pcts = [
+            m.llm_first_sentence / m.ttfs for m in attribution_turns
+        ]
+        synth_pcts = [
+            m.synth_dispatch_seconds / m.ttfs for m in attribution_turns
+        ]
+        med_stt = int(statistics.median(stt_pcts) * 100)
+        med_llm = int(statistics.median(llm_pcts) * 100)
+        med_synth = int(statistics.median(synth_pcts) * 100)
+        _emit(
+            f"    TTFS breakdown:   "
+            f"STT {med_stt}% + LLM {med_llm}% + synth {med_synth}%"
+        )
     # iter-074: bargeable-time fraction summary. Emit ONLY when at
     # least one turn dropped below the healthy threshold — clean
     # sessions don't need the line, but a regression should be

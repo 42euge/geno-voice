@@ -447,6 +447,22 @@ class ChatLoop:
                     metrics.naturalness_bucket = "natural"
                 else:
                     metrics.naturalness_bucket = "slow"
+                # iter-076: TTFS attribution residual = ttfs minus
+                # the stt and LLM-to-first-sentence terms. Captures
+                # everything from "first complete sentence reached
+                # the worker" through "first audio chunk played":
+                # synth, queue dispatch, audio device buffering.
+                # Defensively clamps negative residuals (which
+                # would mean parts add to more than the whole —
+                # only happens via microsecond clock-skew between
+                # the recorder and loop clocks).
+                llm_first_sent_local = (
+                    (first_sentence_at - llm_start) if first_sentence_at else 0.0
+                )
+                metrics.synth_dispatch_seconds = max(
+                    0.0,
+                    metrics.ttfs - stt_time - llm_first_sent_local,
+                )
             metrics.llm_first_token = (
                 (first_token_at - llm_start) if first_token_at else 0
             )
