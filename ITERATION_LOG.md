@@ -4663,3 +4663,68 @@ Notes:
   — almost free given iter-063's groundwork), 1.6 (WER, needs
   ground truth corpus), 1.20 (cold-start latency penalty: turn-1
   TTFS minus median of remaining turns).
+
+## iter-065 — VAD trailing-silence wall metric (taxonomy 1.3)
+
+**Branch:** iter-065-eot-overhead  **Commit:** 36569ba  **Date:** 2026-05-24
+
+Added `eot_overhead = max(0, eot_latency - silence_duration_used)`.
+Decomposes the EoT wait into:
+- "knob-budget" — the configured `silence_duration` (what we
+  asked for).
+- "implementation overhead" — chunk granularity + processing time
+  on top.
+
+The decomposition tells the operator which lever to pull when EoT
+latency is too high:
+- Overhead ≈ 0 → the wait is fully explained by the knob; lower
+  `chat.vad.silence_duration` (default 0.8s).
+- Overhead > 100ms → something else in the recording loop is slow;
+  tuning the knob won't help.
+
+Implementation:
+- `TurnMetrics.eot_overhead: float = 0.0` (new field).
+- ChatLoop computes immediately after `metrics.eot_latency` is
+  populated:
+  ```python
+  if metrics.eot_latency > 0:
+      metrics.eot_overhead = max(
+          0.0, metrics.eot_latency - self._silence_duration
+      )
+  ```
+  The `max(0, ...)` clamps a rare off-by-one between
+  `last_speech_at` (the actual last in-speech frame) and VadState's
+  silence-window start (the first sub-threshold frame, one chunk
+  later).
+- Per-turn print: appends "+NNms overhead" to the EoT line when
+  > 10ms (above chunk-granularity noise). Yellow when >100ms.
+- Session summary: "EoT overhead: NNms (above silence_duration)"
+  emitted only when at least one turn showed real overhead.
+- `ScenarioResult.eot_overhead_ms` on perf snapshots.
+
+Tests (12 in `tests/unit/test_eot_overhead.py`):
+- Default zero.
+- Per-turn print: zero / sub-chunk-noise (≤10ms) / real overhead /
+  high overhead / no-EoT-line edge case.
+- Session aggregate: no-overhead omitted, present emits median,
+  sub-chunk filtered.
+- ChatLoop arithmetic: clamps at zero (off-by-one tolerance);
+  always ≤ eot_latency by definition; eot_latency=0 turns leave
+  overhead at default.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **831 passed, 1 skipped in 23s** (819 existing
++ 12 new).
+
+Notes:
+- **Twenty-seven metrics live (59% of the 46-metric taxonomy.)**
+- The recording-side latency story is now fully decomposed:
+  speech_duration (user actually talking) + eot_latency (VAD wait)
+  + stt_time (transcription) — and within eot_latency,
+  silence_duration_used (knob) + eot_overhead (implementation).
+  Any future regression in the recording path will surface in
+  exactly one of those terms.
+- Next candidates: 1.20 (cold-start latency penalty: turn-1 TTFS
+  minus median of remaining turns), 2.15 (worker error-recovery
+  success: turns where worker.errors is non-empty but ttfs > 0 —
+  silent partial degradation), 1.6 (WER, needs ground truth corpus).
