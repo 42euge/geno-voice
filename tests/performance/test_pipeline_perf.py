@@ -121,6 +121,8 @@ class ScenarioResult:
     worker_idle_gap_ms: float = 0.0
     # iter-045: mean character length of sentences submitted.
     mean_sentence_chars: float = 0.0
+    # iter-059: sentence-split coverage (0.0–1.0).
+    sentence_split_coverage: float = 0.0
     # iter-046: bot speaking rate (words per minute).
     bot_wpm: float = 0.0
     wall_ms: float = 0.0          # full run_one_turn wall-clock
@@ -300,6 +302,7 @@ def _run_scenario(
         streaming_overlap_ratio=m.streaming_overlap_ratio,
         worker_idle_gap_ms=m.worker_idle_gap_total * 1000,
         mean_sentence_chars=m.mean_sentence_chars,
+        sentence_split_coverage=m.sentence_split_coverage,
         bot_wpm=m.bot_wpm,
         wall_ms=wall * 1000,
         barge_in=m.barge_in,
@@ -472,6 +475,7 @@ class TestPerfScenarios:
         streaming_overlap_ratio=m.streaming_overlap_ratio,
         worker_idle_gap_ms=m.worker_idle_gap_total * 1000,
         mean_sentence_chars=m.mean_sentence_chars,
+        sentence_split_coverage=m.sentence_split_coverage,
         bot_wpm=m.bot_wpm,
             wall_ms=wall * 1000,
             barge_in=m.barge_in,

@@ -123,6 +123,15 @@ class TurnMetrics:
     # in voice context lands ~50-100 chars / sentence. Metric 2.6
     # in the perf-metrics taxonomy.
     mean_sentence_chars: float = 0.0
+    # iter-059: fraction of LLM token chars submitted to the worker
+    # as part of a complete sentence (terminator + whitespace) vs
+    # flushed as the trailing remainder at end-of-stream. 1.0 = LLM
+    # always ended with punctuation, every char overlaps with the
+    # next sentence. <1.0 = some chars forced through as remainder
+    # which can't overlap with anything (synth happens after stream
+    # done). 0 = no chars submitted this turn. Metric 2.5 in the
+    # perf-metrics taxonomy.
+    sentence_split_coverage: float = 0.0
     # iter-046: bot speaking rate in words-per-minute, derived from
     # the worker's word_count_total / audio_seconds_total. UX-research
     # sweet spot is 150-180 WPM; outside that range is a tunable
@@ -230,6 +239,13 @@ class TurnMetrics:
         # delaying TTFS).
         if self.mean_sentence_chars > 0:
             tts_suffix += f", avg {self.mean_sentence_chars:.0f} chars"
+        # iter-059: split coverage as a percentage. Only emit on
+        # turns where it's < 1.0 — a perfect 100% split is the
+        # expected case and shouldn't clutter the line.
+        if 0 < self.sentence_split_coverage < 1.0:
+            tts_suffix += (
+                f", {self.sentence_split_coverage*100:.0f}% complete"
+            )
         tts_suffix += ")"
         # iter-050: append RTF to TTS suffix when measurable.
         if self.tts_rtf > 0:
@@ -499,6 +515,12 @@ def print_session_summary(
     # was actually submitted (>0). Operator can spot a fragmentation
     # regression at session-summary glance — e.g. a system-prompt
     # nudge that crashes the avg from 70 → 25 chars.
+    # iter-059: split coverage values across turns where measurable.
+    coverage_values = [
+        m.sentence_split_coverage
+        for m in metrics_list
+        if m.sentence_split_coverage > 0
+    ]
     sentence_lens = [
         m.mean_sentence_chars
         for m in metrics_list
@@ -693,6 +715,12 @@ def print_session_summary(
         # iter-045: mean across the per-turn means.
         avg_chars = sum(sentence_lens) / len(sentence_lens)
         _emit(f"    Mean sentence:    {avg_chars:.0f} chars")
+    if coverage_values:
+        # iter-059: median split coverage across turns. <90% is a
+        # signal the LLM isn't ending its responses with punctuation
+        # often enough — system-prompt opportunity.
+        median_cov = statistics.median(coverage_values) * 100
+        _emit(f"    Split coverage:   {median_cov:.0f}%")
     if bot_wpms:
         median_wpm = statistics.median(bot_wpms)
         _emit(f"    Median bot WPM:   {median_wpm:.0f}")

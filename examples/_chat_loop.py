@@ -282,6 +282,11 @@ class ChatLoop:
         # + count separately so the average is computed once at end.
         sentence_chars_total = 0
         sentence_chars_count = 0
+        # iter-059: split coverage — chars submitted as complete
+        # sentences (overlap-friendly) vs the trailing remainder
+        # forced through at end-of-stream (can't overlap).
+        complete_sentence_chars = 0
+        remainder_chars = 0
         # iter-052: count tokens received from the LLM. Used to
         # compute TPS (tokens/sec) post-stream.
         token_count = 0
@@ -302,6 +307,9 @@ class ChatLoop:
                 for sentence in complete:
                     sentence_chars_total += len(sentence)
                     sentence_chars_count += 1
+                    # iter-059: track complete-sentence chars
+                    # separately to compute split coverage at end.
+                    complete_sentence_chars += len(sentence)
                     worker.submit(sentence)
 
             llm_stream_done_at = self._clock()
@@ -311,6 +319,9 @@ class ChatLoop:
                 if remaining:
                     sentence_chars_total += len(remaining)
                     sentence_chars_count += 1
+                    # iter-059: trailing remainder — can't overlap
+                    # with anything (synth happens after stream done).
+                    remainder_chars += len(remaining)
                     worker.submit(remaining)
                 worker.submit_done()
                 worker.wait_done(timeout=self._wait_done_timeout)
@@ -413,6 +424,13 @@ class ChatLoop:
             if sentence_chars_count > 0:
                 metrics.mean_sentence_chars = (
                     sentence_chars_total / sentence_chars_count
+                )
+            # iter-059: sentence-split coverage. Only meaningful
+            # when at least some chars were submitted to the worker.
+            total_submitted = complete_sentence_chars + remainder_chars
+            if total_submitted > 0:
+                metrics.sentence_split_coverage = (
+                    complete_sentence_chars / total_submitted
                 )
             # iter-046: bot WPM. Both components must be >0 — a
             # turn with no audio (worker errored, no sentences
