@@ -5609,3 +5609,77 @@ Notes:
   unique fillers / total played), 1.6 (WER, needs ground truth
   corpus), 1.17 (audio underrun/overrun count — needs PyAudio
   plumbing).
+
+## iter-080 — pre-empted-content loss (taxonomy 3.7)
+
+**Branch:** iter-080-preempted-loss  **Commit:** 16f188f  **Date:** 2026-05-25
+
+Added `preempted_words` — words the LLM generated but the user
+never heard because of a mid-stream barge. Computed on barge
+turns only:
+
+    preempted_words = max(0, len(response.split()) - worker.word_count_total)
+
+0 on non-barge turns and on barge turns where the cut happened
+cleanly between sentences (no words lost). High values on a
+barge turn signal the bot was being verbose enough that the user
+interrupted; pairs with iter-069 interruption rate and iter-047
+barge phase to localize the cause:
+
+- High `preempted_words` + `playback`-phase barge → bot was too
+  verbose, user cut off mid-sentence.
+- Low `preempted_words` + `llm_stream`-phase barge → user
+  impatient with TTFS, no audio had played yet so nothing to
+  pre-empt.
+
+Implementation:
+- `TurnMetrics.preempted_words: int = 0` (new field).
+- ChatLoop computes ONLY when `coord.is_set()` (barge fired):
+  ```python
+  if coord.is_set():
+      response_words = len(metrics.response.split())
+      played_words = worker.word_count_total
+      metrics.preempted_words = max(0, response_words - played_words)
+  ```
+  The `max(0, ...)` clamp is defensive — `worker.word_count_total`
+  comes from the per-sentence token alignment which can over-count
+  in edge cases (e.g. punctuation-only tokens).
+- Per-turn print: emits "Pre-empted: NN words (generated but not
+  played)" inside the existing `barge_in` block. Yellow when >10
+  words (≥5s of speech lost — bot was being verbose).
+- Session summary: "Pre-empted words: NN total (M/N barges,
+  X avg/loss)" — total words pre-empted, fraction of barges that
+  involved any loss, average words lost per lossy barge.
+- `ScenarioResult.preempted_words` on perf snapshots.
+
+Tests (11 in `tests/unit/test_preempted_loss.py`):
+- Default zero / per-turn print: zero omits, no-barge omits, low
+  emits dim, high emits.
+- Session aggregate: no-barge omits, all-clean omits, single
+  lossy barge, mixed lossy+clean.
+- ChatLoop wiring: clean turn yields 0; deterministic delayed-
+  barge scenario yields ≥0 always (clamp), bounded above by
+  response word count.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **992 passed, 1 skipped in 25s** (981 existing
++ 11 new).
+
+Notes:
+- **Forty-one metrics live (89% of the 46-metric taxonomy).**
+- The barge-in dimension now has 8 orthogonal lenses, fully
+  describing the interruption from cause to consequence:
+  - `barge_in` (rate, base) — did it happen?
+  - `barge_in_phase` (iter-047) — LLM-stream vs playback?
+  - `barge_in_latency` (iter-041) — how fast did we react?
+  - `sentences_cancelled` (iter-040) — how aggressive was the cut?
+  - `barge_in_regret` (iter-056) — did we pre-empt the user?
+  - `llm_cancel_to_close` (iter-060) — HTTP socket teardown?
+  - `primed_frames_seconds` (iter-057) — how much did we save
+    for the next turn?
+  - `preempted_words` (iter-080) — how much did we waste?
+- Next candidates: 3.8 (filler novelty index — unique fillers /
+  total played), 3.13 (adaptive-rate margin — bot_wpm / user_wpm
+  ratio; partially covered by iter-064's mirror gap), 1.6 (WER,
+  needs ground truth corpus), 1.17 (audio underrun/overrun count
+  — needs PyAudio plumbing).
