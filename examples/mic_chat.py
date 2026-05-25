@@ -266,6 +266,12 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
             lag_out=lag_out,
         )
 
+    # iter-088: optional aggressive first-sentence splitter. Reduces
+    # TTFS on long-preamble responses at the cost of some prosody.
+    # Read from chat_cfg with a False default — opt-in.
+    aggressive_first_sentence = bool(
+        chat_cfg.get("aggressive_first_sentence", False)
+    )
     chat_loop = ChatLoop(
         mic=mic,
         speaker_factory=_speaker_factory,
@@ -281,6 +287,7 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
         play_fn=_play,
         fillers=rendered_fillers,
         idle_threshold=filler_idle_threshold,
+        aggressive_first_sentence=aggressive_first_sentence,
     )
 
     system_prompt = llm_config.get("system_prompt", "You are a concise voice assistant.")

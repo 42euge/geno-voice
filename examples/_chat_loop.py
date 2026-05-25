@@ -123,6 +123,13 @@ class ChatLoop:
         # Filler config (iter-011)
         fillers: Optional[list] = None,
         idle_threshold: float = 0.0,
+        # iter-088: aggressive first-sentence splitter. When True,
+        # the splitter accepts comma+whitespace as a terminator for
+        # the FIRST sentence only, reducing TTFS on long-preamble
+        # responses at the cost of some prosody. Strict splitter
+        # resumes for sentence 2+. Default False — opt in via
+        # chat.aggressive_first_sentence in config.local.yaml.
+        aggressive_first_sentence: bool = False,
         # Tunables / I/O
         clock: Callable[[], float] = time.monotonic,
         output=None,
@@ -148,6 +155,8 @@ class ChatLoop:
 
         self._fillers = list(fillers) if fillers else []
         self._idle_threshold = idle_threshold
+        # iter-088: aggressive first-sentence splitter config.
+        self._aggressive_first_sentence = aggressive_first_sentence
 
         self._clock = clock
         self._output = output  # passed to record_utterance_streaming
@@ -371,6 +380,12 @@ class ChatLoop:
         # All subsequent gaps feed into max_token_gap.
         prev_token_at: Optional[float] = None
         max_token_gap = 0.0
+        # iter-088: track whether the aggressive first-sentence
+        # splitter is still active for this turn. Starts True only
+        # if the loop's config enabled it; flips False as soon as
+        # the splitter returns ANY complete sentence (so subsequent
+        # iterations use strict splitting).
+        aggressive_active = self._aggressive_first_sentence
 
         try:
             for token in llm_gen:
@@ -393,9 +408,17 @@ class ChatLoop:
                 full_response += token
                 token_count += 1
 
-                complete, token_buffer = split_complete_sentences(token_buffer)
-                if complete and first_sentence_at is None:
-                    first_sentence_at = self._clock()
+                complete, token_buffer = split_complete_sentences(
+                    token_buffer,
+                    aggressive_first=aggressive_active,
+                )
+                if complete:
+                    # iter-088: first sentence(s) emerged — flip off
+                    # aggressive splitting so subsequent iterations
+                    # require strict ``.!?`` terminators.
+                    aggressive_active = False
+                    if first_sentence_at is None:
+                        first_sentence_at = self._clock()
                 for sentence in complete:
                     sentence_chars_total += len(sentence)
                     sentence_chars_count += 1

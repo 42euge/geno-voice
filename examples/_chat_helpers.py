@@ -30,6 +30,18 @@ SENTENCE_END = re.compile(
     r'(?<=[.!?])\s+|(?<=[.!?][' + re.escape(_CLOSING_AFTER_TERMINATOR) + r'])\s+'
 )
 
+# iter-088: aggressive first-sentence terminator pattern. Matches
+# a comma immediately followed by whitespace. Only used when the
+# splitter is called with ``aggressive_first=True``; the caller
+# (ChatLoop) flips that flag off once the first sentence emerges,
+# so subsequent splits revert to strict ``.!?`` matching. The
+# AGGRESSIVE_MIN_CHARS guard ensures we only split after the
+# preamble has accumulated enough text to be a meaningful synth
+# unit — short interjections like "Sure, let me ..." don't trip
+# the early split.
+AGGRESSIVE_COMMA_END = re.compile(r'(?<=,)\s+')
+AGGRESSIVE_MIN_CHARS = 20
+
 # Backwards-compat alias for any external users — same content as
 # the iter-022 constant. iter-033 generalized the name.
 _CLOSING_QUOTES = _CLOSING_AFTER_TERMINATOR
@@ -181,7 +193,11 @@ def _word_before_period(buffer: str, period_idx: int) -> str:
     return word
 
 
-def split_complete_sentences(buffer: str) -> tuple[list[str], str]:
+def split_complete_sentences(
+    buffer: str,
+    *,
+    aggressive_first: bool = False,
+) -> tuple[list[str], str]:
     """Split a streaming token buffer into (complete_sentences, remainder).
 
     A "complete" sentence is one terminated by . ! or ? followed by
@@ -193,6 +209,18 @@ def split_complete_sentences(buffer: str) -> tuple[list[str], str]:
     the sentence. iter-016.
 
     Empty / whitespace-only sentences are dropped.
+
+    iter-088: ``aggressive_first`` — when True, also accept comma +
+    whitespace as a sentence terminator, BUT only for the FIRST
+    matching position AND only when the buffer before the comma is
+    at least ``AGGRESSIVE_MIN_CHARS`` (20) characters long. Reduces
+    TTFS on long-preamble LLM responses ("Well, let me think about
+    that for a moment, ...") by letting TTS start as soon as the
+    preamble completes — even before the first period arrives.
+    Caller (ChatLoop) flips the flag off as soon as the first
+    sentence emerges so subsequent splits revert to strict
+    terminator matching. Default False — opt in via the
+    ``chat.aggressive_first_sentence`` config.
 
     Examples:
         >>> split_complete_sentences("Hello world. How are")
@@ -210,6 +238,22 @@ def split_complete_sentences(buffer: str) -> tuple[list[str], str]:
         return [], ""
 
     matches = list(SENTENCE_END.finditer(buffer))
+
+    # iter-088: when aggressive_first is on, find the earliest
+    # comma+whitespace whose pre-content meets AGGRESSIVE_MIN_CHARS.
+    # Earlier commas (e.g. "Sure, ...") are short interjections
+    # we don't want to split on. The first qualifying comma is
+    # only used if it lands BEFORE any strict terminator —
+    # periods/exclamations/questions still win when present
+    # earlier.
+    if aggressive_first:
+        for cm in AGGRESSIVE_COMMA_END.finditer(buffer):
+            if cm.start() < AGGRESSIVE_MIN_CHARS:
+                continue
+            if not matches or cm.start() < matches[0].start():
+                matches = [cm] + matches
+            break
+
     if not matches:
         return [], buffer
 
