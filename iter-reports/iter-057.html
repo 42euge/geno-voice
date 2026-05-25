@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-056 — regret rate metric (taxonomy 3.4)</title>
+<title>iter-057 — primed-frames replay duration metric (taxonomy 2.12)</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,24 +168,20 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-055.html">← iter-055</a><a href="iter-057.html">iter-057 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-056 — regret rate metric (taxonomy 3.4)</h1>
-<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-056-regret</code></span> · <span>commit: <code>6325c36</code></span> · <span>tests: <code>+17</code> (total 728)</span></div>
-</header><p><strong>Branch:</strong> <code>iter-056-regret</code> (merged ff to main, commit <code>6325c36</code>) <strong>Date:</strong> 2026-05-24</p>
-<p>Eighteenth metric pulled from <code>docs/perf-metrics-taxonomy.md</code>. Third &quot;Novel/speculative&quot; entry (after iter-053 naturalness + iter-055 rhythm).</p>
-<p>A barge-in is <strong>&quot;regret&quot;</strong> when the user starts speaking within 200ms of bot first audio. Implies the bot pre-empted the user — the user was already mid-utterance and the bot misjudged end-of-turn (silence_duration fired too early). The taxonomy notes: &quot;the bot may be pre-empting; raise silence_duration.&quot;</p>
-<p>Distinct from iter-053&#x27;s &quot;rushed&quot; naturalness:</p>
-<ul><li><strong>rushed</strong> = bot&#x27;s TTFS was very low (subjective fast response, bot&#x27;s internal timing dimension)</li><li><strong>regret</strong> = the user actually objected to the bot speaking (user&#x27;s behavior dimension)</li></ul>
-<p>Both can be true on the same turn. Both pointing at the same underlying issue (bot speaking too early), but observed from different angles. The recommended fix differs:</p>
-<ul><li>rushed → reduce LLM/synth speed to add naturalness pause</li><li>regret → raise <code>silence_duration</code> so end-of-turn is more conservative</li></ul>
+<nav><a href="index.html">← Index</a><a href="iter-056.html">← iter-056</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-057 — primed-frames replay duration metric (taxonomy 2.12)</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-057-primed-frames</code></span> · <span>commit: <code>639344f</code></span> · <span>tests: <code>+9</code> (total 737)</span></div>
+</header><p><strong>Branch:</strong> <code>iter-057-primed-frames</code> (merged ff to main, commit <code>639344f</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>Nineteenth metric pulled from <code>docs/perf-metrics-taxonomy.md</code>. <strong>Metric 2.12 — Primed-frames replay duration</strong>, &quot;Architecture- specific&quot; bucket.</p>
+<p>The chat_loop already computed <code>len(next_primed) * chunk / rate</code> on barge turns for the diagnostic print line. iter-057 promotes that value to a <code>TurnMetrics</code> field so the session summary can aggregate it across turns — operational view of how much user audio iter-025&#x27;s lead-in is preserving.</p>
+<p>Why it matters: high totals validate iter-025&#x27;s design (the watcher&#x27;s ring buffer is meaningfully preserving the user&#x27;s first syllables for the next STT pass). Near-zero totals would suggest iter-025 isn&#x27;t paying off and could be simplified or removed.</p>
 <p>Implementation:</p>
-<ul><li><code>TurnMetrics.barge_in_regret: bool = False</code> (new field).</li><li>ChatLoop sets True when:<ul><li><code>coord.triggered_at</code> is set</li><li>AND <code>worker.first_audio_at</code> is set</li><li>AND <code>coord.is_set()</code> (sanity — barge actually fired)</li><li>AND <code>0 &lt; (coord.triggered_at - worker.first_audio_at) &lt; 0.2</code></li></ul></li><li>Per-turn Barge-in line gains <code>— regret</code> suffix when True.</li><li>Session summary: `Regret rate: M/N (P%) — bot may be pre-empting; raise silence_duration` emitted when at least one regret happened.</li></ul>
-<p>Tests (17 in <code>tests/unit/test_regret_rate.py</code>):</p>
-<ul><li>Default False.</li><li>Per-turn print: no-barge / barge-no-regret / barge-with-regret.</li><li>Session aggregate: no-barge / barges-no-regret / partial regret / all-regret.</li><li>Boundary parametrize: 7 gap values document the strict inequality: <code>0</code> (False), <code>50/100/199</code> (True), <code>200</code> (False), <code>250/1000</code> (False).</li><li>Guards: no-first-audio + no-barge → False regardless of triggered_at.</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>728 passed, 1 skipped in 23s</strong> (711 existing + 17 new).</p>
+<ul><li><code>TurnMetrics.primed_frames_seconds: float = 0.0</code> (new field).</li><li>ChatLoop assigns the value in the watcher-detected branch alongside <code>metrics.barge_in_phase</code>. Refactored the existing print to use the metric (single source of truth for both diagnostic and aggregation).</li><li>Per-turn print: new `Primed frames: NNNms (carried into next turn)` line on barge turns.</li><li>Session summary: `Primed audio: N.Ns (carried into next turn — validates iter-025)` when total &gt; 0.</li><li><code>ScenarioResult.primed_frames_seconds</code> on perf snapshots.</li></ul>
+<p>Tests (9 in <code>tests/unit/test_primed_frames_seconds.py</code>):</p>
+<ul><li>Default 0.</li><li>Per-turn print: zero omits, non-zero shows ms + explainer, no-barge zero omits.</li><li>Session aggregate: no-primed omits, multi-turn / single-turn totals.</li><li>Computation contract: formula at default CHUNK/RATE; zero-frames edge case.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>737 passed, 1 skipped in 22s</strong> (728 existing + 9 new).</p>
 <p>Notes:</p>
-<ul><li>Eighteen metrics live (39% of the 46-metric taxonomy).</li><li>The barge-in dimension is now exhaustively covered: Five orthogonal lenses on barge-in events.<ul><li>Did it fire? (<code>barge_in</code>)</li><li>Where did it land? (<code>barge_in_phase</code>: llm_stream / playback)</li><li>How fast did we respond? (<code>barge_in_latency</code>)</li><li>Did it cut a sentence mid-stream? (<code>sentences_cancelled</code>)</li><li>Was the bot wrong to start speaking? (<code>barge_in_regret</code>)</li></ul></li><li>Next candidates: 2.7 (worker queue depth — sampler daemon), 1.2 (EoT detection latency — needs frame-by-frame VAD timing), 3.6 (interruption recovery — multi-turn).</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-055.html">← iter-055</a><a href="iter-057.html">iter-057 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li><strong>Nineteen metrics live (41% of the 46-metric taxonomy).</strong> Crossed the 40% milestone.</li><li>Refactor opportunity surfaced: the session summary&#x27;s conditional structure has accumulated a lot of <code>if X:</code> / <code>_emit(...)</code> pairs across iterations. Some are nested under <code>if barges_total:</code> (correctly, since they&#x27;re barge-only), some are at the same level (correctly, since they&#x27;re independent). iter-057 had to fix one initially-mis-nested block. Future iter could refactor into a list of <code>MetricSection</code> objects with explicit predicates — but the current shape is still readable and shipping changes is low-friction.</li><li>Next candidates: 2.5 (filler novelty — needs filler-text history), 1.16-onwards (long tail), 2.7 (worker queue depth).</li></ul><nav><a href="index.html">← Index</a><a href="iter-056.html">← iter-056</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

@@ -4152,3 +4152,66 @@ Notes:
 - Next candidates: 2.7 (worker queue depth — sampler daemon),
   1.2 (EoT detection latency — needs frame-by-frame VAD timing),
   3.6 (interruption recovery — multi-turn).
+
+---
+
+## iter-057 — primed-frames replay duration metric (taxonomy 2.12)
+
+**Branch:** `iter-057-primed-frames` (merged ff to main, commit `639344f`)
+**Date:** 2026-05-24
+
+Nineteenth metric pulled from `docs/perf-metrics-taxonomy.md`.
+**Metric 2.12 — Primed-frames replay duration**, "Architecture-
+specific" bucket.
+
+The chat_loop already computed `len(next_primed) * chunk / rate`
+on barge turns for the diagnostic print line. iter-057 promotes
+that value to a `TurnMetrics` field so the session summary can
+aggregate it across turns — operational view of how much user
+audio iter-025's lead-in is preserving.
+
+Why it matters: high totals validate iter-025's design (the
+watcher's ring buffer is meaningfully preserving the user's
+first syllables for the next STT pass). Near-zero totals would
+suggest iter-025 isn't paying off and could be simplified or
+removed.
+
+Implementation:
+- `TurnMetrics.primed_frames_seconds: float = 0.0` (new field).
+- ChatLoop assigns the value in the watcher-detected branch
+  alongside `metrics.barge_in_phase`. Refactored the existing
+  print to use the metric (single source of truth for both
+  diagnostic and aggregation).
+- Per-turn print: new `Primed frames: NNNms (carried into next
+  turn)` line on barge turns.
+- Session summary: `Primed audio: N.Ns (carried into next turn —
+  validates iter-025)` when total > 0.
+- `ScenarioResult.primed_frames_seconds` on perf snapshots.
+
+Tests (9 in `tests/unit/test_primed_frames_seconds.py`):
+- Default 0.
+- Per-turn print: zero omits, non-zero shows ms + explainer,
+  no-barge zero omits.
+- Session aggregate: no-primed omits, multi-turn / single-turn
+  totals.
+- Computation contract: formula at default CHUNK/RATE; zero-frames
+  edge case.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **737 passed, 1 skipped in 22s** (728
+existing + 9 new).
+
+Notes:
+- **Nineteen metrics live (41% of the 46-metric taxonomy).**
+  Crossed the 40% milestone.
+- Refactor opportunity surfaced: the session summary's
+  conditional structure has accumulated a lot of `if X:` /
+  `_emit(...)` pairs across iterations. Some are nested under
+  `if barges_total:` (correctly, since they're barge-only), some
+  are at the same level (correctly, since they're independent).
+  iter-057 had to fix one initially-mis-nested block. Future
+  iter could refactor into a list of `MetricSection` objects
+  with explicit predicates — but the current shape is still
+  readable and shipping changes is low-friction.
+- Next candidates: 2.5 (filler novelty — needs filler-text
+  history), 1.16-onwards (long tail), 2.7 (worker queue depth).
