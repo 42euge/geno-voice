@@ -386,6 +386,28 @@ class ChatLoop:
                 worker.wait_done(timeout=self._cancel_wait_timeout)
 
             watcher.stop(timeout=2.0)
+            # iter-074: bargeable-time fraction. Of the time the
+            # bot was producing audio, what fraction was the
+            # watcher active (i.e. barge-in was actually possible)?
+            # 1.0 is the architectural default — watcher.start
+            # precedes worker.first_audio_at and watcher.stop is
+            # called right after worker.wait_done. Sentinel: a
+            # future change that pauses the watcher (e.g. during
+            # fillers) would push this below 1.0 — visible
+            # regression. Skip when no audio played.
+            if (
+                worker.first_audio_at is not None
+                and watcher.started_at is not None
+                and watcher.stopped_at is not None
+                and watcher.stopped_at > worker.first_audio_at
+            ):
+                bot_speech_dur = watcher.stopped_at - worker.first_audio_at
+                inter_start = max(watcher.started_at, worker.first_audio_at)
+                inter_end = watcher.stopped_at
+                intersection = max(0.0, inter_end - inter_start)
+                metrics.bargeable_fraction = min(
+                    1.0, intersection / bot_speech_dur
+                )
             if watcher.detected:
                 next_primed = list(watcher.frames)
                 # iter-047: structured phase. Used both for the

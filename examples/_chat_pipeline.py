@@ -630,11 +630,23 @@ class BargeInWatcher:
         self.frames: list[bytes] = []
         self.events: list = []  # full sequence for assertions
         self.frame_idx_at_trigger: Optional[int] = None
+        # iter-074: timestamps for bargeable-time fraction. The
+        # watcher is "active" between started_at and stopped_at.
+        # ChatLoop intersects this with the bot-speech window
+        # (worker.first_audio_at → end of last audio) to surface
+        # what fraction of bot speech could actually have been
+        # interrupted. Both None until the corresponding lifecycle
+        # call fires. Metric 1.19 in the perf-metrics taxonomy.
+        self.started_at: Optional[float] = None
+        self.stopped_at: Optional[float] = None
 
     def start(self) -> None:
         if self._started:
             raise RuntimeError("BargeInWatcher already started")
         self._started = True
+        # iter-074: stamp before launching the thread so callers
+        # racing for the timestamp can't catch a None.
+        self.started_at = self._clock()
         self._thread = threading.Thread(
             target=self._run, name="BargeInWatcher", daemon=True
         )
@@ -646,6 +658,10 @@ class BargeInWatcher:
         self._stop_event.set()
         if self._thread is not None:
             self._thread.join(timeout=timeout)
+        # iter-074: stamp after the thread joins so stopped_at
+        # reflects the moment the watcher is genuinely no longer
+        # listening (matching the start_at semantics).
+        self.stopped_at = self._clock()
 
     def _run(self) -> None:
         frame_idx = 0

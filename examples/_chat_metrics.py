@@ -93,6 +93,17 @@ class TurnMetrics:
     # first-synth duration = first synth was fully masked.
     # Metric 2.2 in the perf-metrics taxonomy.
     first_synth_overlap_seconds: float = 0.0
+    # iter-074: bargeable-time fraction in [0.0, 1.0]. Of the
+    # window during which the bot was producing audio, what
+    # fraction had the BargeInWatcher active? 1.0 is the
+    # architectural default — watcher starts before bot speech
+    # and stops right after. Anything below 1.0 means the bot
+    # was functionally uninterruptible for some fraction of its
+    # speech (would happen if a future change paused the watcher
+    # mid-turn — e.g. during fillers). Sentinel for that regression.
+    # 0.0 default = no audio played this turn or watcher lifecycle
+    # didn't fire. Metric 1.19 in the perf-metrics taxonomy.
+    bargeable_fraction: float = 0.0
     # iter-044: cumulative seconds the SentenceWorker spent blocked
     # waiting for the next sentence, AFTER the first sentence
     # (excludes TTFsent). High idle gap = LLM didn't keep up with
@@ -462,6 +473,18 @@ class TurnMetrics:
                 f"{color}{pct:>6.0f}%{_RESET}  "
                 f"({_DIM}LLM↔TTS concurrency{_RESET})"
             )
+        # iter-074: bargeable-time fraction. Skip when 1.0 (the
+        # healthy architectural default — clutter-free for clean
+        # sessions). Anything < 1.0 surfaces as a yellow regression
+        # alarm: the bot was uninterruptible for some fraction of
+        # its speech.
+        if 0 < self.bargeable_fraction < 0.99:
+            pct = self.bargeable_fraction * 100
+            print(
+                f"  {_DIM}│{_RESET}  Bargeable:     "
+                f"{_YELLOW}{pct:>6.0f}%{_RESET}  "
+                f"({_DIM}watcher coverage of bot speech{_RESET})"
+            )
         # iter-073: first-sentence overlap savings. Emit when >0 —
         # tells the operator how many ms were shaved off TTFS by
         # parallelizing first synth with the rest of LLM streaming.
@@ -744,6 +767,14 @@ def print_session_summary(
         m.first_synth_overlap_seconds
         for m in metrics_list
         if m.first_synth_overlap_seconds > 0
+    ]
+    # iter-074: bargeable-time fractions across turns where audio
+    # actually played (>0 in the field). The interesting statistic
+    # is whether ALL turns hit 1.0 (healthy) or any dropped below.
+    bargeable_values = [
+        m.bargeable_fraction
+        for m in metrics_list
+        if m.bargeable_fraction > 0
     ]
     # iter-045: mean sentence-length over turns where any sentence
     # was actually submitted (>0). Operator can spot a fragmentation
@@ -1090,6 +1121,19 @@ def print_session_summary(
     if first_overlap_secs:
         med_save_ms = statistics.median(first_overlap_secs) * 1000
         _emit(f"    1st-synth saved:  {med_save_ms:.0f}ms median")
+    # iter-074: bargeable-time fraction summary. Emit ONLY when at
+    # least one turn dropped below the healthy threshold — clean
+    # sessions don't need the line, but a regression should be
+    # impossible to miss.
+    if bargeable_values and min(bargeable_values) < 0.99:
+        worst = min(bargeable_values) * 100
+        below_count = sum(1 for v in bargeable_values if v < 0.99)
+        _emit(
+            f"    Bargeable:        "
+            f"{worst:.0f}% worst "
+            f"({below_count}/{len(bargeable_values)} turns < 99%) — "
+            f"watcher coverage regression"
+        )
     if sentence_lens:
         # iter-045: mean across the per-turn means.
         avg_chars = sum(sentence_lens) / len(sentence_lens)
