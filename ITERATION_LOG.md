@@ -6860,3 +6860,96 @@ Notes:
     rate curve more precisely than a binary A/B.
   - Extract `_emit_recording_block` (still pending from iter-097).
   - WER fixture (1.6) heavyweight iteration.
+
+## iter-100 — A/B perf scenarios for auto_aggressive_threshold
+
+**Goal:** Third pair-scenario in three iterations (after iter-098,
+iter-099). Validates iter-093's auto-aggressive-on-stall logic
+empirically and cements the pair-scenario pattern as the default
+shape for opt-in feature validation.
+
+iter-093 watches the inter-token LLM gap and flips the splitter
+to aggressive mode mid-stream when the gap exceeds the configured
+threshold AND no complete sentence has been emitted yet. The
+existing unit tests in `tests/unit/test_chat_loop.py` verify the
+flip mechanics; this iteration measures the TTFS impact.
+
+**Change:** Extended the perf-suite stub `_yield_tokens` with an
+optional `stall_after`/`stall_seconds` pair that injects a long
+pause AFTER yielding the first token containing a substring. Then
+two new scenarios drive the same `_STALLED_PREAMBLE` response
+twice — once with `auto_aggressive_threshold=0.0` (off, pre-093
+behavior), once with `0.3` (flips on the 500ms stall).
+
+```python
+_STALLED_PREAMBLE = (
+    "Well let me think about this for a moment, "
+    "the answer is twelve. "
+    "And the reason is straightforward."
+)
+
+# Stall fires AFTER yielding the "moment," token, so the gap is
+# observed when the next token (the post-stall "the") arrives.
+stall_after="moment,", stall_seconds=0.5
+```
+
+`_run_scenario` grew two new kwargs (`auto_aggressive_threshold`,
+`stall_after`/`stall_seconds`) — small surface-area expansion;
+the existing pair-scenario shape carries over unchanged.
+
+**Empirical A/B** (this run, x86_64 Linux stub pipeline, per-token
+delay 10ms):
+
+| Metric                | threshold=0.0 (off) | threshold=0.3 (on) | Δ      |
+|-----------------------|---------------------|--------------------|--------|
+| TTFS                  | 1431.7 ms           | 1401.5 ms          | -30 ms |
+| llm_first_sentence    | 631.3 ms            | 601.1 ms           | -30 ms |
+| max_token_gap         | 510.1 ms            | 510.1 ms           | 0      |
+| mean_sentence_chars   | 49.0                | 32.3               | -17    |
+
+Both runs see the same 510ms `max_token_gap` — the stall fires
+identically. The mean_chars drop from 49→32 confirms the auto-flip
+worked: with the splitter strict, the first sentence had to grow
+to "Well let me think about this for a moment, the answer is
+twelve." (49 chars); with the auto-flip, it sliced at the comma
+to "Well let me think about this for a moment," (~32 chars after
+trim).
+
+The 30ms TTFS savings is modest because the stub LLM streams
+tokens at 10ms each — only ~3-4 tokens between the comma and the
+period. On a real LLM with 50ms/token (the iter-052 baseline),
+this would scale to ~150-200ms savings. On a 100ms/token slow
+LLM (our `slow_llm_300ms` scenario), ~300-400ms.
+
+Verification: `python -m pytest tests/performance/ -q` → **15
+passed in 4.9s** (was 13, +2 new). Full unit + integration suite:
+`tests/ --ignore=tests/performance --ignore=tests/test_session.py
+--ignore=tests/e2e -q` → **1148 passed, 1 skipped** (identical to
+main).
+
+Notes:
+- **Three pair-scenarios — the pattern is the default now.**
+  iter-098 (aggressive splitter), iter-099 (filler threshold),
+  iter-100 (auto-aggressive). All share the same shape: a single
+  `_FIXTURE` response or clip, two scenario methods that vary
+  exactly one kwarg, and a TTFS / behavior-marker delta. Future
+  opt-in features should default to this template.
+- **Stub-vs-real scaling.** The savings ratio (30ms / 1431ms ≈ 2%)
+  understates the real-world benefit. The stall is fixed at 500ms,
+  but the *post-stall path-length* depends on per-token-delay
+  (which is 10ms in the stub vs 50-100ms in production). A future
+  variant could parameterize per-token-delay across [0.01, 0.05,
+  0.1] to plot the savings curve.
+- **stall_after as a building block.** This stub feature isn't
+  iter-100-specific — any future scenario that wants to test
+  mid-stream behavior (cancel handling, queue depth under stall,
+  context-token billing on retry) can compose it. Worth keeping
+  in mind as the perf suite grows.
+- Next directions:
+  - Per-token-delay grid (3-5 values) for iter-100 to surface the
+    savings curve as a function of token speed.
+  - Pair scenarios for `max_user_assistant` cap (5 vs 20) on a
+    long-context session — would round out the four user-facing
+    opt-ins.
+  - Extract `_emit_recording_block` (still pending from iter-097).
+  - WER fixture (1.6) heavyweight iteration.

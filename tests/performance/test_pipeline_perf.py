@@ -258,7 +258,15 @@ def _slow_play(speaker, audio, tokens, *, is_first_sentence=False, cancel_event=
     return 0.0
 
 
-def _yield_tokens(text, *, per_token_delay=0.0):
+def _yield_tokens(text, *, per_token_delay=0.0, stall_after=None, stall_seconds=0.0):
+    """Build a streaming-LLM stub.
+
+    ``stall_after`` (optional): substring; the simulated stream
+    pauses for ``stall_seconds`` AFTER yielding the first token
+    that contains this substring. Used by iter-100 to trigger the
+    iter-093 auto-aggressive-on-stall logic at a deterministic
+    point in the response.
+    """
     import re
 
     def factory(messages, config):
@@ -267,6 +275,8 @@ def _yield_tokens(text, *, per_token_delay=0.0):
             if per_token_delay > 0:
                 time.sleep(per_token_delay)
             yield p + " "
+            if stall_after is not None and stall_after in p and stall_seconds > 0:
+                time.sleep(stall_seconds)
 
     return factory
 
@@ -294,6 +304,9 @@ def _run_scenario(
     fillers: list | None = None,
     idle_threshold: float = 0.0,
     aggressive_first_sentence: bool = False,
+    auto_aggressive_threshold: float = 0.0,
+    stall_after: str | None = None,
+    stall_seconds: float = 0.0,
 ) -> ScenarioResult:
     mic = VirtualMicStream(rate=RATE, chunk_size=CHUNK)
     _utterance(speech_seconds, mic)
@@ -304,13 +317,19 @@ def _run_scenario(
         speaker_factory=lambda: VirtualSpeakerStream(rate=24000),
         stt_engine=engine,
         transcribe_fn=transcribe,
-        llm_stream_fn=_yield_tokens(response, per_token_delay=per_token_delay),
+        llm_stream_fn=_yield_tokens(
+            response,
+            per_token_delay=per_token_delay,
+            stall_after=stall_after,
+            stall_seconds=stall_seconds,
+        ),
         llm_config={"model": "stub"},
         synth_fn=_const_synth(synth_delay=synth_delay),
         play_fn=_slow_play,
         fillers=fillers,
         idle_threshold=idle_threshold,
         aggressive_first_sentence=aggressive_first_sentence,
+        auto_aggressive_threshold=auto_aggressive_threshold,
     )
 
     t0 = time.monotonic()
@@ -527,6 +546,46 @@ class TestPerfScenarios:
             per_token_delay=0.1,
             fillers=[self._FILLER_CLIP],
             idle_threshold=0.15,
+        )
+        assert r.sentences_spoken >= 1
+
+    # iter-100: A/B for auto_aggressive_threshold (iter-093). The
+    # same long-preamble response is streamed twice, with a 500ms
+    # mid-stream stall right after the comma. With threshold=0.0,
+    # the splitter stays strict and TTFS waits for the post-stall
+    # period. With threshold=0.3, the stall trips the auto-flip;
+    # the splitter goes aggressive on the next iteration and slices
+    # at the comma already in the buffer — first audio out before
+    # the stalled tokens finish arriving.
+    _STALLED_PREAMBLE = (
+        "Well let me think about this for a moment, "
+        "the answer is twelve. "
+        "And the reason is straightforward."
+    )
+
+    def test_auto_aggressive_off(self):
+        r = _run_scenario(
+            "auto_aggressive_off",
+            "Mid-stream stall, auto-aggressive off — TTFS includes stall",
+            speech_seconds=1.0,
+            response=self._STALLED_PREAMBLE,
+            per_token_delay=0.01,
+            stall_after="moment,",
+            stall_seconds=0.5,
+            auto_aggressive_threshold=0.0,
+        )
+        assert r.sentences_spoken >= 1
+
+    def test_auto_aggressive_on(self):
+        r = _run_scenario(
+            "auto_aggressive_on",
+            "Mid-stream stall, auto-aggressive on (0.3s) — flip on stall",
+            speech_seconds=1.0,
+            response=self._STALLED_PREAMBLE,
+            per_token_delay=0.01,
+            stall_after="moment,",
+            stall_seconds=0.5,
+            auto_aggressive_threshold=0.3,
         )
         assert r.sentences_spoken >= 1
 
