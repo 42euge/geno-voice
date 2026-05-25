@@ -100,6 +100,12 @@ class TurnMetrics:
     # user was actually still talking. Metric 3.4 in the perf-metrics
     # taxonomy ("Novel/speculative").
     barge_in_regret: bool = False
+    # iter-057: audio seconds carried over via next_primed_frames
+    # into the next turn. Validates iter-025 lead-in: how much of
+    # the user's first words would have been lost without the
+    # watcher's frame buffer. 0 on non-barge turns. Metric 2.12 in
+    # the perf-metrics taxonomy.
+    primed_frames_seconds: float = 0.0
     total_e2e: float = 0.0
     sentences_spoken: int = 0
     # iter-045: mean character length of sentences submitted to the
@@ -303,6 +309,16 @@ class TurnMetrics:
                     f"{lat_ms:>6.0f}ms{_RESET}  "
                     f"(detect → halt)"
                 )
+            # iter-057: primed-frames replay seconds. Only on barge
+            # turns where the watcher captured frames. Bigger value
+            # = more of the user's first words were preserved for
+            # the next STT pass.
+            if self.primed_frames_seconds > 0:
+                print(
+                    f"  {_DIM}│{_RESET}  {_DIM}Primed frames: "
+                    f"{self.primed_frames_seconds*1000:>6.0f}ms{_RESET}  "
+                    f"(carried into next turn)"
+                )
         # iter-037: only emit when non-zero — a clean turn shouldn't
         # spend pixels on a stale-frame counter that's almost always 0.
         # When >0 it's worth noticing — bot voice leaking back through
@@ -445,6 +461,10 @@ def print_session_summary(
     # iter-056: regret count — barges firing within 200ms of bot
     # first audio. High count = end-of-turn detection misjudges.
     regret_barges = sum(1 for m in metrics_list if m.barge_in_regret)
+    # iter-057: total seconds of audio carried over via primed frames.
+    primed_seconds_total = sum(
+        m.primed_frames_seconds for m in metrics_list
+    )
     # iter-041: barge-in latency over turns where it was measured
     # (>0 — both triggered_at and playback_stopped_at have to be
     # set for the metric to be meaningful).
@@ -605,6 +625,17 @@ def print_session_summary(
                 f"{regret_barges}/{barges_total} ({pct:.0f}%) "
                 f"— bot may be pre-empting; raise silence_duration"
             )
+    # iter-057: total seconds of audio carried over by the watcher
+    # via primed_frames. Report regardless of whether we computed
+    # the barge-block above (the metric is technically only set on
+    # barge turns, but its reporting is independent of barge-count
+    # totals).
+    if primed_seconds_total > 0:
+        _emit(
+            f"    Primed audio:     "
+            f"{primed_seconds_total:.1f}s "
+            f"(carried into next turn — validates iter-025)"
+        )
     if stale_total:
         # iter-037: surface aggregate stale-frame total so a "session
         # had constant echo" pattern is visible at the end of the run.

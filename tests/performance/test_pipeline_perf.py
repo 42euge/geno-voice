@@ -130,6 +130,8 @@ class ScenarioResult:
     barge_in_latency_ms: float = 0.0
     # iter-047: barge-in phase ("llm_stream", "playback", or "").
     barge_in_phase: str = ""
+    # iter-057: primed-frames replay seconds carried into next turn.
+    primed_frames_seconds: float = 0.0
     # iter-037: count of mic frames flushed at start of turn.
     mic_stale_frames: int = 0
 
@@ -303,6 +305,7 @@ def _run_scenario(
         barge_in=m.barge_in,
         barge_in_latency_ms=m.barge_in_latency * 1000,
         barge_in_phase=m.barge_in_phase,
+        primed_frames_seconds=m.primed_frames_seconds,
         mic_stale_frames=m.mic_stale_frames,
     )
     _record(res)
@@ -474,6 +477,7 @@ class TestPerfScenarios:
             barge_in=m.barge_in,
             barge_in_latency_ms=m.barge_in_latency * 1000,
         barge_in_phase=m.barge_in_phase,
+        primed_frames_seconds=m.primed_frames_seconds,
             mic_stale_frames=m.mic_stale_frames,
         )
         _record(res)

@@ -332,11 +332,15 @@ class ChatLoop:
                     else "playback"
                 )
                 metrics.barge_in_phase = phase_key
+                # iter-057: primed-frames replay duration as a metric.
+                metrics.primed_frames_seconds = (
+                    len(next_primed) * self._chunk / self._rate
+                )
                 phase = f"{phase_key.replace('_', '-')} phase"
                 self._print(
                     f"\n  {_DIM}barge-in during {phase}: replaying "
                     f"{len(next_primed)} captured frames "
-                    f"({len(next_primed) * self._chunk / self._rate:.1f}s){_RESET}"
+                    f"({metrics.primed_frames_seconds:.1f}s){_RESET}"
                 )
 
             # Populate metrics from the worker.
