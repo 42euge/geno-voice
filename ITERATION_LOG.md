@@ -5876,3 +5876,50 @@ Notes:
   PyAudio plumbing). Both heavyweight; might do them as
   separate larger iterations or pivot to other work after the
   taxonomy is exhausted.
+
+## iter-084 — sub-second turn rate (taxonomy 3.19)
+
+**Branch:** iter-084-sub-second  **Commit:** 394ebf5  **Date:** 2026-05-25
+
+Added sub-second turn rate — single human-feel threshold across
+the session: what fraction of TTFS values landed under 1.0s.
+<1.0s feels "instant" to most users, so the rate is a clear KPI
+for "did we hit the snappy bar." Easier to track than median
+when comparing across sessions or model swaps.
+
+Implementation:
+- Pure session-level derivation in `print_session_summary`. No
+  new TurnMetrics field — uses the already-computed `ttfs_times`
+  list (which already excludes zero-TTFS turns).
+- Always emits when there's at least one measurable TTFS — the
+  rate itself is informative even at 0% (the operator wants to
+  know that, too).
+- Output: "Sub-second TTFS: M/N (X%)" inserted between Best TTFS
+  and Rhythm score for visual locality with the other "TTFS-shape"
+  metrics.
+
+Tests (9 in `tests/unit/test_sub_second_rate.py`):
+- No-emit boundaries: zero turns, all-no-audio.
+- Emit cases: 100%, 0%, mixed (50%), boundary (0.999s counts,
+  1.0s doesn't), zero-TTFS turns excluded from denominator.
+- Co-emission with Best TTFS and Rhythm score.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **1037 passed, 1 skipped in 24s** (1028
+existing + 9 new).
+
+Notes:
+- **Forty-five metrics live (98% of the 46-metric taxonomy).**
+- The TTFS dimension now has 9 lenses: budget, attribution,
+  bilateral split, naturalness, cold-start, jitter, rhythm,
+  best-of, and now hit-rate-vs-1s. After this, only WER (1.6 —
+  needs ground truth corpus) remains; iter-085 may pivot to
+  other work or tackle WER as a heavyweight iteration.
+- **Pattern observation:** the last 10 iterations have alternated
+  between session-level pure-derivation metrics (cheap, ~10
+  lines + tests) and per-turn instrumented metrics (medium, ~50
+  lines + tests across multiple files). The session-level
+  metrics tend to be richer in the "diagnostic value per line of
+  code" sense — they leverage data already captured rather than
+  paying instrumentation costs. iter-085 onward will likely lean
+  on this pattern more.

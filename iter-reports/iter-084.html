@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-083 — first-token-to-audio gap (FT-A) (taxonomy 3.18)</title>
+<title>iter-084 — sub-second turn rate (taxonomy 3.19)</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,21 +168,18 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-082.html">← iter-082</a><a href="iter-084.html">iter-084 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-083 — first-token-to-audio gap (FT-A) (taxonomy 3.18)</h1>
-<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+9</code> (total 1028)</span></div>
-</header><p><strong>Branch:</strong> iter-083-fta-gap  <strong>Commit:</strong> afd33fb  <strong>Date:</strong> 2026-05-25</p>
-<p>Added <code>first_token_to_audio</code> — time from when the LLM&#x27;s first token landed at the splitter to when the worker played its first audio chunk:</p>
-<p>FT-A = worker.first_audio_at - first_token_at</p>
-<p>Complementary to iter-052&#x27;s <code>llm_first_token</code>. Together they bracket where TTFS time was spent:</p>
-<ul><li>High <strong><code>llm_first_token</code></strong>, low FT-A → LLM is the bottleneck (TTFB to invest in: model latency, network, prompt length).</li><li>Low <code>llm_first_token</code>, high <strong>FT-A</strong> → sentence-split + TTS is the bottleneck (synth speed, splitter waiting on terminator).</li><li>Both high → both legs need work.</li></ul>
+<nav><a href="index.html">← Index</a><a href="iter-083.html">← iter-083</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-084 — sub-second turn rate (taxonomy 3.19)</h1>
+<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+9</code> (total 1037)</span></div>
+</header><p><strong>Branch:</strong> iter-084-sub-second  <strong>Commit:</strong> 394ebf5  <strong>Date:</strong> 2026-05-25</p>
+<p>Added sub-second turn rate — single human-feel threshold across the session: what fraction of TTFS values landed under 1.0s. &lt;1.0s feels &quot;instant&quot; to most users, so the rate is a clear KPI for &quot;did we hit the snappy bar.&quot; Easier to track than median when comparing across sessions or model swaps.</p>
 <p>Implementation:</p>
-<ul><li><code>TurnMetrics.first_token_to_audio: float = 0.0</code> (new field).</li><li>ChatLoop computes when both <code>first_token_at</code> and <code>worker.first_audio_at</code> exist; clamped at 0 against tiny clock-skew negatives.</li><li>Per-turn print: appends &quot;+NNms → audio&quot; suffix to the LLM 1st-tok line, mirroring iter-038&#x27;s &quot;+NNms preamble&quot; suffix on the LLM 1st-sent line. The visual symmetry makes the decomposition obvious.</li><li>Session summary: &quot;Median FT-A: NNms&quot; emitted alongside &quot;Median LLM 1st&quot; so the operator sees both halves.</li><li><code>ScenarioResult.first_token_to_audio_ms</code> on perf snapshots.</li></ul>
-<p>Tests (9 in <code>tests/unit/test_fta_gap.py</code>):</p>
-<ul><li>Default zero / per-turn print: zero omits suffix, non-zero appends.</li><li>Session aggregate: no-data, median, zero-filter.</li><li>ChatLoop arithmetic: clean turn populates ≥0 and bounded; clamp at zero defensive.</li><li>Complementarity test: stt + llm_ft + FT-A = ttfs algebraically on a constructed case.</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>1028 passed, 1 skipped in 25s</strong> (1019 existing + 9 new).</p>
+<ul><li>Pure session-level derivation in <code>print_session_summary</code>. No new TurnMetrics field — uses the already-computed <code>ttfs_times</code> list (which already excludes zero-TTFS turns).</li><li>Always emits when there&#x27;s at least one measurable TTFS — the rate itself is informative even at 0% (the operator wants to know that, too).</li><li>Output: &quot;Sub-second TTFS: M/N (X%)&quot; inserted between Best TTFS and Rhythm score for visual locality with the other &quot;TTFS-shape&quot; metrics.</li></ul>
+<p>Tests (9 in <code>tests/unit/test_sub_second_rate.py</code>):</p>
+<ul><li>No-emit boundaries: zero turns, all-no-audio.</li><li>Emit cases: 100%, 0%, mixed (50%), boundary (0.999s counts, 1.0s doesn&#x27;t), zero-TTFS turns excluded from denominator.</li><li>Co-emission with Best TTFS and Rhythm score.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>1037 passed, 1 skipped in 24s</strong> (1028 existing + 9 new).</p>
 <p>Notes:</p>
-<ul><li><strong>Forty-four metrics live (96% of the 46-metric taxonomy).</strong></li><li>The TTFS decomposition is now exhaustive on the diagnostic side: macro budget (<code>ttfs</code>), three-bucket attribution (iter-076), bilateral split (<code>llm_first_token</code> + this), preamble gap (iter-038), naturalness bucket (iter-053), cold-start penalty (iter-066), jitter + rhythm (iter-068/055). Eight orthogonal lenses on the most important UX number.</li><li>Remaining 2 metrics from 46: 1.6 (WER, needs ground truth corpus) and 1.17 (audio device underrun/overrun count, needs PyAudio plumbing). Both heavyweight; might do them as separate larger iterations or pivot to other work after the taxonomy is exhausted.</li></ul><nav><a href="index.html">← Index</a><a href="iter-082.html">← iter-082</a><a href="iter-084.html">iter-084 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li><strong>Forty-five metrics live (98% of the 46-metric taxonomy).</strong></li><li>The TTFS dimension now has 9 lenses: budget, attribution, bilateral split, naturalness, cold-start, jitter, rhythm, best-of, and now hit-rate-vs-1s. After this, only WER (1.6 — needs ground truth corpus) remains; iter-085 may pivot to other work or tackle WER as a heavyweight iteration.</li><li><strong>Pattern observation:</strong> the last 10 iterations have alternated between session-level pure-derivation metrics (cheap, ~10 lines + tests) and per-turn instrumented metrics (medium, ~50 lines + tests across multiple files). The session-level metrics tend to be richer in the &quot;diagnostic value per line of code&quot; sense — they leverage data already captured rather than paying instrumentation costs. iter-085 onward will likely lean on this pattern more.</li></ul><nav><a href="index.html">← Index</a><a href="iter-083.html">← iter-083</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>
