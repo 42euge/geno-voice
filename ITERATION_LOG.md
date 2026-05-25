@@ -4472,3 +4472,66 @@ Notes:
 - Next candidates: 2.7 (worker queue depth), 2.9 (persistent-
   speaker open count per session), 1.5 (VAD missed-speech rate
   — needs ground truth), 1.2 (EoT detection latency).
+
+## iter-062 — peak worker queue depth metric (taxonomy 2.7)
+
+**Branch:** iter-062-queue-depth  **Commit:** 9109bb4  **Date:** 2026-05-24
+
+Added `max_queue_depth` — peak number of sentences waiting in the
+SentenceWorker's queue at any moment during a turn. Inverse of
+iter-044's `worker_idle_gap_total` (worker starved). Together the
+two metrics localize where the streaming pipeline gets stuck:
+- High idle gap, low queue depth → LLM is the bottleneck.
+- Low idle gap, high queue depth → synth is the bottleneck.
+- Both low → balanced (the iter-008 streaming-overlap design is
+  paying off).
+- Both high → buffering oscillation (rare; would suggest the
+  splitter itself is producing in bursts).
+
+Implementation:
+- `SentenceWorker.max_queue_depth: int = 0` (new field).
+- Sampled inside `SentenceWorker.submit()` after each `Queue.put`:
+  ```python
+  self._queue.put(sentence)
+  depth = self._queue.qsize()
+  if depth > self.max_queue_depth:
+      self.max_queue_depth = depth
+  ```
+  `qsize()` is documented as approximate but the only race is
+  with the consumer thread which only DRAINS — over-count is
+  harmless for a peak metric and the test suite confirms the
+  observed behavior.
+- `TurnMetrics.max_queue_depth: int = 0` and ChatLoop transfer
+  alongside other worker → metrics assignments.
+- Per-turn print: "Queue depth: N (synth backlog peak)" only
+  when >1. Yellow if ≥3.
+- Session summary: "Worst queue: N (M/N turns backed up)" with
+  worst depth across turns + count of turns where any backup
+  happened. Single-backup-turn case shows "1 turn backed up"
+  instead of "1/N turns" for readability.
+- `ScenarioResult.max_queue_depth` on perf snapshots.
+
+Tests (16 in `tests/unit/test_queue_depth.py`):
+- Defaults: TurnMetrics + SentenceWorker both 0.
+- Per-turn print: 0 / 1 omitted; 2 dim; 5 visible.
+- Session aggregate: no-data / only-healthy / single-backup /
+  multi-backup variants.
+- Worker tracking: single submit records ≥1; burst with slow synth
+  builds depth; no-submits keeps 0; submits-after-stop ignored.
+- ChatLoop wiring: short response stays ≤1; slow-synth scenario
+  with 5 sentences bubbles depth into TurnMetrics within sanity
+  bounds.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **796 passed, 1 skipped in 23s** (780 existing
++ 16 new).
+
+Notes:
+- **Twenty-four metrics live (52% of the 46-metric taxonomy).**
+- The producer/consumer dimension is now fully measured — both
+  sides of the queue have peak indicators (this) AND idle indicators
+  (idle_gap), so a regression in either direction shows up.
+- Next candidates: 2.9 (persistent-speaker open count per session
+  — should always be 1 with iter-008 design; >1 means the worker
+  thread crashed and restarted), 1.5 (VAD missed-speech rate —
+  needs ground truth fixture), 1.2 (EoT detection latency).
