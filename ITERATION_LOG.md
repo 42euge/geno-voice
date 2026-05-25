@@ -6252,3 +6252,59 @@ Notes:
     iter-088 (aggressive splitter) into "auto-aggressive" — flip
     splitter to aggressive mid-turn if a stall is detected.
   - WER ground-truth fixture as a heavyweight iteration.
+
+## iter-090 — extract _emit_barge_block helper
+
+**Branch:** iter-090-barge-helper  **Commit:** dbf434d  **Date:** 2026-05-25
+
+The barge-in section of `print_session_summary` was 76 lines
+across 8 sub-conditions (count + mid-stream %, interruption rate,
+latency median+worst, cancel-to-close, phase distribution, regret
+rate, pre-empted words). Extract to a standalone
+`_emit_barge_block(emit, stats: BargeStats)` helper.
+
+Introduced a `BargeStats` dataclass to bundle the 11 input fields
+cleanly. Following the iter-086 SessionMeta pattern: each new
+barge-side metric extends the dataclass instead of growing the
+helper signature.
+
+Behavior-preserving: byte-for-byte identical output. The 1082
+prior tests pass unchanged — the regression sentinel pattern from
+iter-089 carries forward.
+
+Tests (13 in `tests/unit/test_emit_barge_block.py`):
+- `BargeStats` defaults are all zero / empty.
+- No-barges path emits nothing.
+- Single barge: clean form ("all between sentences") vs
+  mid-stream form ("N mid-stream, X%").
+- Interruption rate against `n` denominator.
+- Latencies: median + worst when present.
+- Cancel-to-close median when present.
+- Phase distribution: emits when either non-zero, omits when
+  both 0.
+- Regret rate emits with correct %, omits when 0.
+- Pre-empted words: total + avg/loss correctly computed.
+- Ordering invariant across all 8 emitted line types.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **1095 passed, 1 skipped in 25s** (1082
+existing + 13 new).
+
+Notes:
+- `print_session_summary` is now ~1370 lines (down from 1500
+  pre-iter-089). Each block extraction compounds — TTFS (-80) +
+  barge (-76) = -156 lines reduced. Function still has Errors,
+  Filler, WPM, Sentence-stats, Token-lag, Queue, Mic-stale, VAD-
+  false-trig, Trim, Context, Recovery, Bargeable blocks left to
+  consider.
+- The `BargeStats` dataclass pattern is paying off — adding
+  iter-080 pre-empted-content fields was a 2-line dataclass
+  extension instead of growing a kwarg list. Future barge
+  metrics extend the dataclass cleanly.
+- Next directions:
+  - Continue: extract `_emit_filler_block` (iter-014/051/081).
+  - Continue: extract `_emit_errors_block` (iter-058/067/079 +
+    silent-turn rate).
+  - Architecture: combine iter-085 max_token_gap with iter-088
+    aggressive_first to auto-flip the splitter mid-turn on a
+    detected stall.

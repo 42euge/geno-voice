@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-089 — extract _emit_ttfs_block helper</title>
+<title>iter-090 — extract _emit_barge_block helper</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,18 +168,18 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-088.html">← iter-088</a><a href="iter-090.html">iter-090 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-089 — extract _emit_ttfs_block helper</h1>
-<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+9</code> (total 1082)</span></div>
-</header><p><strong>Branch:</strong> iter-089-ttfs-helper  <strong>Commit:</strong> dca7298  <strong>Date:</strong> 2026-05-25</p>
-<p><code>print_session_summary</code>&#x27;s TTFS block was 80 lines of co-emitted session-summary output (Median TTFS, Best TTFS, sub-second rate, rhythm, jitter, cold-start, naturalness) — all gated on <code>ttfs_times</code> being non-empty AND various sub-conditions.</p>
-<p>Extracted to a standalone <code>_emit_ttfs_block(emit, ttfs_times, metrics_list, naturalness_counts)</code> helper. Behavior-preserving: output is byte-for-byte identical (1073 prior tests pass unchanged without modification).</p>
-<p>This sets the pattern for further teardown. <code>print_session_summary</code> is currently 1500+ lines; future iterations can extract Errors, Barge, Filler, etc. blocks the same way: 1. Identify a contiguous block of lines that share gating conditions. 2. Pull the lines + the data they read from into a helper. 3. Replace the inline block with a single call. 4. Verify the existing tests still pass (regression sentinel). 5. Add direct tests on the helper for faster, more focused coverage.</p>
-<p>Tests (9 in <code>tests/unit/test_emit_ttfs_block.py</code>):</p>
-<ul><li>Empty ttfs_times → n/a placeholders.</li><li>Single-turn → only the lines that don&#x27;t need ≥2 turns (rhythm/jitter/cold-start gated, skipped).</li><li>Multi-turn → rhythm + jitter emit.</li><li>Cold-start emits when penalty &gt; 50ms; skipped below.</li><li>Naturalness emits only when any bucket set.</li><li>Ordering invariant: median → best → sub-second → rhythm → jitter → cold-start → naturalness in stable order.</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>1082 passed, 1 skipped in 25s</strong> (1073 existing + 9 new). The 1073 prior tests are the regression sentinel — they pass unchanged because the helper produces byte-for-byte identical output.</p>
+<nav><a href="index.html">← Index</a><a href="iter-089.html">← iter-089</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-090 — extract _emit_barge_block helper</h1>
+<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+13</code> (total 1095)</span></div>
+</header><p><strong>Branch:</strong> iter-090-barge-helper  <strong>Commit:</strong> dbf434d  <strong>Date:</strong> 2026-05-25</p>
+<p>The barge-in section of <code>print_session_summary</code> was 76 lines across 8 sub-conditions (count + mid-stream %, interruption rate, latency median+worst, cancel-to-close, phase distribution, regret rate, pre-empted words). Extract to a standalone <code>_emit_barge_block(emit, stats: BargeStats)</code> helper.</p>
+<p>Introduced a <code>BargeStats</code> dataclass to bundle the 11 input fields cleanly. Following the iter-086 SessionMeta pattern: each new barge-side metric extends the dataclass instead of growing the helper signature.</p>
+<p>Behavior-preserving: byte-for-byte identical output. The 1082 prior tests pass unchanged — the regression sentinel pattern from iter-089 carries forward.</p>
+<p>Tests (13 in <code>tests/unit/test_emit_barge_block.py</code>):</p>
+<ul><li><code>BargeStats</code> defaults are all zero / empty.</li><li>No-barges path emits nothing.</li><li>Single barge: clean form (&quot;all between sentences&quot;) vs mid-stream form (&quot;N mid-stream, X%&quot;).</li><li>Interruption rate against <code>n</code> denominator.</li><li>Latencies: median + worst when present.</li><li>Cancel-to-close median when present.</li><li>Phase distribution: emits when either non-zero, omits when both 0.</li><li>Regret rate emits with correct %, omits when 0.</li><li>Pre-empted words: total + avg/loss correctly computed.</li><li>Ordering invariant across all 8 emitted line types.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>1095 passed, 1 skipped in 25s</strong> (1082 existing + 13 new).</p>
 <p>Notes:</p>
-<ul><li>The &quot;test the helper directly&quot; pattern is faster (sub-millisecond per test vs ~25ms going through the full session-summary path) and more focused (no setup of unrelated metrics). Future per-block helpers should follow this pattern.</li><li><code>print_session_summary</code> is now 1500 → 1426 lines, a modest reduction. Each future block extraction will compound.</li><li>Next directions: 041/047/056/057/060/080 cluster — substantial size). iter-088 (aggressive splitter) into &quot;auto-aggressive&quot; — flip splitter to aggressive mid-turn if a stall is detected.<ul><li>Continue refactoring: extract _emit_barge_block (the iter-040/</li><li>Continue architecture: combine iter-085 (max_token_gap) and</li><li>WER ground-truth fixture as a heavyweight iteration.</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-088.html">← iter-088</a><a href="iter-090.html">iter-090 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li><code>print_session_summary</code> is now ~1370 lines (down from 1500 pre-iter-089). Each block extraction compounds — TTFS (-80) + barge (-76) = -156 lines reduced. Function still has Errors, Filler, WPM, Sentence-stats, Token-lag, Queue, Mic-stale, VAD- false-trig, Trim, Context, Recovery, Bargeable blocks left to consider.</li><li>The <code>BargeStats</code> dataclass pattern is paying off — adding iter-080 pre-empted-content fields was a 2-line dataclass extension instead of growing a kwarg list. Future barge metrics extend the dataclass cleanly.</li><li>Next directions: silent-turn rate). aggressive_first to auto-flip the splitter mid-turn on a detected stall.<ul><li>Continue: extract <code>_emit_filler_block</code> (iter-014/051/081).</li><li>Continue: extract <code>_emit_errors_block</code> (iter-058/067/079 +</li><li>Architecture: combine iter-085 max_token_gap with iter-088</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-089.html">← iter-089</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>
