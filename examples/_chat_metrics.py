@@ -970,6 +970,66 @@ def _emit_barge_block(emit, stats: BargeStats) -> None:
 
 
 @dataclass
+class FillerStats:
+    """iter-091: aggregated filler-side counters consumed by
+    ``_emit_filler_block``. Each new filler-side metric extends
+    the dataclass instead of growing the helper signature.
+
+    Fields:
+      ``fillers_total`` (iter-014): total filler clips played.
+      ``filler_turns`` (iter-051): turns where ≥1 filler played
+        (denominator for the FP rate).
+      ``filler_false_positives`` (iter-051): filler turns where
+        ``llm_first_token < idle_threshold`` — the filler wasn't
+        actually needed.
+      ``unique_filler_count`` (iter-081): distinct filler IDs
+        played across the session.
+    """
+
+    fillers_total: int = 0
+    filler_turns: int = 0
+    filler_false_positives: int = 0
+    unique_filler_count: int = 0
+
+
+def _emit_filler_block(emit, stats: FillerStats) -> None:
+    """iter-091: extracted from print_session_summary's filler
+    section.
+
+    Renders:
+      - "Fillers played: N" (iter-014).
+      - "Filler FP rate: M/K (X%)" (iter-051) when any FP fired.
+      - "Filler novelty: M unique / N (X%)" (iter-081) when
+        ≥2 fillers played (single-play is trivially 100%).
+
+    Behavior-preserving: byte-for-byte identical to the inline
+    version.
+    """
+    if stats.fillers_total <= 0:
+        return
+
+    emit(f"    Fillers played:   {stats.fillers_total}")
+    # iter-051: false-positive rate among filler turns. Only
+    # emits when at least one false positive fired.
+    if stats.filler_turns > 0 and stats.filler_false_positives > 0:
+        fp_pct = (stats.filler_false_positives / stats.filler_turns) * 100
+        emit(
+            f"    Filler FP rate:   "
+            f"{stats.filler_false_positives}/{stats.filler_turns} "
+            f"({fp_pct:.0f}%) — tune idle_threshold up"
+        )
+    # iter-081: filler novelty index — distinct clips / total
+    # plays. Skip on single-play sessions (1/1 = 100% trivially).
+    if stats.fillers_total >= 2:
+        novelty_pct = (stats.unique_filler_count / stats.fillers_total) * 100
+        emit(
+            f"    Filler novelty:   "
+            f"{stats.unique_filler_count} unique / {stats.fillers_total} "
+            f"({novelty_pct:.0f}%)"
+        )
+
+
+@dataclass
 class SessionMeta:
     """iter-086: session-level signals collected by the driver
     (mic_chat) and passed into ``print_session_summary`` as a
@@ -1415,38 +1475,20 @@ def print_session_summary(
     # call. Behavior-preserving: output is byte-for-byte identical
     # to the inline version.
     _emit_ttfs_block(_emit, ttfs_times, metrics_list, naturalness_counts)
-    if fillers_total:
-        _emit(f"    Fillers played:   {fillers_total}")
-        # iter-051: false-positive rate among the turns where a
-        # filler played. Tune idle_threshold up if FP is high —
-        # the bot's rendering disfluency for no benefit.
-        if filler_turns > 0:
-            fp_pct = (filler_false_positives / filler_turns) * 100
-            if filler_false_positives > 0:
-                _emit(
-                    f"    Filler FP rate:   "
-                    f"{filler_false_positives}/{filler_turns} "
-                    f"({fp_pct:.0f}%) — tune idle_threshold up"
-                )
-        # iter-081: filler novelty index. Distinct clip IDs across
-        # the session vs total plays. 100% = picker distributed
-        # perfectly (every play was a distinct clip); <100% = at
-        # least one clip got picked more than once. Hearing the
-        # same "umm" multiple times in a row feels worse than no
-        # filler at all. Skip the line on single-play sessions
-        # (1/1 = 100% trivially).
-        unique_filler_ids = {
-            m.last_filler_id for m in metrics_list
-            if m.last_filler_id != 0
-        }
-        if fillers_total >= 2:
-            unique_count = len(unique_filler_ids)
-            novelty_pct = (unique_count / fillers_total) * 100
-            _emit(
-                f"    Filler novelty:   "
-                f"{unique_count} unique / {fillers_total} "
-                f"({novelty_pct:.0f}%)"
-            )
+    # iter-091: filler block extracted to _emit_filler_block.
+    unique_filler_ids = {
+        m.last_filler_id for m in metrics_list
+        if m.last_filler_id != 0
+    }
+    _emit_filler_block(
+        _emit,
+        FillerStats(
+            fillers_total=fillers_total,
+            filler_turns=filler_turns,
+            filler_false_positives=filler_false_positives,
+            unique_filler_count=len(unique_filler_ids),
+        ),
+    )
     # iter-090: barge block extracted to _emit_barge_block helper.
     # ~76 lines of co-emitted lines (count, interruption rate,
     # latency, phase distribution, regret, pre-empted words)
