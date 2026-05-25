@@ -3844,3 +3844,65 @@ Notes:
 - Next candidates: 1.5 (VAD missed-speech, harder, needs ground
   truth), 2.7 (worker queue depth, simple), 1.9 (LLM TPS — needs
   token count which we have).
+
+---
+
+## iter-052 — LLM tokens-per-second metric (taxonomy 1.9)
+
+**Branch:** `iter-052-llm-tps` (merged ff to main, commit `1097340`)
+**Date:** 2026-05-24
+
+Fourteenth metric pulled from `docs/perf-metrics-taxonomy.md`.
+**Metric 1.9 — LLM tokens-per-second**, "Standard" bucket.
+
+Stream throughput of the LLM measured AFTER first token:
+
+    llm_tps = (token_count - 1) / (llm_stream_done_at - first_token_at)
+
+Excluding the first-token wait avoids conflating TTFT (already
+on `metrics.llm_first_token` since iter-001) with steady-state
+throughput. The taxonomy separation: TTFT is "did the LLM start
+fast?", TPS is "is the LLM keeping up?" Two different problems
+with two different fixes.
+
+Operational context:
+- Local 7B-13B models on Apple Silicon: 30-80 tps.
+- Cloud APIs (Anthropic, OpenAI): 20-60 tps.
+- <20 tps with no first-token issue → endpoint is overloaded,
+  pre-token cache is cold, or model is too large for hardware.
+- LLM TPS directly gates `llm_first_sentence` (iter-038), which
+  gates `ttfs` (iter-001), so this metric explains downstream slowness.
+
+Implementation:
+- `TurnMetrics.llm_tps: float = 0.0` (new field).
+- ChatLoop adds `token_count += 1` inside the existing for-token
+  loop. After `llm_stream_done_at` is set, computes the ratio
+  with three guards: ≥2 tokens, positive interval, both endpoints
+  set. Single-token / empty / barge-cut streams leave TPS at 0.
+- Per-turn print: extends LLM-total line to
+  `"NNms (model, NN tps)"` when measurable.
+- Session summary: `Median LLM TPS: NN` filtered for >0.
+- `ScenarioResult.llm_tps` on perf snapshots.
+
+Tests (10 in `tests/unit/test_llm_tps.py`):
+- Default 0.
+- Per-turn print: zero omits the suffix, non-zero shows it,
+  high TPS rendered with `:.0f` rounding.
+- Session aggregate: no-data omits, with-data shows median,
+  zero-filter (parallel to iter-031 / iter-038 / iter-049 / iter-050).
+- ChatLoop arithmetic: 6 tokens with 20ms each yields 20-100 TPS
+  (real timing has overhead — bound is loose); single token
+  yields 0 (need ≥2); empty stream yields 0.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **674 passed, 1 skipped in 23s** (664
+existing + 10 new).
+
+Notes:
+- Fourteen metrics live (30% of the 46-metric taxonomy).
+- The LLM diagnostic now has TTFT, TTFsent, TPS, total — the full
+  picture from "did it start" to "is it keeping up" to "did it
+  finish."
+- Next candidates: 2.7 (worker queue depth — needs a sampler
+  daemon), 1.15 (turn count / session length — derivable from
+  metrics_list), 3.1 (naturalness gap — interesting novel metric).
