@@ -1111,6 +1111,47 @@ def _emit_errors_block(emit, stats: ErrorStats) -> None:
 
 
 @dataclass
+class WpmStats:
+    """iter-094: WPM medians consumed by ``_emit_wpm_block``.
+
+    Bundles the iter-064 user-WPM list and iter-046 bot-WPM list
+    (both filtered to nonzero values by the caller). The mirror
+    gap (iter-064) is computed inline by the helper when both
+    are present.
+
+    Fields:
+      ``user_wpms``: list of measurable per-turn user WPM values.
+      ``bot_wpms``: list of measurable per-turn bot WPM values.
+    """
+
+    user_wpms: list = field(default_factory=list)
+    bot_wpms: list = field(default_factory=list)
+
+
+def _emit_wpm_block(emit, stats: WpmStats) -> None:
+    """iter-094: extracted from print_session_summary's WPM block.
+
+    Renders:
+      - "Median user WPM: NNN" (iter-064) when measurable.
+      - "Median bot WPM:  NNN" (iter-046) when measurable.
+      - "Mirror gap: ±NN WPM (bot − user)" (iter-064) when both
+        are measurable.
+
+    Behavior-preserving: byte-for-byte identical to the inline
+    version that lived in print_session_summary.
+    """
+    if stats.user_wpms:
+        median_user_wpm = statistics.median(stats.user_wpms)
+        emit(f"    Median user WPM:  {median_user_wpm:.0f}")
+    if stats.bot_wpms:
+        median_wpm = statistics.median(stats.bot_wpms)
+        emit(f"    Median bot WPM:   {median_wpm:.0f}")
+        if stats.user_wpms:
+            gap = median_wpm - statistics.median(stats.user_wpms)
+            emit(f"    Mirror gap:       {gap:+.0f} WPM (bot − user)")
+
+
+@dataclass
 class SessionMeta:
     """iter-086: session-level signals collected by the driver
     (mic_chat) and passed into ``print_session_summary`` as a
@@ -1719,20 +1760,8 @@ def print_session_summary(
         # often enough — system-prompt opportunity.
         median_cov = statistics.median(coverage_values) * 100
         _emit(f"    Split coverage:   {median_cov:.0f}%")
-    # iter-064: user WPM (median across measurable turns) + the
-    # mirror gap (bot - user WPM) when both are known. The mirror
-    # gap predicts conversational "feel": ≈0 = mirroring (high
-    # rapport); >40 = bot too fast for user (likely interruption
-    # source); <-40 = bot too slow (user impatient).
-    if user_wpms:
-        median_user_wpm = statistics.median(user_wpms)
-        _emit(f"    Median user WPM:  {median_user_wpm:.0f}")
-    if bot_wpms:
-        median_wpm = statistics.median(bot_wpms)
-        _emit(f"    Median bot WPM:   {median_wpm:.0f}")
-        if user_wpms:
-            gap = median_wpm - statistics.median(user_wpms)
-            _emit(f"    Mirror gap:       {gap:+.0f} WPM (bot − user)")
+    # iter-094: WPM block extracted to _emit_wpm_block helper.
+    _emit_wpm_block(_emit, WpmStats(user_wpms=user_wpms, bot_wpms=bot_wpms))
     # iter-077: context size summary. The MEDIAN tells you the
     # typical per-call cost; the MAX tells you the worst case.
     # Pair them: if max ≫ median, late turns blew up — likely a
