@@ -5683,3 +5683,67 @@ Notes:
   ratio; partially covered by iter-064's mirror gap), 1.6 (WER,
   needs ground truth corpus), 1.17 (audio underrun/overrun count
   — needs PyAudio plumbing).
+
+## iter-081 — filler novelty index (taxonomy 3.8)
+
+**Branch:** iter-081-filler-novelty  **Commit:** 58abd25  **Date:** 2026-05-25
+
+Added filler novelty index — distinct filler clip IDs across the
+session vs total plays. Hearing the same "umm" three times in a
+row is worse than no filler at all; the metric measures whether
+the picker is actually distributing across the rendered_fillers
+list.
+
+Implementation:
+- `SentenceWorker.last_filler_id: Optional[int] = None` (new
+  public attribute). Latched after a successful filler play:
+  `self.last_filler_id = id(clip)`. The id() is stable across
+  worker instances because mic_chat holds the canonical
+  rendered_fillers list and passes it by reference each turn.
+- `TurnMetrics.last_filler_id: int = 0` (0 = no filler this turn).
+  ChatLoop transfers from worker when worker had a filler.
+- `print_session_summary` computes session-wide diversity via set
+  arithmetic:
+  ```python
+  unique_filler_ids = {
+      m.last_filler_id for m in metrics_list if m.last_filler_id != 0
+  }
+  novelty_pct = len(unique_filler_ids) / fillers_total * 100
+  ```
+- Output: "Filler novelty: M unique / N (X%)" emitted only when
+  ≥2 fillers played (single-play sessions are 100% trivially —
+  no info).
+- `ScenarioResult.last_filler_id` on perf snapshots. Caveat: the
+  id is process-stable but not portable across runs — useful for
+  in-session aggregation, NOT for cross-iteration time-series.
+
+Tests (11 in `tests/unit/test_filler_novelty.py`):
+- Defaults zero / None.
+- Worker latching: empty fillers list keeps None; single filler
+  available with deterministic picker latches its id; 3-filler
+  picker picks the second and latches THAT id (not the others).
+  Tests use a delayed `submit_done()` so the queue.get timeout
+  fires the filler path before the sentinel cancels it.
+- Session aggregate: no-fillers omits, single-play omits (100%
+  trivially), perfect diversity (3/3 = 100%), partial (2/4 = 50%),
+  all-same (1/5 = 20%), zero-id turns excluded from denominator.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **1003 passed, 1 skipped in 24s** (992 existing
++ 11 new). **Test suite crossed 1000.**
+
+Notes:
+- **Forty-two metrics live (91% of the 46-metric taxonomy).**
+- Filler dimension complete: count (iter-014 fillers_played),
+  false-positive rate (iter-051), novelty index (this — taxonomy
+  3.8). Three orthogonal lenses on the iter-011 filler design.
+- The `id()`-based session aggregation pattern is unusual but
+  fits the use case: we need a stable-per-process identifier for
+  sets, and the rendered_fillers tuples already provide that
+  naturally. Documented the time-series caveat so future
+  iterations don't try to compare `last_filler_id` across runs.
+- Next candidates: 1.6 (WER, needs ground truth corpus), 1.17
+  (audio underrun/overrun count — needs PyAudio plumbing), 3.13
+  (adaptive-rate margin — bot_wpm/user_wpm; partially covered
+  by iter-064's mirror gap), 3.14 (TTC proxy — time from bot
+  first audio to next user turn first speech).
