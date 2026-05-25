@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-082 — TTC (time-to-comprehension) proxy (taxonomy 3.14)</title>
+<title>iter-083 — first-token-to-audio gap (FT-A) (taxonomy 3.18)</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,21 +168,21 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-081.html">← iter-081</a><a href="iter-083.html">iter-083 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-082 — TTC (time-to-comprehension) proxy (taxonomy 3.14)</h1>
-<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+16</code> (total 1019)</span></div>
-</header><p><strong>Branch:</strong> iter-082-ttc  <strong>Commit:</strong> 8e5f4f8  <strong>Date:</strong> 2026-05-25</p>
-<p>Added <code>time_to_comprehension</code> — a cross-turn metric measuring the gap from the PREVIOUS turn&#x27;s bot first audio to THIS turn&#x27;s first speech-detected frame:</p>
-<p>ttc = current_turn.speech_start_at - prev_turn.first_audio_at</p>
-<p>Captures how long the user listened before responding. Three signals:</p>
-<ul><li><strong>&lt;500ms</strong>: user already knew the answer; bot was telling them what they already knew (under-performing).</li><li><strong>&gt;5s</strong>: user was confused / thinking / multi-tasking.</li><li><strong>1-3s</strong>: bell-curve target — typical conversational response time.</li></ul>
+<nav><a href="index.html">← Index</a><a href="iter-082.html">← iter-082</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-083 — first-token-to-audio gap (FT-A) (taxonomy 3.18)</h1>
+<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+9</code> (total 1028)</span></div>
+</header><p><strong>Branch:</strong> iter-083-fta-gap  <strong>Commit:</strong> afd33fb  <strong>Date:</strong> 2026-05-25</p>
+<p>Added <code>first_token_to_audio</code> — time from when the LLM&#x27;s first token landed at the splitter to when the worker played its first audio chunk:</p>
+<p>FT-A = worker.first_audio_at - first_token_at</p>
+<p>Complementary to iter-052&#x27;s <code>llm_first_token</code>. Together they bracket where TTFS time was spent:</p>
+<ul><li>High <strong><code>llm_first_token</code></strong>, low FT-A → LLM is the bottleneck (TTFB to invest in: model latency, network, prompt length).</li><li>Low <code>llm_first_token</code>, high <strong>FT-A</strong> → sentence-split + TTS is the bottleneck (synth speed, splitter waiting on terminator).</li><li>Both high → both legs need work.</li></ul>
 <p>Implementation:</p>
-<ul><li><code>record_utterance_streaming</code> gained an <code>out_metrics[&quot;speech_start_at&quot;]</code> key. Latched in the recorder&#x27;s per-frame loop the first time a frame&#x27;s RMS crosses <code>silence_threshold</code>. Same DONE_OK gating as <code>eot_latency</code> — DONE_TOO_SHORT path doesn&#x27;t write.</li><li><code>ChatLoop</code> gained <code>self._last_first_audio_at: Optional[float]</code> instance state. Initialized to None; updated each turn that produces audio (skipped on silent turns to avoid anchoring to a missing event).</li><li>TTC computed on turns where both prev&#x27;s first_audio_at AND this turn&#x27;s speech_start_at exist. Clamped at 0 to handle test-mode clock drift between the recorder&#x27;s frame-aligned virtual clock and the loop&#x27;s wall-clock.</li><li>Per-turn print: emits &quot;TTC: NNms (user listened before responding)&quot; when &gt;0. Yellow at the rushed (&lt;500ms) and slow (&gt;5s) extremes.</li><li>Session aggregate: median + outlier counts (&quot;X rushed, Y slow&quot;) inline. Showcases distribution shape, not just central tendency.</li><li><code>ScenarioResult.time_to_comprehension_ms</code> on perf snapshots.</li></ul>
-<p>Tests (16 in <code>tests/unit/test_ttc_proxy.py</code>):</p>
-<ul><li>Default zero / per-turn print: zero omits, natural emits dim, rushed and slow render with sign-aware color paths.</li><li>Recorder integration: <code>speech_start_at</code> populated on DONE_OK, omitted on DONE_TOO_SHORT.</li><li>Session aggregate: no-data, natural-only (no outlier annotation), rushed outlier, slow outlier, both kinds, zero filtering.</li><li>ChatLoop wiring: turn 1 zero (no prev); turn 2 populated and non-negative; silent prev turn breaks the chain (bounded result).</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>1019 passed, 1 skipped in 24s</strong> (1003 existing + 16 new).</p>
+<ul><li><code>TurnMetrics.first_token_to_audio: float = 0.0</code> (new field).</li><li>ChatLoop computes when both <code>first_token_at</code> and <code>worker.first_audio_at</code> exist; clamped at 0 against tiny clock-skew negatives.</li><li>Per-turn print: appends &quot;+NNms → audio&quot; suffix to the LLM 1st-tok line, mirroring iter-038&#x27;s &quot;+NNms preamble&quot; suffix on the LLM 1st-sent line. The visual symmetry makes the decomposition obvious.</li><li>Session summary: &quot;Median FT-A: NNms&quot; emitted alongside &quot;Median LLM 1st&quot; so the operator sees both halves.</li><li><code>ScenarioResult.first_token_to_audio_ms</code> on perf snapshots.</li></ul>
+<p>Tests (9 in <code>tests/unit/test_fta_gap.py</code>):</p>
+<ul><li>Default zero / per-turn print: zero omits suffix, non-zero appends.</li><li>Session aggregate: no-data, median, zero-filter.</li><li>ChatLoop arithmetic: clean turn populates ≥0 and bounded; clamp at zero defensive.</li><li>Complementarity test: stt + llm_ft + FT-A = ttfs algebraically on a constructed case.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>1028 passed, 1 skipped in 25s</strong> (1019 existing + 9 new).</p>
 <p>Notes:</p>
-<ul><li><strong>Forty-three metrics live (93% of the 46-metric taxonomy).</strong></li><li>This is the FIRST cross-turn metric in the project. The ChatLoop-as-session-state pattern (vs purely run_one_turn-as- pure-function) opens the door to other cross-turn signals: 3.13 adaptive-rate margin (already partially covered), 3.16 cross-modal consistency, 1.20 cold-start (already done at print-time).</li><li>The <code>out_metrics</code> dict in <code>record_utterance_streaming</code> now carries 3 keys (eot_latency, stt_preview_divergence, speech_start_at). Every recorder-side metric becomes one new key + one ChatLoop read — pattern stays clean.</li><li>Next candidates (3 metrics from 46 left, all heavyweight): 1.6 (WER, needs ground truth corpus), 1.17 (audio underrun/ overrun count — needs PyAudio plumbing), 2.13 (primed-frames STT contribution — needs offline ablation).</li></ul><nav><a href="index.html">← Index</a><a href="iter-081.html">← iter-081</a><a href="iter-083.html">iter-083 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li><strong>Forty-four metrics live (96% of the 46-metric taxonomy).</strong></li><li>The TTFS decomposition is now exhaustive on the diagnostic side: macro budget (<code>ttfs</code>), three-bucket attribution (iter-076), bilateral split (<code>llm_first_token</code> + this), preamble gap (iter-038), naturalness bucket (iter-053), cold-start penalty (iter-066), jitter + rhythm (iter-068/055). Eight orthogonal lenses on the most important UX number.</li><li>Remaining 2 metrics from 46: 1.6 (WER, needs ground truth corpus) and 1.17 (audio device underrun/overrun count, needs PyAudio plumbing). Both heavyweight; might do them as separate larger iterations or pivot to other work after the taxonomy is exhausted.</li></ul><nav><a href="index.html">← Index</a><a href="iter-082.html">← iter-082</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

@@ -5818,3 +5818,61 @@ Notes:
   1.6 (WER, needs ground truth corpus), 1.17 (audio underrun/
   overrun count — needs PyAudio plumbing), 2.13 (primed-frames
   STT contribution — needs offline ablation).
+
+## iter-083 — first-token-to-audio gap (FT-A) (taxonomy 3.18)
+
+**Branch:** iter-083-fta-gap  **Commit:** afd33fb  **Date:** 2026-05-25
+
+Added `first_token_to_audio` — time from when the LLM's first
+token landed at the splitter to when the worker played its first
+audio chunk:
+
+    FT-A = worker.first_audio_at - first_token_at
+
+Complementary to iter-052's `llm_first_token`. Together they
+bracket where TTFS time was spent:
+- High **`llm_first_token`**, low FT-A → LLM is the bottleneck
+  (TTFB to invest in: model latency, network, prompt length).
+- Low `llm_first_token`, high **FT-A** → sentence-split + TTS is
+  the bottleneck (synth speed, splitter waiting on terminator).
+- Both high → both legs need work.
+
+Implementation:
+- `TurnMetrics.first_token_to_audio: float = 0.0` (new field).
+- ChatLoop computes when both `first_token_at` and
+  `worker.first_audio_at` exist; clamped at 0 against tiny
+  clock-skew negatives.
+- Per-turn print: appends "+NNms → audio" suffix to the LLM
+  1st-tok line, mirroring iter-038's "+NNms preamble" suffix on
+  the LLM 1st-sent line. The visual symmetry makes the
+  decomposition obvious.
+- Session summary: "Median FT-A: NNms" emitted alongside
+  "Median LLM 1st" so the operator sees both halves.
+- `ScenarioResult.first_token_to_audio_ms` on perf snapshots.
+
+Tests (9 in `tests/unit/test_fta_gap.py`):
+- Default zero / per-turn print: zero omits suffix, non-zero
+  appends.
+- Session aggregate: no-data, median, zero-filter.
+- ChatLoop arithmetic: clean turn populates ≥0 and bounded;
+  clamp at zero defensive.
+- Complementarity test: stt + llm_ft + FT-A = ttfs algebraically
+  on a constructed case.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **1028 passed, 1 skipped in 25s** (1019
+existing + 9 new).
+
+Notes:
+- **Forty-four metrics live (96% of the 46-metric taxonomy).**
+- The TTFS decomposition is now exhaustive on the diagnostic
+  side: macro budget (`ttfs`), three-bucket attribution
+  (iter-076), bilateral split (`llm_first_token` + this), preamble
+  gap (iter-038), naturalness bucket (iter-053), cold-start
+  penalty (iter-066), jitter + rhythm (iter-068/055). Eight
+  orthogonal lenses on the most important UX number.
+- Remaining 2 metrics from 46: 1.6 (WER, needs ground truth
+  corpus) and 1.17 (audio device underrun/overrun count, needs
+  PyAudio plumbing). Both heavyweight; might do them as
+  separate larger iterations or pivot to other work after the
+  taxonomy is exhausted.
