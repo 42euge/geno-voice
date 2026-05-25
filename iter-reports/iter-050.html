@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-049 — STT real-time factor metric (taxonomy 1.7)</title>
+<title>iter-050 — TTS real-time factor metric (taxonomy 1.11)</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,22 +168,41 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-048.html">← iter-048</a><a href="iter-050.html">iter-050 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-049 — STT real-time factor metric (taxonomy 1.7)</h1>
-<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-049-stt-rtf</code></span> · <span>commit: <code>b7f02f4</code></span> · <span>tests: <code>+8</code> (total 645)</span></div>
-</header><p><strong>Branch:</strong> <code>iter-049-stt-rtf</code> (merged ff to main, commit <code>b7f02f4</code>) <strong>Date:</strong> 2026-05-24</p>
-<p>Eleventh metric pulled from <code>docs/perf-metrics-taxonomy.md</code>. <strong>Metric 1.7 — STT real-time factor (RTF)</strong>, &quot;Standard&quot; bucket.</p>
-<p>Simplest possible metric: <code>stt_rtf = stt_time / speech_duration</code>. Both inputs already on TurnMetrics since iter-001. iter-049 just exposes the ratio.</p>
-<p>Operational signal:</p>
-<ul><li><strong>&lt;1</strong>: STT runs faster than realtime — safe to invoke inline at end-of-turn. Mlx-whisper-large on Apple Silicon: ~0.1-0.3.</li><li><strong>&gt;1</strong>: STT is the bottleneck — need streaming partial transcription, smaller model, or hardware acceleration.</li></ul>
-<p>Implementation:</p>
-<ul><li><code>TurnMetrics.stt_rtf: float = 0.0</code> (new field).</li><li>ChatLoop computes after <code>stt_time</code> + <code>speech_dur</code> are set; guards div-by-zero (zero-speech turns can&#x27;t reach this code path post- iter-031, but the guard documents the contract).</li><li>Per-turn print: extends STT line to <code>&quot;STT: NNms (RTF 0.05x)&quot;</code>. Green if &lt;1, yellow if ≥1. Falls back to plain <code>STT: NNms</code> when RTF is 0 (back-compat for tests + zero-data turns).</li><li>Session summary: <code>Median STT RTF: N.NNx</code> filtered for &gt;0.</li><li><code>ScenarioResult.stt_rtf</code> on perf snapshots.</li></ul>
-<p>Tests (8 in <code>tests/unit/test_stt_rtf.py</code>):</p>
-<ul><li>Default 0.</li><li>Per-turn print: zero falls back to plain line, sub-realtime shown, ≥1 still rendered.</li><li>Session aggregate: no-data omits, with-data shows median, zero-filter (parallel to iter-031 / iter-038 / iter-046 / iter-048).</li><li>ChatLoop arithmetic: real run with <code>slow_transcribe</code> (50ms sleep) on ~1s speech yields RTF that matches <code>stt_time / speech_duration</code> and is &lt;0.2.</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>645 passed, 1 skipped in 22s</strong> (637 existing + 8 new).</p>
+<nav><a href="index.html">← Index</a><a href="iter-049.html">← iter-049</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-050 — TTS real-time factor metric (taxonomy 1.11)</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-050-tts-rtf</code></span> · <span>commit: <code>c12d8b2</code></span> · <span>tests: <code>+9</code> (total 654)</span></div>
+</header><p><strong>Branch:</strong> <code>iter-050-tts-rtf</code> (merged ff to main, commit <code>c12d8b2</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>Twelfth metric from <code>docs/perf-metrics-taxonomy.md</code>. <strong>Metric 1.11 — TTS real-time factor</strong>, &quot;Standard&quot; bucket. Symmetric to iter-049&#x27;s STT RTF.</p>
+<p>tts_rtf = tts_time / audio_seconds_total</p>
+<ul><li><strong>&lt;1</strong>: synth runs faster than the audio it produces — overlap (iter-008) buys real wall-clock savings. Kokoro on Apple Silicon: ~0.1-0.3.</li><li><strong>&gt;1</strong>: synth is the bottleneck. Streaming-overlap won&#x27;t help; need a faster TTS or smaller voice.</li></ul>
+<p>Both inputs already captured: <code>tts_time</code> since iter-001, <code>audio_seconds_total</code> since iter-046. iter-050 just derives the ratio.</p>
+<p>Implementation mirrors iter-049 exactly (same shape, same guards, same UX choices):</p>
+<ul><li><code>TurnMetrics.tts_rtf: float = 0.0</code>.</li><li>ChatLoop computes after worker returns; div-by-zero guard.</li><li>Per-turn print appends <code>(RTF N.NNx)</code> to the TTS suffix; green &lt;1, yellow ≥1.</li><li>Session summary: <code>Median TTS RTF: N.NNx</code> filtered for &gt;0.</li><li><code>ScenarioResult.tts_rtf</code> on perf snapshots.</li></ul>
+<p>Tests (9 in <code>tests/unit/test_tts_rtf.py</code>):</p>
+<ul><li>Default 0; per-turn print zero/non-zero/high; session aggregate zero/some/filter; ChatLoop arithmetic with controlled synth latency yields the expected ratio; empty audio yields 0.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>654 passed, 1 skipped in 22s</strong> (645 existing + 9 new).</p>
+<p><strong>Milestone:</strong> 12/46 taxonomy metrics live (26%). iter-050 marks 50 iterations on geno-voice — over 600 tests, 13 perf snapshots in history, ten distinct visible metrics in the session summary diagnostic. The dashboard now reads (with all metrics populated):</p>
+<pre class="code-block"><code>Session Summary (3 turns)
+    Median STT:       50ms
+    Median STT RTF:   0.05x      ← iter-049
+    Median LLM 1st:   100ms
+    Median LLM sent:  300ms
+    Median TTS:       200ms
+    Median TTS RTF:   0.20x      ← iter-050
+    Median TTFS:      650ms
+    Best TTFS:        500ms
+    Barge-ins:        2 (1 mid-stream, 50%)
+    Median barge:     150ms
+    Worst barge:      150ms
+    Barge phases:     1 LLM-stream, 1 playback
+    Mic stale:        320 frames (0.0s)
+    VAD false-trig:   1/4 (25%)
+    Median overlap:   65%
+    Mean sentence:    62 chars
+    Median bot WPM:   165
+    Model:            local-llama</code></pre>
 <p>Notes:</p>
-<ul><li>Eleven metrics from the taxonomy now live (24% of the 46-metric list). The trivial-ratio pattern (1.7) shipped in this iter took ~10 minutes — proof that some metrics are nearly-free once the underlying inputs are already captured.</li><li>Next candidates: 1.5 (VAD missed-speech rate), 2.4 (filler false-positive rate), 1.11 (TTS RTF).</li><li>1.11 (TTS RTF) is the symmetric pair to 1.7. Same shape: ratio of synth time to audio duration. Could be a tight follow-on.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-048.html">← iter-048</a><a href="iter-050.html">iter-050 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li>iter-049 + iter-050 each took ~10 minutes. The trivial-ratio metrics from the taxonomy are nearly free once both inputs are captured. Worth batching them when there are several together in future.</li><li>Next candidates: 1.5 (VAD missed-speech rate — needs manual ground truth, harder), 2.4 (filler false-positive rate — straightforward).</li></ul><nav><a href="index.html">← Index</a><a href="iter-049.html">← iter-049</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

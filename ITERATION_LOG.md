@@ -3704,3 +3704,79 @@ Notes:
   false-positive rate), 1.11 (TTS RTF).
 - 1.11 (TTS RTF) is the symmetric pair to 1.7. Same shape: ratio
   of synth time to audio duration. Could be a tight follow-on.
+
+---
+
+## iter-050 — TTS real-time factor metric (taxonomy 1.11)
+
+**Branch:** `iter-050-tts-rtf` (merged ff to main, commit `c12d8b2`)
+**Date:** 2026-05-24
+
+Twelfth metric from `docs/perf-metrics-taxonomy.md`. **Metric 1.11
+— TTS real-time factor**, "Standard" bucket. Symmetric to iter-049's
+STT RTF.
+
+    tts_rtf = tts_time / audio_seconds_total
+
+- **<1**: synth runs faster than the audio it produces — overlap
+  (iter-008) buys real wall-clock savings. Kokoro on Apple Silicon:
+  ~0.1-0.3.
+- **>1**: synth is the bottleneck. Streaming-overlap won't help;
+  need a faster TTS or smaller voice.
+
+Both inputs already captured: `tts_time` since iter-001,
+`audio_seconds_total` since iter-046. iter-050 just derives the ratio.
+
+Implementation mirrors iter-049 exactly (same shape, same guards,
+same UX choices):
+- `TurnMetrics.tts_rtf: float = 0.0`.
+- ChatLoop computes after worker returns; div-by-zero guard.
+- Per-turn print appends `(RTF N.NNx)` to the TTS suffix; green
+  <1, yellow ≥1.
+- Session summary: `Median TTS RTF: N.NNx` filtered for >0.
+- `ScenarioResult.tts_rtf` on perf snapshots.
+
+Tests (9 in `tests/unit/test_tts_rtf.py`):
+- Default 0; per-turn print zero/non-zero/high; session aggregate
+  zero/some/filter; ChatLoop arithmetic with controlled
+  synth latency yields the expected ratio; empty audio yields 0.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **654 passed, 1 skipped in 22s** (645
+existing + 9 new).
+
+**Milestone:** 12/46 taxonomy metrics live (26%). iter-050 marks
+50 iterations on geno-voice — over 600 tests, 13 perf snapshots
+in history, ten distinct visible metrics in the session summary
+diagnostic. The dashboard now reads (with all metrics populated):
+
+```
+Session Summary (3 turns)
+    Median STT:       50ms
+    Median STT RTF:   0.05x      ← iter-049
+    Median LLM 1st:   100ms
+    Median LLM sent:  300ms
+    Median TTS:       200ms
+    Median TTS RTF:   0.20x      ← iter-050
+    Median TTFS:      650ms
+    Best TTFS:        500ms
+    Barge-ins:        2 (1 mid-stream, 50%)
+    Median barge:     150ms
+    Worst barge:      150ms
+    Barge phases:     1 LLM-stream, 1 playback
+    Mic stale:        320 frames (0.0s)
+    VAD false-trig:   1/4 (25%)
+    Median overlap:   65%
+    Mean sentence:    62 chars
+    Median bot WPM:   165
+    Model:            local-llama
+```
+
+Notes:
+- iter-049 + iter-050 each took ~10 minutes. The trivial-ratio
+  metrics from the taxonomy are nearly free once both inputs are
+  captured. Worth batching them when there are several together
+  in future.
+- Next candidates: 1.5 (VAD missed-speech rate — needs
+  manual ground truth, harder), 2.4 (filler false-positive rate
+  — straightforward).
