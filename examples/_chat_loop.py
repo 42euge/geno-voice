@@ -456,6 +456,20 @@ class ChatLoop:
                     0.0,
                     coord.playback_stopped_at - coord.triggered_at,
                 )
+            # iter-056: regret flag. The user started speaking within
+            # 200ms of bot first audio — implies the bot misjudged
+            # end-of-turn and pre-empted the user. Different signal
+            # than iter-053's "rushed" naturalness: rushed measures
+            # the bot's response latency from the user's perspective;
+            # regret measures whether the bot interrupted real speech.
+            if (
+                coord.triggered_at is not None
+                and worker.first_audio_at is not None
+                and coord.is_set()
+            ):
+                gap = coord.triggered_at - worker.first_audio_at
+                if 0 < gap < 0.2:
+                    metrics.barge_in_regret = True
             metrics.mic_stale_frames = stale_frames
             metrics.response = full_response.strip()
             metrics.total_e2e = self._clock() - turn_start

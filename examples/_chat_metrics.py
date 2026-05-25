@@ -91,6 +91,15 @@ class TurnMetrics:
     # "" when no audio played this turn. Metric 3.1 in the
     # perf-metrics taxonomy ("Novel/speculative").
     naturalness_bucket: str = ""
+    # iter-056: True when the user barged in within 200ms of bot
+    # first audio. Implies the bot pre-empted the user — the user
+    # was already mid-utterance when bot speech started, suggesting
+    # iter-001's end-of-turn detection (or iter-020's silence_duration
+    # config) fired too early. Distinct from "rushed" naturalness:
+    # rushed = bot felt fast (subjective, latency-based); regret =
+    # user was actually still talking. Metric 3.4 in the perf-metrics
+    # taxonomy ("Novel/speculative").
+    barge_in_regret: bool = False
     total_e2e: float = 0.0
     sentences_spoken: int = 0
     # iter-045: mean character length of sentences submitted to the
@@ -271,9 +280,11 @@ class TurnMetrics:
                 phase_note = " (during playback)"
             else:
                 phase_note = ""
+            # iter-056: regret marker. Bot pre-empted the user.
+            regret_note = " — regret" if self.barge_in_regret else ""
             print(
                 f"  {_DIM}│{_RESET}  {_YELLOW}Barge-in:      "
-                f"yes (user interrupted){cancel_note}{phase_note}{_RESET}"
+                f"yes (user interrupted){cancel_note}{phase_note}{regret_note}{_RESET}"
             )
             # iter-041: barge-in latency. Only meaningful when
             # >0 (some test paths leave it at 0). Color-code:
@@ -431,6 +442,9 @@ def print_session_summary(
         1 for m in metrics_list
         if m.barge_in and m.barge_in_phase == "playback"
     )
+    # iter-056: regret count — barges firing within 200ms of bot
+    # first audio. High count = end-of-turn detection misjudges.
+    regret_barges = sum(1 for m in metrics_list if m.barge_in_regret)
     # iter-041: barge-in latency over turns where it was measured
     # (>0 — both triggered_at and playback_stopped_at have to be
     # set for the metric to be meaningful).
@@ -581,6 +595,15 @@ def print_session_summary(
                 f"    Barge phases:     "
                 f"{llm_phase_barges} LLM-stream, "
                 f"{playback_phase_barges} playback"
+            )
+        # iter-056: regret rate. High = end-of-turn detection
+        # misjudges; consider raising silence_duration.
+        if regret_barges:
+            pct = (regret_barges / barges_total) * 100
+            _emit(
+                f"    Regret rate:      "
+                f"{regret_barges}/{barges_total} ({pct:.0f}%) "
+                f"— bot may be pre-empting; raise silence_duration"
             )
     if stale_total:
         # iter-037: surface aggregate stale-frame total so a "session
