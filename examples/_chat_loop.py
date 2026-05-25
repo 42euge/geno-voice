@@ -217,6 +217,17 @@ class ChatLoop:
         # when the recorder didn't emit (DONE_TOO_SHORT path), which
         # the per-turn print + session aggregate both filter on.
         metrics.eot_latency = float(rec_metrics.get("eot_latency", 0.0))
+        # iter-065: trailing-silence wall. The part of EoT NOT
+        # explained by the configured silence_duration. ``max(0, ...)``
+        # because the EoT measurement uses the actual last-speech
+        # frame timestamp while VadState's silence window starts one
+        # frame later (the first sub-threshold frame); on rare turns
+        # this gap is a hair smaller than silence_duration. Clamp
+        # negative numbers to 0 so the metric stays interpretable.
+        if metrics.eot_latency > 0:
+            metrics.eot_overhead = max(
+                0.0, metrics.eot_latency - self._silence_duration
+            )
         speech_ended_at = self._clock() - self._silence_duration
         turn_start = self._clock()
         metrics.stt_time = stt_time

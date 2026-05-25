@@ -224,6 +224,16 @@ class TurnMetrics:
     # path, no transcription). Metric 1.2 in the perf-metrics
     # taxonomy — dominates "the agent feels slow" complaints.
     eot_latency: float = 0.0
+    # iter-065: the part of eot_latency NOT explained by the
+    # configured silence_duration. ``eot_overhead = max(0,
+    # eot_latency - silence_duration_used)``. Decomposes the EoT
+    # wait into "knob-budget" (the silence_duration we asked for)
+    # vs implementation overhead (chunk granularity, processing).
+    # If overhead is ~0, the way to reduce EoT latency is to tune
+    # ``chat.vad.silence_duration`` lower. If overhead is >100ms,
+    # there's something else slow in the recording loop and tuning
+    # the knob won't help. Metric 1.3 in the perf-metrics taxonomy.
+    eot_overhead: float = 0.0
     transcript: str = ""
     response: str = ""
     model: str = ""
@@ -259,10 +269,22 @@ class TurnMetrics:
         if self.eot_latency > 0:
             ms = self.eot_latency * 1000
             color = _YELLOW if ms > 1000 else _DIM
+            # iter-065: append the trailing-silence wall — how much
+            # of the EoT wait is implementation overhead vs the
+            # configured silence_duration. Skip the suffix when
+            # overhead is trivial (<10ms — within chunk noise);
+            # yellow when >100ms (knob-tuning won't help).
+            suffix = f"  ({_DIM}silence wait{_RESET})"
+            if self.eot_overhead > 0.010:
+                ov_ms = self.eot_overhead * 1000
+                ov_color = _YELLOW if ov_ms > 100 else _DIM
+                suffix = (
+                    f"  ({_DIM}silence wait{_RESET}, "
+                    f"{ov_color}+{ov_ms:.0f}ms overhead{_RESET})"
+                )
             print(
                 f"  {_DIM}│{_RESET}  EoT detect:    "
-                f"{color}{ms:>7.0f}ms{_RESET}  "
-                f"({_DIM}silence wait{_RESET})"
+                f"{color}{ms:>7.0f}ms{_RESET}{suffix}"
             )
         # iter-049: append STT RTF when measurable.
         if self.stt_rtf > 0:
@@ -663,6 +685,10 @@ def print_session_summary(
     # recorder emitted. Filter zeros (DONE_TOO_SHORT / no-transcription
     # turns leave the field at default).
     eot_latencies = [m.eot_latency for m in metrics_list if m.eot_latency > 0]
+    # iter-065: trailing-silence wall — overhead beyond the configured
+    # silence_duration. Filter zeros + sub-chunk noise; the line only
+    # emits when at least one turn showed real overhead.
+    eot_overheads = [m.eot_overhead for m in metrics_list if m.eot_overhead > 0.010]
 
     # iter-054: include session duration in the header when known.
     # Format the duration human-readably:
@@ -704,6 +730,12 @@ def print_session_summary(
         _emit(f"    Median EoT:       {_median_ms(eot_latencies):.0f}ms")
         if len(eot_latencies) >= 2 and max(eot_latencies) > min(eot_latencies):
             _emit(f"    Worst EoT:        {max(eot_latencies) * 1000:.0f}ms")
+        # iter-065: trailing-silence wall median. Only meaningful
+        # when at least one turn showed real overhead — otherwise
+        # the EoT wait is fully explained by silence_duration.
+        if eot_overheads:
+            ov_med = statistics.median(eot_overheads) * 1000
+            _emit(f"    EoT overhead:     {ov_med:.0f}ms (above silence_duration)")
     _emit(f"    Median STT:       {_median_ms(stt_times):.0f}ms")
     if stt_rtfs:
         _emit(f"    Median STT RTF:   {statistics.median(stt_rtfs):.2f}x")

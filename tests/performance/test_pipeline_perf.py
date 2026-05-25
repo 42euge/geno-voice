@@ -146,6 +146,8 @@ class ScenarioResult:
     eot_latency_ms: float = 0.0
     # iter-064: user speaking rate (words per minute).
     user_wpm: float = 0.0
+    # iter-065: EoT overhead beyond silence_duration, ms.
+    eot_overhead_ms: float = 0.0
 
 
 _RESULTS: list[ScenarioResult] = []
@@ -325,6 +327,7 @@ def _run_scenario(
         max_queue_depth=m.max_queue_depth,
         eot_latency_ms=m.eot_latency * 1000,
         user_wpm=m.user_wpm,
+        eot_overhead_ms=m.eot_overhead * 1000,
     )
     _record(res)
     return res
@@ -503,6 +506,7 @@ class TestPerfScenarios:
             max_queue_depth=m.max_queue_depth,
             eot_latency_ms=m.eot_latency * 1000,
             user_wpm=m.user_wpm,
+            eot_overhead_ms=m.eot_overhead * 1000,
         )
         _record(res)
 
