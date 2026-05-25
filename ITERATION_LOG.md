@@ -5747,3 +5747,74 @@ Notes:
   (adaptive-rate margin — bot_wpm/user_wpm; partially covered
   by iter-064's mirror gap), 3.14 (TTC proxy — time from bot
   first audio to next user turn first speech).
+
+## iter-082 — TTC (time-to-comprehension) proxy (taxonomy 3.14)
+
+**Branch:** iter-082-ttc  **Commit:** 8e5f4f8  **Date:** 2026-05-25
+
+Added `time_to_comprehension` — a cross-turn metric measuring the
+gap from the PREVIOUS turn's bot first audio to THIS turn's first
+speech-detected frame:
+
+    ttc = current_turn.speech_start_at - prev_turn.first_audio_at
+
+Captures how long the user listened before responding. Three
+signals:
+- **<500ms**: user already knew the answer; bot was telling them
+  what they already knew (under-performing).
+- **>5s**: user was confused / thinking / multi-tasking.
+- **1-3s**: bell-curve target — typical conversational response
+  time.
+
+Implementation:
+- `record_utterance_streaming` gained an `out_metrics["speech_start_at"]`
+  key. Latched in the recorder's per-frame loop the first time a
+  frame's RMS crosses `silence_threshold`. Same DONE_OK gating as
+  `eot_latency` — DONE_TOO_SHORT path doesn't write.
+- `ChatLoop` gained `self._last_first_audio_at: Optional[float]`
+  instance state. Initialized to None; updated each turn that
+  produces audio (skipped on silent turns to avoid anchoring to
+  a missing event).
+- TTC computed on turns where both prev's first_audio_at AND
+  this turn's speech_start_at exist. Clamped at 0 to handle
+  test-mode clock drift between the recorder's frame-aligned
+  virtual clock and the loop's wall-clock.
+- Per-turn print: emits "TTC: NNms (user listened before
+  responding)" when >0. Yellow at the rushed (<500ms) and slow
+  (>5s) extremes.
+- Session aggregate: median + outlier counts ("X rushed, Y slow")
+  inline. Showcases distribution shape, not just central tendency.
+- `ScenarioResult.time_to_comprehension_ms` on perf snapshots.
+
+Tests (16 in `tests/unit/test_ttc_proxy.py`):
+- Default zero / per-turn print: zero omits, natural emits dim,
+  rushed and slow render with sign-aware color paths.
+- Recorder integration: `speech_start_at` populated on DONE_OK,
+  omitted on DONE_TOO_SHORT.
+- Session aggregate: no-data, natural-only (no outlier
+  annotation), rushed outlier, slow outlier, both kinds, zero
+  filtering.
+- ChatLoop wiring: turn 1 zero (no prev); turn 2 populated and
+  non-negative; silent prev turn breaks the chain (bounded
+  result).
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **1019 passed, 1 skipped in 24s** (1003
+existing + 16 new).
+
+Notes:
+- **Forty-three metrics live (93% of the 46-metric taxonomy).**
+- This is the FIRST cross-turn metric in the project. The
+  ChatLoop-as-session-state pattern (vs purely run_one_turn-as-
+  pure-function) opens the door to other cross-turn signals:
+  3.13 adaptive-rate margin (already partially covered), 3.16
+  cross-modal consistency, 1.20 cold-start (already done at
+  print-time).
+- The `out_metrics` dict in `record_utterance_streaming` now
+  carries 3 keys (eot_latency, stt_preview_divergence,
+  speech_start_at). Every recorder-side metric becomes one new
+  key + one ChatLoop read — pattern stays clean.
+- Next candidates (3 metrics from 46 left, all heavyweight):
+  1.6 (WER, needs ground truth corpus), 1.17 (audio underrun/
+  overrun count — needs PyAudio plumbing), 2.13 (primed-frames
+  STT contribution — needs offline ablation).
