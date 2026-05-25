@@ -222,6 +222,16 @@ class SentenceWorker:
         self.token_reveal_lag_sum: float = 0.0
         self.token_reveal_lag_count: int = 0
         self.token_reveal_lag_max: float = 0.0
+        # iter-073: first-sentence synth window. Latched once on
+        # the first successful synth. ChatLoop intersects this with
+        # the LLM-stream window to compute first-sentence overlap
+        # savings — the actual TTFS win from iter-008's streaming-
+        # sentence-dispatch design (vs iter-043's whole-stream
+        # ratio). Both None on turns where no synth ever ran or
+        # every synth raised. Metric 2.2 in the perf-metrics
+        # taxonomy.
+        self.first_synth_start_at: Optional[float] = None
+        self.first_synth_done_at: Optional[float] = None
         # iter-062: peak queue depth observed during the turn —
         # number of sentences waiting for synth at the moment of
         # the deepest backlog. >1 means the producer (LLM splitter)
@@ -484,7 +494,16 @@ class SentenceWorker:
                 try:
                     t = self._clock()
                     audio_np, tokens = self._synth_fn(sentence)
-                    self.tts_time += self._clock() - t
+                    elapsed = self._clock() - t
+                    self.tts_time += elapsed
+                    # iter-073: latch first-sentence synth window the
+                    # FIRST time synth succeeds. A failed first synth
+                    # (raise → continue) means the next successful
+                    # synth becomes "first" for TTFS accounting,
+                    # which matches the user's perception.
+                    if self.first_synth_start_at is None:
+                        self.first_synth_start_at = t
+                        self.first_synth_done_at = t + elapsed
                 except Exception as e:
                     self.errors.append(e)
                     continue

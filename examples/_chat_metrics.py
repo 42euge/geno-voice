@@ -84,6 +84,15 @@ class TurnMetrics:
     # iter-008 streaming-overlap not buying us anything that turn.
     # Metric 2.1 in the perf-metrics taxonomy.
     streaming_overlap_ratio: float = 0.0
+    # iter-073: first-sentence overlap savings — seconds of first
+    # synth that ran concurrently with LLM streaming. Distinct from
+    # streaming_overlap_ratio (whole-stream ratio): this scopes to
+    # the FIRST sentence because that's what gates TTFS. 0 = first
+    # synth was entirely sequential with LLM (no TTFS savings from
+    # the iter-008 streaming-sentence-dispatch design). Equal to
+    # first-synth duration = first synth was fully masked.
+    # Metric 2.2 in the perf-metrics taxonomy.
+    first_synth_overlap_seconds: float = 0.0
     # iter-044: cumulative seconds the SentenceWorker spent blocked
     # waiting for the next sentence, AFTER the first sentence
     # (excludes TTFsent). High idle gap = LLM didn't keep up with
@@ -453,6 +462,18 @@ class TurnMetrics:
                 f"{color}{pct:>6.0f}%{_RESET}  "
                 f"({_DIM}LLM↔TTS concurrency{_RESET})"
             )
+        # iter-073: first-sentence overlap savings. Emit when >0 —
+        # tells the operator how many ms were shaved off TTFS by
+        # parallelizing first synth with the rest of LLM streaming.
+        # Green when >100ms (meaningful TTFS win); dim otherwise.
+        if self.first_synth_overlap_seconds > 0:
+            ms = self.first_synth_overlap_seconds * 1000
+            color = _GREEN if ms > 100 else _DIM
+            print(
+                f"  {_DIM}│{_RESET}  1st-synth save: "
+                f"{color}{ms:>5.0f}ms{_RESET}  "
+                f"({_DIM}TTFS shaved by streaming{_RESET})"
+            )
         # iter-044: between-sentence worker idle gap. Skip when 0
         # (single-sentence responses or very fast LLM). >300ms is
         # "the worker is starving" — investigate.
@@ -715,6 +736,14 @@ def print_session_summary(
         m.streaming_overlap_ratio
         for m in metrics_list
         if m.streaming_overlap_ratio > 0
+    ]
+    # iter-073: first-sentence overlap savings (seconds shaved off
+    # TTFS by parallelizing first synth with LLM streaming). Filter
+    # zeros — sequential turns or no-audio turns.
+    first_overlap_secs = [
+        m.first_synth_overlap_seconds
+        for m in metrics_list
+        if m.first_synth_overlap_seconds > 0
     ]
     # iter-045: mean sentence-length over turns where any sentence
     # was actually submitted (>0). Operator can spot a fragmentation
@@ -1054,6 +1083,13 @@ def print_session_summary(
         # first-sentence latency (iter-038's TTFsent) and synth time.
         median_pct = statistics.median(overlap_ratios) * 100
         _emit(f"    Median overlap:   {median_pct:.0f}%")
+    # iter-073: median first-sentence savings. The interesting
+    # statistic — total ms shaved off TTFS on average. >100ms is
+    # meaningful (users notice the difference between 600ms and
+    # 700ms TTFS).
+    if first_overlap_secs:
+        med_save_ms = statistics.median(first_overlap_secs) * 1000
+        _emit(f"    1st-synth saved:  {med_save_ms:.0f}ms median")
     if sentence_lens:
         # iter-045: mean across the per-turn means.
         avg_chars = sum(sentence_lens) / len(sentence_lens)

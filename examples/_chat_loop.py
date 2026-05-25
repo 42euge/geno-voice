@@ -475,6 +475,29 @@ class ChatLoop:
                 metrics.streaming_overlap_ratio = min(
                     1.0, overlap / metrics.llm_total
                 )
+            # iter-073: first-sentence overlap savings — how much
+            # of the FIRST synth was masked by ongoing LLM streaming.
+            # Distinct from the iter-043 whole-stream ratio: this
+            # scopes to the first sentence specifically because
+            # that's what gates TTFS. Standard interval-overlap:
+            #     overlap = max(0, min(synth_done, llm_done) -
+            #                       max(synth_start, llm_start))
+            # 0 means first synth ran entirely after LLM finished
+            # (sequential — streaming bought nothing for TTFS).
+            # Equal to first-synth duration means first synth ran
+            # entirely under LLM streaming (best case — synth was
+            # fully masked).
+            if (
+                worker.first_synth_start_at is not None
+                and worker.first_synth_done_at is not None
+                and llm_stream_done_at is not None
+            ):
+                overlap_first = max(
+                    0.0,
+                    min(worker.first_synth_done_at, llm_stream_done_at)
+                    - max(worker.first_synth_start_at, llm_start),
+                )
+                metrics.first_synth_overlap_seconds = overlap_first
             # iter-044: cumulative between-sentence idle gap.
             metrics.worker_idle_gap_total = worker.idle_gap_total
             # iter-045: mean character length of sentences submitted.

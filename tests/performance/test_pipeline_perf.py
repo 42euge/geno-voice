@@ -119,6 +119,8 @@ class ScenarioResult:
     sentences_cancelled: int = 0
     # iter-043: streaming overlap ratio (0.0–1.0).
     streaming_overlap_ratio: float = 0.0
+    # iter-073: first-sentence overlap savings, ms.
+    first_synth_overlap_ms: float = 0.0
     # iter-044: cumulative between-sentence worker idle gap.
     worker_idle_gap_ms: float = 0.0
     # iter-045: mean character length of sentences submitted.
@@ -321,6 +323,7 @@ def _run_scenario(
         sentences_spoken=m.sentences_spoken,
         sentences_cancelled=m.sentences_cancelled,
         streaming_overlap_ratio=m.streaming_overlap_ratio,
+        first_synth_overlap_ms=m.first_synth_overlap_seconds * 1000,
         worker_idle_gap_ms=m.worker_idle_gap_total * 1000,
         mean_sentence_chars=m.mean_sentence_chars,
         sentence_split_coverage=m.sentence_split_coverage,
@@ -505,6 +508,7 @@ class TestPerfScenarios:
             sentences_spoken=m.sentences_spoken,
             sentences_cancelled=m.sentences_cancelled,
         streaming_overlap_ratio=m.streaming_overlap_ratio,
+        first_synth_overlap_ms=m.first_synth_overlap_seconds * 1000,
         worker_idle_gap_ms=m.worker_idle_gap_total * 1000,
         mean_sentence_chars=m.mean_sentence_chars,
         sentence_split_coverage=m.sentence_split_coverage,
