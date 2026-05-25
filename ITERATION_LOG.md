@@ -6053,3 +6053,76 @@ Notes:
     if first sentence still hasn't arrived after another idle
     threshold), or aggressive first-sentence splitter (split on
     comma for the first sentence to start synth earlier).
+
+## iter-087 — multi-shot fillers (architecture)
+
+**Branch:** iter-087-multi-fillers  **Commit:** 1497509  **Date:** 2026-05-25
+
+The original iter-011 design fired ONE filler per turn after
+`idle_threshold` elapsed. iter-087 enables **up to MAX_FILLERS=2**
+fillers per turn, picking from clips not yet played to avoid
+"umm umm" repetition.
+
+UX win: on slow-LLM turns where the FIRST filler completed but
+the LLM still hadn't produced a complete sentence, the user
+previously heard awkward silence until first audio. Now a second
+distinct filler can fire to maintain conversational presence.
+
+Implementation:
+- Replaced boolean `filler_used` with `played_filler_ids: set[int]`
+  + `MAX_FILLERS = 2` cap inside `SentenceWorker._run()`.
+- Filler-timeout gate now:
+  ```python
+  filler_can_fire = (
+      bool(self._fillers)
+      and len(played_filler_ids) < MAX_FILLERS
+      and len(played_filler_ids) < len(self._fillers)
+  )
+  ```
+  Both bounds matter: cap at 2 absolute AND can't exceed available
+  clips (single-filler configs stay single-shot).
+- Picker invoked on a FILTERED list of unplayed clips so the
+  second pick can't accidentally repeat the first — defensive
+  against custom pickers that ignore the input order.
+- `last_filler_id` (iter-081) remains the LAST clip played per
+  turn; session-wide novelty in `print_session_summary` continues
+  to aggregate via set arithmetic across turns.
+
+Tests (5 new in `test_multi_shot_fillers.py`):
+- Single-clip config: stays single-shot (no clip to swap to).
+- Multi-clip + slow LLM: 2 fires happen within the test window.
+- Distinct clips picked: second fire's id ≠ first.
+- MAX_FILLERS cap honored: 5 clips + long wait → exactly 2 fires.
+- Picker that always returns lst[0] cannot pick the same clip
+  twice (worker's available-list filter saves it).
+
+Adjusted iter-081's `test_filler_picker_picks_one` to be tolerant
+of multi-shot semantics — the assertion now accepts either
+single-shot or multi-shot outcomes since the test's fixed wait
+window may race the second-fire timeout.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **1062 passed, 1 skipped in 25s** (1057
+existing + 5 new). All prior tests pass — no regression.
+
+Notes:
+- This is the **first architectural change** since iter-008's
+  streaming-sentence-dispatch and iter-009's barge-in primitives.
+  Most iterations since iter-009 have been measurement-focused
+  (the 46-metric taxonomy). iter-086 (cleanup) and now iter-087
+  (architecture) start a non-measurement phase.
+- The metric instrumentation built in iter-051/081 was directly
+  exercised here — `filler_false_positive` (iter-051) still
+  works correctly with multi-shot (any filler that played when
+  llm_first_token < idle_threshold is a false positive); session-
+  wide `Filler novelty` (iter-081) now becomes a richer signal
+  because turns with 2 fires contribute 2 ids to the unique
+  count.
+- Next directions:
+  - Aggressive first-sentence splitter (split on comma for
+    sentence 1 to start synth earlier — TTFS reduction at the
+    cost of prosody).
+  - Continue refactoring momentum: extract a TTFS-block helper
+    from print_session_summary.
+  - WER (1.6) as a heavyweight iteration with built-in test
+    fixture corpus.
