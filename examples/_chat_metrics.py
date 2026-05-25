@@ -841,6 +841,19 @@ def print_session_summary(
                 f"    Barge-ins:        {barges_total} "
                 f"(all between sentences)"
             )
+        # iter-069: interruption rate as a fraction of total turns.
+        # Distinct from the mid-stream % above (denominator is total
+        # barges, not turns). Industry single-number UX KPI: "what
+        # fraction of bot turns did the user feel they had to
+        # interrupt." High = bot is too verbose, slow, or wrong.
+        # Low = bot is well-tuned for this user. Metric 1.18 in the
+        # perf-metrics taxonomy.
+        if n > 0:
+            int_pct = (barges_total / n) * 100
+            _emit(
+                f"    Interruption rate: "
+                f"{barges_total}/{n} turns ({int_pct:.0f}%)"
+            )
         # iter-041: median + worst barge-in latency. Useful for
         # tuning the watcher's poll interval and the worker cancel
         # path. >200ms median is a reliable "feels broken" signal.
