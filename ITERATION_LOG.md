@@ -4606,3 +4606,60 @@ Notes:
   — almost free given iter-063's groundwork), 1.14 (user WPM —
   derive from transcript len / speech_duration), 2.13 (primed-frames
   STT contribution — needs offline ablation).
+
+## iter-064 — user WPM metric (taxonomy 1.14)
+
+**Branch:** iter-064-user-wpm  **Commit:** ec83283  **Date:** 2026-05-24
+
+Added `user_wpm` — user speaking rate in words-per-minute, derived
+from `len(transcript.split()) / speech_duration * 60`. Symmetric
+to iter-046's `bot_wpm`. Useful for the mirroring effect: adapting
+bot WPM to match user produces higher rapport and lower interruption
+rate (UX research). Wide variance is normal — humans speak 100-200
+WPM depending on context (slow in monologue, fast in conversation).
+
+Implementation:
+- `TurnMetrics.user_wpm: float = 0.0` (new field).
+- ChatLoop computes immediately after `metrics.transcript` is set:
+  whitespace-split word count is a decent proxy — Whisper transcripts
+  use space-separated tokens and the error vs true tokenization is
+  dwarfed by natural variance in human speech rates. Skipped on
+  zero `speech_duration` or empty transcript (defensive — keeps
+  the field at the 0.0 default).
+- Per-turn print: appends "(NNN WPM)" suffix to the existing Speech
+  line when known. No color coding — there's no "wrong" rate for
+  the user, only a "match the user" target for the bot.
+- Session summary: "Median user WPM: NNN" filtered for >0. When
+  both user and bot WPM are known, also emit "Mirror gap: ±NN WPM
+  (bot − user)" — the cross-side delta that predicts conversational
+  feel (≈0 = mirroring, >40 = bot too fast, <-40 = bot too slow).
+- `ScenarioResult.user_wpm` on perf snapshots — first metric
+  capturing the user side of the conversational rhythm picture.
+
+Tests (11 in `tests/unit/test_user_wpm.py`):
+- Default zero.
+- Per-turn print: 0 omits suffix; non-zero appends; extreme values
+  emit without color treatment.
+- Session aggregate: no-data omitted; user-only emits median but
+  no mirror gap; both present emit median + signed gap; negative
+  gap; zero-filter.
+- ChatLoop wiring: deterministic transcribe stub yields a 4-word
+  phrase from a 0.6s tone; user_wpm lands in the [100, 800] sanity
+  band (CI-safe tolerance for VAD timing jitter).
+- Empty transcript edge: TurnMetrics default unchanged when
+  ChatLoop's n_words guard would skip the assignment.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **819 passed, 1 skipped in 23s** (808 existing
++ 11 new).
+
+Notes:
+- **Twenty-six metrics live (57% of the 46-metric taxonomy).**
+- The conversational rhythm dimension is now bilateral: bot WPM
+  (iter-046), user WPM (this), and the mirror gap derived metric.
+  Combined with iter-055's TTFS rhythm score, the operator now has
+  five orthogonal "feel" indicators on the session summary.
+- Next candidates: 1.3 (VAD trailing-silence wall: `eot - silence_duration`
+  — almost free given iter-063's groundwork), 1.6 (WER, needs
+  ground truth corpus), 1.20 (cold-start latency penalty: turn-1
+  TTFS minus median of remaining turns).
