@@ -130,6 +130,16 @@ class ChatLoop:
         # resumes for sentence 2+. Default False — opt in via
         # chat.aggressive_first_sentence in config.local.yaml.
         aggressive_first_sentence: bool = False,
+        # iter-093: auto-aggressive on stall. When >0, a mid-stream
+        # token gap exceeding this threshold (seconds) flips the
+        # splitter into aggressive mode mid-turn even if the static
+        # aggressive_first_sentence config was False. Rationale:
+        # the user has waited longer than expected; getting some
+        # audio out faster (with imperfect prosody) beats continued
+        # silence. Default 0.0 = disabled. Recommended 0.5-1.0s —
+        # comfortably above normal token-streaming jitter, well
+        # below the user's "is this broken" threshold.
+        auto_aggressive_threshold: float = 0.0,
         # Tunables / I/O
         clock: Callable[[], float] = time.monotonic,
         output=None,
@@ -157,6 +167,8 @@ class ChatLoop:
         self._idle_threshold = idle_threshold
         # iter-088: aggressive first-sentence splitter config.
         self._aggressive_first_sentence = aggressive_first_sentence
+        # iter-093: auto-aggressive-on-stall threshold (seconds).
+        self._auto_aggressive_threshold = auto_aggressive_threshold
 
         self._clock = clock
         self._output = output  # passed to record_utterance_streaming
@@ -403,6 +415,23 @@ class ChatLoop:
                         gap = now - prev_token_at
                         if gap > max_token_gap:
                             max_token_gap = gap
+                        # iter-093: auto-aggressive on stall. If
+                        # the inter-token gap exceeded the
+                        # configured threshold AND we haven't
+                        # produced a complete sentence yet, flip
+                        # the splitter to aggressive mode so the
+                        # NEXT iteration can comma-split. Once
+                        # first_sentence_at is set, the strict
+                        # splitter is fine again — we already got
+                        # audio out. Threshold of 0.0 means
+                        # disabled (pre-iter-093 behavior).
+                        if (
+                            self._auto_aggressive_threshold > 0
+                            and gap > self._auto_aggressive_threshold
+                            and not aggressive_active
+                            and first_sentence_at is None
+                        ):
+                            aggressive_active = True
                 prev_token_at = now
                 token_buffer += token
                 full_response += token

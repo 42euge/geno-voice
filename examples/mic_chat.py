@@ -272,6 +272,13 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
     aggressive_first_sentence = bool(
         chat_cfg.get("aggressive_first_sentence", False)
     )
+    # iter-093: optional auto-aggressive-on-stall threshold. When
+    # >0, a mid-stream LLM token gap above this many seconds
+    # flips the splitter to aggressive mode mid-turn so audio
+    # recovers faster from the stall. 0.0 = disabled.
+    auto_aggressive_threshold = float(
+        chat_cfg.get("auto_aggressive_threshold", 0.0)
+    )
     chat_loop = ChatLoop(
         mic=mic,
         speaker_factory=_speaker_factory,
@@ -288,6 +295,7 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
         fillers=rendered_fillers,
         idle_threshold=filler_idle_threshold,
         aggressive_first_sentence=aggressive_first_sentence,
+        auto_aggressive_threshold=auto_aggressive_threshold,
     )
 
     system_prompt = llm_config.get("system_prompt", "You are a concise voice assistant.")
