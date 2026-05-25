@@ -647,6 +647,16 @@ class ChatLoop:
                     metrics.barge_in_regret = True
             metrics.mic_stale_frames = stale_frames
             metrics.response = full_response.strip()
+            # iter-080: pre-empted-content loss. Compute on barge
+            # turns only — non-barge turns naturally have small
+            # diffs from splitter remainder + alignment edge cases
+            # that aren't really "lost content."
+            if coord.is_set():
+                response_words = len(metrics.response.split())
+                played_words = worker.word_count_total
+                metrics.preempted_words = max(
+                    0, response_words - played_words
+                )
             metrics.total_e2e = self._clock() - turn_start
 
             messages.append({"role": "assistant", "content": metrics.response})

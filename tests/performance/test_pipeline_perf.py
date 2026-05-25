@@ -127,6 +127,8 @@ class ScenarioResult:
     synth_dispatch_ms: float = 0.0
     # iter-077: approximate context-token count sent to the LLM.
     context_tokens: int = 0
+    # iter-080: pre-empted words on barge turns.
+    preempted_words: int = 0
     # iter-044: cumulative between-sentence worker idle gap.
     worker_idle_gap_ms: float = 0.0
     # iter-045: mean character length of sentences submitted.
@@ -333,6 +335,7 @@ def _run_scenario(
         bargeable_fraction=m.bargeable_fraction,
         synth_dispatch_ms=m.synth_dispatch_seconds * 1000,
         context_tokens=m.context_tokens,
+        preempted_words=m.preempted_words,
         worker_idle_gap_ms=m.worker_idle_gap_total * 1000,
         mean_sentence_chars=m.mean_sentence_chars,
         sentence_split_coverage=m.sentence_split_coverage,
@@ -521,6 +524,7 @@ class TestPerfScenarios:
         bargeable_fraction=m.bargeable_fraction,
         synth_dispatch_ms=m.synth_dispatch_seconds * 1000,
         context_tokens=m.context_tokens,
+        preempted_words=m.preempted_words,
         worker_idle_gap_ms=m.worker_idle_gap_total * 1000,
         mean_sentence_chars=m.mean_sentence_chars,
         sentence_split_coverage=m.sentence_split_coverage,

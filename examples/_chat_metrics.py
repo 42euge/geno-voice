@@ -133,6 +133,17 @@ class TurnMetrics:
     # keeps growing despite the trim cap, system-prompt bloat is
     # the culprit. Metric 2.23 in the perf-metrics taxonomy.
     context_tokens: int = 0
+    # iter-080: words the LLM generated but the user never heard
+    # (cancelled mid-stream by a barge). Computed on barge turns
+    # only: ``max(0, len(response.split()) - worker.word_count_total)``.
+    # 0 on non-barge turns and on barge turns where the cut
+    # happened cleanly between sentences (no words were lost).
+    # High values pair with iter-069's interruption rate and
+    # iter-047's barge-in phase to localize the cause: "bot was
+    # being verbose, user cut it off" vs "bot was being slow, user
+    # got impatient before any audio." Metric 3.7 in the perf-
+    # metrics taxonomy ("Novel/speculative").
+    preempted_words: int = 0
     # iter-053: TTFS bucketed against the human-conversation
     # sweet spot. "rushed" (<200ms): bot interrupted natural
     # turn-taking pause; "natural" (200-400ms): matches human
@@ -592,6 +603,19 @@ class TurnMetrics:
                     f"{self.primed_frames_seconds*1000:>6.0f}ms{_RESET}  "
                     f"(carried into next turn)"
                 )
+            # iter-080: pre-empted words — content the LLM
+            # generated but the user never heard. Only on barge
+            # turns. Yellow when >10 words: that's >5 seconds of
+            # spoken content lost, suggesting bot was being too
+            # verbose (vs <5 words = a clean cut-off in the
+            # middle of a normal sentence).
+            if self.preempted_words > 0:
+                color = _YELLOW if self.preempted_words > 10 else _DIM
+                print(
+                    f"  {_DIM}│{_RESET}  {color}Pre-empted:    "
+                    f"{self.preempted_words:>6d} words{_RESET}  "
+                    f"({_DIM}generated but not played{_RESET})"
+                )
             # iter-060: LLM stream cancel-to-close. Only meaningful
             # on barge turns; >500ms is "the HTTP socket is hanging."
             if self.llm_cancel_to_close > 0:
@@ -791,6 +815,14 @@ def print_session_summary(
     # iter-056: regret count — barges firing within 200ms of bot
     # first audio. High count = end-of-turn detection misjudges.
     regret_barges = sum(1 for m in metrics_list if m.barge_in_regret)
+    # iter-080: total words pre-empted across all barge turns.
+    # ``barge_turns`` denominator distinct from preempted_total —
+    # tells the operator how often the cut-off happened mid-content
+    # vs cleanly between sentences (where preempted_words == 0).
+    preempted_total = sum(m.preempted_words for m in metrics_list)
+    barge_turns_with_loss = sum(
+        1 for m in metrics_list if m.preempted_words > 0
+    )
     # iter-057: total seconds of audio carried over via primed frames.
     # iter-058: total worker errors across the session (sum of
     # per-turn worker_errors counts).
@@ -1121,6 +1153,19 @@ def print_session_summary(
                 f"    Regret rate:      "
                 f"{regret_barges}/{barges_total} ({pct:.0f}%) "
                 f"— bot may be pre-empting; raise silence_duration"
+            )
+        # iter-080: total words pre-empted across barge turns.
+        # Useful denominator: barge_turns_with_loss / barges_total
+        # tells you what fraction of barges happened mid-content
+        # (vs cleanly between sentences). High mid-content fraction
+        # paired with high preempted_total = bot was being verbose.
+        if preempted_total > 0:
+            avg = preempted_total / max(barge_turns_with_loss, 1)
+            _emit(
+                f"    Pre-empted words: "
+                f"{preempted_total} total "
+                f"({barge_turns_with_loss}/{barges_total} barges, "
+                f"{avg:.0f} avg/loss)"
             )
     # iter-057: total seconds of audio carried over by the watcher
     # via primed_frames. Report regardless of whether we computed
