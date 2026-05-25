@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-077 — conversation history grow rate (taxonomy 2.23)</title>
+<title>iter-078 — trim event rate (taxonomy 2.24)</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,19 +168,20 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-076.html">← iter-076</a><a href="iter-078.html">iter-078 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-077 — conversation history grow rate (taxonomy 2.23)</h1>
-<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+12</code> (total 962)</span></div>
-</header><p><strong>Branch:</strong> iter-077-context-tokens  <strong>Commit:</strong> 17f2859  <strong>Date:</strong> 2026-05-25</p>
-<p>Added <code>context_tokens</code> — approximate count of context tokens being sent to the LLM each turn. Whitespace-split is a rough estimator (real tokenizer counts vary by model) but the per-turn TREND is what matters: late-session turns get progressively slower as context grows, so a creep here predicts an <code>llm_first_token</code> regression even before the latency itself measurably worsens.</p>
-<p>Pairs with iter-024&#x27;s <code>trim_history(max_user_assistant=20)</code> — if context keeps growing despite the trim cap, system-prompt bloat is the culprit.</p>
+<nav><a href="index.html">← Index</a><a href="iter-077.html">← iter-077</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-078 — trim event rate (taxonomy 2.24)</h1>
+<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+11</code> (total 973)</span></div>
+</header><p><strong>Branch:</strong> iter-078-trim-rate  <strong>Commit:</strong> 3a6ef5c  <strong>Date:</strong> 2026-05-25</p>
+<p>Added trim event rate — counts how many times across a session <code>trim_history</code> actually evicted at least one message, plus the cumulative count of evicted messages. Pairs with iter-077: validates the iter-024 <code>max_user_assistant=20</code> threshold is calibrated.</p>
+<p>Reading the metric:</p>
+<ul><li><code>events == 0</code> across a long session → trim threshold too loose; <code>Context tokens: max</code> (iter-077) will be growing in lockstep.</li><li><code>evicted/events == 1</code> → calibrated steady-state (each turn trims exactly the one new pair that pushed past the cap).</li><li><code>evicted/events &gt;&gt; 1</code> → trim catching up after a longer gap (e.g. <code>max_user_assistant</code> was lowered mid-session).</li></ul>
 <p>Implementation:</p>
-<ul><li><code>TurnMetrics.context_tokens: int = 0</code> (new field).</li><li>ChatLoop counts immediately after the user message is appended to the messages list, BEFORE the LLM call: ```python metrics.context_tokens = sum( len(str(m.get(&quot;content&quot;, &quot;&quot;)).split()) for m in messages ) ```</li><li>Per-turn print: appends &quot;N ctx&quot; suffix to the LLM total line alongside the existing TPS suffix: <code>LLM total: 500ms (qwen-2.5-7b, 45 tps, 120 ctx)</code>.</li><li>Session summary: have measurable context — the first-vs-last delta is a quick growth sentinel without needing a least-squares slope.<ul><li>&quot;Context tokens: N median, M max&quot; (always when measurable).</li><li>&quot;Context growth: ±N tokens (turn 1 → turn N)&quot; when ≥3 turns</li></ul></li><li><code>ScenarioResult.context_tokens</code> on perf snapshots.</li></ul>
-<p>Tests (12 in <code>tests/unit/test_context_tokens.py</code>):</p>
-<ul><li>Default zero, per-turn print: zero omits suffix, non-zero appends, combines with TPS.</li><li>Session aggregate: no-data, 2-turn (median+max but no growth line), 3-turn (median+max+growth), negative growth (trim aggressive), zero filtering.</li><li>ChatLoop arithmetic: short transcript yields exact word count, long transcript scales correctly, prefilled history adds to total.</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>962 passed, 1 skipped in 25s</strong> (950 existing + 12 new).</p>
+<ul><li><code>print_session_summary</code> gained two new kwargs: <code>trim_events: int = 0</code> and <code>trim_messages_evicted: int = 0</code>. Both default to 0 — existing callers unaffected.</li><li>mic_chat tracks both counters by diffing message-list lengths around each <code>ChatLoop.trim_messages</code> call. Non-invasive: no changes to <code>trim_history</code> or <code>ChatLoop.trim_messages</code> signatures.</li><li>Output: &quot;Trim events: N (M evicted, X.X/event)&quot; emitted only when <code>trim_events &gt; 0</code>. The per-event ratio surfaces severity immediately.</li></ul>
+<p>Tests (11 in <code>tests/unit/test_trim_event_rate.py</code>):</p>
+<ul><li>print_session_summary kwargs: default omits, zero omits, one event emits, steady-state 1.0/event, high ratio (catch-up).</li><li><code>trim_history</code> length-diff contract: no-op below threshold, evicts above threshold, empty case.</li><li><code>ChatLoop.trim_messages</code> passthrough preserves the same semantics.</li><li>Co-emission with iter-077 context tokens: both lines visible in a session that has both.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>973 passed, 1 skipped in 24s</strong> (962 existing + 11 new).</p>
 <p>Notes:</p>
-<ul><li><strong>Thirty-eight metrics live (83% of the 46-metric taxonomy).</strong></li><li>The conversation-state dimension is now measurable — context size predicts LLM TTFB before the latency itself shows it. Pairs with iter-076&#x27;s TTFS attribution: a creeping LLM% in the attribution + a growing context_tokens points squarely at prompt bloat, not LLM slowness.</li><li>Next candidates: 2.24 (trim event rate — paired with this; fires when trim_history actually evicts), 3.7 (pre-empted- content loss — bot tokens generated but never spoken on barge-in turns), 3.11 (silent-turn rate — turns where transcript exists but ttfs == 0), 1.6 (WER, needs ground truth corpus).</li></ul><nav><a href="index.html">← Index</a><a href="iter-076.html">← iter-076</a><a href="iter-078.html">iter-078 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li><strong>Thirty-nine metrics live (85% of the 46-metric taxonomy).</strong></li><li>The conversation-state dimension is now bilateral: context size (iter-077, growth signal) and trim activity (this, calibration signal). A session where context_tokens grows unbounded AND trim_events stays at 0 is the unambiguous &quot;trim broken&quot; signal — both metrics agree.</li><li>The pattern of &quot;session-level kwargs to print_session_summary&quot; is paying off (false_triggers, llm_errors, session_seconds, trim_events, trim_messages_evicted). Each new session-level signal is one new kwarg, no per-turn churn.</li><li>Next candidates: 3.7 (pre-empted-content loss — bot tokens generated but not spoken on barge turns), 3.11 (silent-turn rate — turns where transcript exists but ttfs == 0), 1.6 (WER, needs ground truth corpus), 1.17 (audio underrun/ overrun count — needs PyAudio plumbing).</li></ul><nav><a href="index.html">← Index</a><a href="iter-077.html">← iter-077</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

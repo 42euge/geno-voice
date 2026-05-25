@@ -5490,3 +5490,63 @@ Notes:
   barge-in turns), 3.11 (silent-turn rate — turns where
   transcript exists but ttfs == 0), 1.6 (WER, needs ground
   truth corpus).
+
+## iter-078 — trim event rate (taxonomy 2.24)
+
+**Branch:** iter-078-trim-rate  **Commit:** 3a6ef5c  **Date:** 2026-05-25
+
+Added trim event rate — counts how many times across a session
+`trim_history` actually evicted at least one message, plus the
+cumulative count of evicted messages. Pairs with iter-077:
+validates the iter-024 `max_user_assistant=20` threshold is
+calibrated.
+
+Reading the metric:
+- `events == 0` across a long session → trim threshold too loose;
+  `Context tokens: max` (iter-077) will be growing in lockstep.
+- `evicted/events == 1` → calibrated steady-state (each turn
+  trims exactly the one new pair that pushed past the cap).
+- `evicted/events >> 1` → trim catching up after a longer gap
+  (e.g. `max_user_assistant` was lowered mid-session).
+
+Implementation:
+- `print_session_summary` gained two new kwargs:
+  `trim_events: int = 0` and `trim_messages_evicted: int = 0`.
+  Both default to 0 — existing callers unaffected.
+- mic_chat tracks both counters by diffing message-list lengths
+  around each `ChatLoop.trim_messages` call. Non-invasive: no
+  changes to `trim_history` or `ChatLoop.trim_messages` signatures.
+- Output: "Trim events: N (M evicted, X.X/event)" emitted only
+  when `trim_events > 0`. The per-event ratio surfaces severity
+  immediately.
+
+Tests (11 in `tests/unit/test_trim_event_rate.py`):
+- print_session_summary kwargs: default omits, zero omits, one
+  event emits, steady-state 1.0/event, high ratio (catch-up).
+- `trim_history` length-diff contract: no-op below threshold,
+  evicts above threshold, empty case.
+- `ChatLoop.trim_messages` passthrough preserves the same
+  semantics.
+- Co-emission with iter-077 context tokens: both lines visible
+  in a session that has both.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **973 passed, 1 skipped in 24s** (962 existing
++ 11 new).
+
+Notes:
+- **Thirty-nine metrics live (85% of the 46-metric taxonomy).**
+- The conversation-state dimension is now bilateral: context
+  size (iter-077, growth signal) and trim activity (this,
+  calibration signal). A session where context_tokens grows
+  unbounded AND trim_events stays at 0 is the unambiguous
+  "trim broken" signal — both metrics agree.
+- The pattern of "session-level kwargs to print_session_summary"
+  is paying off (false_triggers, llm_errors, session_seconds,
+  trim_events, trim_messages_evicted). Each new session-level
+  signal is one new kwarg, no per-turn churn.
+- Next candidates: 3.7 (pre-empted-content loss — bot tokens
+  generated but not spoken on barge turns), 3.11 (silent-turn
+  rate — turns where transcript exists but ttfs == 0), 1.6
+  (WER, needs ground truth corpus), 1.17 (audio underrun/
+  overrun count — needs PyAudio plumbing).
