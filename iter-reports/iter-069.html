@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-068 — TTFS jitter / turn-taking jitter (taxonomy 1.12)</title>
+<title>iter-069 — interruption rate (taxonomy 1.18)</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,18 +168,21 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-067.html">← iter-067</a><a href="iter-069.html">iter-069 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-068 — TTFS jitter / turn-taking jitter (taxonomy 1.12)</h1>
-<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+9</code> (total 858)</span></div>
-</header><p><strong>Branch:</strong> iter-068-jitter  <strong>Commit:</strong> 5c9cbfc  <strong>Date:</strong> 2026-05-25</p>
-<p>Added <code>TTFS jitter</code> — <code>stdev(ttfs for ttfs in metrics_list if ttfs &gt; 0)</code> promoted from iter-055&#x27;s rhythm-score internal computation to its own line. The rhythm score is a normalized [0,1] number useful for at-a-glance health comparison; the raw jitter in milliseconds is the more actionable number when tuning. Humans tolerate consistent slow turn-taking better than inconsistent fast turn-taking — a 250ms jitter at 600ms median feels more broken than a steady 750ms median.</p>
+<nav><a href="index.html">← Index</a><a href="iter-068.html">← iter-068</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-069 — interruption rate (taxonomy 1.18)</h1>
+<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+7</code> (total 865)</span></div>
+</header><p><strong>Branch:</strong> iter-069-interruption-rate  <strong>Commit:</strong> ddbed66  <strong>Date:</strong> 2026-05-25</p>
+<p>Added explicit &quot;Interruption rate: M/N turns (X%)&quot; session-summary line. Industry single-number UX KPI: &quot;what fraction of bot turns did the user feel they had to interrupt?&quot; Distinct from the existing mid-stream %, which uses total barges as denominator; this uses total completed turns.</p>
 <p>Implementation:</p>
-<ul><li>Pure derivation in <code>print_session_summary</code>; reuses the same <code>sd = statistics.stdev(ttfs_times)</code> line that feeds the rhythm score, just emits the value as ms.</li><li>Same gating as the rhythm score: needs ≥2 measurable TTFS values. Inserted right after the rhythm-score line so the two sit visually adjacent.</li><li>Output: &quot;TTFS jitter: ±NNms&quot;.</li></ul>
-<p>Tests (9 in <code>tests/unit/test_ttfs_jitter.py</code>):</p>
-<ul><li>No-emit boundaries: 0-turn, 1-turn, all-no-audio sessions.</li><li>Emit cases: two-turn arithmetic check, uniform values yield ±0ms, high-variance multi-turn, zero-TTFS turns excluded from the sample.</li><li>Co-emission: jitter and rhythm score appear together when ≥2 turns; both omitted otherwise.</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>858 passed, 1 skipped in 23s</strong> (849 existing + 9 new).</p>
+<ul><li>Pure derivation in <code>print_session_summary</code>; reads <code>barges_total</code> and <code>n</code> (already computed). Inserted right after the existing Barge-ins block so the two related lines sit adjacent.</li><li>Gated on <code>barges_total &gt; 0</code> (the whole barge sub-block).</li><li>Output: &quot;Interruption rate: M/N turns (X%)&quot;.</li></ul>
+<p>Why distinct from the mid-stream %:</p>
+<ul><li>mid-stream % = mid_cancels / barges_total → &quot;of barges, what fraction were violent (cut a sentence mid-stream)&quot;</li><li>interruption rate = barges_total / n → &quot;of turns, what fraction the user interrupted at all&quot;</li></ul>
+<p>Both are useful and answer different operator questions. The interruption rate is the headline UX number; mid-stream % is the &quot;how aggressive were the interruptions&quot; diagnostic.</p>
+<p>Tests (7 in <code>tests/unit/test_interruption_rate.py</code>):</p>
+<ul><li>No-emit: zero turns, zero barges.</li><li>Emit cases: 1/3 (33%), 2/2 (100%), 1/10 (10%).</li><li>Co-emission with the existing mid-stream line (both visible).</li><li>Distinct denominators verified with a case where the two percentages differ (4 barges of 8 turns, 1 mid-stream → 50% rate vs 25% mid-stream).</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>865 passed, 1 skipped in 23s</strong> (858 existing + 7 new).</p>
 <p>Notes:</p>
-<ul><li><strong>Thirty metrics live (65% of the 46-metric taxonomy.)</strong></li><li>The TTFS dimension now has four orthogonal lenses: median (the central tendency), best (the floor — what&#x27;s achievable on a good turn), jitter (the spread — this iteration), rhythm score (the normalized inverse for at-a-glance comparison). Plus iter-066&#x27;s cold-start penalty isolating turn 1.</li><li>Next candidates: 1.18 (interruption rate as explicit %, already shown as raw count), 2.6 (sentence-length histogram, currently emitted as mean), 1.6 (WER, needs ground truth corpus).</li></ul><nav><a href="index.html">← Index</a><a href="iter-067.html">← iter-067</a><a href="iter-069.html">iter-069 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li><strong>Thirty-one metrics live (67% of the 46-metric taxonomy.)</strong></li><li>The barge-in dimension is now exhaustively measured at every level: rate (this), latency (iter-041), phase (iter-047), regret (iter-056), mid-stream cuts (iter-040), cancel-to-close (iter-060). A regression in any sub-aspect surfaces in exactly one of these.</li><li>Next candidates: 1.6 (WER, needs ground truth corpus), 1.17 (audio device underrun/overrun count — would require surfacing PyAudio&#x27;s overflow flag instead of swallowing it), 2.6 (sentence-length histogram — currently only the mean surfaces; could promote min/max).</li></ul><nav><a href="index.html">← Index</a><a href="iter-068.html">← iter-068</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

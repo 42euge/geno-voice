@@ -4888,3 +4888,55 @@ Notes:
 - Next candidates: 1.18 (interruption rate as explicit %, already
   shown as raw count), 2.6 (sentence-length histogram, currently
   emitted as mean), 1.6 (WER, needs ground truth corpus).
+
+## iter-069 — interruption rate (taxonomy 1.18)
+
+**Branch:** iter-069-interruption-rate  **Commit:** ddbed66  **Date:** 2026-05-25
+
+Added explicit "Interruption rate: M/N turns (X%)" session-summary
+line. Industry single-number UX KPI: "what fraction of bot turns
+did the user feel they had to interrupt?" Distinct from the
+existing mid-stream %, which uses total barges as denominator;
+this uses total completed turns.
+
+Implementation:
+- Pure derivation in `print_session_summary`; reads `barges_total`
+  and `n` (already computed). Inserted right after the existing
+  Barge-ins block so the two related lines sit adjacent.
+- Gated on `barges_total > 0` (the whole barge sub-block).
+- Output: "Interruption rate: M/N turns (X%)".
+
+Why distinct from the mid-stream %:
+- mid-stream % = mid_cancels / barges_total → "of barges, what
+  fraction were violent (cut a sentence mid-stream)"
+- interruption rate = barges_total / n → "of turns, what fraction
+  the user interrupted at all"
+
+Both are useful and answer different operator questions. The
+interruption rate is the headline UX number; mid-stream % is the
+"how aggressive were the interruptions" diagnostic.
+
+Tests (7 in `tests/unit/test_interruption_rate.py`):
+- No-emit: zero turns, zero barges.
+- Emit cases: 1/3 (33%), 2/2 (100%), 1/10 (10%).
+- Co-emission with the existing mid-stream line (both visible).
+- Distinct denominators verified with a case where the two
+  percentages differ (4 barges of 8 turns, 1 mid-stream → 50% rate
+  vs 25% mid-stream).
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **865 passed, 1 skipped in 23s** (858 existing
++ 7 new).
+
+Notes:
+- **Thirty-one metrics live (67% of the 46-metric taxonomy.)**
+- The barge-in dimension is now exhaustively measured at every
+  level: rate (this), latency (iter-041), phase (iter-047), regret
+  (iter-056), mid-stream cuts (iter-040), cancel-to-close
+  (iter-060). A regression in any sub-aspect surfaces in exactly
+  one of these.
+- Next candidates: 1.6 (WER, needs ground truth corpus), 1.17
+  (audio device underrun/overrun count — would require
+  surfacing PyAudio's overflow flag instead of swallowing it),
+  2.6 (sentence-length histogram — currently only the mean
+  surfaces; could promote min/max).
