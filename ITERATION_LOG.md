@@ -4278,3 +4278,72 @@ Notes:
 - Next candidates: 2.5 (sentence-split coverage — already have the
   inputs), 2.7 (worker queue depth), 2.14 (LLM stream cancel-to-
   close).
+
+---
+
+## iter-059 — sentence-split coverage metric (taxonomy 2.5)
+
+**Branch:** `iter-059-split-coverage` (merged ff to main, commit `1308417`)
+**Date:** 2026-05-24
+
+Twenty-first metric pulled from `docs/perf-metrics-taxonomy.md`.
+**Metric 2.5 — Sentence-split coverage**, "Architecture-specific"
+bucket.
+
+    coverage = complete_sentence_chars / (complete + remainder)
+
+Range [0, 1]:
+- **1.0**: LLM always ended responses with punctuation. Every
+  char went to the worker as a complete sentence — fully
+  overlap-friendly.
+- **0.5**: half the chars came as remainder.
+- **0.0**: LLM produced fragments only; all chars flushed as
+  remainder.
+
+Why it matters: the trailing remainder is the `worker.submit()` that
+happens AFTER `llm_stream_done_at`. There's nothing for streaming
+overlap (iter-043's metric) to pair with — the worker synthesizes
+that final piece while the user waits. High remainder share is
+operational waste of the iter-008 streaming-overlap design.
+
+Implementation:
+- `TurnMetrics.sentence_split_coverage: float = 0.0` (new field).
+- ChatLoop tracks `complete_sentence_chars` and `remainder_chars`
+  separately, in addition to iter-045's `sentence_chars_total`
+  accumulator. Computes coverage when total > 0.
+- Per-turn print: appends `, N% complete` to TTS suffix only when
+  `0 < coverage < 1.0`. Perfect 100% (the expected case) doesn't
+  clutter the line.
+- Session summary: `Split coverage: N%` (median over turns where >0).
+- `ScenarioResult.sentence_split_coverage` on perf snapshots.
+
+Tests (10 in `tests/unit/test_split_coverage.py`):
+- Default 0.
+- Per-turn print: perfect / zero / partial cases.
+- Session aggregate: no-data / with-data / zero-filter.
+- ChatLoop arithmetic:
+  - `"Hello world. "` → 100% (clean terminator).
+  - `"fragment without terminator"` → 0% (all flushed as remainder).
+  - `"Done. trailing"` → 5/13 ≈ 38% (one complete + remainder).
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **756 passed, 1 skipped in 23s** (746
+existing + 10 new).
+
+Notes:
+- **Twenty-one metrics live (46% of the 46-metric taxonomy).** Half
+  the wishlist down. The tail metrics will be progressively harder
+  (need new instrumentation, ablation studies, or external ground
+  truth).
+- Combined with iter-043 (overlap ratio) and iter-038 (TTFsent),
+  the streaming-overlap story is now fully observable: how much
+  was the LLM keeping up (TTFsent), how much overlap actually
+  happened (overlap ratio), and how much did the splitter waste
+  via remainder (split coverage).
+- The 0.0 default ambiguity ("no chars submitted" vs "all
+  remainder") is documented in the test. In practice the session
+  aggregate's >0 filter handles the no-chars case cleanly; the
+  all-remainder case is rare enough (LLM yielding raw fragments
+  without any terminator) that the false-positive cost is low.
+- Next candidates: 2.7 (worker queue depth — sampler daemon),
+  2.14 (LLM stream cancel-to-close), 1.2 (EoT detection latency).

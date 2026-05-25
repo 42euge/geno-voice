@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-058 — error rate per stage metric (taxonomy 1.16)</title>
+<title>iter-059 — sentence-split coverage metric (taxonomy 2.5)</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,22 +168,22 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-057.html">← iter-057</a><a href="iter-059.html">iter-059 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-058 — error rate per stage metric (taxonomy 1.16)</h1>
-<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-058-error-rates</code></span> · <span>commit: <code>8c402b8</code></span> · <span>tests: <code>+9</code> (total 746)</span></div>
-</header><p><strong>Branch:</strong> <code>iter-058-error-rates</code> (merged ff to main, commit <code>8c402b8</code>) <strong>Date:</strong> 2026-05-24</p>
-<p>Twentieth metric pulled from <code>docs/perf-metrics-taxonomy.md</code>. <strong>Metric 1.16 — Error rate per stage</strong>, &quot;Standard&quot; bucket.</p>
-<p>Two-layer reporting because errors fail at different scopes:</p>
-<ul><li><strong>LLM errors</strong> kill the entire turn. The user spoke, the bot crashed before any audio. Tracked at session level (<code>llm_errors</code> kwarg).</li><li><strong>Worker errors</strong> lose one sentence but the rest of the turn proceeds. Some audio plays. Tracked per-turn (<code>TurnMetrics.worker_errors</code>).</li></ul>
-<p>These tell different reliability stories. A session with 5 LLM errors is unusable; a session with 5 worker errors heard mostly- right responses with the occasional missing sentence.</p>
+<nav><a href="index.html">← Index</a><a href="iter-058.html">← iter-058</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-059 — sentence-split coverage metric (taxonomy 2.5)</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-059-split-coverage</code></span> · <span>commit: <code>1308417</code></span> · <span>tests: <code>+10</code> (total 756)</span></div>
+</header><p><strong>Branch:</strong> <code>iter-059-split-coverage</code> (merged ff to main, commit <code>1308417</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>Twenty-first metric pulled from <code>docs/perf-metrics-taxonomy.md</code>. <strong>Metric 2.5 — Sentence-split coverage</strong>, &quot;Architecture-specific&quot; bucket.</p>
+<p>coverage = complete_sentence_chars / (complete + remainder)</p>
+<p>Range [0, 1]:</p>
+<ul><li><strong>1.0</strong>: LLM always ended responses with punctuation. Every char went to the worker as a complete sentence — fully overlap-friendly.</li><li><strong>0.5</strong>: half the chars came as remainder.</li><li><strong>0.0</strong>: LLM produced fragments only; all chars flushed as remainder.</li></ul>
+<p>Why it matters: the trailing remainder is the <code>worker.submit()</code> that happens AFTER <code>llm_stream_done_at</code>. There&#x27;s nothing for streaming overlap (iter-043&#x27;s metric) to pair with — the worker synthesizes that final piece while the user waits. High remainder share is operational waste of the iter-008 streaming-overlap design.</p>
 <p>Implementation:</p>
-<ul><li><code>TurnMetrics.worker_errors: int = 0</code> (new field).</li><li>ChatLoop assigns <code>metrics.worker_errors = len(worker.errors)</code> on the success path (alongside the existing diagnostic print loop over those same errors).</li><li><code>print_session_summary</code> gains <code>llm_errors: int = 0</code> kwarg (back-compat default).</li><li>Aggregate: `worker_errors_total = sum(m.worker_errors for m in metrics_list)`.</li><li>Output: <code>Errors: N LLM, M worker (over K attempts)</code> where <code>K = n_completed + llm_errors + false_triggers</code>. Each piece appears only when its count is non-zero (e.g. only-LLM-errors shows <code>&quot;N LLM (over K attempts)&quot;</code>, no worker bit).</li><li><code>mic_chat.run_chat</code> increments <code>llm_errors</code> in the existing <code>if result.had_error: continue</code> branch; passes total to summary.</li></ul>
-<p>Tests (9 in <code>tests/unit/test_error_rates.py</code>):</p>
-<ul><li>Per-turn field default + settable.</li><li>Clean session omits the block.</li><li>LLM only / worker only / both — output formatting + denominator computation.</li><li>false_triggers contribute to attempts.</li><li>Worker errors summed across turns.</li><li>Empty <code>metrics_list</code> → no-completed-turns placeholder takes precedence over the error block.</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>746 passed, 1 skipped in 24s</strong> (737 existing + 9 new).</p>
+<ul><li><code>TurnMetrics.sentence_split_coverage: float = 0.0</code> (new field).</li><li>ChatLoop tracks <code>complete_sentence_chars</code> and <code>remainder_chars</code> separately, in addition to iter-045&#x27;s <code>sentence_chars_total</code> accumulator. Computes coverage when total &gt; 0.</li><li>Per-turn print: appends <code>, N% complete</code> to TTS suffix only when <code>0 &lt; coverage &lt; 1.0</code>. Perfect 100% (the expected case) doesn&#x27;t clutter the line.</li><li>Session summary: <code>Split coverage: N%</code> (median over turns where &gt;0).</li><li><code>ScenarioResult.sentence_split_coverage</code> on perf snapshots.</li></ul>
+<p>Tests (10 in <code>tests/unit/test_split_coverage.py</code>):</p>
+<ul><li>Default 0.</li><li>Per-turn print: perfect / zero / partial cases.</li><li>Session aggregate: no-data / with-data / zero-filter.</li><li>ChatLoop arithmetic:<ul><li><code>&quot;Hello world. &quot;</code> → 100% (clean terminator).</li><li><code>&quot;fragment without terminator&quot;</code> → 0% (all flushed as remainder).</li><li><code>&quot;Done. trailing&quot;</code> → 5/13 ≈ 38% (one complete + remainder).</li></ul></li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>756 passed, 1 skipped in 23s</strong> (746 existing + 10 new).</p>
 <p>Notes:</p>
-<ul><li><strong>Twenty metrics live (43% of the 46-metric taxonomy).</strong> Hit the round number.</li><li>The reliability surface is now: error rate per stage + barge-in shape + cancel correctness + filler false-positive. Plus mic stale frames as a leakage signal. Together: full reliability picture for ops review.</li><li>Next candidates: 2.5 (sentence-split coverage — already have the inputs), 2.7 (worker queue depth), 2.14 (LLM stream cancel-to- close).</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-057.html">← iter-057</a><a href="iter-059.html">iter-059 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li><strong>Twenty-one metrics live (46% of the 46-metric taxonomy).</strong> Half the wishlist down. The tail metrics will be progressively harder (need new instrumentation, ablation studies, or external ground truth).</li><li>Combined with iter-043 (overlap ratio) and iter-038 (TTFsent), the streaming-overlap story is now fully observable: how much was the LLM keeping up (TTFsent), how much overlap actually happened (overlap ratio), and how much did the splitter waste via remainder (split coverage).</li><li>The 0.0 default ambiguity (&quot;no chars submitted&quot; vs &quot;all remainder&quot;) is documented in the test. In practice the session aggregate&#x27;s &gt;0 filter handles the no-chars case cleanly; the all-remainder case is rare enough (LLM yielding raw fragments without any terminator) that the false-positive cost is low.</li><li>Next candidates: 2.7 (worker queue depth — sampler daemon), 2.14 (LLM stream cancel-to-close), 1.2 (EoT detection latency).</li></ul><nav><a href="index.html">← Index</a><a href="iter-058.html">← iter-058</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>
