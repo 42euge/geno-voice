@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-095 — extract _emit_sentence_block helper</title>
+<title>iter-096 — filler idle_threshold recommendation (auto-tuning)</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,19 +168,23 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-094.html">← iter-094</a><a href="iter-096.html">iter-096 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-095 — extract _emit_sentence_block helper</h1>
-<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+9</code> (total 1138)</span></div>
-</header><p><strong>Branch:</strong> iter-095-sentence-helper  <strong>Commit:</strong> c4b4ceb  <strong>Date:</strong> 2026-05-25</p>
-<p>Continues the refactor pattern. The sentence-shape section of <code>print_session_summary</code> was 30 lines covering:</p>
-<ul><li>&quot;Mean sentence: NN chars&quot; (iter-045) when measurable.</li><li>&quot;Sentence range: [min..max] chars (session)&quot; (iter-070) when min != max.</li><li>&quot;Split coverage: NN%&quot; (iter-059) when measurable.</li></ul>
-<p>Extracted to <code>_emit_sentence_block(emit, stats: SentenceStats)</code> backed by a 4-field <code>SentenceStats</code> dataclass (sentence_lens, min_chars_seen, max_chars_seen, coverage_values).</p>
-<p>Behavior-preserving: byte-for-byte identical output. The 1129 prior tests pass unchanged.</p>
-<p>Tests (9 in <code>tests/unit/test_emit_sentence_block.py</code>):</p>
-<ul><li><code>SentenceStats</code> defaults (empty / 0).</li><li>No-data → no emit.</li><li>Mean-only when range fields unset (range gated on max&gt;0).</li><li>Range emits when min&lt;max; omits when min==max.</li><li>Coverage emits when present, omits when empty, independent of mean (can fire alone).</li><li>Ordering invariant: mean → range → coverage.</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>1138 passed, 1 skipped in 28s</strong> (1129 existing + 9 new).</p>
+<nav><a href="index.html">← Index</a><a href="iter-095.html">← iter-095</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-096 — filler idle_threshold recommendation (auto-tuning)</h1>
+<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+9</code> (total 1147)</span></div>
+</header><p><strong>Branch:</strong> iter-096-idle-recommend  <strong>Commit:</strong> dc600da  <strong>Date:</strong> 2026-05-25</p>
+<p>When filler false positives are firing, the FP-rate session line previously said &quot;tune idle_threshold up&quot; without a specific target. iter-096 computes a recommended value from the observed <code>llm_first_token</code> distribution and surfaces it inline:</p>
+<p>Filler FP rate:   2/4 (50%) — tune idle_threshold up to 1.2s</p>
+<p>Recommendation formula:</p>
+<p>recommended = max(current * 1.2, p75(first_token) + 100ms)</p>
+<p>Rounded to 1 decimal. The 1.2× current ensures a meaningful bump even when first-token times cluster near the existing threshold; the p75 + 100ms ensures we cover most real first-token waits while still firing fillers on the slow tail.</p>
+<p>Implementation:</p>
+<ul><li><code>SessionMeta</code> gains <code>idle_threshold: float = 0.0</code> (no legacy kwarg path — only flows through SessionMeta).</li><li><code>FillerStats</code> gains <code>recommended_idle_threshold: float = 0.0</code>.</li><li><code>print_session_summary</code> computes the recommendation when:<ul><li><code>filler_false_positives &gt; 0</code></li><li><code>meta.idle_threshold &gt; 0</code></li><li>At least 2 turns have measurable <code>llm_first_token</code></li></ul></li><li><code>_emit_filler_block</code> appends &quot;to N.Ns&quot; to the legacy &quot;tune up&quot; text when the recommendation is set.</li><li><code>mic_chat</code> passes <code>filler_idle_threshold</code> via SessionMeta.</li></ul>
+<p>Backwards-compat: when no recommendation is computed, the legacy &quot;tune idle_threshold up&quot; suffix is preserved unchanged. All 1138 prior tests pass.</p>
+<p>Tests (9 in <code>tests/unit/test_idle_threshold_recommend.py</code>):</p>
+<ul><li><code>FillerStats.recommended_idle_threshold</code> default zero.</li><li>Helper rendering: no recommendation → legacy suffix; non-zero → appended; no-FP → no FP-rate line at all (recommendation moot).</li><li>End-to-end via <code>print_session_summary</code>: no threshold → legacy text; with threshold + observations → 0.6s rendered; high first-token times → p75 path produces 2.1s; no first-token data → falls back to legacy; clean session → no FP line.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>1147 passed, 1 skipped in 40s</strong> (1138 existing + 9 new).</p>
 <p>Notes:</p>
-<ul><li><code>print_session_summary</code> is now ~1255 lines (down from 1500 pre-iter-089). Block extractions: TTFS (-80), Barge (-76), Filler (-32), Errors (-50), WPM (-12), Sentence (-30) = -280 lines reduced. Six helpers extracted, all following the identical <code>*Stats</code> dataclass + helper pattern.</li><li>The function is approaching a comfortable size where the remaining inline blocks (token-lag, queue depth, mic stale, VAD false-trig, primed audio, trim, context, bargeable, TTFS attribution) could be batched into 2-3 more iterations or consolidated into a single <code>_emit_misc_block</code> for the smaller ones.</li><li>Next directions: mic stale + iter-048 false-trigger + iter-074 bargeable fraction). print_session_summary based on the iter-051 false-positive distribution (recommend, don&#x27;t auto-apply).<ul><li>Continue refactor: extract <code>_emit_recording_block</code> (iter-037</li><li>Continue auto-tuning: filler idle_threshold suggestion in</li><li>WER fixture (1.6) heavyweight iteration.</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-094.html">← iter-094</a><a href="iter-096.html">iter-096 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li>This is the <strong>second auto-tuning use of an instrumented metric</strong> after iter-093&#x27;s auto-aggressive splitter. iter-051 was a passive measurement (FP rate); iter-096 turns it into actionable advice (specific recommended value).</li><li>The recommendation is shown, not auto-applied — mid-session config mutation is too risky. Operator updates <code>config.local.yaml</code> for the next session and re-runs.</li><li>Pattern generalizes: <code>max_user_assistant</code> trim cap when growth is unbounded. the live preview when consistently misleading. when stdev grows large.<ul><li>iter-077 context tokens could recommend a tighter</li><li>iter-072 stt_preview_divergence could recommend disabling</li><li>iter-068 TTFS jitter could suggest investigating LLM endpoint</li></ul></li><li>Next directions: trigger, bargeable fraction). pattern.<ul><li>More extractions: <code>_emit_recording_block</code> (mic stale, false-</li><li>More auto-tuning recommendations following the iter-096</li><li>WER fixture (1.6) heavyweight iteration.</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-095.html">← iter-095</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

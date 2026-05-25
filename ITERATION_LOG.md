@@ -6582,3 +6582,74 @@ Notes:
     print_session_summary based on the iter-051 false-positive
     distribution (recommend, don't auto-apply).
   - WER fixture (1.6) heavyweight iteration.
+
+## iter-096 — filler idle_threshold recommendation (auto-tuning)
+
+**Branch:** iter-096-idle-recommend  **Commit:** dc600da  **Date:** 2026-05-25
+
+When filler false positives are firing, the FP-rate session line
+previously said "tune idle_threshold up" without a specific
+target. iter-096 computes a recommended value from the observed
+`llm_first_token` distribution and surfaces it inline:
+
+    Filler FP rate:   2/4 (50%) — tune idle_threshold up to 1.2s
+
+Recommendation formula:
+
+    recommended = max(current * 1.2, p75(first_token) + 100ms)
+
+Rounded to 1 decimal. The 1.2× current ensures a meaningful bump
+even when first-token times cluster near the existing threshold;
+the p75 + 100ms ensures we cover most real first-token waits
+while still firing fillers on the slow tail.
+
+Implementation:
+- `SessionMeta` gains `idle_threshold: float = 0.0` (no legacy
+  kwarg path — only flows through SessionMeta).
+- `FillerStats` gains `recommended_idle_threshold: float = 0.0`.
+- `print_session_summary` computes the recommendation when:
+  - `filler_false_positives > 0`
+  - `meta.idle_threshold > 0`
+  - At least 2 turns have measurable `llm_first_token`
+- `_emit_filler_block` appends "to N.Ns" to the legacy "tune up"
+  text when the recommendation is set.
+- `mic_chat` passes `filler_idle_threshold` via SessionMeta.
+
+Backwards-compat: when no recommendation is computed, the legacy
+"tune idle_threshold up" suffix is preserved unchanged. All 1138
+prior tests pass.
+
+Tests (9 in `tests/unit/test_idle_threshold_recommend.py`):
+- `FillerStats.recommended_idle_threshold` default zero.
+- Helper rendering: no recommendation → legacy suffix; non-zero →
+  appended; no-FP → no FP-rate line at all (recommendation moot).
+- End-to-end via `print_session_summary`: no threshold → legacy
+  text; with threshold + observations → 0.6s rendered; high
+  first-token times → p75 path produces 2.1s; no first-token
+  data → falls back to legacy; clean session → no FP line.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **1147 passed, 1 skipped in 40s** (1138
+existing + 9 new).
+
+Notes:
+- This is the **second auto-tuning use of an instrumented metric**
+  after iter-093's auto-aggressive splitter. iter-051 was a
+  passive measurement (FP rate); iter-096 turns it into
+  actionable advice (specific recommended value).
+- The recommendation is shown, not auto-applied — mid-session
+  config mutation is too risky. Operator updates `config.local.yaml`
+  for the next session and re-runs.
+- Pattern generalizes:
+  - iter-077 context tokens could recommend a tighter
+    `max_user_assistant` trim cap when growth is unbounded.
+  - iter-072 stt_preview_divergence could recommend disabling
+    the live preview when consistently misleading.
+  - iter-068 TTFS jitter could suggest investigating LLM endpoint
+    when stdev grows large.
+- Next directions:
+  - More extractions: `_emit_recording_block` (mic stale, false-
+    trigger, bargeable fraction).
+  - More auto-tuning recommendations following the iter-096
+    pattern.
+  - WER fixture (1.6) heavyweight iteration.
