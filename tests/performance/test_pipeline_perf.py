@@ -496,6 +496,40 @@ class TestPerfScenarios:
         )
         assert r.sentences_spoken >= 1
 
+    # iter-099: A/B for the filler idle_threshold (iter-011 + iter-051).
+    # Same slow-LLM setup driven twice — once with the operator-default
+    # 0.6s threshold, once with the aggressive 0.15s. The time-series
+    # chart then shows how much earlier the filler kicks in. Lower
+    # threshold = earlier filler = lower TTFS-to-first-audio, at the
+    # cost of more false-positive fillers on naturally fast turns
+    # (the iter-051 sensitivity that iter-096 surfaces in the
+    # session-summary recommendation).
+    _FILLER_CLIP = (np.full(2048, 0.3, dtype=np.float32), [])
+
+    def test_filler_threshold_default(self):
+        r = _run_scenario(
+            "filler_threshold_default",
+            "Slow LLM, filler threshold 0.6s — operator default",
+            speech_seconds=1.0,
+            response="The actual answer is here.",
+            per_token_delay=0.1,
+            fillers=[self._FILLER_CLIP],
+            idle_threshold=0.6,
+        )
+        assert r.sentences_spoken >= 1
+
+    def test_filler_threshold_aggressive(self):
+        r = _run_scenario(
+            "filler_threshold_aggressive",
+            "Slow LLM, filler threshold 0.15s — aggressive (iter-051)",
+            speech_seconds=1.0,
+            response="The actual answer is here.",
+            per_token_delay=0.1,
+            fillers=[self._FILLER_CLIP],
+            idle_threshold=0.15,
+        )
+        assert r.sentences_spoken >= 1
+
     def test_barge_in_during_playback(self):
         # iter-042: deterministic barge-in scenario.
         #

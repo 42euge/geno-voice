@@ -6780,3 +6780,83 @@ Notes:
     sensitivity test).
   - Extract `_emit_recording_block` (still pending from iter-097).
   - WER fixture (1.6) heavyweight iteration.
+
+## iter-099 — A/B perf scenarios for filler idle_threshold
+
+**Goal:** Apply iter-098's pair-scenario pattern to the filler
+`idle_threshold` (iter-011, sensitivity-tuned in iter-051,
+auto-recommended in iter-096) so the time-series chart can show
+how the threshold trades TTFS savings against false-positive
+filler fires.
+
+**Change:** Two new perf scenarios driving the same slow-LLM
+response (per_token_delay=0.1) twice — one at the operator-default
+0.6s threshold, one at the aggressive 0.15s threshold. Both share
+the existing `_FILLER_CLIP` (a 2048-sample constant tone) so the
+only variable is the threshold.
+
+```python
+_FILLER_CLIP = (np.full(2048, 0.3, dtype=np.float32), [])
+
+def test_filler_threshold_default(self):    # 0.6s
+def test_filler_threshold_aggressive(self): # 0.15s
+```
+
+No plumbing changes needed — `_run_scenario` already accepts
+`fillers` + `idle_threshold` (added in iter-011 era).
+
+**Empirical A/B** (this run, x86_64 Linux stub pipeline):
+
+| Metric           | threshold=0.6 (default) | threshold=0.15 (aggressive) | Δ        |
+|------------------|-------------------------|-----------------------------|----------|
+| TTFS             | 1301.1 ms               | 950.3 ms                    | -351 ms  |
+| llm_first_token  | 100.1 ms                | 100.1 ms                    | 0        |
+| last_filler_id   | 0 (no fire)             | non-zero (fire)             | —        |
+
+The LLM TTFB is identical at 100ms in both runs (deterministic
+stub). The default 0.6s threshold sits *above* that TTFB, so the
+filler never triggers — TTFS is bounded by synth + first-sentence
+emission. The aggressive 0.15s threshold sits *below* the TTFB,
+so the filler fires while the LLM is still warming up — TTFS is
+bounded by the much faster filler-clip start.
+
+The 351ms savings is the entire LLM-warmup cost being masked. On
+a real LLM with 200-500ms TTFB the aggressive threshold would
+mask even more, but the operator pays for it with a filler clip
+on every turn (false-positive rate climbs as threshold falls).
+
+Verification: `python -m pytest tests/performance/ -q` → **13
+passed in 3.5s** (was 11, +2 new). Full unit + integration suite:
+`tests/ --ignore=tests/performance --ignore=tests/test_session.py
+--ignore=tests/e2e -q` → **1148 passed, 1 skipped** (identical to
+main).
+
+Notes:
+- **Pair-scenario compounding.** This is the second pair after
+  iter-098. The pattern now has 2 instances and is starting to
+  earn its keep — same data shape, same chart axes, same code
+  path. A third pair (auto-aggressive threshold off vs on) would
+  cement the pattern as the default.
+- **The TTFS difference is pure LLM-masking, not pipeline speedup.**
+  iter-098's aggressive splitter cuts real synth+dispatch work;
+  iter-099's aggressive threshold just hides the LLM warmup
+  behind a filler. The chart should label these distinctly so
+  the operator doesn't conflate them.
+- **iter-096 recommendation now has a calibration target.** The
+  session-summary line that recommends an `idle_threshold` value
+  based on FP rate now has a perf-suite anchor: at 0.15s the
+  filler fires deterministically on a 100ms TTFB. Future iter
+  could grid-search threshold values across multiple TTFB
+  shapes, picking the lowest threshold where FP rate < 5%.
+- **Operational gotcha for live deployments:** A 0.15s threshold
+  on the live mic_chat path means *every* turn with a real LLM
+  TTFB > 150ms will fire a filler. That's most turns. Operators
+  who don't want chatty fillers should keep the default 0.6s.
+- Next directions:
+  - Pair scenario for `auto_aggressive_threshold` (iter-093)
+    off vs on with stalled LLM — third pair, validates iter-093
+    in the same way iter-098 validated iter-088.
+  - Threshold grid-search (4-5 values) — would surface the FP
+    rate curve more precisely than a binary A/B.
+  - Extract `_emit_recording_block` (still pending from iter-097).
+  - WER fixture (1.6) heavyweight iteration.
