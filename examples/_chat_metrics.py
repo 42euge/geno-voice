@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import statistics
 from dataclasses import dataclass
+from typing import Optional
 
 # ANSI codes — duplicated from mic_chat so this module remains a
 # clean leaf with no dependency back on mic_chat itself.
@@ -776,11 +777,45 @@ def _median_ms(values: list[float]) -> float:
     return statistics.median(values) * 1000
 
 
+@dataclass
+class SessionMeta:
+    """iter-086: session-level signals collected by the driver
+    (mic_chat) and passed into ``print_session_summary`` as a
+    single object, rather than as a growing list of kwargs.
+
+    Each field tracks something the per-turn ``TurnMetrics`` can't
+    express because it spans turns or non-turn events:
+
+      ``false_triggers`` (iter-048): turns where the recorder fired
+        but no transcript came back — VAD noise.
+      ``session_seconds`` (iter-054): wall-clock from session start
+        to summary call. 0.0 when not provided.
+      ``llm_errors`` (iter-058): turn-fatal LLM exceptions.
+      ``trim_events`` (iter-078): how many times trim_history
+        actually evicted ≥1 message.
+      ``trim_messages_evicted`` (iter-078): cumulative evicted
+        message count across all trim_events.
+
+    All fields default to 0 — a `SessionMeta()` with no args is a
+    "no extra context" object. Callers that don't care about any
+    of these signals can continue to pass nothing (legacy kwargs
+    on print_session_summary are still accepted, see that
+    function's docstring).
+    """
+
+    false_triggers: int = 0
+    session_seconds: float = 0.0
+    llm_errors: int = 0
+    trim_events: int = 0
+    trim_messages_evicted: int = 0
+
+
 def print_session_summary(
     metrics_list: list[TurnMetrics],
     llm_config: dict,
     *,
     file=None,
+    meta: Optional["SessionMeta"] = None,
     false_triggers: int = 0,
     session_seconds: float = 0.0,
     llm_errors: int = 0,
@@ -815,7 +850,45 @@ def print_session_summary(
     showing the same story). If trim_messages_evicted/events is
     consistently 1, the cap is exactly right (each turn trims
     one). Metric 2.24 in the perf-metrics taxonomy.
+
+    iter-086: ``meta`` (a ``SessionMeta``) is the preferred way to
+    pass session-level signals — future additions extend the
+    dataclass instead of growing this kwarg list. When ``meta`` is
+    provided it takes precedence; the legacy kwargs are still
+    accepted for backwards compatibility and merge in for ANY
+    field not covered by ``meta``. Mixed-mode (some via meta, some
+    via kwargs) is rare but works.
     """
+    # iter-086: consolidate the session-level signals into a single
+    # SessionMeta. ``meta`` wins for any field it provides; legacy
+    # kwargs fill in the rest. This keeps the function body uniform
+    # — every reference is ``meta_eff.field`` regardless of where
+    # the value came from.
+    if meta is not None:
+        meta_eff = SessionMeta(
+            false_triggers=meta.false_triggers or false_triggers,
+            session_seconds=meta.session_seconds or session_seconds,
+            llm_errors=meta.llm_errors or llm_errors,
+            trim_events=meta.trim_events or trim_events,
+            trim_messages_evicted=(
+                meta.trim_messages_evicted or trim_messages_evicted
+            ),
+        )
+    else:
+        meta_eff = SessionMeta(
+            false_triggers=false_triggers,
+            session_seconds=session_seconds,
+            llm_errors=llm_errors,
+            trim_events=trim_events,
+            trim_messages_evicted=trim_messages_evicted,
+        )
+    # Local rebinds so the rest of the function reads naturally.
+    false_triggers = meta_eff.false_triggers
+    session_seconds = meta_eff.session_seconds
+    llm_errors = meta_eff.llm_errors
+    trim_events = meta_eff.trim_events
+    trim_messages_evicted = meta_eff.trim_messages_evicted
+
     def _emit(line: str = "") -> None:
         if file is None:
             print(line)

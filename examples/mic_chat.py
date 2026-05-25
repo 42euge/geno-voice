@@ -333,14 +333,22 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
         # iter-017: extracted to _chat_metrics.print_session_summary
         # so it's testable and uses statistics.median (proper
         # even-length handling).
-        from examples._chat_metrics import print_session_summary
+        # iter-086: bundle session-level signals into SessionMeta.
+        # Future session-level signals extend the dataclass instead
+        # of growing this call site's kwarg list.
+        from examples._chat_metrics import (
+            print_session_summary,
+            SessionMeta,
+        )
         print_session_summary(
             all_metrics, llm_config,
-            false_triggers=false_triggers,
-            session_seconds=time.monotonic() - session_start,
-            llm_errors=llm_errors,
-            trim_events=trim_events,
-            trim_messages_evicted=trim_messages_evicted,
+            meta=SessionMeta(
+                false_triggers=false_triggers,
+                session_seconds=time.monotonic() - session_start,
+                llm_errors=llm_errors,
+                trim_events=trim_events,
+                trim_messages_evicted=trim_messages_evicted,
+            ),
         )
     finally:
         mic.stop_stream()
