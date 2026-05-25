@@ -131,6 +131,8 @@ class ScenarioResult:
     preempted_words: int = 0
     # iter-081: id() of the filler clip picked this turn.
     last_filler_id: int = 0
+    # iter-082: TTC (cross-turn) — ms.
+    time_to_comprehension_ms: float = 0.0
     # iter-044: cumulative between-sentence worker idle gap.
     worker_idle_gap_ms: float = 0.0
     # iter-045: mean character length of sentences submitted.
@@ -339,6 +341,7 @@ def _run_scenario(
         context_tokens=m.context_tokens,
         preempted_words=m.preempted_words,
         last_filler_id=m.last_filler_id,
+        time_to_comprehension_ms=m.time_to_comprehension * 1000,
         worker_idle_gap_ms=m.worker_idle_gap_total * 1000,
         mean_sentence_chars=m.mean_sentence_chars,
         sentence_split_coverage=m.sentence_split_coverage,
@@ -529,6 +532,7 @@ class TestPerfScenarios:
         context_tokens=m.context_tokens,
         preempted_words=m.preempted_words,
         last_filler_id=m.last_filler_id,
+        time_to_comprehension_ms=m.time_to_comprehension * 1000,
         worker_idle_gap_ms=m.worker_idle_gap_total * 1000,
         mean_sentence_chars=m.mean_sentence_chars,
         sentence_split_coverage=m.sentence_split_coverage,

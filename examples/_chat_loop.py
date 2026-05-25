@@ -153,6 +153,12 @@ class ChatLoop:
         self._output = output  # passed to record_utterance_streaming
         self._wait_done_timeout = wait_done_timeout
         self._cancel_wait_timeout = cancel_wait_timeout
+        # iter-082: cross-turn state for the TTC proxy. Records the
+        # ``worker.first_audio_at`` of the previous turn so the
+        # NEXT turn can compute "user speech start - prev bot first
+        # audio" = how long the user listened before responding.
+        # None until turn 1 produces audio.
+        self._last_first_audio_at: Optional[float] = None
 
     def _print(self, msg: str) -> None:
         """Status print — go to the same output the recording loop
@@ -223,6 +229,22 @@ class ChatLoop:
         metrics.stt_preview_divergence = float(
             rec_metrics.get("stt_preview_divergence", 0.0)
         )
+        # iter-082: TTC (time-to-comprehension) proxy. Cross-turn
+        # gap from the PREVIOUS turn's first bot audio to THIS
+        # turn's first speech-detected frame. Captures "how long
+        # did the user listen before responding." Skip on turn 1
+        # (no prev) and on turns where the recorder didn't emit
+        # speech_start_at.
+        speech_start_at = rec_metrics.get("speech_start_at")
+        if (
+            self._last_first_audio_at is not None
+            and speech_start_at is not None
+        ):
+            ttc = speech_start_at - self._last_first_audio_at
+            # Negative TTC is a clock-skew artifact (the recorder
+            # uses its own t_origin clock; the worker uses
+            # self._clock); clamp at 0.
+            metrics.time_to_comprehension = max(0.0, ttc)
         # iter-065: trailing-silence wall. The part of EoT NOT
         # explained by the configured silence_duration. ``max(0, ...)``
         # because the EoT measurement uses the actual last-speech
@@ -445,6 +467,11 @@ class ChatLoop:
 
             # Populate metrics from the worker.
             if worker.first_audio_at is not None:
+                # iter-082: stash this turn's first-audio timestamp
+                # so the NEXT turn's TTC computation has its
+                # left-hand operand. Update only when audio
+                # actually played — silent turns don't anchor TTC.
+                self._last_first_audio_at = worker.first_audio_at
                 metrics.ttfs = worker.first_audio_at - speech_ended_at
                 # iter-053: bucket TTFS against the human-conversation
                 # sweet spot. <200ms feels rushed (bot interrupted the

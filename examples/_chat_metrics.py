@@ -322,6 +322,16 @@ class TurnMetrics:
     # there's something else slow in the recording loop and tuning
     # the knob won't help. Metric 1.3 in the perf-metrics taxonomy.
     eot_overhead: float = 0.0
+    # iter-082: TTC (time-to-comprehension) proxy. Cross-turn gap
+    # from the PREVIOUS turn's first bot audio to THIS turn's first
+    # speech-detected frame. Captures how long the user listened
+    # before responding. <500ms = user already knew the answer
+    # (bot was telling them something they already knew). >5s =
+    # user was confused / thinking. Both are signals; the bell-
+    # curve target is 1-3s. 0 on turn 1 and on turns where the
+    # prior turn produced no audio. Metric 3.14 in the perf-metrics
+    # taxonomy ("Novel/speculative").
+    time_to_comprehension: float = 0.0
     transcript: str = ""
     response: str = ""
     model: str = ""
@@ -333,6 +343,22 @@ class TurnMetrics:
         print(f"  {_DIM}You:{_RESET} \"{self.transcript}\"")
         print()
         print(f"  {_DIM}┌─ PIPELINE{_RESET}")
+        # iter-082: TTC (time-to-comprehension) — cross-turn gap
+        # from prev bot first audio to this turn's user speech
+        # start. Skip when 0 (turn 1, or prior had no audio).
+        # Bell-curve target is 1-3s; <500ms or >5s are both
+        # interesting flags.
+        if self.time_to_comprehension > 0:
+            ms = self.time_to_comprehension * 1000
+            if ms < 500 or ms > 5000:
+                color = _YELLOW
+            else:
+                color = _DIM
+            print(
+                f"  {_DIM}│{_RESET}  TTC:           "
+                f"{color}{ms:>7.0f}ms{_RESET}  "
+                f"({_DIM}user listened before responding{_RESET})"
+            )
         # iter-064: append user WPM to the Speech line when known.
         # Symmetric to iter-046's bot WPM display. No color coding —
         # humans speak across a wide range and there's no "correct"
@@ -950,6 +976,14 @@ def print_session_summary(
     # recorder emitted. Filter zeros (DONE_TOO_SHORT / no-transcription
     # turns leave the field at default).
     eot_latencies = [m.eot_latency for m in metrics_list if m.eot_latency > 0]
+    # iter-082: TTC values across turns where the cross-turn
+    # measurement was possible. Filter zeros (turn 1 + post-silent-
+    # prev turns).
+    ttc_values = [
+        m.time_to_comprehension
+        for m in metrics_list
+        if m.time_to_comprehension > 0
+    ]
     # iter-065: trailing-silence wall — overhead beyond the configured
     # silence_duration. Filter zeros + sub-chunk noise; the line only
     # emits when at least one turn showed real overhead.
@@ -1001,6 +1035,23 @@ def print_session_summary(
         if eot_overheads:
             ov_med = statistics.median(eot_overheads) * 1000
             _emit(f"    EoT overhead:     {ov_med:.0f}ms (above silence_duration)")
+    # iter-082: TTC median + outlier counts. Sub-500ms = "user
+    # didn't need to listen" (bot was telling them what they
+    # already knew); >5s = "user was confused / thinking." Both
+    # are signals; the bell-curve target is 1-3s.
+    if ttc_values:
+        med_ttc_ms = statistics.median(ttc_values) * 1000
+        rushed = sum(1 for v in ttc_values if v < 0.5)
+        slow = sum(1 for v in ttc_values if v > 5.0)
+        outlier_str = ""
+        if rushed or slow:
+            bits = []
+            if rushed:
+                bits.append(f"{rushed} rushed")
+            if slow:
+                bits.append(f"{slow} slow")
+            outlier_str = f" ({', '.join(bits)})"
+        _emit(f"    Median TTC:       {med_ttc_ms:.0f}ms{outlier_str}")
     _emit(f"    Median STT:       {_median_ms(stt_times):.0f}ms")
     if stt_rtfs:
         _emit(f"    Median STT RTF:   {statistics.median(stt_rtfs):.2f}x")

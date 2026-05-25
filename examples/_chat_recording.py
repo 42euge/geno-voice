@@ -163,6 +163,11 @@ def record_utterance_streaming(
             completely different. Populated when both preview and
             final are non-empty; ``DONE_TOO_SHORT`` returns early
             without writing either key.
+          - ``"speech_start_at"`` (iter-082): clock timestamp of
+            the first frame whose RMS level crossed
+            ``silence_threshold``. Used by ChatLoop for the
+            cross-turn TTC metric (``speech_start_at - prev_first_audio_at``).
+            Same DONE_OK gating as eot_latency.
     """
     if transcribe_fn is None:
         transcribe_fn = lambda wav: _transcribe_quick(stt_engine, wav)
@@ -209,6 +214,11 @@ def record_utterance_streaming(
     # processing). Stays None when the loop exits via DONE_TOO_SHORT
     # or never sees speech.
     last_speech_at: float | None = None
+    # iter-082: track the FIRST speech-detected frame, mirror image
+    # of last_speech_at. The cross-turn TTC metric is
+    # ``speech_start_at - prev_first_audio_at`` — how long the user
+    # listened before responding.
+    first_speech_at: float | None = None
 
     while True:
         if primed_idx < len(primed):
@@ -227,6 +237,11 @@ def record_utterance_streaming(
         # VadEvent it produces.
         if level > silence_threshold:
             last_speech_at = now
+            # iter-082: latch first-speech timestamp once. The
+            # cross-turn TTC metric is computed at the loop level
+            # using prev_first_audio_at + this value.
+            if first_speech_at is None:
+                first_speech_at = now
 
         event = vad.feed(level, now)
 
@@ -249,6 +264,11 @@ def record_utterance_streaming(
             # speaking frame (the speech_start latch in VadState).
             if out_metrics is not None and last_speech_at is not None:
                 out_metrics["eot_latency"] = now - last_speech_at
+            # iter-082: publish first_speech_at for cross-turn
+            # TTC computation in ChatLoop. Same DONE_OK gating —
+            # DONE_TOO_SHORT path skips this.
+            if out_metrics is not None and first_speech_at is not None:
+                out_metrics["speech_start_at"] = first_speech_at
             break
         if event is VadEvent.DONE_TOO_SHORT:
             too_short = True
