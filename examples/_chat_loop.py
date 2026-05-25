@@ -518,6 +518,15 @@ class ChatLoop:
             # iter-062: peak queue depth (taxonomy 2.7). Sampled in
             # SentenceWorker.submit() after each put.
             metrics.max_queue_depth = worker.max_queue_depth
+            # iter-071: token-reveal lag — worker accumulates raw
+            # sums; ChatLoop computes the mean at the turn boundary
+            # so the denominator is stable.
+            if worker.token_reveal_lag_count > 0:
+                metrics.mean_token_reveal_lag = (
+                    worker.token_reveal_lag_sum
+                    / worker.token_reveal_lag_count
+                )
+                metrics.max_token_reveal_lag = worker.token_reveal_lag_max
             metrics.sentences_spoken = worker.sentences_spoken
             # iter-040: count of sentences cut mid-stream by cancel_event.
             metrics.sentences_cancelled = worker.cancelled_sentences

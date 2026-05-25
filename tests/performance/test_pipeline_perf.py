@@ -124,6 +124,9 @@ class ScenarioResult:
     # iter-070: per-turn min/max sentence lengths.
     min_sentence_chars: int = 0
     max_sentence_chars: int = 0
+    # iter-071: token-reveal lag, ms.
+    mean_token_reveal_lag_ms: float = 0.0
+    max_token_reveal_lag_ms: float = 0.0
     # iter-059: sentence-split coverage (0.0–1.0).
     sentence_split_coverage: float = 0.0
     # iter-046: bot speaking rate (words per minute).
@@ -333,6 +336,8 @@ def _run_scenario(
         eot_overhead_ms=m.eot_overhead * 1000,
         min_sentence_chars=m.min_sentence_chars,
         max_sentence_chars=m.max_sentence_chars,
+        mean_token_reveal_lag_ms=m.mean_token_reveal_lag * 1000,
+        max_token_reveal_lag_ms=m.max_token_reveal_lag * 1000,
     )
     _record(res)
     return res
@@ -514,6 +519,8 @@ class TestPerfScenarios:
             eot_overhead_ms=m.eot_overhead * 1000,
             min_sentence_chars=m.min_sentence_chars,
             max_sentence_chars=m.max_sentence_chars,
+            mean_token_reveal_lag_ms=m.mean_token_reveal_lag * 1000,
+            max_token_reveal_lag_ms=m.max_token_reveal_lag * 1000,
         )
         _record(res)
 

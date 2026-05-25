@@ -223,6 +223,16 @@ class TurnMetrics:
     # can't fully mask it. Inverse of ``worker_idle_gap_total``
     # (worker starved). Metric 2.7 in the perf-metrics taxonomy.
     max_queue_depth: int = 0
+    # iter-071: token-reveal lag — mean per-token wall-clock offset
+    # between the moment a token is printed and the audio second
+    # its ``start`` field claims. Positive = text falls behind audio
+    # (UX feels broken — text is "subtitles late"); negative = text
+    # leads audio (spoils the bot before it speaks). Aggregated from
+    # per-sentence stats inside SentenceWorker; 0.0 when play_fn
+    # doesn't support the lag_out kwarg (test stubs) or no tokens
+    # were emitted. Metric 2.17 in the perf-metrics taxonomy.
+    mean_token_reveal_lag: float = 0.0
+    max_token_reveal_lag: float = 0.0
     # iter-063: time from the user's last in-speech frame to the
     # VAD declaring DONE_OK. Lower bound is roughly
     # ``silence_duration`` (the VAD has to wait that long before
@@ -386,6 +396,19 @@ class TurnMetrics:
                 f"  {_DIM}│{_RESET}  Queue depth:   "
                 f"{color}{self.max_queue_depth:>6d}{_RESET}  "
                 f"({_DIM}synth backlog peak{_RESET})"
+            )
+        # iter-071: token-reveal lag. Skip when the metric wasn't
+        # captured (mean and max both at 0). Yellow when |mean| >
+        # 100ms — the user perceives the text as out of sync with
+        # the bot's voice. Sign-aware: render with leading "+/-".
+        if self.mean_token_reveal_lag != 0 or self.max_token_reveal_lag != 0:
+            mean_ms = self.mean_token_reveal_lag * 1000
+            max_ms = self.max_token_reveal_lag * 1000
+            color = _YELLOW if abs(mean_ms) > 100 else _DIM
+            print(
+                f"  {_DIM}│{_RESET}  Token-reveal:  "
+                f"{color}{mean_ms:>+6.0f}ms{_RESET} mean, "
+                f"{_DIM}{max_ms:+.0f}ms peak{_RESET}"
             )
         # iter-046: bot WPM. Skip if 0 (no audio / no tokens). Color:
         # green if 130-200 (around the UX-research sweet spot 150-180),
@@ -678,6 +701,18 @@ def print_session_summary(
     ]
     # iter-046: bot WPM across measurable turns.
     bot_wpms = [m.bot_wpm for m in metrics_list if m.bot_wpm > 0]
+    # iter-071: token-reveal lag — both mean and max collected
+    # across turns where the play_fn supplied lag stats. ``!= 0``
+    # filter rather than ``> 0`` because lag can be legitimately
+    # negative (text-leading-audio).
+    token_lag_means = [
+        m.mean_token_reveal_lag for m in metrics_list
+        if m.mean_token_reveal_lag != 0
+    ]
+    token_lag_maxes = [
+        m.max_token_reveal_lag for m in metrics_list
+        if m.max_token_reveal_lag != 0
+    ]
     # iter-064: user WPM across turns where transcript + speech_duration
     # were both non-zero. Filter zeros — empty transcript / zero
     # speech turns shouldn't bias the average.
@@ -1024,6 +1059,20 @@ def print_session_summary(
         if user_wpms:
             gap = median_wpm - statistics.median(user_wpms)
             _emit(f"    Mirror gap:       {gap:+.0f} WPM (bot − user)")
+    # iter-071: median mean-lag + worst peak across the session.
+    # Sign-preserved on output. >50ms median is "the user notices
+    # the desync"; >300ms peak on any one token is a visible glitch
+    # even if the average looks OK.
+    if token_lag_means:
+        med_lag_ms = statistics.median(token_lag_means) * 1000
+        # Pick the lag with the largest absolute value as "worst".
+        worst_peak = max(token_lag_maxes, key=abs) if token_lag_maxes else 0.0
+        worst_ms = worst_peak * 1000
+        _emit(
+            f"    Token lag:        "
+            f"{med_lag_ms:+.0f}ms median, "
+            f"{worst_ms:+.0f}ms worst peak"
+        )
     # iter-062: worst queue depth across the session. Skip when no
     # turn backed up (≤1) — clean sessions don't need the line.
     # When multiple turns backed up, show how many to differentiate

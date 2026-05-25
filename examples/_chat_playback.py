@@ -84,6 +84,7 @@ def play_aligned(
     play_chunk: int = DEFAULT_PLAY_CHUNK,
     rate: int = TTS_RATE,
     cancel_event=None,
+    lag_out: dict | None = None,
 ) -> float:
     """Stream `audio_np` into `speaker_stream` chunk-by-chunk and reveal
     `tokens` in real-time as playback advances.
@@ -106,6 +107,18 @@ def play_aligned(
     primitive: a watcher on the mic side can flip the flag the
     instant it detects user speech, and the worker stops mid-sentence.
 
+    `lag_out` (iter-071) is an optional dict that, if provided, gets
+    populated with per-call token-reveal lag statistics:
+        ``"sum"``    — total lag (seconds) summed across emitted tokens
+        ``"count"``  — number of tokens with a lag observation
+        ``"max"``    — single-token worst-case lag (seconds)
+    Lag is ``(clock_at_emit - t0) - token["start"]``. Positive means
+    text was emitted AFTER the audio second it claims to align with;
+    negative means text led audio (the bot got "spoiled"). Production
+    play_aligned in mic_chat.py wires this through SentenceWorker so
+    the per-turn mean ends up on TurnMetrics. Tests can call directly
+    with their own dict.
+
     Returns elapsed wall-clock seconds spent inside the play loop.
     """
     if output is None:
@@ -124,6 +137,12 @@ def play_aligned(
     t0 = clock()
     samples_played = 0
     token_idx = 0
+    # iter-071: token-reveal lag accumulators. Only updated when
+    # ``lag_out`` was provided by the caller — keeps the hot loop
+    # branch-free in the common case.
+    lag_sum = 0.0
+    lag_count = 0
+    lag_max = 0.0
 
     while samples_played < total_samples:
         if cancel_event is not None and cancel_event.is_set():
@@ -139,6 +158,16 @@ def play_aligned(
         pos = samples_played / rate
 
         while token_idx < len(tokens) and tokens[token_idx]["start"] <= pos:
+            if lag_out is not None:
+                # iter-071: lag for this token. ``clock() - t0`` is
+                # wall-clock elapsed since play start; the token
+                # claims its audio plays at ``token["start"]``.
+                # Difference = lag (positive = text behind audio).
+                lag = (clock() - t0) - tokens[token_idx]["start"]
+                lag_sum += lag
+                lag_count += 1
+                if abs(lag) > abs(lag_max):
+                    lag_max = lag
             _emit_token(output, tokens[token_idx]["text"], bold=True, flush=True)
             token_idx += 1
 
@@ -159,5 +188,13 @@ def play_aligned(
             _emit_token(output, tokens[token_idx]["text"], bold=False, flush=False)
             token_idx += 1
         output.flush()
+
+    # iter-071: publish lag stats. Skip when no tokens had a
+    # lag observation (cancel-before-first-token, or the stream
+    # had zero tokens).
+    if lag_out is not None and lag_count > 0:
+        lag_out["sum"] = lag_sum
+        lag_out["count"] = lag_count
+        lag_out["max"] = lag_max
 
     return elapsed

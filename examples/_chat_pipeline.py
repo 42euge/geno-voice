@@ -69,6 +69,25 @@ def _play_fn_accepts_cancel_event(play_fn) -> bool:
         p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
     )
 
+def _play_fn_accepts_lag_out(play_fn) -> bool:
+    """iter-071: Return True if ``play_fn`` accepts ``lag_out``.
+
+    Same sniff pattern as ``_play_fn_accepts_cancel_event``: detect
+    once at worker construction; pass the kwarg only when supported
+    so older / minimal play_fns continue to work unchanged.
+    """
+    try:
+        sig = inspect.signature(play_fn)
+    except (ValueError, TypeError):
+        return False
+    params = sig.parameters
+    if "lag_out" in params:
+        return True
+    return any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+    )
+
+
 # Sentinel marking "no more sentences will be submitted." Using a unique
 # object ensures it can never collide with a real sentence string.
 _SENTINEL = object()
@@ -124,6 +143,10 @@ class SentenceWorker:
         # play_fn accepts ``cancel_event``, instead of swallowing
         # TypeError per-call (which masked real bugs).
         self._play_fn_supports_cancel = _play_fn_accepts_cancel_event(play_fn)
+        # iter-071: same detection pattern for the optional lag_out
+        # kwarg. When supported, the worker passes a fresh dict per
+        # play call and folds the stats into worker-level totals.
+        self._play_fn_supports_lag_out = _play_fn_accepts_lag_out(play_fn)
         self._clock = clock
         self._output = output if output is not None else sys.stdout
 
@@ -188,6 +211,17 @@ class SentenceWorker:
         # (taxonomy 2.8). Validates the iter-008 win — if this
         # creeps back, TTFS regresses silently.
         self.speaker_open_seconds: float = 0.0
+        # iter-071: token-reveal lag accumulators across the per-
+        # sentence play_fn calls. ``mean = sum / count`` is computed
+        # by the consumer (ChatLoop) since ``count`` is the more
+        # useful number for downstream filtering. ``max`` is the
+        # single-token worst-case across all sentences this turn.
+        # All zero when play_fn doesn't support lag_out (test stubs)
+        # or no sentences played. Metric 2.17 in the perf-metrics
+        # taxonomy.
+        self.token_reveal_lag_sum: float = 0.0
+        self.token_reveal_lag_count: int = 0
+        self.token_reveal_lag_max: float = 0.0
         # iter-062: peak queue depth observed during the turn —
         # number of sentences waiting for synth at the moment of
         # the deepest backlog. >1 means the producer (LLM splitter)
@@ -314,11 +348,30 @@ class SentenceWorker:
             # by the play_fn body now surfaces correctly via the
             # outer ``except Exception`` instead of triggering a
             # silent retry.
-            if self._play_fn_supports_cancel:
+            # iter-071: pass a fresh lag dict when the play_fn
+            # supports it; fold per-call stats into worker totals
+            # after each call.
+            lag_out: dict | None = (
+                {} if self._play_fn_supports_lag_out else None
+            )
+            if self._play_fn_supports_cancel and lag_out is not None:
                 elapsed = self._play_fn(
                     speaker, audio_np, tokens,
                     is_first_sentence=is_first,
                     cancel_event=self._cancel_event,
+                    lag_out=lag_out,
+                )
+            elif self._play_fn_supports_cancel:
+                elapsed = self._play_fn(
+                    speaker, audio_np, tokens,
+                    is_first_sentence=is_first,
+                    cancel_event=self._cancel_event,
+                )
+            elif lag_out is not None:
+                elapsed = self._play_fn(
+                    speaker, audio_np, tokens,
+                    is_first_sentence=is_first,
+                    lag_out=lag_out,
                 )
             else:
                 elapsed = self._play_fn(
@@ -326,6 +379,16 @@ class SentenceWorker:
                     is_first_sentence=is_first,
                 )
             self.playback_time += float(elapsed) if elapsed else 0.0
+            # iter-071: fold this call's lag stats into worker-level
+            # totals. play_aligned only writes the dict when at
+            # least one token was emitted, so an empty dict here is
+            # the legitimate "no data" signal.
+            if lag_out:
+                self.token_reveal_lag_sum += lag_out.get("sum", 0.0)
+                self.token_reveal_lag_count += lag_out.get("count", 0)
+                call_max = lag_out.get("max", 0.0)
+                if abs(call_max) > abs(self.token_reveal_lag_max):
+                    self.token_reveal_lag_max = call_max
             # iter-040: cancel transitioned during the call —
             # play_fn exited mid-stream.
             if (

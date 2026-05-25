@@ -254,12 +254,16 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
     def _synth(sentence: str):
         return synthesize_with_alignment(tts_engine, sentence, voice, speed)
 
-    def _play(speaker, audio_np, tokens, *, is_first_sentence=False, cancel_event=None):
+    def _play(speaker, audio_np, tokens, *, is_first_sentence=False,
+              cancel_event=None, lag_out=None):
+        # iter-071: forward lag_out so SentenceWorker can collect
+        # per-token reveal-lag stats on the live mic_chat path.
         return _play_aligned_core(
             speaker, audio_np, tokens,
             is_first_sentence=is_first_sentence,
             rate=TTS_RATE,
             cancel_event=cancel_event,
+            lag_out=lag_out,
         )
 
     chat_loop = ChatLoop(
