@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-091 — extract _emit_filler_block helper</title>
+<title>iter-092 — extract _emit_errors_block helper</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,19 +168,18 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-090.html">← iter-090</a><a href="iter-092.html">iter-092 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-091 — extract _emit_filler_block helper</h1>
-<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+9</code> (total 1104)</span></div>
-</header><p><strong>Branch:</strong> iter-091-filler-helper  <strong>Commit:</strong> 83a355a  <strong>Date:</strong> 2026-05-25</p>
-<p>Continues the iter-089/iter-090 refactor pattern. The filler section of <code>print_session_summary</code> was 32 lines across three sub-conditions:</p>
-<ul><li>&quot;Fillers played: N&quot; (iter-014).</li><li>&quot;Filler FP rate: M/K (X%)&quot; (iter-051) when any false positive fired.</li><li>&quot;Filler novelty: M unique / N (X%)&quot; (iter-081) when ≥2 fillers played.</li></ul>
-<p>Extracted to <code>_emit_filler_block(emit, stats: FillerStats)</code> with a <code>FillerStats</code> dataclass bundling the 4 input fields. Mirrors the iter-090 <code>BargeStats</code> pattern.</p>
-<p>Behavior-preserving: byte-for-byte identical output. The 1095 prior tests pass unchanged.</p>
-<p>Tests (9 in <code>tests/unit/test_emit_filler_block.py</code>):</p>
-<ul><li><code>FillerStats</code> defaults all zero.</li><li>No-data → no emit.</li><li>Single-play → count line only (FP rate gated on &gt;0 FPs; novelty gated on ≥2 plays).</li><li>FP rate emits with correct % when FPs present; omits when 0.</li><li>Novelty emits at 2+ plays; omits at single play (trivially 100%).</li><li>Ordering invariant: count → FP → novelty.</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>1104 passed, 1 skipped in 26s</strong> (1095 existing + 9 new).</p>
+<nav><a href="index.html">← Index</a><a href="iter-091.html">← iter-091</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-092 — extract _emit_errors_block helper</h1>
+<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+11</code> (total 1115)</span></div>
+</header><p><strong>Branch:</strong> iter-092-errors-helper  <strong>Commit:</strong> 43532ec  <strong>Date:</strong> 2026-05-25</p>
+<p>Continues the refactor pattern. The errors-and-silent-turn section of <code>print_session_summary</code> was 50 lines across three sub-conditions:</p>
+<ul><li>&quot;Errors: N LLM, M worker (over X attempts)&quot; (iter-058) when any error fired.</li><li>&quot;Worker recovery: M/N turns produced audio (X%)&quot; (iter-067) when any worker error fired.</li><li>&quot;Silent turns: M/N (X%) — bot produced no audio&quot; (iter-079) when any silent turn occurred.</li></ul>
+<p>Extracted to <code>_emit_errors_block(emit, stats: ErrorStats)</code> backed by a 7-field <code>ErrorStats</code> dataclass. Behavior-preserving: byte-for-byte identical output (1104 prior tests pass unchanged).</p>
+<p>Tests (11 in <code>tests/unit/test_emit_errors_block.py</code>):</p>
+<ul><li><code>ErrorStats</code> defaults all zero.</li><li>No-data → no emit.</li><li>LLM-only errors → count + attempts singular/plural form.</li><li>Worker errors + recovery rates (full success, zero, partial).</li><li>Combined LLM+worker → both kinds in one Errors line.</li><li>Silent turns: emit when present, omit when zero, independent of error block (silent turns can fire without any errors).</li><li>Ordering invariant: Errors → Worker recovery → Silent turns.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>1115 passed, 1 skipped in 24s</strong> (1104 existing + 11 new).</p>
 <p>Notes:</p>
-<ul><li><code>print_session_summary</code> is now ~1340 lines (down from 1500 pre-iter-089). Block extractions so far: TTFS (-80), Barge (-76), Filler (-32) = -188 lines reduced. Significant readability win.</li><li>The pattern is fully formed: 1. Identify a contiguous block sharing a top-level guard. 2. Bundle inputs into a small dataclass. 3. Move the block to a helper that takes <code>(emit, stats)</code>. 4. Existing tests are the regression sentinel. 5. Add focused helper-level tests.</li><li>Next directions: recovery + iter-079 silent turns). + mirror gap). splitter on detected stall.<ul><li>Extract <code>_emit_errors_block</code> (iter-058 + iter-067 worker</li><li>Extract <code>_emit_wpm_block</code> (iter-046 bot + iter-064 user</li><li>Architecture: combine iter-085 + iter-088 → auto-aggressive</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-090.html">← iter-090</a><a href="iter-092.html">iter-092 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li><code>print_session_summary</code> is now ~1290 lines (down from 1500 pre-iter-089). Block extractions so far: TTFS (-80), Barge (-76), Filler (-32), Errors (-50) = -238 lines reduced.</li><li>Four blocks extracted; the function is approaching the size where the remaining co-emitted clusters (WPM, sentences, mic stale, VAD false-trig, trim, context, queue, token-lag, bargeable, primed-audio) could be extracted in 2-3 more iterations.</li><li>The <code>*Stats</code> dataclass pattern is robust — each new metric in a block extends the dataclass instead of touching the helper signature.</li><li>Next directions: WPM + mirror gap). range, iter-059 split coverage). splitter on detected stall.<ul><li>Extract <code>_emit_wpm_block</code> (iter-046 bot WPM, iter-064 user</li><li>Extract <code>_emit_sentence_block</code> (iter-045 mean, iter-070</li><li>Architecture: combine iter-085 + iter-088 → auto-aggressive</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-091.html">← iter-091</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

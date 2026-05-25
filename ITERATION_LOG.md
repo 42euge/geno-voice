@@ -6361,3 +6361,54 @@ Notes:
     + mirror gap).
   - Architecture: combine iter-085 + iter-088 → auto-aggressive
     splitter on detected stall.
+
+## iter-092 — extract _emit_errors_block helper
+
+**Branch:** iter-092-errors-helper  **Commit:** 43532ec  **Date:** 2026-05-25
+
+Continues the refactor pattern. The errors-and-silent-turn section
+of `print_session_summary` was 50 lines across three sub-conditions:
+- "Errors: N LLM, M worker (over X attempts)" (iter-058) when any
+  error fired.
+- "Worker recovery: M/N turns produced audio (X%)" (iter-067)
+  when any worker error fired.
+- "Silent turns: M/N (X%) — bot produced no audio" (iter-079)
+  when any silent turn occurred.
+
+Extracted to `_emit_errors_block(emit, stats: ErrorStats)` backed
+by a 7-field `ErrorStats` dataclass. Behavior-preserving:
+byte-for-byte identical output (1104 prior tests pass unchanged).
+
+Tests (11 in `tests/unit/test_emit_errors_block.py`):
+- `ErrorStats` defaults all zero.
+- No-data → no emit.
+- LLM-only errors → count + attempts singular/plural form.
+- Worker errors + recovery rates (full success, zero, partial).
+- Combined LLM+worker → both kinds in one Errors line.
+- Silent turns: emit when present, omit when zero, independent
+  of error block (silent turns can fire without any errors).
+- Ordering invariant: Errors → Worker recovery → Silent turns.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **1115 passed, 1 skipped in 24s** (1104
+existing + 11 new).
+
+Notes:
+- `print_session_summary` is now ~1290 lines (down from 1500
+  pre-iter-089). Block extractions so far: TTFS (-80), Barge
+  (-76), Filler (-32), Errors (-50) = -238 lines reduced.
+- Four blocks extracted; the function is approaching the size
+  where the remaining co-emitted clusters (WPM, sentences, mic
+  stale, VAD false-trig, trim, context, queue, token-lag,
+  bargeable, primed-audio) could be extracted in 2-3 more
+  iterations.
+- The `*Stats` dataclass pattern is robust — each new metric in
+  a block extends the dataclass instead of touching the helper
+  signature.
+- Next directions:
+  - Extract `_emit_wpm_block` (iter-046 bot WPM, iter-064 user
+    WPM + mirror gap).
+  - Extract `_emit_sentence_block` (iter-045 mean, iter-070
+    range, iter-059 split coverage).
+  - Architecture: combine iter-085 + iter-088 → auto-aggressive
+    splitter on detected stall.
