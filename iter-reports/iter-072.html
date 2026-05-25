@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-072 — STT preview-vs-final divergence metric (taxonomy 1.8)</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-071.html">← iter-071</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-072 — STT preview-vs-final divergence metric (taxonomy 1.8)</h1>
+<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+12</code> (total 904)</span></div>
+</header><p><strong>Branch:</strong> iter-072-stt-divergence  <strong>Commit:</strong> 05b51da  <strong>Date:</strong> 2026-05-25</p>
+<p>Added STT preview-vs-final divergence — how aligned the live STT preview the user sees while speaking is with the final transcript:</p>
+<p>divergence = 1 - SequenceMatcher(None, preview, final).ratio()</p>
+<p>0 = preview matched final perfectly (incremental Whisper output was already correct — live STT was useful). 1 = totally different — the user had to wait for the final to know if they were understood. Uses <code>difflib.SequenceMatcher</code> from stdlib so no new dependencies.</p>
+<p>Implementation:</p>
+<ul><li><code>record_utterance_streaming</code> populates the iter-063 <code>out_metrics</code> dict with key <code>&quot;stt_preview_divergence&quot;</code> when both <code>preview_text</code> and <code>final_text</code> are non-empty. The compute happens after the final transcribe completes; sized for the compare-once-at-end pattern (vs per-frame). DONE_TOO_SHORT path exits early as before — no key written.</li><li><code>TurnMetrics.stt_preview_divergence: float = 0.0</code> (new field). ChatLoop copies from <code>rec_metrics</code>.</li><li>Per-turn print: appends &quot;preview Δ N%&quot; to the STT line when <code>&gt; 0</code>. Yellow when <code>&gt; 30%</code> (live preview was unreliable enough the user can&#x27;t trust it). Combined with the iter-049 RTF tag, the STT line now shows two diagnostics: <code>STT: NNms (RTF 0.25x, preview Δ 12%)</code></li><li>Session summary: &quot;STT preview Δ: N% (median)&quot; filtered for <code>&gt;0</code>.</li><li><code>ScenarioResult.stt_preview_divergence</code> on perf snapshots.</li></ul>
+<p>Tests (12 in <code>tests/unit/test_stt_preview_divergence.py</code>):</p>
+<ul><li>Default zero, per-turn print: zero omits suffix; low value emits dim; high value emits (yellow); combined with RTF.</li><li>Session aggregate: no-data, median calculation, zero-filter.</li><li>Recorder integration: perfect-preview (preview == final) → divergence 0; matched preview/final case (recorder doesn&#x27;t populate when buffer-growth dynamics make preview converge to final); no-preview case (utterance too short for inference interval).</li><li>ChatLoop wiring: field bubbles to TurnMetrics in [0,1].</li></ul>
+<p>Notes on test design:</p>
+<ul><li>The recorder&#x27;s preview always reflects the LATEST <code>transcribe_fn</code> return for the growing buffer. Forcing a &quot;different preview vs final&quot; outcome via virtual mic would require either patching INFERENCE_INTERVAL or distinguishing calls by some side-channel the recorder doesn&#x27;t expose. The test suite verifies the divergence formula (via <code>difflib.SequenceMatcher</code> directly), the populate-only-when-both-exist contract, and the in-bounds property — but not a specific high-divergence scenario through the live recorder. That&#x27;s adequate for a regression sentinel: the formula is fixed, the recorder either populates correctly or doesn&#x27;t.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>904 passed, 1 skipped in 24s</strong> (892 existing + 12 new).</p>
+<p>Notes:</p>
+<ul><li><strong>Thirty-four metrics live (74% of the 46-metric taxonomy).</strong></li><li>The STT dimension now has three lenses: time (<code>stt_time</code>, iter-base), speed (<code>stt_rtf</code>, iter-049 — how fast vs realtime), reliability (this — how trustworthy the live preview was). The STT line in per-turn output has reached its target density — any further STT decoration would warrant a second line.</li><li>iter-072 is the second use of the iter-063 <code>out_metrics</code> dict pattern from <code>record_utterance_streaming</code>. The pattern is paying dividends: each new recorder-side metric is a single key + a 5-line population block, no signature churn.</li><li>Next candidates: 1.6 (WER, needs ground truth corpus), 1.17 (audio device underrun/overrun count), 2.2 (first-sentence overlap savings: how much of the first sentence&#x27;s tts_time happened before llm_stream_done — distinct from iter-043&#x27;s ratio which covers the whole stream).</li></ul><nav><a href="index.html">← Index</a><a href="iter-071.html">← iter-071</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>

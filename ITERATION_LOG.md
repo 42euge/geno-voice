@@ -5079,3 +5079,80 @@ Notes:
   config consistency between recorder and watcher — already
   enforced by iter-028's plumbing; promote to a regression
   sentinel).
+
+## iter-072 — STT preview-vs-final divergence metric (taxonomy 1.8)
+
+**Branch:** iter-072-stt-divergence  **Commit:** 05b51da  **Date:** 2026-05-25
+
+Added STT preview-vs-final divergence — how aligned the live STT
+preview the user sees while speaking is with the final transcript:
+
+    divergence = 1 - SequenceMatcher(None, preview, final).ratio()
+
+0 = preview matched final perfectly (incremental Whisper output
+was already correct — live STT was useful). 1 = totally different
+— the user had to wait for the final to know if they were
+understood. Uses `difflib.SequenceMatcher` from stdlib so no new
+dependencies.
+
+Implementation:
+- `record_utterance_streaming` populates the iter-063
+  `out_metrics` dict with key `"stt_preview_divergence"` when
+  both `preview_text` and `final_text` are non-empty. The compute
+  happens after the final transcribe completes; sized for the
+  compare-once-at-end pattern (vs per-frame). DONE_TOO_SHORT path
+  exits early as before — no key written.
+- `TurnMetrics.stt_preview_divergence: float = 0.0` (new field).
+  ChatLoop copies from `rec_metrics`.
+- Per-turn print: appends "preview Δ N%" to the STT line when
+  `> 0`. Yellow when `> 30%` (live preview was unreliable enough
+  the user can't trust it). Combined with the iter-049 RTF tag,
+  the STT line now shows two diagnostics:
+  `STT: NNms (RTF 0.25x, preview Δ 12%)`
+- Session summary: "STT preview Δ: N% (median)" filtered for `>0`.
+- `ScenarioResult.stt_preview_divergence` on perf snapshots.
+
+Tests (12 in `tests/unit/test_stt_preview_divergence.py`):
+- Default zero, per-turn print: zero omits suffix; low value
+  emits dim; high value emits (yellow); combined with RTF.
+- Session aggregate: no-data, median calculation, zero-filter.
+- Recorder integration: perfect-preview (preview == final) →
+  divergence 0; matched preview/final case (recorder doesn't
+  populate when buffer-growth dynamics make preview converge
+  to final); no-preview case (utterance too short for
+  inference interval).
+- ChatLoop wiring: field bubbles to TurnMetrics in [0,1].
+
+Notes on test design:
+- The recorder's preview always reflects the LATEST `transcribe_fn`
+  return for the growing buffer. Forcing a "different preview vs
+  final" outcome via virtual mic would require either patching
+  INFERENCE_INTERVAL or distinguishing calls by some side-channel
+  the recorder doesn't expose. The test suite verifies the
+  divergence formula (via `difflib.SequenceMatcher` directly),
+  the populate-only-when-both-exist contract, and the in-bounds
+  property — but not a specific high-divergence scenario through
+  the live recorder. That's adequate for a regression sentinel:
+  the formula is fixed, the recorder either populates correctly
+  or doesn't.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **904 passed, 1 skipped in 24s** (892 existing
++ 12 new).
+
+Notes:
+- **Thirty-four metrics live (74% of the 46-metric taxonomy).**
+- The STT dimension now has three lenses: time (`stt_time`,
+  iter-base), speed (`stt_rtf`, iter-049 — how fast vs realtime),
+  reliability (this — how trustworthy the live preview was). The
+  STT line in per-turn output has reached its target density —
+  any further STT decoration would warrant a second line.
+- iter-072 is the second use of the iter-063 `out_metrics` dict
+  pattern from `record_utterance_streaming`. The pattern is
+  paying dividends: each new recorder-side metric is a single
+  key + a 5-line population block, no signature churn.
+- Next candidates: 1.6 (WER, needs ground truth corpus), 1.17
+  (audio device underrun/overrun count), 2.2 (first-sentence
+  overlap savings: how much of the first sentence's tts_time
+  happened before llm_stream_done — distinct from iter-043's
+  ratio which covers the whole stream).
