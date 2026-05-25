@@ -146,6 +146,15 @@ class TurnMetrics:
     # this turn (or no tokens produced — alignment failed).
     # Metric 1.13 in the perf-metrics taxonomy.
     bot_wpm: float = 0.0
+    # iter-064: user speaking rate in words-per-minute, derived from
+    # transcript word count / speech_duration. Symmetric to bot_wpm.
+    # Useful for the mirroring effect: adapting bot WPM to match
+    # user produces higher rapport and lower interruption rate.
+    # Wide variance is normal — humans speak 100-200 WPM depending
+    # on context (slow in monologue, fast in conversation). 0
+    # means speech_duration was 0 or transcript empty.
+    # Metric 1.14 in the perf-metrics taxonomy.
+    user_wpm: float = 0.0
     # iter-040: count of sentences cut mid-stream by cancel_event
     # (vs completed naturally before barge-in fired). Only non-zero
     # on barge-in turns where the cancel landed during a sentence's
@@ -226,7 +235,22 @@ class TurnMetrics:
         print(f"  {_DIM}You:{_RESET} \"{self.transcript}\"")
         print()
         print(f"  {_DIM}┌─ PIPELINE{_RESET}")
-        print(f"  {_DIM}│{_RESET}  Speech:        {self.speech_duration*1000:>7.0f}ms")
+        # iter-064: append user WPM to the Speech line when known.
+        # Symmetric to iter-046's bot WPM display. No color coding —
+        # humans speak across a wide range and there's no "correct"
+        # rate for the user; only a "match the user" target for the
+        # bot.
+        if self.user_wpm > 0:
+            print(
+                f"  {_DIM}│{_RESET}  Speech:        "
+                f"{self.speech_duration*1000:>7.0f}ms  "
+                f"({_DIM}{self.user_wpm:.0f} WPM{_RESET})"
+            )
+        else:
+            print(
+                f"  {_DIM}│{_RESET}  Speech:        "
+                f"{self.speech_duration*1000:>7.0f}ms"
+            )
         # iter-063: EoT detection latency. Skip when 0 (recorder
         # didn't emit — DONE_TOO_SHORT path or test stub bypass).
         # Yellow when >1.0s — the user has stopped talking but the
@@ -614,6 +638,10 @@ def print_session_summary(
     ]
     # iter-046: bot WPM across measurable turns.
     bot_wpms = [m.bot_wpm for m in metrics_list if m.bot_wpm > 0]
+    # iter-064: user WPM across turns where transcript + speech_duration
+    # were both non-zero. Filter zeros — empty transcript / zero
+    # speech turns shouldn't bias the average.
+    user_wpms = [m.user_wpm for m in metrics_list if m.user_wpm > 0]
     # iter-061: speaker-open seconds across turns where it was set.
     # Filter out 0s — those represent turns whose worker exited before
     # ever opening the speaker (early error path). Healthy turns
@@ -845,9 +873,20 @@ def print_session_summary(
         # often enough — system-prompt opportunity.
         median_cov = statistics.median(coverage_values) * 100
         _emit(f"    Split coverage:   {median_cov:.0f}%")
+    # iter-064: user WPM (median across measurable turns) + the
+    # mirror gap (bot - user WPM) when both are known. The mirror
+    # gap predicts conversational "feel": ≈0 = mirroring (high
+    # rapport); >40 = bot too fast for user (likely interruption
+    # source); <-40 = bot too slow (user impatient).
+    if user_wpms:
+        median_user_wpm = statistics.median(user_wpms)
+        _emit(f"    Median user WPM:  {median_user_wpm:.0f}")
     if bot_wpms:
         median_wpm = statistics.median(bot_wpms)
         _emit(f"    Median bot WPM:   {median_wpm:.0f}")
+        if user_wpms:
+            gap = median_wpm - statistics.median(user_wpms)
+            _emit(f"    Mirror gap:       {gap:+.0f} WPM (bot − user)")
     # iter-062: worst queue depth across the session. Skip when no
     # turn backed up (≤1) — clean sessions don't need the line.
     # When multiple turns backed up, show how many to differentiate

@@ -225,6 +225,15 @@ class ChatLoop:
         if speech_dur > 0:
             metrics.stt_rtf = stt_time / speech_dur
         metrics.transcript = text.strip()
+        # iter-064: user speaking rate. Symmetric to iter-046's
+        # bot_wpm. Whitespace-split word count is a decent proxy —
+        # Whisper transcripts use space-separated tokens, and the
+        # error versus a true tokenization is dwarfed by natural
+        # variance in human speech rates.
+        if speech_dur > 0:
+            n_words = len(metrics.transcript.split())
+            if n_words > 0:
+                metrics.user_wpm = (n_words / speech_dur) * 60.0
 
         # ---- Phase 2: LLM stream + worker + watcher ----
         messages.append({"role": "user", "content": metrics.transcript})

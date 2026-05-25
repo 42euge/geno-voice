@@ -144,6 +144,8 @@ class ScenarioResult:
     max_queue_depth: int = 0
     # iter-063: EoT detection latency (last-speech → DONE_OK), ms.
     eot_latency_ms: float = 0.0
+    # iter-064: user speaking rate (words per minute).
+    user_wpm: float = 0.0
 
 
 _RESULTS: list[ScenarioResult] = []
@@ -322,6 +324,7 @@ def _run_scenario(
         speaker_open_ms=m.speaker_open_seconds * 1000,
         max_queue_depth=m.max_queue_depth,
         eot_latency_ms=m.eot_latency * 1000,
+        user_wpm=m.user_wpm,
     )
     _record(res)
     return res
@@ -499,6 +502,7 @@ class TestPerfScenarios:
             speaker_open_ms=m.speaker_open_seconds * 1000,
             max_queue_depth=m.max_queue_depth,
             eot_latency_ms=m.eot_latency * 1000,
+            user_wpm=m.user_wpm,
         )
         _record(res)
 
