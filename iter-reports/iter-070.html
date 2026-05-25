@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-069 — interruption rate (taxonomy 1.18)</title>
+<title>iter-070 — sentence-length min/max range (taxonomy 2.6)</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,21 +168,20 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-068.html">← iter-068</a><a href="iter-070.html">iter-070 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-069 — interruption rate (taxonomy 1.18)</h1>
-<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+7</code> (total 865)</span></div>
-</header><p><strong>Branch:</strong> iter-069-interruption-rate  <strong>Commit:</strong> ddbed66  <strong>Date:</strong> 2026-05-25</p>
-<p>Added explicit &quot;Interruption rate: M/N turns (X%)&quot; session-summary line. Industry single-number UX KPI: &quot;what fraction of bot turns did the user feel they had to interrupt?&quot; Distinct from the existing mid-stream %, which uses total barges as denominator; this uses total completed turns.</p>
+<nav><a href="index.html">← Index</a><a href="iter-069.html">← iter-069</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-070 — sentence-length min/max range (taxonomy 2.6)</h1>
+<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+11</code> (total 876)</span></div>
+</header><p><strong>Branch:</strong> iter-070-sentence-range  <strong>Commit:</strong> 512bdf8  <strong>Date:</strong> 2026-05-25</p>
+<p>Added per-turn <code>min_sentence_chars</code> + <code>max_sentence_chars</code> alongside iter-045&#x27;s existing mean. The mean alone hides bimodal patterns:</p>
+<ul><li>Turn A: sentences [10, 130] → mean=70, range=[10..130]</li><li>Turn B: sentences [70, 70]  → mean=70, range=[70..70]</li></ul>
+<p>Both report <code>mean_sentence_chars=70</code>, but only Turn A has the &quot;short interjection followed by long monologue&quot; fragmentation profile that defeats streaming overlap. The min/max surface this.</p>
 <p>Implementation:</p>
-<ul><li>Pure derivation in <code>print_session_summary</code>; reads <code>barges_total</code> and <code>n</code> (already computed). Inserted right after the existing Barge-ins block so the two related lines sit adjacent.</li><li>Gated on <code>barges_total &gt; 0</code> (the whole barge sub-block).</li><li>Output: &quot;Interruption rate: M/N turns (X%)&quot;.</li></ul>
-<p>Why distinct from the mid-stream %:</p>
-<ul><li>mid-stream % = mid_cancels / barges_total → &quot;of barges, what fraction were violent (cut a sentence mid-stream)&quot;</li><li>interruption rate = barges_total / n → &quot;of turns, what fraction the user interrupted at all&quot;</li></ul>
-<p>Both are useful and answer different operator questions. The interruption rate is the headline UX number; mid-stream % is the &quot;how aggressive were the interruptions&quot; diagnostic.</p>
-<p>Tests (7 in <code>tests/unit/test_interruption_rate.py</code>):</p>
-<ul><li>No-emit: zero turns, zero barges.</li><li>Emit cases: 1/3 (33%), 2/2 (100%), 1/10 (10%).</li><li>Co-emission with the existing mid-stream line (both visible).</li><li>Distinct denominators verified with a case where the two percentages differ (4 barges of 8 turns, 1 mid-stream → 50% rate vs 25% mid-stream).</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>865 passed, 1 skipped in 23s</strong> (858 existing + 7 new).</p>
+<ul><li>ChatLoop tracks <code>sentence_min_chars</code> / <code>sentence_max_chars</code> as locals alongside the existing total/count accumulators. Updated on each <code>worker.submit(sentence)</code> AND on the trailing-remainder submit (since that&#x27;s a real synthesis unit too).</li><li><code>TurnMetrics.min_sentence_chars: int = 0</code>, <code>max_sentence_chars: int = 0</code> (new fields). Both default to 0 on turns with no submissions; populated only when at least one sentence was submitted.</li><li>Per-turn print: extends the iter-045 avg suffix with &quot;[min..max]&quot; when min ≠ max. <code>min == max</code> (single sentence / uniform turn) skips the suffix to avoid noise.</li><li>Session summary: &quot;Sentence range: [shortest..longest] chars (session)&quot; — worst-case across all turns, gated on at least one turn diverging.</li><li><code>ScenarioResult.min_sentence_chars</code> + <code>max_sentence_chars</code> on perf snapshots.</li></ul>
+<p>Tests (11 in <code>tests/unit/test_sentence_range.py</code>):</p>
+<ul><li>Defaults zero.</li><li>Per-turn print: no-mean omits range; uniform omits range; diverging emits &quot;[min..max]&quot;; min=0 (unset signal) skips.</li><li>Session aggregate: no-data / uniform / divergent / zero-filter.</li><li>ChatLoop wiring: bimodal LLM response (&quot;Yes.&quot; + long sentence) produces min&lt;10, max&gt;50; single-sentence response produces min == max.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>876 passed, 1 skipped in 24s</strong> (865 existing + 11 new).</p>
 <p>Notes:</p>
-<ul><li><strong>Thirty-one metrics live (67% of the 46-metric taxonomy.)</strong></li><li>The barge-in dimension is now exhaustively measured at every level: rate (this), latency (iter-041), phase (iter-047), regret (iter-056), mid-stream cuts (iter-040), cancel-to-close (iter-060). A regression in any sub-aspect surfaces in exactly one of these.</li><li>Next candidates: 1.6 (WER, needs ground truth corpus), 1.17 (audio device underrun/overrun count — would require surfacing PyAudio&#x27;s overflow flag instead of swallowing it), 2.6 (sentence-length histogram — currently only the mean surfaces; could promote min/max).</li></ul><nav><a href="index.html">← Index</a><a href="iter-068.html">← iter-068</a><a href="iter-070.html">iter-070 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li><strong>Thirty-two metrics live (70% of the 46-metric taxonomy).</strong></li><li>The fragmentation dimension is now fully measured: mean (iter-045 — central tendency), min/max (this — distribution shape), split coverage (iter-059 — what fraction made it as a complete sentence). A regression in any one shows up independently.</li><li>Next candidates: 1.6 (WER, needs ground truth corpus), 1.17 (audio device underrun/overrun count — would require surfacing PyAudio&#x27;s overflow flag), 2.17 (token-reveal lag — measures the text-vs-audio sync; needs play_aligned instrumentation).</li></ul><nav><a href="index.html">← Index</a><a href="iter-069.html">← iter-069</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

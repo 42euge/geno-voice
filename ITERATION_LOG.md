@@ -4940,3 +4940,59 @@ Notes:
   surfacing PyAudio's overflow flag instead of swallowing it),
   2.6 (sentence-length histogram — currently only the mean
   surfaces; could promote min/max).
+
+## iter-070 — sentence-length min/max range (taxonomy 2.6)
+
+**Branch:** iter-070-sentence-range  **Commit:** 512bdf8  **Date:** 2026-05-25
+
+Added per-turn `min_sentence_chars` + `max_sentence_chars` alongside
+iter-045's existing mean. The mean alone hides bimodal patterns:
+- Turn A: sentences [10, 130] → mean=70, range=[10..130]
+- Turn B: sentences [70, 70]  → mean=70, range=[70..70]
+
+Both report `mean_sentence_chars=70`, but only Turn A has the
+"short interjection followed by long monologue" fragmentation
+profile that defeats streaming overlap. The min/max surface this.
+
+Implementation:
+- ChatLoop tracks `sentence_min_chars` / `sentence_max_chars` as
+  locals alongside the existing total/count accumulators. Updated
+  on each `worker.submit(sentence)` AND on the trailing-remainder
+  submit (since that's a real synthesis unit too).
+- `TurnMetrics.min_sentence_chars: int = 0`,
+  `max_sentence_chars: int = 0` (new fields). Both default to 0
+  on turns with no submissions; populated only when at least one
+  sentence was submitted.
+- Per-turn print: extends the iter-045 avg suffix with
+  "[min..max]" when min ≠ max. `min == max` (single sentence /
+  uniform turn) skips the suffix to avoid noise.
+- Session summary: "Sentence range: [shortest..longest] chars
+  (session)" — worst-case across all turns, gated on at least one
+  turn diverging.
+- `ScenarioResult.min_sentence_chars` + `max_sentence_chars` on
+  perf snapshots.
+
+Tests (11 in `tests/unit/test_sentence_range.py`):
+- Defaults zero.
+- Per-turn print: no-mean omits range; uniform omits range;
+  diverging emits "[min..max]"; min=0 (unset signal) skips.
+- Session aggregate: no-data / uniform / divergent / zero-filter.
+- ChatLoop wiring: bimodal LLM response ("Yes." + long sentence)
+  produces min<10, max>50; single-sentence response produces
+  min == max.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **876 passed, 1 skipped in 24s** (865 existing
++ 11 new).
+
+Notes:
+- **Thirty-two metrics live (70% of the 46-metric taxonomy).**
+- The fragmentation dimension is now fully measured: mean
+  (iter-045 — central tendency), min/max (this — distribution
+  shape), split coverage (iter-059 — what fraction made it as a
+  complete sentence). A regression in any one shows up
+  independently.
+- Next candidates: 1.6 (WER, needs ground truth corpus), 1.17
+  (audio device underrun/overrun count — would require surfacing
+  PyAudio's overflow flag), 2.17 (token-reveal lag — measures the
+  text-vs-audio sync; needs play_aligned instrumentation).
