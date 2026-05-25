@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-057 — primed-frames replay duration metric (taxonomy 2.12)</title>
+<title>iter-058 — error rate per stage metric (taxonomy 1.16)</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,21 +168,21 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-056.html">← iter-056</a><a href="iter-058.html">iter-058 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-057 — primed-frames replay duration metric (taxonomy 2.12)</h1>
-<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-057-primed-frames</code></span> · <span>commit: <code>639344f</code></span> · <span>tests: <code>+9</code> (total 737)</span></div>
-</header><p><strong>Branch:</strong> <code>iter-057-primed-frames</code> (merged ff to main, commit <code>639344f</code>) <strong>Date:</strong> 2026-05-24</p>
-<p>Nineteenth metric pulled from <code>docs/perf-metrics-taxonomy.md</code>. <strong>Metric 2.12 — Primed-frames replay duration</strong>, &quot;Architecture- specific&quot; bucket.</p>
-<p>The chat_loop already computed <code>len(next_primed) * chunk / rate</code> on barge turns for the diagnostic print line. iter-057 promotes that value to a <code>TurnMetrics</code> field so the session summary can aggregate it across turns — operational view of how much user audio iter-025&#x27;s lead-in is preserving.</p>
-<p>Why it matters: high totals validate iter-025&#x27;s design (the watcher&#x27;s ring buffer is meaningfully preserving the user&#x27;s first syllables for the next STT pass). Near-zero totals would suggest iter-025 isn&#x27;t paying off and could be simplified or removed.</p>
+<nav><a href="index.html">← Index</a><a href="iter-057.html">← iter-057</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-058 — error rate per stage metric (taxonomy 1.16)</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-058-error-rates</code></span> · <span>commit: <code>8c402b8</code></span> · <span>tests: <code>+9</code> (total 746)</span></div>
+</header><p><strong>Branch:</strong> <code>iter-058-error-rates</code> (merged ff to main, commit <code>8c402b8</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>Twentieth metric pulled from <code>docs/perf-metrics-taxonomy.md</code>. <strong>Metric 1.16 — Error rate per stage</strong>, &quot;Standard&quot; bucket.</p>
+<p>Two-layer reporting because errors fail at different scopes:</p>
+<ul><li><strong>LLM errors</strong> kill the entire turn. The user spoke, the bot crashed before any audio. Tracked at session level (<code>llm_errors</code> kwarg).</li><li><strong>Worker errors</strong> lose one sentence but the rest of the turn proceeds. Some audio plays. Tracked per-turn (<code>TurnMetrics.worker_errors</code>).</li></ul>
+<p>These tell different reliability stories. A session with 5 LLM errors is unusable; a session with 5 worker errors heard mostly- right responses with the occasional missing sentence.</p>
 <p>Implementation:</p>
-<ul><li><code>TurnMetrics.primed_frames_seconds: float = 0.0</code> (new field).</li><li>ChatLoop assigns the value in the watcher-detected branch alongside <code>metrics.barge_in_phase</code>. Refactored the existing print to use the metric (single source of truth for both diagnostic and aggregation).</li><li>Per-turn print: new `Primed frames: NNNms (carried into next turn)` line on barge turns.</li><li>Session summary: `Primed audio: N.Ns (carried into next turn — validates iter-025)` when total &gt; 0.</li><li><code>ScenarioResult.primed_frames_seconds</code> on perf snapshots.</li></ul>
-<p>Tests (9 in <code>tests/unit/test_primed_frames_seconds.py</code>):</p>
-<ul><li>Default 0.</li><li>Per-turn print: zero omits, non-zero shows ms + explainer, no-barge zero omits.</li><li>Session aggregate: no-primed omits, multi-turn / single-turn totals.</li><li>Computation contract: formula at default CHUNK/RATE; zero-frames edge case.</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>737 passed, 1 skipped in 22s</strong> (728 existing + 9 new).</p>
+<ul><li><code>TurnMetrics.worker_errors: int = 0</code> (new field).</li><li>ChatLoop assigns <code>metrics.worker_errors = len(worker.errors)</code> on the success path (alongside the existing diagnostic print loop over those same errors).</li><li><code>print_session_summary</code> gains <code>llm_errors: int = 0</code> kwarg (back-compat default).</li><li>Aggregate: `worker_errors_total = sum(m.worker_errors for m in metrics_list)`.</li><li>Output: <code>Errors: N LLM, M worker (over K attempts)</code> where <code>K = n_completed + llm_errors + false_triggers</code>. Each piece appears only when its count is non-zero (e.g. only-LLM-errors shows <code>&quot;N LLM (over K attempts)&quot;</code>, no worker bit).</li><li><code>mic_chat.run_chat</code> increments <code>llm_errors</code> in the existing <code>if result.had_error: continue</code> branch; passes total to summary.</li></ul>
+<p>Tests (9 in <code>tests/unit/test_error_rates.py</code>):</p>
+<ul><li>Per-turn field default + settable.</li><li>Clean session omits the block.</li><li>LLM only / worker only / both — output formatting + denominator computation.</li><li>false_triggers contribute to attempts.</li><li>Worker errors summed across turns.</li><li>Empty <code>metrics_list</code> → no-completed-turns placeholder takes precedence over the error block.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>746 passed, 1 skipped in 24s</strong> (737 existing + 9 new).</p>
 <p>Notes:</p>
-<ul><li><strong>Nineteen metrics live (41% of the 46-metric taxonomy).</strong> Crossed the 40% milestone.</li><li>Refactor opportunity surfaced: the session summary&#x27;s conditional structure has accumulated a lot of <code>if X:</code> / <code>_emit(...)</code> pairs across iterations. Some are nested under <code>if barges_total:</code> (correctly, since they&#x27;re barge-only), some are at the same level (correctly, since they&#x27;re independent). iter-057 had to fix one initially-mis-nested block. Future iter could refactor into a list of <code>MetricSection</code> objects with explicit predicates — but the current shape is still readable and shipping changes is low-friction.</li><li>Next candidates: 2.5 (filler novelty — needs filler-text history), 1.16-onwards (long tail), 2.7 (worker queue depth).</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-056.html">← iter-056</a><a href="iter-058.html">iter-058 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li><strong>Twenty metrics live (43% of the 46-metric taxonomy).</strong> Hit the round number.</li><li>The reliability surface is now: error rate per stage + barge-in shape + cancel correctness + filler false-positive. Plus mic stale frames as a leakage signal. Together: full reliability picture for ops review.</li><li>Next candidates: 2.5 (sentence-split coverage — already have the inputs), 2.7 (worker queue depth), 2.14 (LLM stream cancel-to- close).</li></ul><nav><a href="index.html">← Index</a><a href="iter-057.html">← iter-057</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

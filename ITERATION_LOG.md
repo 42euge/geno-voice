@@ -4215,3 +4215,66 @@ Notes:
   readable and shipping changes is low-friction.
 - Next candidates: 2.5 (filler novelty — needs filler-text
   history), 1.16-onwards (long tail), 2.7 (worker queue depth).
+
+---
+
+## iter-058 — error rate per stage metric (taxonomy 1.16)
+
+**Branch:** `iter-058-error-rates` (merged ff to main, commit `8c402b8`)
+**Date:** 2026-05-24
+
+Twentieth metric pulled from `docs/perf-metrics-taxonomy.md`.
+**Metric 1.16 — Error rate per stage**, "Standard" bucket.
+
+Two-layer reporting because errors fail at different scopes:
+- **LLM errors** kill the entire turn. The user spoke, the
+  bot crashed before any audio. Tracked at session level
+  (`llm_errors` kwarg).
+- **Worker errors** lose one sentence but the rest of the turn
+  proceeds. Some audio plays. Tracked per-turn
+  (`TurnMetrics.worker_errors`).
+
+These tell different reliability stories. A session with 5 LLM
+errors is unusable; a session with 5 worker errors heard mostly-
+right responses with the occasional missing sentence.
+
+Implementation:
+- `TurnMetrics.worker_errors: int = 0` (new field).
+- ChatLoop assigns `metrics.worker_errors = len(worker.errors)`
+  on the success path (alongside the existing diagnostic print
+  loop over those same errors).
+- `print_session_summary` gains `llm_errors: int = 0` kwarg
+  (back-compat default).
+- Aggregate: `worker_errors_total = sum(m.worker_errors for m in
+  metrics_list)`.
+- Output: `Errors: N LLM, M worker (over K attempts)` where
+  `K = n_completed + llm_errors + false_triggers`. Each piece
+  appears only when its count is non-zero (e.g. only-LLM-errors
+  shows `"N LLM (over K attempts)"`, no worker bit).
+- `mic_chat.run_chat` increments `llm_errors` in the existing
+  `if result.had_error: continue` branch; passes total to summary.
+
+Tests (9 in `tests/unit/test_error_rates.py`):
+- Per-turn field default + settable.
+- Clean session omits the block.
+- LLM only / worker only / both — output formatting + denominator
+  computation.
+- false_triggers contribute to attempts.
+- Worker errors summed across turns.
+- Empty `metrics_list` → no-completed-turns placeholder takes
+  precedence over the error block.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **746 passed, 1 skipped in 24s** (737 existing
++ 9 new).
+
+Notes:
+- **Twenty metrics live (43% of the 46-metric taxonomy).** Hit
+  the round number.
+- The reliability surface is now: error rate per stage + barge-in
+  shape + cancel correctness + filler false-positive. Plus mic
+  stale frames as a leakage signal. Together: full reliability
+  picture for ops review.
+- Next candidates: 2.5 (sentence-split coverage — already have the
+  inputs), 2.7 (worker queue depth), 2.14 (LLM stream cancel-to-
+  close).
