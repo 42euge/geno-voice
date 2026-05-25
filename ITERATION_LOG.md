@@ -4535,3 +4535,74 @@ Notes:
   — should always be 1 with iter-008 design; >1 means the worker
   thread crashed and restarted), 1.5 (VAD missed-speech rate —
   needs ground truth fixture), 1.2 (EoT detection latency).
+
+## iter-063 — EoT detection latency metric (taxonomy 1.2)
+
+**Branch:** iter-063-eot-latency  **Commit:** 0fc936b  **Date:** 2026-05-24
+
+Added `eot_latency` — time from the user's last in-speech frame to
+VadEvent.DONE_OK firing. Lower bound is roughly `silence_duration`
+(the VAD has to wait that long before deciding the user really
+stopped); the gap above that is implementation overhead (chunk
+granularity, processing). Critical UX number — "the agent feels
+slow" complaints map directly to this.
+
+Implementation:
+- `record_utterance_streaming()` gained an optional `out_metrics:
+  dict | None = None` keyword arg. When provided, the function
+  populates it with side-band measurements that don't fit the
+  `(wav, dur, stt)` return tuple. Currently emits one key —
+  `"eot_latency"` — only on the DONE_OK success path. ~15 existing
+  unpack sites in tests are untouched (they don't pass the new
+  kwarg).
+- Inside the recorder loop, `last_speech_at` is updated for any
+  frame where `level > silence_threshold`. On DONE_OK the gap
+  between the current `now` and `last_speech_at` is the EoT
+  latency. Setting before the VadEvent dispatch is intentional —
+  any frame above threshold is "in speech" regardless of which
+  VadEvent it produces.
+- ChatLoop creates a fresh `rec_metrics: dict = {}`, passes it,
+  reads `eot_latency` after, copies into TurnMetrics.
+- Per-turn print: "EoT detect: NNms (silence wait)" only when >0.
+  Yellow when >1.0s — the user has stopped talking but the agent
+  is still waiting; tunable down to ~500ms in noisy rooms.
+- Session summary: median + worst (worst skipped when all values
+  uniform — single-knob tuning sessions don't need the line).
+  Emitted before STT to mirror the per-turn pipeline order.
+- `ScenarioResult.eot_latency_ms` on perf snapshots — first metric
+  exposing what fraction of S2S latency is "VAD waiting" vs
+  "actual work."
+
+Tests (12 in `tests/unit/test_eot_latency.py`):
+- Defaults: TurnMetrics zero.
+- Per-turn print: 0 omitted, normal value (850ms) dim, high (1.5s).
+- Session aggregate: no-data omitted, uniform values (no Worst
+  line), spread (median + worst), zero-filter.
+- Recorder integration via VirtualMicStream: DONE_OK populates
+  within sanity bounds, DONE_TOO_SHORT does NOT populate, kwarg
+  is fully optional (backwards-compat with old callers).
+- ChatLoop wiring: TurnMetrics.eot_latency reflects the recorder's
+  measurement end-to-end.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **808 passed, 1 skipped in 23s** (796 existing
++ 12 new).
+
+Notes:
+- **Twenty-five metrics live (54% of the 46-metric taxonomy).**
+- This is the first metric that requires plumbing an out-parameter
+  through `record_utterance_streaming` — the (wav, dur, stt) return
+  tuple was getting saturated. The dict pattern scales: future
+  recorder-side metrics (1.3 VAD trailing-silence wall, 1.8 STT
+  preview-vs-final divergence, 1.14 user speaking rate) just add
+  more keys, no signature churn.
+- The S2S latency budget (`ttfs`) now decomposes as:
+  `eot_latency + stt_time + llm_first_sentence + first_synth_time +
+  first_chunk_play_time`. With `silence_duration=0.8s` config, the
+  EoT term is ~800ms — typically the LARGEST single contributor to
+  TTFS in well-tuned systems. Surfacing it makes the "lower
+  silence_duration" decision visible and measurable.
+- Next candidates: 1.3 (VAD trailing-silence wall: `eot - silence_duration`
+  — almost free given iter-063's groundwork), 1.14 (user WPM —
+  derive from transcript len / speech_duration), 2.13 (primed-frames
+  STT contribution — needs offline ablation).
