@@ -361,33 +361,23 @@ class SentenceWorker:
             # iter-071: pass a fresh lag dict when the play_fn
             # supports it; fold per-call stats into worker totals
             # after each call.
+            # iter-075: assemble optional kwargs into a dict instead
+            # of branching on each combination. Each new optional
+            # kwarg adds one entry rather than doubling the branch
+            # count. ``base_kwargs`` is the always-passed set;
+            # extras are appended only when the play_fn signature
+            # accepts them.
             lag_out: dict | None = (
                 {} if self._play_fn_supports_lag_out else None
             )
-            if self._play_fn_supports_cancel and lag_out is not None:
-                elapsed = self._play_fn(
-                    speaker, audio_np, tokens,
-                    is_first_sentence=is_first,
-                    cancel_event=self._cancel_event,
-                    lag_out=lag_out,
-                )
-            elif self._play_fn_supports_cancel:
-                elapsed = self._play_fn(
-                    speaker, audio_np, tokens,
-                    is_first_sentence=is_first,
-                    cancel_event=self._cancel_event,
-                )
-            elif lag_out is not None:
-                elapsed = self._play_fn(
-                    speaker, audio_np, tokens,
-                    is_first_sentence=is_first,
-                    lag_out=lag_out,
-                )
-            else:
-                elapsed = self._play_fn(
-                    speaker, audio_np, tokens,
-                    is_first_sentence=is_first,
-                )
+            base_kwargs: dict = {"is_first_sentence": is_first}
+            if self._play_fn_supports_cancel:
+                base_kwargs["cancel_event"] = self._cancel_event
+            if lag_out is not None:
+                base_kwargs["lag_out"] = lag_out
+            elapsed = self._play_fn(
+                speaker, audio_np, tokens, **base_kwargs,
+            )
             self.playback_time += float(elapsed) if elapsed else 0.0
             # iter-071: fold this call's lag stats into worker-level
             # totals. play_aligned only writes the dict when at
