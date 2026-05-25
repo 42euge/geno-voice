@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-050 — TTS real-time factor metric (taxonomy 1.11)</title>
+<title>iter-051 — filler false-positive rate metric (taxonomy 2.4)</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,42 +168,21 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-049.html">← iter-049</a><a href="iter-051.html">iter-051 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-050 — TTS real-time factor metric (taxonomy 1.11)</h1>
-<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-050-tts-rtf</code></span> · <span>commit: <code>c12d8b2</code></span> · <span>tests: <code>+9</code> (total 654)</span></div>
-</header><p><strong>Branch:</strong> <code>iter-050-tts-rtf</code> (merged ff to main, commit <code>c12d8b2</code>) <strong>Date:</strong> 2026-05-24</p>
-<p>Twelfth metric from <code>docs/perf-metrics-taxonomy.md</code>. <strong>Metric 1.11 — TTS real-time factor</strong>, &quot;Standard&quot; bucket. Symmetric to iter-049&#x27;s STT RTF.</p>
-<p>tts_rtf = tts_time / audio_seconds_total</p>
-<ul><li><strong>&lt;1</strong>: synth runs faster than the audio it produces — overlap (iter-008) buys real wall-clock savings. Kokoro on Apple Silicon: ~0.1-0.3.</li><li><strong>&gt;1</strong>: synth is the bottleneck. Streaming-overlap won&#x27;t help; need a faster TTS or smaller voice.</li></ul>
-<p>Both inputs already captured: <code>tts_time</code> since iter-001, <code>audio_seconds_total</code> since iter-046. iter-050 just derives the ratio.</p>
-<p>Implementation mirrors iter-049 exactly (same shape, same guards, same UX choices):</p>
-<ul><li><code>TurnMetrics.tts_rtf: float = 0.0</code>.</li><li>ChatLoop computes after worker returns; div-by-zero guard.</li><li>Per-turn print appends <code>(RTF N.NNx)</code> to the TTS suffix; green &lt;1, yellow ≥1.</li><li>Session summary: <code>Median TTS RTF: N.NNx</code> filtered for &gt;0.</li><li><code>ScenarioResult.tts_rtf</code> on perf snapshots.</li></ul>
-<p>Tests (9 in <code>tests/unit/test_tts_rtf.py</code>):</p>
-<ul><li>Default 0; per-turn print zero/non-zero/high; session aggregate zero/some/filter; ChatLoop arithmetic with controlled synth latency yields the expected ratio; empty audio yields 0.</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>654 passed, 1 skipped in 22s</strong> (645 existing + 9 new).</p>
-<p><strong>Milestone:</strong> 12/46 taxonomy metrics live (26%). iter-050 marks 50 iterations on geno-voice — over 600 tests, 13 perf snapshots in history, ten distinct visible metrics in the session summary diagnostic. The dashboard now reads (with all metrics populated):</p>
-<pre class="code-block"><code>Session Summary (3 turns)
-    Median STT:       50ms
-    Median STT RTF:   0.05x      ← iter-049
-    Median LLM 1st:   100ms
-    Median LLM sent:  300ms
-    Median TTS:       200ms
-    Median TTS RTF:   0.20x      ← iter-050
-    Median TTFS:      650ms
-    Best TTFS:        500ms
-    Barge-ins:        2 (1 mid-stream, 50%)
-    Median barge:     150ms
-    Worst barge:      150ms
-    Barge phases:     1 LLM-stream, 1 playback
-    Mic stale:        320 frames (0.0s)
-    VAD false-trig:   1/4 (25%)
-    Median overlap:   65%
-    Mean sentence:    62 chars
-    Median bot WPM:   165
-    Model:            local-llama</code></pre>
+<nav><a href="index.html">← Index</a><a href="iter-050.html">← iter-050</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-051 — filler false-positive rate metric (taxonomy 2.4)</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-051-filler-fp</code></span> · <span>commit: <code>816132f</code></span> · <span>tests: <code>+10</code> (total 664)</span></div>
+</header><p><strong>Branch:</strong> <code>iter-051-filler-fp</code> (merged ff to main, commit <code>816132f</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>Thirteenth metric pulled from <code>docs/perf-metrics-taxonomy.md</code>. <strong>Metric 2.4 — Filler false-positive rate</strong>.</p>
+<p>A turn&#x27;s filler is a false positive when: 1. A filler actually played (<code>fillers_played &gt; 0</code>). 2. AND the LLM&#x27;s first token arrived faster than the configured <code>idle_threshold</code>.</p>
+<p>Meaning: the bot would have started speaking on its own before the filler was needed. The filler made the bot sound disfluent for no reason. Tune <code>idle_threshold</code> up.</p>
+<p>This is the first metric that&#x27;s a flag (bool) rather than a number. Pattern: per-turn truth, session-level rate. Mirrors iter-048&#x27;s VAD false-trigger rate but lives on TurnMetrics rather than as a session-level kwarg (because iter-051 needs the per-turn comparison to compute, and per-turn data is the natural carrier).</p>
+<p>Implementation:</p>
+<ul><li><code>TurnMetrics.filler_false_positive: bool = False</code> (new field).</li><li>ChatLoop sets True when: The inner <code>&gt;0</code> guard on <code>llm_first_token</code> prevents false-marking turns where first-token wasn&#x27;t captured (no LLM response).<ul><li><code>metrics.fillers_played &gt; 0</code></li><li>AND <code>self._idle_threshold &gt; 0</code></li><li>AND <code>0 &lt; metrics.llm_first_token &lt; self._idle_threshold</code></li></ul></li><li>Per-turn print: appends <code>&quot;*&quot;</code> to the filler suffix when FP (&quot;1 filler*&quot; instead of &quot;1 filler&quot;). Compact — stars are easy to spot in output review.</li><li>Session summary: <code>Filler FP rate: M/N (P%) — tune idle_threshold up</code> emitted only when at least one FP occurred. Clean sessions don&#x27;t see the line.</li></ul>
+<p>Tests (10 in <code>tests/unit/test_filler_false_positive.py</code>):</p>
+<ul><li>Default False.</li><li>Per-turn print: no-filler / filler-no-FP / filler-FP cases.</li><li>Session aggregate: no-fillers, fillers-no-FP, partial FP with tuning suggestion, all-FP at 100%.</li><li>ChatLoop wires: fast LLM + 0.5s idle_threshold → if filler played, FP=True; no-fillers configured → FP stays False.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>664 passed, 1 skipped in 23s</strong> (654 existing + 10 new).</p>
 <p>Notes:</p>
-<ul><li>iter-049 + iter-050 each took ~10 minutes. The trivial-ratio metrics from the taxonomy are nearly free once both inputs are captured. Worth batching them when there are several together in future.</li><li>Next candidates: 1.5 (VAD missed-speech rate — needs manual ground truth, harder), 2.4 (filler false-positive rate — straightforward).</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-049.html">← iter-049</a><a href="iter-051.html">iter-051 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li>Thirteen metrics live (28% of the 46-metric taxonomy).</li><li>Combined with iter-040 (cancel correctness) and iter-047 (barge phase), the worker&#x27;s &quot;filler quality&quot; picture is now complete: (combine iter-051 + iter-047 logic).<ul><li>How often did fillers fire? (<code>fillers_played</code> totals)</li><li>Of those, how often were they unnecessary? (FP rate, iter-051)</li><li>When LLM was slow, did the filler ALSO get cut by a barge-in?</li></ul></li><li>Next candidates: 1.5 (VAD missed-speech, harder, needs ground truth), 2.7 (worker queue depth, simple), 1.9 (LLM TPS — needs token count which we have).</li></ul><nav><a href="index.html">← Index</a><a href="iter-050.html">← iter-050</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

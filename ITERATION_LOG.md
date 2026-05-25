@@ -3780,3 +3780,67 @@ Notes:
 - Next candidates: 1.5 (VAD missed-speech rate — needs
   manual ground truth, harder), 2.4 (filler false-positive rate
   — straightforward).
+
+---
+
+## iter-051 — filler false-positive rate metric (taxonomy 2.4)
+
+**Branch:** `iter-051-filler-fp` (merged ff to main, commit `816132f`)
+**Date:** 2026-05-24
+
+Thirteenth metric pulled from `docs/perf-metrics-taxonomy.md`.
+**Metric 2.4 — Filler false-positive rate**.
+
+A turn's filler is a false positive when:
+1. A filler actually played (`fillers_played > 0`).
+2. AND the LLM's first token arrived faster than the configured
+   `idle_threshold`.
+
+Meaning: the bot would have started speaking on its own before the
+filler was needed. The filler made the bot sound disfluent for no
+reason. Tune `idle_threshold` up.
+
+This is the first metric that's a flag (bool) rather than a number.
+Pattern: per-turn truth, session-level rate. Mirrors iter-048's
+VAD false-trigger rate but lives on TurnMetrics rather than as a
+session-level kwarg (because iter-051 needs the per-turn comparison
+to compute, and per-turn data is the natural carrier).
+
+Implementation:
+- `TurnMetrics.filler_false_positive: bool = False` (new field).
+- ChatLoop sets True when:
+  - `metrics.fillers_played > 0`
+  - AND `self._idle_threshold > 0`
+  - AND `0 < metrics.llm_first_token < self._idle_threshold`
+  The inner `>0` guard on `llm_first_token` prevents false-marking
+  turns where first-token wasn't captured (no LLM response).
+- Per-turn print: appends `"*"` to the filler suffix when FP
+  ("1 filler*" instead of "1 filler"). Compact — stars are easy
+  to spot in output review.
+- Session summary: `Filler FP rate: M/N (P%) — tune idle_threshold up`
+  emitted only when at least one FP occurred. Clean sessions don't
+  see the line.
+
+Tests (10 in `tests/unit/test_filler_false_positive.py`):
+- Default False.
+- Per-turn print: no-filler / filler-no-FP / filler-FP cases.
+- Session aggregate: no-fillers, fillers-no-FP, partial FP with
+  tuning suggestion, all-FP at 100%.
+- ChatLoop wires: fast LLM + 0.5s idle_threshold → if filler
+  played, FP=True; no-fillers configured → FP stays False.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **664 passed, 1 skipped in 23s** (654
+existing + 10 new).
+
+Notes:
+- Thirteen metrics live (28% of the 46-metric taxonomy).
+- Combined with iter-040 (cancel correctness) and iter-047 (barge
+  phase), the worker's "filler quality" picture is now complete:
+  - How often did fillers fire? (`fillers_played` totals)
+  - Of those, how often were they unnecessary? (FP rate, iter-051)
+  - When LLM was slow, did the filler ALSO get cut by a barge-in?
+    (combine iter-051 + iter-047 logic).
+- Next candidates: 1.5 (VAD missed-speech, harder, needs ground
+  truth), 2.7 (worker queue depth, simple), 1.9 (LLM TPS — needs
+  token count which we have).
