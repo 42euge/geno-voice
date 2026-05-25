@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-065 — VAD trailing-silence wall metric (taxonomy 1.3)</title>
+<title>iter-066 — cold-start latency penalty metric (taxonomy 1.20)</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,21 +168,18 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-064.html">← iter-064</a><a href="iter-066.html">iter-066 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-065 — VAD trailing-silence wall metric (taxonomy 1.3)</h1>
-<div class="meta"><span>2026-05-24</span> · <span>tests: <code>+12</code> (total 831)</span></div>
-</header><p><strong>Branch:</strong> iter-065-eot-overhead  <strong>Commit:</strong> 36569ba  <strong>Date:</strong> 2026-05-24</p>
-<p>Added <code>eot_overhead = max(0, eot_latency - silence_duration_used)</code>. Decomposes the EoT wait into:</p>
-<ul><li>&quot;knob-budget&quot; — the configured <code>silence_duration</code> (what we asked for).</li><li>&quot;implementation overhead&quot; — chunk granularity + processing time on top.</li></ul>
-<p>The decomposition tells the operator which lever to pull when EoT latency is too high:</p>
-<ul><li>Overhead ≈ 0 → the wait is fully explained by the knob; lower <code>chat.vad.silence_duration</code> (default 0.8s).</li><li>Overhead &gt; 100ms → something else in the recording loop is slow; tuning the knob won&#x27;t help.</li></ul>
+<nav><a href="index.html">← Index</a><a href="iter-065.html">← iter-065</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-066 — cold-start latency penalty metric (taxonomy 1.20)</h1>
+<div class="meta"><span>2026-05-24</span> · <span>tests: <code>+11</code> (total 842)</span></div>
+</header><p><strong>Branch:</strong> iter-066-cold-start  <strong>Commit:</strong> 0f34530  <strong>Date:</strong> 2026-05-24</p>
+<p>Added cold-start latency penalty — <code>metrics_list[0].ttfs - median(m.ttfs for m in metrics_list[1:] if m.ttfs &gt; 0)</code>. Captures lazy initialization that hits turn 1 disproportionately — model load, speaker open, TTS warmup, lazy imports — and would otherwise get buried in the overall TTFS median. Critical because users judge the entire session by its first impression.</p>
 <p>Implementation:</p>
-<ul><li><code>TurnMetrics.eot_overhead: float = 0.0</code> (new field).</li><li>ChatLoop computes immediately after <code>metrics.eot_latency</code> is populated: ```python if metrics.eot_latency &gt; 0: metrics.eot_overhead = max( 0.0, metrics.eot_latency - self._silence_duration ) ``` The <code>max(0, ...)</code> clamps a rare off-by-one between <code>last_speech_at</code> (the actual last in-speech frame) and VadState&#x27;s silence-window start (the first sub-threshold frame, one chunk later).</li><li>Per-turn print: appends &quot;+NNms overhead&quot; to the EoT line when &gt; 10ms (above chunk-granularity noise). Yellow when &gt;100ms.</li><li>Session summary: &quot;EoT overhead: NNms (above silence_duration)&quot; emitted only when at least one turn showed real overhead.</li><li><code>ScenarioResult.eot_overhead_ms</code> on perf snapshots.</li></ul>
-<p>Tests (12 in <code>tests/unit/test_eot_overhead.py</code>):</p>
-<ul><li>Default zero.</li><li>Per-turn print: zero / sub-chunk-noise (≤10ms) / real overhead / high overhead / no-EoT-line edge case.</li><li>Session aggregate: no-overhead omitted, present emits median, sub-chunk filtered.</li><li>ChatLoop arithmetic: clamps at zero (off-by-one tolerance); always ≤ eot_latency by definition; eot_latency=0 turns leave overhead at default.</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>831 passed, 1 skipped in 23s</strong> (819 existing + 12 new).</p>
+<ul><li>Pure derivation in <code>print_session_summary</code>; no new TurnMetrics field needed (everything is computable from existing per-turn TTFS values). Sits alongside the rhythm-score block in the per-session output.</li><li>Guards: absent first turn). turn-to-turn variation alone produces ~30-40ms swings.<ul><li>Turn 1 must have measurable TTFS (otherwise comparing an</li><li>At least 1 steady-state turn (turns 2:N) must have TTFS &gt; 0.</li><li><code>|penalty|</code> must exceed the 50ms jitter floor — natural</li></ul></li><li>Sign preserved on output. Positive (typical): turn 1 was slower. Negative (rare): turn 1 was faster — could indicate post-turn-1 GC pauses, cache pollution, or otherwise-warm subsystems going cold (the inverse of what we&#x27;d usually see).</li><li>Output: &quot;Cold start: +NNms vs steady state&quot;.</li></ul>
+<p>Tests (11 in <code>tests/unit/test_cold_start.py</code>):</p>
+<ul><li>No-emit boundaries: 1-turn / 0-turn sessions, turn 1 with no TTFS, no steady-state turns, sub-jitter penalty.</li><li>Positive penalty: 2-turn minimum / multi-turn median / steady- state zero filtering.</li><li>Negative penalty: turn 1 faster than steady state, sign rendered with leading &quot;-&quot;.</li><li>Threshold: just-below-floor omits, just-above emits.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>842 passed, 1 skipped in 23s</strong> (831 existing + 11 new).</p>
 <p>Notes:</p>
-<ul><li><strong>Twenty-seven metrics live (59% of the 46-metric taxonomy.)</strong></li><li>The recording-side latency story is now fully decomposed: speech_duration (user actually talking) + eot_latency (VAD wait) + stt_time (transcription) — and within eot_latency, silence_duration_used (knob) + eot_overhead (implementation). Any future regression in the recording path will surface in exactly one of those terms.</li><li>Next candidates: 1.20 (cold-start latency penalty: turn-1 TTFS minus median of remaining turns), 2.15 (worker error-recovery success: turns where worker.errors is non-empty but ttfs &gt; 0 — silent partial degradation), 1.6 (WER, needs ground truth corpus).</li></ul><nav><a href="index.html">← Index</a><a href="iter-064.html">← iter-064</a><a href="iter-066.html">iter-066 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li><strong>Twenty-eight metrics live (61% of the 46-metric taxonomy).</strong></li><li>This is the second purely session-level metric (after iter-055&#x27;s rhythm score). Both decompose information that&#x27;s already in the per-turn record but only becomes meaningful in aggregate.</li><li>Cold-start penalty completes the &quot;first impression&quot; picture alongside iter-061&#x27;s <code>speaker_open_seconds</code> (which on turn 1 is the speaker open cost, on later turns is 0): now the operator can attribute turn-1 lag to specific subsystems.</li><li>Next candidates: 2.15 (worker error-recovery success: turns where worker.errors is non-empty but ttfs &gt; 0 — silent partial degradation), 1.12 (turn-taking jitter: stdev of TTFS — already implicitly in rhythm score, could promote to its own line), 1.6 (WER, needs ground truth corpus).</li></ul><nav><a href="index.html">← Index</a><a href="iter-065.html">← iter-065</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

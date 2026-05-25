@@ -4728,3 +4728,59 @@ Notes:
   minus median of remaining turns), 2.15 (worker error-recovery
   success: turns where worker.errors is non-empty but ttfs > 0 —
   silent partial degradation), 1.6 (WER, needs ground truth corpus).
+
+## iter-066 — cold-start latency penalty metric (taxonomy 1.20)
+
+**Branch:** iter-066-cold-start  **Commit:** 0f34530  **Date:** 2026-05-24
+
+Added cold-start latency penalty — `metrics_list[0].ttfs -
+median(m.ttfs for m in metrics_list[1:] if m.ttfs > 0)`. Captures
+lazy initialization that hits turn 1 disproportionately — model
+load, speaker open, TTS warmup, lazy imports — and would otherwise
+get buried in the overall TTFS median. Critical because users judge
+the entire session by its first impression.
+
+Implementation:
+- Pure derivation in `print_session_summary`; no new TurnMetrics
+  field needed (everything is computable from existing per-turn
+  TTFS values). Sits alongside the rhythm-score block in the
+  per-session output.
+- Guards:
+  - Turn 1 must have measurable TTFS (otherwise comparing an
+    absent first turn).
+  - At least 1 steady-state turn (turns 2:N) must have TTFS > 0.
+  - `|penalty|` must exceed the 50ms jitter floor — natural
+    turn-to-turn variation alone produces ~30-40ms swings.
+- Sign preserved on output. Positive (typical): turn 1 was slower.
+  Negative (rare): turn 1 was faster — could indicate post-turn-1
+  GC pauses, cache pollution, or otherwise-warm subsystems going
+  cold (the inverse of what we'd usually see).
+- Output: "Cold start: +NNms vs steady state".
+
+Tests (11 in `tests/unit/test_cold_start.py`):
+- No-emit boundaries: 1-turn / 0-turn sessions, turn 1 with no
+  TTFS, no steady-state turns, sub-jitter penalty.
+- Positive penalty: 2-turn minimum / multi-turn median / steady-
+  state zero filtering.
+- Negative penalty: turn 1 faster than steady state, sign rendered
+  with leading "-".
+- Threshold: just-below-floor omits, just-above emits.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **842 passed, 1 skipped in 23s** (831 existing
++ 11 new).
+
+Notes:
+- **Twenty-eight metrics live (61% of the 46-metric taxonomy).**
+- This is the second purely session-level metric (after iter-055's
+  rhythm score). Both decompose information that's already in the
+  per-turn record but only becomes meaningful in aggregate.
+- Cold-start penalty completes the "first impression" picture
+  alongside iter-061's `speaker_open_seconds` (which on turn 1 is
+  the speaker open cost, on later turns is 0): now the operator
+  can attribute turn-1 lag to specific subsystems.
+- Next candidates: 2.15 (worker error-recovery success: turns
+  where worker.errors is non-empty but ttfs > 0 — silent partial
+  degradation), 1.12 (turn-taking jitter: stdev of TTFS — already
+  implicitly in rhythm score, could promote to its own line),
+  1.6 (WER, needs ground truth corpus).
