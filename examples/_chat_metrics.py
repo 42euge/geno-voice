@@ -236,6 +236,15 @@ class TurnMetrics:
     # to the worker / coordinator in iter-011 / iter-012 but never
     # made it into the per-turn summary.
     fillers_played: int = 0
+    # iter-081: identity (Python ``id()``) of the filler clip the
+    # worker picked this turn, or 0 when none played. The id is
+    # only meaningful within the running process — print_session_summary
+    # aggregates these across turns into a session-wide diversity
+    # count via set arithmetic. Persisted to perf snapshots as a
+    # stable-per-process integer; useful for in-session aggregation,
+    # NOT for cross-iteration time-series (process IDs change).
+    # Metric 3.8 in the perf-metrics taxonomy ("Novel/speculative").
+    last_filler_id: int = 0
     # iter-051: True if a filler played AND the LLM's first token
     # actually arrived faster than the configured idle_threshold —
     # i.e. the filler was unnecessary, the bot would have started
@@ -1091,6 +1100,25 @@ def print_session_summary(
                     f"{filler_false_positives}/{filler_turns} "
                     f"({fp_pct:.0f}%) — tune idle_threshold up"
                 )
+        # iter-081: filler novelty index. Distinct clip IDs across
+        # the session vs total plays. 100% = picker distributed
+        # perfectly (every play was a distinct clip); <100% = at
+        # least one clip got picked more than once. Hearing the
+        # same "umm" multiple times in a row feels worse than no
+        # filler at all. Skip the line on single-play sessions
+        # (1/1 = 100% trivially).
+        unique_filler_ids = {
+            m.last_filler_id for m in metrics_list
+            if m.last_filler_id != 0
+        }
+        if fillers_total >= 2:
+            unique_count = len(unique_filler_ids)
+            novelty_pct = (unique_count / fillers_total) * 100
+            _emit(
+                f"    Filler novelty:   "
+                f"{unique_count} unique / {fillers_total} "
+                f"({novelty_pct:.0f}%)"
+            )
     if barges_total:
         if mid_cancels:
             pct = (mid_cancels / barges_total) * 100

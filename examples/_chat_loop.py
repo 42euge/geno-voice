@@ -608,6 +608,10 @@ class ChatLoop:
             # iter-040: count of sentences cut mid-stream by cancel_event.
             metrics.sentences_cancelled = worker.cancelled_sentences
             metrics.fillers_played = worker.fillers_played
+            # iter-081: filler clip ID for session-wide diversity
+            # aggregation. 0 when no filler played this turn.
+            if worker.last_filler_id is not None:
+                metrics.last_filler_id = worker.last_filler_id
             # iter-051: filler false-positive flag. The filler is
             # unnecessary if the LLM's first token actually arrived
             # before the idle_threshold window would have elapsed.

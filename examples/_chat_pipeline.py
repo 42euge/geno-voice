@@ -205,6 +205,14 @@ class SentenceWorker:
         self.word_count_total: int = 0
         self.audio_seconds_total: float = 0.0
         self.fillers_played: int = 0
+        # iter-081: identity (id()) of the filler clip the picker
+        # selected for this turn. None on turns where no filler
+        # played. Mic_chat aggregates these across turns into a
+        # session-wide diversity count — `id()` is stable across
+        # worker instances because the rendered_fillers list lives
+        # in mic_chat's scope and is passed by reference. Metric 3.8
+        # in the perf-metrics taxonomy ("Novel/speculative").
+        self.last_filler_id: Optional[int] = None
         self.tts_time: float = 0.0
         self.playback_time: float = 0.0
         # iter-061: time spent opening the persistent speaker
@@ -458,6 +466,11 @@ class SentenceWorker:
                         if played:
                             is_first_audio = False
                             self.fillers_played += 1
+                            # iter-081: record which filler we picked
+                            # (by tuple id, stable across workers
+                            # because mic_chat holds the canonical
+                            # rendered_fillers list).
+                            self.last_filler_id = id(clip)
                         # Whether or not it played, mark used so we
                         # don't loop forever choosing the same idle
                         # path again.
