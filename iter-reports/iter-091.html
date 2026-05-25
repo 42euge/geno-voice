@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-090 — extract _emit_barge_block helper</title>
+<title>iter-091 — extract _emit_filler_block helper</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,18 +168,19 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-089.html">← iter-089</a><a href="iter-091.html">iter-091 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-090 — extract _emit_barge_block helper</h1>
-<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+13</code> (total 1095)</span></div>
-</header><p><strong>Branch:</strong> iter-090-barge-helper  <strong>Commit:</strong> dbf434d  <strong>Date:</strong> 2026-05-25</p>
-<p>The barge-in section of <code>print_session_summary</code> was 76 lines across 8 sub-conditions (count + mid-stream %, interruption rate, latency median+worst, cancel-to-close, phase distribution, regret rate, pre-empted words). Extract to a standalone <code>_emit_barge_block(emit, stats: BargeStats)</code> helper.</p>
-<p>Introduced a <code>BargeStats</code> dataclass to bundle the 11 input fields cleanly. Following the iter-086 SessionMeta pattern: each new barge-side metric extends the dataclass instead of growing the helper signature.</p>
-<p>Behavior-preserving: byte-for-byte identical output. The 1082 prior tests pass unchanged — the regression sentinel pattern from iter-089 carries forward.</p>
-<p>Tests (13 in <code>tests/unit/test_emit_barge_block.py</code>):</p>
-<ul><li><code>BargeStats</code> defaults are all zero / empty.</li><li>No-barges path emits nothing.</li><li>Single barge: clean form (&quot;all between sentences&quot;) vs mid-stream form (&quot;N mid-stream, X%&quot;).</li><li>Interruption rate against <code>n</code> denominator.</li><li>Latencies: median + worst when present.</li><li>Cancel-to-close median when present.</li><li>Phase distribution: emits when either non-zero, omits when both 0.</li><li>Regret rate emits with correct %, omits when 0.</li><li>Pre-empted words: total + avg/loss correctly computed.</li><li>Ordering invariant across all 8 emitted line types.</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>1095 passed, 1 skipped in 25s</strong> (1082 existing + 13 new).</p>
+<nav><a href="index.html">← Index</a><a href="iter-090.html">← iter-090</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-091 — extract _emit_filler_block helper</h1>
+<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+9</code> (total 1104)</span></div>
+</header><p><strong>Branch:</strong> iter-091-filler-helper  <strong>Commit:</strong> 83a355a  <strong>Date:</strong> 2026-05-25</p>
+<p>Continues the iter-089/iter-090 refactor pattern. The filler section of <code>print_session_summary</code> was 32 lines across three sub-conditions:</p>
+<ul><li>&quot;Fillers played: N&quot; (iter-014).</li><li>&quot;Filler FP rate: M/K (X%)&quot; (iter-051) when any false positive fired.</li><li>&quot;Filler novelty: M unique / N (X%)&quot; (iter-081) when ≥2 fillers played.</li></ul>
+<p>Extracted to <code>_emit_filler_block(emit, stats: FillerStats)</code> with a <code>FillerStats</code> dataclass bundling the 4 input fields. Mirrors the iter-090 <code>BargeStats</code> pattern.</p>
+<p>Behavior-preserving: byte-for-byte identical output. The 1095 prior tests pass unchanged.</p>
+<p>Tests (9 in <code>tests/unit/test_emit_filler_block.py</code>):</p>
+<ul><li><code>FillerStats</code> defaults all zero.</li><li>No-data → no emit.</li><li>Single-play → count line only (FP rate gated on &gt;0 FPs; novelty gated on ≥2 plays).</li><li>FP rate emits with correct % when FPs present; omits when 0.</li><li>Novelty emits at 2+ plays; omits at single play (trivially 100%).</li><li>Ordering invariant: count → FP → novelty.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>1104 passed, 1 skipped in 26s</strong> (1095 existing + 9 new).</p>
 <p>Notes:</p>
-<ul><li><code>print_session_summary</code> is now ~1370 lines (down from 1500 pre-iter-089). Each block extraction compounds — TTFS (-80) + barge (-76) = -156 lines reduced. Function still has Errors, Filler, WPM, Sentence-stats, Token-lag, Queue, Mic-stale, VAD- false-trig, Trim, Context, Recovery, Bargeable blocks left to consider.</li><li>The <code>BargeStats</code> dataclass pattern is paying off — adding iter-080 pre-empted-content fields was a 2-line dataclass extension instead of growing a kwarg list. Future barge metrics extend the dataclass cleanly.</li><li>Next directions: silent-turn rate). aggressive_first to auto-flip the splitter mid-turn on a detected stall.<ul><li>Continue: extract <code>_emit_filler_block</code> (iter-014/051/081).</li><li>Continue: extract <code>_emit_errors_block</code> (iter-058/067/079 +</li><li>Architecture: combine iter-085 max_token_gap with iter-088</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-089.html">← iter-089</a><a href="iter-091.html">iter-091 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li><code>print_session_summary</code> is now ~1340 lines (down from 1500 pre-iter-089). Block extractions so far: TTFS (-80), Barge (-76), Filler (-32) = -188 lines reduced. Significant readability win.</li><li>The pattern is fully formed: 1. Identify a contiguous block sharing a top-level guard. 2. Bundle inputs into a small dataclass. 3. Move the block to a helper that takes <code>(emit, stats)</code>. 4. Existing tests are the regression sentinel. 5. Add focused helper-level tests.</li><li>Next directions: recovery + iter-079 silent turns). + mirror gap). splitter on detected stall.<ul><li>Extract <code>_emit_errors_block</code> (iter-058 + iter-067 worker</li><li>Extract <code>_emit_wpm_block</code> (iter-046 bot + iter-064 user</li><li>Architecture: combine iter-085 + iter-088 → auto-aggressive</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-090.html">← iter-090</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

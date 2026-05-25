@@ -6308,3 +6308,56 @@ Notes:
   - Architecture: combine iter-085 max_token_gap with iter-088
     aggressive_first to auto-flip the splitter mid-turn on a
     detected stall.
+
+## iter-091 — extract _emit_filler_block helper
+
+**Branch:** iter-091-filler-helper  **Commit:** 83a355a  **Date:** 2026-05-25
+
+Continues the iter-089/iter-090 refactor pattern. The filler
+section of `print_session_summary` was 32 lines across three
+sub-conditions:
+- "Fillers played: N" (iter-014).
+- "Filler FP rate: M/K (X%)" (iter-051) when any false positive
+  fired.
+- "Filler novelty: M unique / N (X%)" (iter-081) when ≥2 fillers
+  played.
+
+Extracted to `_emit_filler_block(emit, stats: FillerStats)` with
+a `FillerStats` dataclass bundling the 4 input fields. Mirrors
+the iter-090 `BargeStats` pattern.
+
+Behavior-preserving: byte-for-byte identical output. The 1095
+prior tests pass unchanged.
+
+Tests (9 in `tests/unit/test_emit_filler_block.py`):
+- `FillerStats` defaults all zero.
+- No-data → no emit.
+- Single-play → count line only (FP rate gated on >0 FPs;
+  novelty gated on ≥2 plays).
+- FP rate emits with correct % when FPs present; omits when 0.
+- Novelty emits at 2+ plays; omits at single play (trivially
+  100%).
+- Ordering invariant: count → FP → novelty.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **1104 passed, 1 skipped in 26s** (1095
+existing + 9 new).
+
+Notes:
+- `print_session_summary` is now ~1340 lines (down from 1500
+  pre-iter-089). Block extractions so far: TTFS (-80), Barge
+  (-76), Filler (-32) = -188 lines reduced. Significant
+  readability win.
+- The pattern is fully formed:
+  1. Identify a contiguous block sharing a top-level guard.
+  2. Bundle inputs into a small dataclass.
+  3. Move the block to a helper that takes `(emit, stats)`.
+  4. Existing tests are the regression sentinel.
+  5. Add focused helper-level tests.
+- Next directions:
+  - Extract `_emit_errors_block` (iter-058 + iter-067 worker
+    recovery + iter-079 silent turns).
+  - Extract `_emit_wpm_block` (iter-046 bot + iter-064 user
+    + mirror gap).
+  - Architecture: combine iter-085 + iter-088 → auto-aggressive
+    splitter on detected stall.
