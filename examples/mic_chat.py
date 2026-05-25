@@ -293,6 +293,10 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
     # iter-058: count LLM errors at session level so the summary
     # can report a per-stage error rate.
     llm_errors = 0
+    # iter-078: trim-event counters. Validates the iter-024
+    # max_user_assistant=20 threshold is calibrated.
+    trim_events = 0
+    trim_messages_evicted = 0
     primed_frames: list[bytes] | None = None
     # iter-054: track session start so the summary can report
     # total wall-clock + turns/min.
@@ -316,7 +320,14 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
             result.metrics.print(turn + 1)
             all_metrics.append(result.metrics)
             turn += 1
+            # iter-078: capture how many messages the trim actually
+            # evicted by diffing list lengths around the call.
+            len_before = len(messages)
             messages = ChatLoop.trim_messages(messages, max_user_assistant=20)
+            evicted = len_before - len(messages)
+            if evicted > 0:
+                trim_events += 1
+                trim_messages_evicted += evicted
 
     except KeyboardInterrupt:
         # iter-017: extracted to _chat_metrics.print_session_summary
@@ -328,6 +339,8 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
             false_triggers=false_triggers,
             session_seconds=time.monotonic() - session_start,
             llm_errors=llm_errors,
+            trim_events=trim_events,
+            trim_messages_evicted=trim_messages_evicted,
         )
     finally:
         mic.stop_stream()

@@ -680,6 +680,8 @@ def print_session_summary(
     false_triggers: int = 0,
     session_seconds: float = 0.0,
     llm_errors: int = 0,
+    trim_events: int = 0,
+    trim_messages_evicted: int = 0,
 ) -> None:
     """Print a multi-line session summary on KeyboardInterrupt.
 
@@ -699,6 +701,16 @@ def print_session_summary(
     tracks these and passes the total. Defaults to 0 for back-
     compat with callers that don't track yet. Metric 1.4 in the
     perf-metrics taxonomy.
+
+    iter-078: ``trim_events`` counts how many times across the
+    session ``trim_history`` actually evicted at least one
+    message; ``trim_messages_evicted`` is the cumulative count
+    of evicted messages. Validates the trim threshold is
+    calibrated: if events == 0 across a long session, the cap
+    is too loose (context-token growth from iter-077 will be
+    showing the same story). If trim_messages_evicted/events is
+    consistently 1, the cap is exactly right (each turn trims
+    one). Metric 2.24 in the perf-metrics taxonomy.
     """
     def _emit(line: str = "") -> None:
         if file is None:
@@ -1283,6 +1295,22 @@ def print_session_summary(
                 f"    Context growth:   "
                 f"{growth:+d} tokens (turn 1 → turn {len(context_token_counts)})"
             )
+    # iter-078: trim event rate. Skip the line on sessions where
+    # trim never fired (early sessions, or trim threshold so high
+    # it's never tripped — the latter is a calibration issue
+    # surfaced by ``Context tokens: max`` keeping growing). The
+    # ratio of evicted/events surfaces the per-trim severity:
+    # evicted/events == 1 means each trim cap was a steady-state
+    # one-message eviction; >1 means the trim is catching up
+    # after a longer interval (might happen if max_user_assistant
+    # was lowered mid-session).
+    if trim_events > 0:
+        ratio = trim_messages_evicted / trim_events
+        _emit(
+            f"    Trim events:      "
+            f"{trim_events} ({trim_messages_evicted} evicted, "
+            f"{ratio:.1f}/event)"
+        )
     # iter-071: median mean-lag + worst peak across the session.
     # Sign-preserved on output. >50ms median is "the user notices
     # the desync"; >300ms peak on any one token is a visible glitch
