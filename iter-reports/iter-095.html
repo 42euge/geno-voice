@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-094 — extract _emit_wpm_block helper</title>
+<title>iter-095 — extract _emit_sentence_block helper</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,19 +168,19 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-093.html">← iter-093</a><a href="iter-095.html">iter-095 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-094 — extract _emit_wpm_block helper</h1>
-<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+7</code> (total 1129)</span></div>
-</header><p><strong>Branch:</strong> iter-094-wpm-helper  <strong>Commit:</strong> 570b375  <strong>Date:</strong> 2026-05-25</p>
-<p>Continues the refactor pattern. The WPM block of <code>print_session_summary</code> was 14 lines covering three lines:</p>
-<ul><li>&quot;Median user WPM: NNN&quot; (iter-064).</li><li>&quot;Median bot WPM: NNN&quot; (iter-046).</li><li>&quot;Mirror gap: ±NN WPM (bot − user)&quot; (iter-064) when both measurable.</li></ul>
-<p>Extracted to <code>_emit_wpm_block(emit, stats: WpmStats)</code> backed by a 2-field <code>WpmStats</code> dataclass.</p>
-<p>Behavior-preserving: byte-for-byte identical output. The 1122 prior tests pass unchanged.</p>
-<p>Tests (7 in <code>tests/unit/test_emit_wpm_block.py</code>):</p>
-<ul><li><code>WpmStats</code> defaults to empty lists.</li><li>No-data → no emit.</li><li>User-only / bot-only → only the relevant median, no mirror gap.</li><li>Both → all three lines with correct gap sign.</li><li>Negative mirror gap rendering.</li><li>Ordering invariant: user → bot → gap.</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>1129 passed, 1 skipped in 27s</strong> (1122 existing + 7 new).</p>
+<nav><a href="index.html">← Index</a><a href="iter-094.html">← iter-094</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-095 — extract _emit_sentence_block helper</h1>
+<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+9</code> (total 1138)</span></div>
+</header><p><strong>Branch:</strong> iter-095-sentence-helper  <strong>Commit:</strong> c4b4ceb  <strong>Date:</strong> 2026-05-25</p>
+<p>Continues the refactor pattern. The sentence-shape section of <code>print_session_summary</code> was 30 lines covering:</p>
+<ul><li>&quot;Mean sentence: NN chars&quot; (iter-045) when measurable.</li><li>&quot;Sentence range: [min..max] chars (session)&quot; (iter-070) when min != max.</li><li>&quot;Split coverage: NN%&quot; (iter-059) when measurable.</li></ul>
+<p>Extracted to <code>_emit_sentence_block(emit, stats: SentenceStats)</code> backed by a 4-field <code>SentenceStats</code> dataclass (sentence_lens, min_chars_seen, max_chars_seen, coverage_values).</p>
+<p>Behavior-preserving: byte-for-byte identical output. The 1129 prior tests pass unchanged.</p>
+<p>Tests (9 in <code>tests/unit/test_emit_sentence_block.py</code>):</p>
+<ul><li><code>SentenceStats</code> defaults (empty / 0).</li><li>No-data → no emit.</li><li>Mean-only when range fields unset (range gated on max&gt;0).</li><li>Range emits when min&lt;max; omits when min==max.</li><li>Coverage emits when present, omits when empty, independent of mean (can fire alone).</li><li>Ordering invariant: mean → range → coverage.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>1138 passed, 1 skipped in 28s</strong> (1129 existing + 9 new).</p>
 <p>Notes:</p>
-<ul><li><code>print_session_summary</code> is now ~1280 lines (down from 1500 pre-iter-089). Block extractions: TTFS (-80), Barge (-76), Filler (-32), Errors (-50), WPM (-12) = -250 lines reduced.</li><li>The <code>*Stats</code> dataclass + <code>_emit_*_block</code> helper pattern is consistent across 5 helpers now. Adding a new metric to any of these blocks is a 1-2 line dataclass extension instead of growing a kwarg list.</li><li>Next directions: iter-070 sentence range, iter-059 split coverage). iter-051 false-positive distribution (suggest, don&#x27;t auto- apply, mid-session).<ul><li>Extract <code>_emit_sentence_block</code> (iter-045 mean_sentence_chars,</li><li>Continue auto-tuning lane: filler idle_threshold based on</li><li>Investigate the WER fixture (1.6) as a heavyweight iteration.</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-093.html">← iter-093</a><a href="iter-095.html">iter-095 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li><code>print_session_summary</code> is now ~1255 lines (down from 1500 pre-iter-089). Block extractions: TTFS (-80), Barge (-76), Filler (-32), Errors (-50), WPM (-12), Sentence (-30) = -280 lines reduced. Six helpers extracted, all following the identical <code>*Stats</code> dataclass + helper pattern.</li><li>The function is approaching a comfortable size where the remaining inline blocks (token-lag, queue depth, mic stale, VAD false-trig, primed audio, trim, context, bargeable, TTFS attribution) could be batched into 2-3 more iterations or consolidated into a single <code>_emit_misc_block</code> for the smaller ones.</li><li>Next directions: mic stale + iter-048 false-trigger + iter-074 bargeable fraction). print_session_summary based on the iter-051 false-positive distribution (recommend, don&#x27;t auto-apply).<ul><li>Continue refactor: extract <code>_emit_recording_block</code> (iter-037</li><li>Continue auto-tuning: filler idle_threshold suggestion in</li><li>WER fixture (1.6) heavyweight iteration.</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-094.html">← iter-094</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>

@@ -6530,3 +6530,55 @@ Notes:
     iter-051 false-positive distribution (suggest, don't auto-
     apply, mid-session).
   - Investigate the WER fixture (1.6) as a heavyweight iteration.
+
+## iter-095 — extract _emit_sentence_block helper
+
+**Branch:** iter-095-sentence-helper  **Commit:** c4b4ceb  **Date:** 2026-05-25
+
+Continues the refactor pattern. The sentence-shape section of
+`print_session_summary` was 30 lines covering:
+- "Mean sentence: NN chars" (iter-045) when measurable.
+- "Sentence range: [min..max] chars (session)" (iter-070) when
+  min != max.
+- "Split coverage: NN%" (iter-059) when measurable.
+
+Extracted to `_emit_sentence_block(emit, stats: SentenceStats)`
+backed by a 4-field `SentenceStats` dataclass (sentence_lens,
+min_chars_seen, max_chars_seen, coverage_values).
+
+Behavior-preserving: byte-for-byte identical output. The 1129
+prior tests pass unchanged.
+
+Tests (9 in `tests/unit/test_emit_sentence_block.py`):
+- `SentenceStats` defaults (empty / 0).
+- No-data → no emit.
+- Mean-only when range fields unset (range gated on max>0).
+- Range emits when min<max; omits when min==max.
+- Coverage emits when present, omits when empty, independent of
+  mean (can fire alone).
+- Ordering invariant: mean → range → coverage.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **1138 passed, 1 skipped in 28s** (1129
+existing + 9 new).
+
+Notes:
+- `print_session_summary` is now ~1255 lines (down from 1500
+  pre-iter-089). Block extractions: TTFS (-80), Barge (-76),
+  Filler (-32), Errors (-50), WPM (-12), Sentence (-30) = -280
+  lines reduced. Six helpers extracted, all following the
+  identical `*Stats` dataclass + helper pattern.
+- The function is approaching a comfortable size where the
+  remaining inline blocks (token-lag, queue depth, mic stale,
+  VAD false-trig, primed audio, trim, context, bargeable, TTFS
+  attribution) could be batched into 2-3 more iterations or
+  consolidated into a single `_emit_misc_block` for the
+  smaller ones.
+- Next directions:
+  - Continue refactor: extract `_emit_recording_block` (iter-037
+    mic stale + iter-048 false-trigger + iter-074 bargeable
+    fraction).
+  - Continue auto-tuning: filler idle_threshold suggestion in
+    print_session_summary based on the iter-051 false-positive
+    distribution (recommend, don't auto-apply).
+  - WER fixture (1.6) heavyweight iteration.
