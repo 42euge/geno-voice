@@ -217,6 +217,12 @@ class ChatLoop:
         # when the recorder didn't emit (DONE_TOO_SHORT path), which
         # the per-turn print + session aggregate both filter on.
         metrics.eot_latency = float(rec_metrics.get("eot_latency", 0.0))
+        # iter-072: STT preview-vs-final divergence (taxonomy 1.8).
+        # Same dict; default 0.0 when the recorder didn't populate
+        # (no preview emerged or final empty).
+        metrics.stt_preview_divergence = float(
+            rec_metrics.get("stt_preview_divergence", 0.0)
+        )
         # iter-065: trailing-silence wall. The part of EoT NOT
         # explained by the configured silence_duration. ``max(0, ...)``
         # because the EoT measurement uses the actual last-speech

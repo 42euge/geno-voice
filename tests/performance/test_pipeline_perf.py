@@ -101,6 +101,8 @@ class ScenarioResult:
     stt_ms: float = 0.0
     # iter-049: STT real-time factor.
     stt_rtf: float = 0.0
+    # iter-072: STT preview-vs-final divergence (0..1).
+    stt_preview_divergence: float = 0.0
     tts_ms: float = 0.0           # cumulative synth time
     # iter-050: TTS real-time factor.
     tts_rtf: float = 0.0
@@ -304,6 +306,7 @@ def _run_scenario(
         naturalness_bucket=m.naturalness_bucket,
         stt_ms=m.stt_time * 1000,
         stt_rtf=m.stt_rtf,
+        stt_preview_divergence=m.stt_preview_divergence,
         tts_rtf=m.tts_rtf,
         tts_ms=m.tts_time * 1000,
         playback_ms=m.playback_time * 1000,
@@ -490,6 +493,7 @@ class TestPerfScenarios:
         naturalness_bucket=m.naturalness_bucket,
             stt_ms=m.stt_time * 1000,
         stt_rtf=m.stt_rtf,
+        stt_preview_divergence=m.stt_preview_divergence,
         tts_rtf=m.tts_rtf,
             tts_ms=m.tts_time * 1000,
             playback_ms=m.playback_time * 1000,

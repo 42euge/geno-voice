@@ -41,6 +41,15 @@ class TurnMetrics:
     # produce TurnMetrics post-iter-031) or stt_time wasn't measured.
     # Metric 1.7 in the perf-metrics taxonomy.
     stt_rtf: float = 0.0
+    # iter-072: STT preview-vs-final divergence in [0.0, 1.0].
+    # 0 = the live preview transcript matched the final perfectly
+    # (incremental Whisper output was already correct — live STT
+    # was useful). 1 = totally different — the user had to wait for
+    # the final transcript to know if they were understood. >0.3
+    # is "preview UX is broken." Computed via
+    # difflib.SequenceMatcher in record_utterance_streaming.
+    # Metric 1.8 in the perf-metrics taxonomy.
+    stt_preview_divergence: float = 0.0
     llm_first_token: float = 0.0
     # iter-052: stream throughput of the LLM in tokens/sec, measured
     # AFTER first token (so the first-token wait doesn't bias TPS
@@ -305,11 +314,22 @@ class TurnMetrics:
                 f"{color}{ms:>7.0f}ms{_RESET}{suffix}"
             )
         # iter-049: append STT RTF when measurable.
+        # iter-072: also append preview divergence when populated.
+        # Yellow when >0.3 (preview was misleading); dim otherwise.
+        stt_extras: list[str] = []
         if self.stt_rtf > 0:
             rtf_color = _GREEN if self.stt_rtf < 1.0 else _YELLOW
+            stt_extras.append(f"{rtf_color}RTF {self.stt_rtf:.2f}x{_RESET}")
+        if self.stt_preview_divergence > 0:
+            div_pct = self.stt_preview_divergence * 100
+            div_color = _YELLOW if self.stt_preview_divergence > 0.3 else _DIM
+            stt_extras.append(
+                f"{div_color}preview Δ {div_pct:.0f}%{_RESET}"
+            )
+        if stt_extras:
             print(
-                f"  {_DIM}│{_RESET}  STT:           {self.stt_time*1000:>7.0f}ms  "
-                f"({rtf_color}RTF {self.stt_rtf:.2f}x{_RESET})"
+                f"  {_DIM}│{_RESET}  STT:           "
+                f"{self.stt_time*1000:>7.0f}ms  ({', '.join(stt_extras)})"
             )
         else:
             print(f"  {_DIM}│{_RESET}  STT:           {self.stt_time*1000:>7.0f}ms")
@@ -603,6 +623,18 @@ def print_session_summary(
     stt_times = [m.stt_time for m in metrics_list]
     # iter-049: STT RTF over turns where it was measurable.
     stt_rtfs = [m.stt_rtf for m in metrics_list if m.stt_rtf > 0]
+    # iter-072: STT preview-vs-final divergence over turns where
+    # both preview and final actually emerged. Filter out 0
+    # because that's the "no preview produced" signal as well as
+    # the "preview matched perfectly" signal — they're collapsed
+    # in this metric. (A "preview matched perfectly" turn is a
+    # rare lucky case anyway; if the median is 0 we'd genuinely
+    # have nothing to surface.)
+    stt_div_values = [
+        m.stt_preview_divergence
+        for m in metrics_list
+        if m.stt_preview_divergence > 0
+    ]
     llm_ft = [m.llm_first_token for m in metrics_list]
     # iter-052: LLM TPS over turns where it was measurable.
     llm_tpses = [m.llm_tps for m in metrics_list if m.llm_tps > 0]
@@ -792,6 +824,12 @@ def print_session_summary(
     _emit(f"    Median STT:       {_median_ms(stt_times):.0f}ms")
     if stt_rtfs:
         _emit(f"    Median STT RTF:   {statistics.median(stt_rtfs):.2f}x")
+    # iter-072: median preview divergence as a percentage. >30%
+    # is "the live preview was generally misleading"; <10% is
+    # "the preview was reliable enough for users to trust."
+    if stt_div_values:
+        med_div_pct = statistics.median(stt_div_values) * 100
+        _emit(f"    STT preview Δ:    {med_div_pct:.0f}% (median)")
     _emit(f"    Median LLM 1st:   {_median_ms(llm_ft):.0f}ms")
     if llm_tpses:
         _emit(f"    Median LLM TPS:   {statistics.median(llm_tpses):.0f}")

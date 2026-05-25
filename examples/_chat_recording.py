@@ -154,10 +154,15 @@ def record_utterance_streaming(
         or stricter speech detection (raise min_speech_duration).
       ``out_metrics`` — optional dict that, if provided, is populated
         with extra measurements that don't fit the return tuple
-        (iter-063). Currently emits ``"eot_latency"`` (seconds from
-        the user's last in-speech frame to ``DONE_OK`` firing). Only
-        populated on the success path; ``DONE_TOO_SHORT`` returns
-        early without writing.
+        (iter-063). Keys:
+          - ``"eot_latency"`` (seconds from last in-speech frame to
+            ``DONE_OK`` firing) — populated on the DONE_OK path only.
+          - ``"stt_preview_divergence"`` (iter-072) in [0.0, 1.0]:
+            ``1 - SequenceMatcher.ratio(preview, final)``. 0 = live
+            preview matched the final transcript perfectly; 1 =
+            completely different. Populated when both preview and
+            final are non-empty; ``DONE_TOO_SHORT`` returns early
+            without writing either key.
     """
     if transcribe_fn is None:
         transcribe_fn = lambda wav: _transcribe_quick(stt_engine, wav)
@@ -280,6 +285,23 @@ def record_utterance_streaming(
     if final_text:
         output.write(f"\r{CLEAR_LINE}  {_BOLD}You:{_RESET} \"{final_text}\"\n")
         output.flush()
+
+    # iter-072: STT preview-vs-final divergence. Populate the
+    # side-band dict with ``1 - SequenceMatcher.ratio()``, where 0
+    # = preview matched final perfectly (live STT was useful), 1 =
+    # totally different (live STT was misleading and the user had
+    # to wait for the final). Only emits when both preview and
+    # final are non-empty — turns where the user spoke but no
+    # preview managed to fire (very short utterance) leave the
+    # field at default. Metric 1.8 in the perf-metrics taxonomy.
+    if (
+        out_metrics is not None
+        and preview_text
+        and final_text
+    ):
+        from difflib import SequenceMatcher
+        ratio = SequenceMatcher(None, preview_text, final_text).ratio()
+        out_metrics["stt_preview_divergence"] = max(0.0, 1.0 - ratio)
 
     stt_engine._last_text = final_text
     return wav_bytes, speech_duration, stt_time
