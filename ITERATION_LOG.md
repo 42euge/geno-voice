@@ -4024,3 +4024,63 @@ Notes:
 - Session header now reads:
   `Session Summary (3 turns over 5m 22s)`
   followed by `Turns/min: 0.6`. Concrete and immediately scannable.
+
+---
+
+## iter-055 — conversation rhythm score (taxonomy 3.2)
+
+**Branch:** `iter-055-rhythm` (merged ff to main, commit `a26367f`)
+**Date:** 2026-05-24
+
+Seventeenth metric pulled from `docs/perf-metrics-taxonomy.md`.
+Second "Novel/speculative" entry, after iter-053's naturalness.
+
+    rhythm = 1 - stdev(ttfs) / median(ttfs)    clamped to [0, 1]
+
+The taxonomy's framing: "consistency feels like a personality;
+jitter feels like a system." A bot with steady ~300ms TTFS feels
+like it has presence; one that oscillates between 100ms and 800ms
+feels broken even if its median is identical. The median alone
+doesn't capture this — variance does.
+
+Pure session-level derivation. No new TurnMetrics field, no new
+ChatLoop instrumentation. Three lines in `print_session_summary`
+on top of the existing `ttfs_times` list.
+
+Score interpretation:
+- **1.00**: perfectly consistent (all TTFS equal — synthetic case)
+- **~0.7**: typical good production session
+- **~0.5**: moderate jitter (stdev ≈ half the median)
+- **0.00**: clamped — stdev exceeds median (high outliers)
+
+Implementation:
+- `print_session_summary` computes rhythm in the existing
+  `if ttfs_times:` branch. Requires `len(ttfs_times) >= 2` for
+  `statistics.stdev` to be defined. Clamps to `[0, 1]` to handle
+  high-variance sessions cleanly (raw can go negative).
+- Output: `"Rhythm score:     N.NN"` between `Best TTFS` and
+  `Naturalness` in the summary block.
+
+Tests (7 in `tests/unit/test_rhythm_score.py`):
+- Suppression: no-TTFS omits, single-turn omits.
+- Score values: perfect consistency → `1.00`, moderate
+  (200/300/400ms) → `0.67`, high jitter → clamped to `0.00`,
+  two-turn session → `0.53` (sample stdev formula).
+- Integration: line appears between `Best TTFS` and `Naturalness`
+  in the output (order check verifies no regressions to ordering).
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **711 passed, 1 skipped in 23s** (704
+existing + 7 new).
+
+Notes:
+- Seventeen metrics live (37% of the 46-metric taxonomy).
+- Combined with iter-053's naturalness bucket distribution, the
+  TTFS dimension is now richly described:
+  - Median TTFS (level)
+  - Best TTFS (best case)
+  - Rhythm score (consistency)
+  - Naturalness distribution (sweet-spot fit)
+  Four orthogonal lenses on the same underlying number.
+- Next candidates: 3.4 (regret rate), 2.7 (worker queue depth —
+  needs sampler daemon, more involved).

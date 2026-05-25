@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-054 — session length + turns/min metric (taxonomy 1.15)</title>
+<title>iter-055 — conversation rhythm score (taxonomy 3.2)</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,20 +168,23 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-053.html">← iter-053</a><a href="iter-055.html">iter-055 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-054 — session length + turns/min metric (taxonomy 1.15)</h1>
-<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-054-session-len</code></span> · <span>commit: <code>4ea23cf</code></span> · <span>tests: <code>+11</code> (total 704)</span></div>
-</header><p><strong>Branch:</strong> <code>iter-054-session-len</code> (merged ff to main, commit <code>4ea23cf</code>) <strong>Date:</strong> 2026-05-24</p>
-<p>Sixteenth metric pulled from <code>docs/perf-metrics-taxonomy.md</code>. <strong>Metric 1.15 — Turn count + session length</strong>, &quot;Standard&quot; bucket.</p>
-<p>The taxonomy describes this as a &quot;denominator metric&quot; — useful not for its own value, but as the basis for normalizing any rate metric (e.g. &quot;false triggers per minute&quot; rather than just &quot;N false triggers&quot; — the rate is comparable across sessions of different lengths).</p>
+<nav><a href="index.html">← Index</a><a href="iter-054.html">← iter-054</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-055 — conversation rhythm score (taxonomy 3.2)</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-055-rhythm</code></span> · <span>commit: <code>a26367f</code></span> · <span>tests: <code>+7</code> (total 711)</span></div>
+</header><p><strong>Branch:</strong> <code>iter-055-rhythm</code> (merged ff to main, commit <code>a26367f</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>Seventeenth metric pulled from <code>docs/perf-metrics-taxonomy.md</code>. Second &quot;Novel/speculative&quot; entry, after iter-053&#x27;s naturalness.</p>
+<p>rhythm = 1 - stdev(ttfs) / median(ttfs)    clamped to [0, 1]</p>
+<p>The taxonomy&#x27;s framing: &quot;consistency feels like a personality; jitter feels like a system.&quot; A bot with steady ~300ms TTFS feels like it has presence; one that oscillates between 100ms and 800ms feels broken even if its median is identical. The median alone doesn&#x27;t capture this — variance does.</p>
+<p>Pure session-level derivation. No new TurnMetrics field, no new ChatLoop instrumentation. Three lines in <code>print_session_summary</code> on top of the existing <code>ttfs_times</code> list.</p>
+<p>Score interpretation:</p>
+<ul><li><strong>1.00</strong>: perfectly consistent (all TTFS equal — synthetic case)</li><li><strong>~0.7</strong>: typical good production session</li><li><strong>~0.5</strong>: moderate jitter (stdev ≈ half the median)</li><li><strong>0.00</strong>: clamped — stdev exceeds median (high outliers)</li></ul>
 <p>Implementation:</p>
-<ul><li><code>print_session_summary</code> gains <code>session_seconds: float = 0.0</code> kwarg (back-compat default).</li><li>Header changes: <code>&quot;Session Summary (3 turns)&quot;</code> → <code>&quot;Session Summary (3 turns over 4m 30s)&quot;</code> when seconds known.</li><li>Human-readable duration formatting:<ul><li><code>&lt;60s</code> → <code>Ns</code></li><li><code>&lt;1h</code> → <code>Mm</code> or <code>Mm Ns</code></li><li><code>≥1h</code> → <code>Hh Mm</code></li></ul></li><li>New <code>Turns/min: N.N</code> line emitted when <code>session_seconds &gt;= 1.0</code> AND there are completed turns (avoids divide-by-tiny on test- shaped sessions).</li><li><code>mic_chat.run_chat</code> tracks <code>session_start = time.monotonic()</code> at session entry; passes <code>(now - session_start)</code> on the KeyboardInterrupt summary call.</li></ul>
-<p>Tests (11 in <code>tests/unit/test_session_length.py</code>):</p>
-<ul><li>Header duration formatting across all four shape ranges (omitted, sub-minute, round-minutes, minutes+seconds, hours).</li><li>Turns/min: omitted when not measurable, computed at common rates, edge case of empty metrics_list (early-return takes precedence over the rate line).</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>704 passed, 1 skipped in 24s</strong> (693 existing + 11 new). <strong>Crossed the 700-test mark.</strong></p>
+<ul><li><code>print_session_summary</code> computes rhythm in the existing <code>if ttfs_times:</code> branch. Requires <code>len(ttfs_times) &gt;= 2</code> for <code>statistics.stdev</code> to be defined. Clamps to <code>[0, 1]</code> to handle high-variance sessions cleanly (raw can go negative).</li><li>Output: <code>&quot;Rhythm score:     N.NN&quot;</code> between <code>Best TTFS</code> and <code>Naturalness</code> in the summary block.</li></ul>
+<p>Tests (7 in <code>tests/unit/test_rhythm_score.py</code>):</p>
+<ul><li>Suppression: no-TTFS omits, single-turn omits.</li><li>Score values: perfect consistency → <code>1.00</code>, moderate (200/300/400ms) → <code>0.67</code>, high jitter → clamped to <code>0.00</code>, two-turn session → <code>0.53</code> (sample stdev formula).</li><li>Integration: line appears between <code>Best TTFS</code> and <code>Naturalness</code> in the output (order check verifies no regressions to ordering).</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>711 passed, 1 skipped in 23s</strong> (704 existing + 7 new).</p>
 <p>Notes:</p>
-<ul><li>Sixteen metrics live (35% of the 46-metric taxonomy).</li><li>The denominator-metric pattern unlocks future iters: anything like &quot;barges/min&quot; or &quot;FP/min&quot; can now use <code>session_seconds</code> as the timebase.</li><li>Session header now reads: <code>Session Summary (3 turns over 5m 22s)</code> followed by <code>Turns/min: 0.6</code>. Concrete and immediately scannable.</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-053.html">← iter-053</a><a href="iter-055.html">iter-055 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li>Seventeen metrics live (37% of the 46-metric taxonomy).</li><li>Combined with iter-053&#x27;s naturalness bucket distribution, the TTFS dimension is now richly described: Four orthogonal lenses on the same underlying number.<ul><li>Median TTFS (level)</li><li>Best TTFS (best case)</li><li>Rhythm score (consistency)</li><li>Naturalness distribution (sweet-spot fit)</li></ul></li><li>Next candidates: 3.4 (regret rate), 2.7 (worker queue depth — needs sampler daemon, more involved).</li></ul><nav><a href="index.html">← Index</a><a href="iter-054.html">← iter-054</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>
