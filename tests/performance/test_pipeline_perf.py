@@ -104,6 +104,8 @@ class ScenarioResult:
     tts_rtf: float = 0.0
     playback_ms: float = 0.0      # cumulative speaker write time
     llm_first_token_ms: float = 0.0
+    # iter-052: LLM tokens-per-second.
+    llm_tps: float = 0.0
     # iter-038: time from LLM start to first complete sentence.
     llm_first_sentence_ms: float = 0.0
     llm_total_ms: float = 0.0
@@ -281,6 +283,7 @@ def _run_scenario(
         tts_ms=m.tts_time * 1000,
         playback_ms=m.playback_time * 1000,
         llm_first_token_ms=m.llm_first_token * 1000,
+        llm_tps=m.llm_tps,
         # iter-042: also capture iter-038 + iter-040 + iter-041 +
         # iter-037 metrics on the perf-snapshot row so the
         # time-series charts can pick them up later.
@@ -453,6 +456,7 @@ class TestPerfScenarios:
             tts_ms=m.tts_time * 1000,
             playback_ms=m.playback_time * 1000,
             llm_first_token_ms=m.llm_first_token * 1000,
+        llm_tps=m.llm_tps,
             llm_first_sentence_ms=m.llm_first_sentence * 1000,
             llm_total_ms=m.llm_total * 1000,
             speech_duration_ms=m.speech_duration * 1000,

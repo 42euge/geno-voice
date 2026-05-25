@@ -42,6 +42,13 @@ class TurnMetrics:
     # Metric 1.7 in the perf-metrics taxonomy.
     stt_rtf: float = 0.0
     llm_first_token: float = 0.0
+    # iter-052: stream throughput of the LLM in tokens/sec, measured
+    # AFTER first token (so the first-token wait doesn't bias TPS
+    # downward). Local 7B-13B models on Apple Silicon land 30-80 tps;
+    # cloud APIs typically 20-60 tps. Directly gates how fast
+    # complete sentences arrive at the worker. Metric 1.9 in the
+    # perf-metrics taxonomy.
+    llm_tps: float = 0.0
     # iter-038: time from LLM start to the first complete sentence
     # reaching the TTS worker. Distinct from llm_first_token: the
     # LLM may stream chatty preamble for a while before a terminator
@@ -169,7 +176,15 @@ class TurnMetrics:
                 f"{self.llm_first_sentence*1000:>7.0f}ms  "
                 f"({_DIM}+{preamble_gap*1000:.0f}ms preamble{_RESET})"
             )
-        print(f"  {_DIM}│{_RESET}  LLM total:     {self.llm_total*1000:>7.0f}ms  ({self.model})")
+        # iter-052: append TPS suffix when measurable.
+        if self.llm_tps > 0:
+            tps_str = f", {self.llm_tps:.0f} tps"
+        else:
+            tps_str = ""
+        print(
+            f"  {_DIM}│{_RESET}  LLM total:     "
+            f"{self.llm_total*1000:>7.0f}ms  ({self.model}{tps_str})"
+        )
         tts_suffix = f"({self.sentences_spoken} sentences"
         if self.fillers_played > 0:
             tts_suffix += f" + {self.fillers_played} filler"
@@ -355,6 +370,8 @@ def print_session_summary(
     # iter-049: STT RTF over turns where it was measurable.
     stt_rtfs = [m.stt_rtf for m in metrics_list if m.stt_rtf > 0]
     llm_ft = [m.llm_first_token for m in metrics_list]
+    # iter-052: LLM TPS over turns where it was measurable.
+    llm_tpses = [m.llm_tps for m in metrics_list if m.llm_tps > 0]
     # iter-038: median TTFsent over turns where a sentence actually
     # emerged. Filter out 0s (parallel to iter-031's TTFS-zero filter)
     # so a turn with no complete sentence doesn't bias the median.
@@ -429,6 +446,8 @@ def print_session_summary(
     if stt_rtfs:
         _emit(f"    Median STT RTF:   {statistics.median(stt_rtfs):.2f}x")
     _emit(f"    Median LLM 1st:   {_median_ms(llm_ft):.0f}ms")
+    if llm_tpses:
+        _emit(f"    Median LLM TPS:   {statistics.median(llm_tpses):.0f}")
     if llm_fs:
         _emit(f"    Median LLM sent:  {_median_ms(llm_fs):.0f}ms")
     _emit(f"    Median TTS:       {_median_ms(tts_times):.0f}ms")

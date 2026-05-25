@@ -282,6 +282,9 @@ class ChatLoop:
         # + count separately so the average is computed once at end.
         sentence_chars_total = 0
         sentence_chars_count = 0
+        # iter-052: count tokens received from the LLM. Used to
+        # compute TPS (tokens/sec) post-stream.
+        token_count = 0
 
         try:
             for token in llm_gen:
@@ -291,6 +294,7 @@ class ChatLoop:
                     first_token_at = self._clock()
                 token_buffer += token
                 full_response += token
+                token_count += 1
 
                 complete, token_buffer = split_complete_sentences(token_buffer)
                 if complete and first_sentence_at is None:
@@ -341,6 +345,20 @@ class ChatLoop:
             metrics.llm_first_token = (
                 (first_token_at - llm_start) if first_token_at else 0
             )
+            # iter-052: LLM TPS — tokens/sec measured AFTER first
+            # token (excludes first-token wait). Need ≥2 tokens
+            # AND a positive interval. (token_count - 1) tokens
+            # were received over (done - first_token_at) seconds.
+            if (
+                token_count >= 2
+                and first_token_at is not None
+                and llm_stream_done_at is not None
+                and llm_stream_done_at > first_token_at
+            ):
+                metrics.llm_tps = (
+                    (token_count - 1)
+                    / (llm_stream_done_at - first_token_at)
+                )
             # iter-038: time from LLM start to the first complete
             # sentence reaching the worker. 0 if no complete sentence
             # ever emerged (LLM yielded fragments only, or stream was
