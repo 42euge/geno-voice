@@ -100,6 +100,8 @@ class ScenarioResult:
     # iter-049: STT real-time factor.
     stt_rtf: float = 0.0
     tts_ms: float = 0.0           # cumulative synth time
+    # iter-050: TTS real-time factor.
+    tts_rtf: float = 0.0
     playback_ms: float = 0.0      # cumulative speaker write time
     llm_first_token_ms: float = 0.0
     # iter-038: time from LLM start to first complete sentence.
@@ -275,6 +277,7 @@ def _run_scenario(
         ttfs_ms=m.ttfs * 1000,
         stt_ms=m.stt_time * 1000,
         stt_rtf=m.stt_rtf,
+        tts_rtf=m.tts_rtf,
         tts_ms=m.tts_time * 1000,
         playback_ms=m.playback_time * 1000,
         llm_first_token_ms=m.llm_first_token * 1000,
@@ -446,6 +449,7 @@ class TestPerfScenarios:
             ttfs_ms=m.ttfs * 1000,
             stt_ms=m.stt_time * 1000,
         stt_rtf=m.stt_rtf,
+        tts_rtf=m.tts_rtf,
             tts_ms=m.tts_time * 1000,
             playback_ms=m.playback_time * 1000,
             llm_first_token_ms=m.llm_first_token * 1000,

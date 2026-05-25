@@ -50,6 +50,13 @@ class TurnMetrics:
     llm_first_sentence: float = 0.0
     llm_total: float = 0.0
     tts_time: float = 0.0
+    # iter-050: TTS real-time factor — tts_time / audio_seconds_total.
+    # Symmetric to iter-049's STT RTF. <1 = synth runs faster than
+    # the audio it produces (can stream overlap usefully); >1 = TTS
+    # is the bottleneck and synth-overlap won't help. Kokoro on
+    # Apple Silicon lands ~0.1-0.3. 0 = no audio produced this turn.
+    # Metric 1.11 in the perf-metrics taxonomy.
+    tts_rtf: float = 0.0
     playback_time: float = 0.0
     # iter-043: fraction of the LLM-stream window during which the
     # worker was already playing audio (vs synth + play happening
@@ -167,6 +174,10 @@ class TurnMetrics:
         if self.mean_sentence_chars > 0:
             tts_suffix += f", avg {self.mean_sentence_chars:.0f} chars"
         tts_suffix += ")"
+        # iter-050: append RTF to TTS suffix when measurable.
+        if self.tts_rtf > 0:
+            rtf_color = _GREEN if self.tts_rtf < 1.0 else _YELLOW
+            tts_suffix += f"  ({rtf_color}RTF {self.tts_rtf:.2f}x{_RESET})"
         print(f"  {_DIM}│{_RESET}  TTS:           {self.tts_time*1000:>7.0f}ms  {tts_suffix}")
         print(f"  {_DIM}│{_RESET}  Playback:      {self.playback_time*1000:>7.0f}ms")
         # iter-046: bot WPM. Skip if 0 (no audio / no tokens). Color:
@@ -337,6 +348,8 @@ def print_session_summary(
     # so a turn with no complete sentence doesn't bias the median.
     llm_fs = [m.llm_first_sentence for m in metrics_list if m.llm_first_sentence > 0]
     tts_times = [m.tts_time for m in metrics_list]
+    # iter-050: TTS RTF over turns where it was measurable.
+    tts_rtfs = [m.tts_rtf for m in metrics_list if m.tts_rtf > 0]
     # iter-031: a turn that ended without audio (worker error,
     # barge-in before first audio, LLM produced no tokens) leaves
     # ``metrics.ttfs`` at its 0.0 default. Including those zeros
@@ -401,6 +414,8 @@ def print_session_summary(
     if llm_fs:
         _emit(f"    Median LLM sent:  {_median_ms(llm_fs):.0f}ms")
     _emit(f"    Median TTS:       {_median_ms(tts_times):.0f}ms")
+    if tts_rtfs:
+        _emit(f"    Median TTS RTF:   {statistics.median(tts_rtfs):.2f}x")
     if ttfs_times:
         _emit(
             f"    {_BOLD}Median TTFS:      {_median_ms(ttfs_times):.0f}ms{_RESET}"

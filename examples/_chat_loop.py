@@ -394,6 +394,11 @@ class ChatLoop:
                     / (worker.audio_seconds_total / 60.0)
                 )
             metrics.tts_time = worker.tts_time
+            # iter-050: TTS real-time factor. Same shape as iter-049's
+            # STT RTF — guard div-by-zero, only meaningful when audio
+            # was produced.
+            if worker.audio_seconds_total > 0:
+                metrics.tts_rtf = worker.tts_time / worker.audio_seconds_total
             metrics.playback_time = worker.playback_time
             metrics.sentences_spoken = worker.sentences_spoken
             # iter-040: count of sentences cut mid-stream by cancel_event.
