@@ -763,6 +763,14 @@ def print_session_summary(
             raw = 1.0 - sd / max(med, 1e-6)
             rhythm = max(0.0, min(1.0, raw))
             _emit(f"    Rhythm score:     {rhythm:.2f}")
+            # iter-068: promote the raw stdev to its own line. The
+            # rhythm score is a normalized [0,1] number useful for
+            # at-a-glance comparison; the jitter in milliseconds is
+            # more actionable when tuning. Humans tolerate consistent
+            # slow turn-taking better than inconsistent fast turn-
+            # taking — a 250ms jitter at 600ms median feels more
+            # broken than a steady 750ms median.
+            _emit(f"    TTFS jitter:      ±{sd * 1000:.0f}ms")
         # iter-066: cold-start latency penalty. The turn-1 TTFS minus
         # the steady-state median (turns 2:N). Captures lazy
         # initialization that hits turn 1 disproportionately — model
