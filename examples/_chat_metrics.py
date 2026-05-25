@@ -105,6 +105,14 @@ class TurnMetrics:
     # to the worker / coordinator in iter-011 / iter-012 but never
     # made it into the per-turn summary.
     fillers_played: int = 0
+    # iter-051: True if a filler played AND the LLM's first token
+    # actually arrived faster than the configured idle_threshold —
+    # i.e. the filler was unnecessary, the bot would have started
+    # speaking soon enough on its own. False-positive fillers make
+    # the bot sound disfluent for no reason. Tune idle_threshold
+    # up if this rate is high. Metric 2.4 in the perf-metrics
+    # taxonomy.
+    filler_false_positive: bool = False
     barge_in: bool = False
     # iter-047: which phase the barge-in fired in. "" if no barge,
     # else "llm_stream" (interrupted while LLM was still streaming
@@ -167,6 +175,10 @@ class TurnMetrics:
             tts_suffix += f" + {self.fillers_played} filler"
             if self.fillers_played > 1:
                 tts_suffix += "s"
+            # iter-051: flag false positive. Marker is "*", with
+            # an explanation appended by the session summary.
+            if self.filler_false_positive:
+                tts_suffix += "*"
         # iter-045: append mean sentence length as fragmentation
         # diagnostic. Yellow flag if <30 chars (over-fragmenting,
         # losing overlap) or >150 chars (under-fragmenting,
@@ -358,6 +370,12 @@ def print_session_summary(
     # meaning for turns that actually played audio. Filter.
     ttfs_times = [m.ttfs for m in metrics_list if m.ttfs > 0]
     fillers_total = sum(m.fillers_played for m in metrics_list)
+    # iter-051: filler false-positive count + denominator (turns
+    # where any filler played).
+    filler_turns = sum(1 for m in metrics_list if m.fillers_played > 0)
+    filler_false_positives = sum(
+        1 for m in metrics_list if m.filler_false_positive
+    )
     barges_total = sum(1 for m in metrics_list if m.barge_in)
     # iter-040: barge-ins where the cancel actually cut a sentence
     # mid-stream. The "mid-stream rate" tells you "how aggressively
@@ -429,6 +447,17 @@ def print_session_summary(
         _emit(f"    Best TTFS:        n/a")
     if fillers_total:
         _emit(f"    Fillers played:   {fillers_total}")
+        # iter-051: false-positive rate among the turns where a
+        # filler played. Tune idle_threshold up if FP is high —
+        # the bot's rendering disfluency for no benefit.
+        if filler_turns > 0:
+            fp_pct = (filler_false_positives / filler_turns) * 100
+            if filler_false_positives > 0:
+                _emit(
+                    f"    Filler FP rate:   "
+                    f"{filler_false_positives}/{filler_turns} "
+                    f"({fp_pct:.0f}%) — tune idle_threshold up"
+                )
     if barges_total:
         if mid_cancels:
             pct = (mid_cancels / barges_total) * 100

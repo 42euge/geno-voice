@@ -404,6 +404,18 @@ class ChatLoop:
             # iter-040: count of sentences cut mid-stream by cancel_event.
             metrics.sentences_cancelled = worker.cancelled_sentences
             metrics.fillers_played = worker.fillers_played
+            # iter-051: filler false-positive flag. The filler is
+            # unnecessary if the LLM's first token actually arrived
+            # before the idle_threshold window would have elapsed.
+            # Only meaningful when a filler actually played AND
+            # both first_token + threshold are positive — otherwise
+            # the comparison is undefined.
+            if (
+                metrics.fillers_played > 0
+                and self._idle_threshold > 0
+                and 0 < metrics.llm_first_token < self._idle_threshold
+            ):
+                metrics.filler_false_positive = True
             metrics.barge_in = coord.is_set()
             # iter-041: barge-in latency from coordinator timestamps.
             # Both pieces only valid when the trigger actually fired.
