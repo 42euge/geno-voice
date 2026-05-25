@@ -254,6 +254,16 @@ class ChatLoop:
 
         # ---- Phase 2: LLM stream + worker + watcher ----
         messages.append({"role": "user", "content": metrics.transcript})
+        # iter-077: count approximate context tokens being sent to
+        # the LLM. Whitespace-split is a rough but consistent
+        # estimator — actual tokenizer-aware counts vary by model
+        # but the per-turn TREND is what matters here. LLM TTFB
+        # scales with input context; without aggressive trimming
+        # late-session turns get progressively slower.
+        metrics.context_tokens = sum(
+            len(str(m.get("content", "")).split())
+            for m in messages
+        )
 
         worker = SentenceWorker(
             speaker_factory=self._speaker_factory,

@@ -123,6 +123,16 @@ class TurnMetrics:
     # decompose TTFS into a 100% breakdown. Metric 2.22 in the
     # perf-metrics taxonomy.
     synth_dispatch_seconds: float = 0.0
+    # iter-077: approximate count of context tokens sent to the
+    # LLM this turn (whitespace-split estimator across the entire
+    # messages list). The per-turn TREND is the actionable signal:
+    # late-session turns get progressively slower as context
+    # grows, so a creep here predicts an LLM TTFB regression even
+    # before llm_first_token measurably worsens. Pairs with
+    # iter-024's trim_history(max_user_assistant=20) — if context
+    # keeps growing despite the trim cap, system-prompt bloat is
+    # the culprit. Metric 2.23 in the perf-metrics taxonomy.
+    context_tokens: int = 0
     # iter-053: TTFS bucketed against the human-conversation
     # sweet spot. "rushed" (<200ms): bot interrupted natural
     # turn-taking pause; "natural" (200-400ms): matches human
@@ -382,9 +392,17 @@ class TurnMetrics:
             tps_str = f", {self.llm_tps:.0f} tps"
         else:
             tps_str = ""
+        # iter-077: append approximate context-token count when
+        # known. Helps explain a creeping llm_first_token even
+        # when TPS looks healthy.
+        if self.context_tokens > 0:
+            ctx_str = f", {self.context_tokens} ctx"
+        else:
+            ctx_str = ""
         print(
             f"  {_DIM}│{_RESET}  LLM total:     "
-            f"{self.llm_total*1000:>7.0f}ms  ({self.model}{tps_str})"
+            f"{self.llm_total*1000:>7.0f}ms  "
+            f"({self.model}{tps_str}{ctx_str})"
         )
         tts_suffix = f"({self.sentences_spoken} sentences"
         if self.fillers_played > 0:
@@ -836,6 +854,12 @@ def print_session_summary(
     ]
     # iter-046: bot WPM across measurable turns.
     bot_wpms = [m.bot_wpm for m in metrics_list if m.bot_wpm > 0]
+    # iter-077: context-token counts across turns where the LLM
+    # call actually happened (>0 = the messages list had non-empty
+    # content). Filter zeros — turns that errored before LLM.
+    context_token_counts = [
+        m.context_tokens for m in metrics_list if m.context_tokens > 0
+    ]
     # iter-071: token-reveal lag — both mean and max collected
     # across turns where the play_fn supplied lag stats. ``!= 0``
     # filter rather than ``> 0`` because lag can be legitimately
@@ -1242,6 +1266,23 @@ def print_session_summary(
         if user_wpms:
             gap = median_wpm - statistics.median(user_wpms)
             _emit(f"    Mirror gap:       {gap:+.0f} WPM (bot − user)")
+    # iter-077: context size summary. The MEDIAN tells you the
+    # typical per-call cost; the MAX tells you the worst case.
+    # Pair them: if max ≫ median, late turns blew up — likely a
+    # trim regression. The growth_per_turn slope is also useful
+    # but needs paired indices, not just values; emit it only
+    # when ≥3 turns have the metric (least-squares is overkill;
+    # just first-vs-last delta gives a quick signal).
+    if context_token_counts:
+        med_ctx = statistics.median(context_token_counts)
+        max_ctx = max(context_token_counts)
+        _emit(f"    Context tokens:   {med_ctx:.0f} median, {max_ctx} max")
+        if len(context_token_counts) >= 3:
+            growth = context_token_counts[-1] - context_token_counts[0]
+            _emit(
+                f"    Context growth:   "
+                f"{growth:+d} tokens (turn 1 → turn {len(context_token_counts)})"
+            )
     # iter-071: median mean-lag + worst peak across the session.
     # Sign-preserved on output. >50ms median is "the user notices
     # the desync"; >300ms peak on any one token is a visible glitch

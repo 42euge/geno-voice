@@ -125,6 +125,8 @@ class ScenarioResult:
     bargeable_fraction: float = 0.0
     # iter-076: TTFS attribution residual (synth + dispatch), ms.
     synth_dispatch_ms: float = 0.0
+    # iter-077: approximate context-token count sent to the LLM.
+    context_tokens: int = 0
     # iter-044: cumulative between-sentence worker idle gap.
     worker_idle_gap_ms: float = 0.0
     # iter-045: mean character length of sentences submitted.
@@ -330,6 +332,7 @@ def _run_scenario(
         first_synth_overlap_ms=m.first_synth_overlap_seconds * 1000,
         bargeable_fraction=m.bargeable_fraction,
         synth_dispatch_ms=m.synth_dispatch_seconds * 1000,
+        context_tokens=m.context_tokens,
         worker_idle_gap_ms=m.worker_idle_gap_total * 1000,
         mean_sentence_chars=m.mean_sentence_chars,
         sentence_split_coverage=m.sentence_split_coverage,
@@ -517,6 +520,7 @@ class TestPerfScenarios:
         first_synth_overlap_ms=m.first_synth_overlap_seconds * 1000,
         bargeable_fraction=m.bargeable_fraction,
         synth_dispatch_ms=m.synth_dispatch_seconds * 1000,
+        context_tokens=m.context_tokens,
         worker_idle_gap_ms=m.worker_idle_gap_total * 1000,
         mean_sentence_chars=m.mean_sentence_chars,
         sentence_split_coverage=m.sentence_split_coverage,
