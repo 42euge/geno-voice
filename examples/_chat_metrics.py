@@ -763,6 +763,35 @@ def print_session_summary(
             raw = 1.0 - sd / max(med, 1e-6)
             rhythm = max(0.0, min(1.0, raw))
             _emit(f"    Rhythm score:     {rhythm:.2f}")
+        # iter-066: cold-start latency penalty. The turn-1 TTFS minus
+        # the steady-state median (turns 2:N). Captures lazy
+        # initialization that hits turn 1 disproportionately — model
+        # load, speaker open, TTS warmup, lazy imports — and gets
+        # buried in the overall median. Needs ≥2 turns with measurable
+        # TTFS, AND turn 1 must have measurable TTFS (otherwise we'd
+        # be comparing an absent first turn). Skip emit when penalty
+        # is below the chunk-noise floor (±50ms): turn-to-turn jitter
+        # from playback timing alone can produce that gap on healthy
+        # systems.
+        first_turn_ttfs = (
+            metrics_list[0].ttfs if metrics_list[0].ttfs > 0 else 0.0
+        )
+        steady_ttfs = [
+            m.ttfs for m in metrics_list[1:] if m.ttfs > 0
+        ]
+        if first_turn_ttfs > 0 and len(steady_ttfs) >= 1:
+            penalty = first_turn_ttfs - statistics.median(steady_ttfs)
+            if abs(penalty) > 0.050:  # >50ms — above jitter floor
+                ms = penalty * 1000
+                # Sign matters: positive means turn 1 was slower
+                # (the typical cold-start case); negative means
+                # turn 1 was faster (rare — could be cache warming
+                # in subsequent turns going wrong, or bot reaching
+                # GC pauses post-turn-1).
+                _emit(
+                    f"    Cold start:       {ms:+.0f}ms "
+                    f"vs steady state"
+                )
         # iter-053: naturalness distribution. Total = sum of all
         # buckets. Show only when at least one turn was bucketed.
         n_total = sum(naturalness_counts.values())
