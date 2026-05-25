@@ -130,6 +130,8 @@ class ScenarioResult:
     # iter-041: time from barge-in detect to playback halt. 0 if
     # no barge-in fired this scenario.
     barge_in_latency_ms: float = 0.0
+    # iter-060: time from coord.trigger() to llm_gen.close() returning.
+    llm_cancel_to_close_ms: float = 0.0
     # iter-047: barge-in phase ("llm_stream", "playback", or "").
     barge_in_phase: str = ""
     # iter-057: primed-frames replay seconds carried into next turn.
@@ -307,6 +309,7 @@ def _run_scenario(
         wall_ms=wall * 1000,
         barge_in=m.barge_in,
         barge_in_latency_ms=m.barge_in_latency * 1000,
+        llm_cancel_to_close_ms=m.llm_cancel_to_close * 1000,
         barge_in_phase=m.barge_in_phase,
         primed_frames_seconds=m.primed_frames_seconds,
         mic_stale_frames=m.mic_stale_frames,
@@ -480,6 +483,7 @@ class TestPerfScenarios:
             wall_ms=wall * 1000,
             barge_in=m.barge_in,
             barge_in_latency_ms=m.barge_in_latency * 1000,
+        llm_cancel_to_close_ms=m.llm_cancel_to_close * 1000,
         barge_in_phase=m.barge_in_phase,
         primed_frames_seconds=m.primed_frames_seconds,
             mic_stale_frames=m.mic_stale_frames,

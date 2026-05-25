@@ -100,6 +100,13 @@ class TurnMetrics:
     # user was actually still talking. Metric 3.4 in the perf-metrics
     # taxonomy ("Novel/speculative").
     barge_in_regret: bool = False
+    # iter-060: time between BargeInCoordinator.trigger() firing and
+    # the LLM HTTP stream's `.close()` actually returning. Only set
+    # on barge turns. High value (>500ms) means the upstream HTTP
+    # connection is taking a long time to wind down — wastes tokens
+    # we paid for and can block the next turn. Metric 2.14 in the
+    # perf-metrics taxonomy.
+    llm_cancel_to_close: float = 0.0
     # iter-057: audio seconds carried over via next_primed_frames
     # into the next turn. Validates iter-025 lead-in: how much of
     # the user's first words would have been lost without the
@@ -342,6 +349,16 @@ class TurnMetrics:
                     f"{self.primed_frames_seconds*1000:>6.0f}ms{_RESET}  "
                     f"(carried into next turn)"
                 )
+            # iter-060: LLM stream cancel-to-close. Only meaningful
+            # on barge turns; >500ms is "the HTTP socket is hanging."
+            if self.llm_cancel_to_close > 0:
+                lat_ms = self.llm_cancel_to_close * 1000
+                color = _YELLOW if lat_ms > 500 else _DIM
+                print(
+                    f"  {_DIM}│{_RESET}  {color}LLM cancel:    "
+                    f"{lat_ms:>6.0f}ms{_RESET}  "
+                    f"(trigger → stream close)"
+                )
         # iter-037: only emit when non-zero — a clean turn shouldn't
         # spend pixels on a stale-frame counter that's almost always 0.
         # When >0 it's worth noticing — bot voice leaking back through
@@ -495,6 +512,12 @@ def print_session_summary(
     # iter-041: barge-in latency over turns where it was measured
     # (>0 — both triggered_at and playback_stopped_at have to be
     # set for the metric to be meaningful).
+    # iter-060: LLM cancel-to-close latencies across barge turns.
+    cancel_close_lats = [
+        m.llm_cancel_to_close
+        for m in metrics_list
+        if m.llm_cancel_to_close > 0
+    ]
     barge_latencies = [
         m.barge_in_latency
         for m in metrics_list
@@ -637,6 +660,13 @@ def print_session_summary(
             _emit(
                 f"    Worst barge:      "
                 f"{max(barge_latencies) * 1000:.0f}ms"
+            )
+        # iter-060: median LLM cancel-to-close across barge turns.
+        # >500ms median is a reliable "HTTP socket hangs."
+        if cancel_close_lats:
+            _emit(
+                f"    Median LLM canc:  "
+                f"{_median_ms(cancel_close_lats):.0f}ms"
             )
         # iter-047: phase distribution. Only show when at least one
         # phase value was set; gives root-cause hint:

@@ -532,10 +532,17 @@ class ChatLoop:
             # iter-013: explicit close so the upstream HTTP
             # response is released promptly even on barge-in /
             # error paths. Idempotent.
+            # iter-060: time the close so we can report
+            # cancel-to-close latency on barge turns. Captures the
+            # time between coord.trigger() and llm_gen.close()
+            # completing — high values mean the HTTP socket is
+            # winding down slowly.
+            close_started_at = self._clock()
             try:
                 llm_gen.close()
             except Exception:
                 pass
+            close_finished_at = self._clock()
             # iter-027: also stop worker + watcher in finally so a
             # KeyboardInterrupt during the for-token loop cleans
             # them up. ``except Exception`` doesn't catch
@@ -553,6 +560,18 @@ class ChatLoop:
             except Exception:
                 pass
 
+        # iter-060: only meaningful on barge turns — populate
+        # llm_cancel_to_close as the gap between trigger and the
+        # close() finishing. Both timestamps were captured during
+        # the finally block above. Non-barge turns leave the field
+        # at 0 (also handles "close was instantaneous" — sub-ms).
+        if (
+            coord.triggered_at is not None
+            and coord.is_set()
+        ):
+            metrics.llm_cancel_to_close = max(
+                0.0, close_finished_at - coord.triggered_at,
+            )
         return TurnResult(
             metrics=metrics,
             next_primed_frames=next_primed,
