@@ -4084,3 +4084,71 @@ Notes:
   Four orthogonal lenses on the same underlying number.
 - Next candidates: 3.4 (regret rate), 2.7 (worker queue depth —
   needs sampler daemon, more involved).
+
+---
+
+## iter-056 — regret rate metric (taxonomy 3.4)
+
+**Branch:** `iter-056-regret` (merged ff to main, commit `6325c36`)
+**Date:** 2026-05-24
+
+Eighteenth metric pulled from `docs/perf-metrics-taxonomy.md`.
+Third "Novel/speculative" entry (after iter-053 naturalness +
+iter-055 rhythm).
+
+A barge-in is **"regret"** when the user starts speaking within
+200ms of bot first audio. Implies the bot pre-empted the user —
+the user was already mid-utterance and the bot misjudged
+end-of-turn (silence_duration fired too early). The taxonomy
+notes: "the bot may be pre-empting; raise silence_duration."
+
+Distinct from iter-053's "rushed" naturalness:
+- **rushed** = bot's TTFS was very low (subjective fast response,
+  bot's internal timing dimension)
+- **regret** = the user actually objected to the bot speaking
+  (user's behavior dimension)
+
+Both can be true on the same turn. Both pointing at the same
+underlying issue (bot speaking too early), but observed from
+different angles. The recommended fix differs:
+- rushed → reduce LLM/synth speed to add naturalness pause
+- regret → raise `silence_duration` so end-of-turn is more
+  conservative
+
+Implementation:
+- `TurnMetrics.barge_in_regret: bool = False` (new field).
+- ChatLoop sets True when:
+  - `coord.triggered_at` is set
+  - AND `worker.first_audio_at` is set
+  - AND `coord.is_set()` (sanity — barge actually fired)
+  - AND `0 < (coord.triggered_at - worker.first_audio_at) < 0.2`
+- Per-turn Barge-in line gains `— regret` suffix when True.
+- Session summary: `Regret rate: M/N (P%) — bot may be pre-empting;
+  raise silence_duration` emitted when at least one regret happened.
+
+Tests (17 in `tests/unit/test_regret_rate.py`):
+- Default False.
+- Per-turn print: no-barge / barge-no-regret / barge-with-regret.
+- Session aggregate: no-barge / barges-no-regret / partial regret
+  / all-regret.
+- Boundary parametrize: 7 gap values document the strict inequality:
+  `0` (False), `50/100/199` (True), `200` (False), `250/1000` (False).
+- Guards: no-first-audio + no-barge → False regardless of
+  triggered_at.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **728 passed, 1 skipped in 23s** (711 existing
++ 17 new).
+
+Notes:
+- Eighteen metrics live (39% of the 46-metric taxonomy).
+- The barge-in dimension is now exhaustively covered:
+  - Did it fire? (`barge_in`)
+  - Where did it land? (`barge_in_phase`: llm_stream / playback)
+  - How fast did we respond? (`barge_in_latency`)
+  - Did it cut a sentence mid-stream? (`sentences_cancelled`)
+  - Was the bot wrong to start speaking? (`barge_in_regret`)
+  Five orthogonal lenses on barge-in events.
+- Next candidates: 2.7 (worker queue depth — sampler daemon),
+  1.2 (EoT detection latency — needs frame-by-frame VAD timing),
+  3.6 (interruption recovery — multi-turn).

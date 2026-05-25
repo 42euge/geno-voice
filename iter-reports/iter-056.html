@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-055 — conversation rhythm score (taxonomy 3.2)</title>
+<title>iter-056 — regret rate metric (taxonomy 3.4)</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,24 +168,23 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-054.html">← iter-054</a><a href="iter-056.html">iter-056 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-055 — conversation rhythm score (taxonomy 3.2)</h1>
-<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-055-rhythm</code></span> · <span>commit: <code>a26367f</code></span> · <span>tests: <code>+7</code> (total 711)</span></div>
-</header><p><strong>Branch:</strong> <code>iter-055-rhythm</code> (merged ff to main, commit <code>a26367f</code>) <strong>Date:</strong> 2026-05-24</p>
-<p>Seventeenth metric pulled from <code>docs/perf-metrics-taxonomy.md</code>. Second &quot;Novel/speculative&quot; entry, after iter-053&#x27;s naturalness.</p>
-<p>rhythm = 1 - stdev(ttfs) / median(ttfs)    clamped to [0, 1]</p>
-<p>The taxonomy&#x27;s framing: &quot;consistency feels like a personality; jitter feels like a system.&quot; A bot with steady ~300ms TTFS feels like it has presence; one that oscillates between 100ms and 800ms feels broken even if its median is identical. The median alone doesn&#x27;t capture this — variance does.</p>
-<p>Pure session-level derivation. No new TurnMetrics field, no new ChatLoop instrumentation. Three lines in <code>print_session_summary</code> on top of the existing <code>ttfs_times</code> list.</p>
-<p>Score interpretation:</p>
-<ul><li><strong>1.00</strong>: perfectly consistent (all TTFS equal — synthetic case)</li><li><strong>~0.7</strong>: typical good production session</li><li><strong>~0.5</strong>: moderate jitter (stdev ≈ half the median)</li><li><strong>0.00</strong>: clamped — stdev exceeds median (high outliers)</li></ul>
+<nav><a href="index.html">← Index</a><a href="iter-055.html">← iter-055</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-056 — regret rate metric (taxonomy 3.4)</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-056-regret</code></span> · <span>commit: <code>6325c36</code></span> · <span>tests: <code>+17</code> (total 728)</span></div>
+</header><p><strong>Branch:</strong> <code>iter-056-regret</code> (merged ff to main, commit <code>6325c36</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>Eighteenth metric pulled from <code>docs/perf-metrics-taxonomy.md</code>. Third &quot;Novel/speculative&quot; entry (after iter-053 naturalness + iter-055 rhythm).</p>
+<p>A barge-in is <strong>&quot;regret&quot;</strong> when the user starts speaking within 200ms of bot first audio. Implies the bot pre-empted the user — the user was already mid-utterance and the bot misjudged end-of-turn (silence_duration fired too early). The taxonomy notes: &quot;the bot may be pre-empting; raise silence_duration.&quot;</p>
+<p>Distinct from iter-053&#x27;s &quot;rushed&quot; naturalness:</p>
+<ul><li><strong>rushed</strong> = bot&#x27;s TTFS was very low (subjective fast response, bot&#x27;s internal timing dimension)</li><li><strong>regret</strong> = the user actually objected to the bot speaking (user&#x27;s behavior dimension)</li></ul>
+<p>Both can be true on the same turn. Both pointing at the same underlying issue (bot speaking too early), but observed from different angles. The recommended fix differs:</p>
+<ul><li>rushed → reduce LLM/synth speed to add naturalness pause</li><li>regret → raise <code>silence_duration</code> so end-of-turn is more conservative</li></ul>
 <p>Implementation:</p>
-<ul><li><code>print_session_summary</code> computes rhythm in the existing <code>if ttfs_times:</code> branch. Requires <code>len(ttfs_times) &gt;= 2</code> for <code>statistics.stdev</code> to be defined. Clamps to <code>[0, 1]</code> to handle high-variance sessions cleanly (raw can go negative).</li><li>Output: <code>&quot;Rhythm score:     N.NN&quot;</code> between <code>Best TTFS</code> and <code>Naturalness</code> in the summary block.</li></ul>
-<p>Tests (7 in <code>tests/unit/test_rhythm_score.py</code>):</p>
-<ul><li>Suppression: no-TTFS omits, single-turn omits.</li><li>Score values: perfect consistency → <code>1.00</code>, moderate (200/300/400ms) → <code>0.67</code>, high jitter → clamped to <code>0.00</code>, two-turn session → <code>0.53</code> (sample stdev formula).</li><li>Integration: line appears between <code>Best TTFS</code> and <code>Naturalness</code> in the output (order check verifies no regressions to ordering).</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>711 passed, 1 skipped in 23s</strong> (704 existing + 7 new).</p>
+<ul><li><code>TurnMetrics.barge_in_regret: bool = False</code> (new field).</li><li>ChatLoop sets True when:<ul><li><code>coord.triggered_at</code> is set</li><li>AND <code>worker.first_audio_at</code> is set</li><li>AND <code>coord.is_set()</code> (sanity — barge actually fired)</li><li>AND <code>0 &lt; (coord.triggered_at - worker.first_audio_at) &lt; 0.2</code></li></ul></li><li>Per-turn Barge-in line gains <code>— regret</code> suffix when True.</li><li>Session summary: `Regret rate: M/N (P%) — bot may be pre-empting; raise silence_duration` emitted when at least one regret happened.</li></ul>
+<p>Tests (17 in <code>tests/unit/test_regret_rate.py</code>):</p>
+<ul><li>Default False.</li><li>Per-turn print: no-barge / barge-no-regret / barge-with-regret.</li><li>Session aggregate: no-barge / barges-no-regret / partial regret / all-regret.</li><li>Boundary parametrize: 7 gap values document the strict inequality: <code>0</code> (False), <code>50/100/199</code> (True), <code>200</code> (False), <code>250/1000</code> (False).</li><li>Guards: no-first-audio + no-barge → False regardless of triggered_at.</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>728 passed, 1 skipped in 23s</strong> (711 existing + 17 new).</p>
 <p>Notes:</p>
-<ul><li>Seventeen metrics live (37% of the 46-metric taxonomy).</li><li>Combined with iter-053&#x27;s naturalness bucket distribution, the TTFS dimension is now richly described: Four orthogonal lenses on the same underlying number.<ul><li>Median TTFS (level)</li><li>Best TTFS (best case)</li><li>Rhythm score (consistency)</li><li>Naturalness distribution (sweet-spot fit)</li></ul></li><li>Next candidates: 3.4 (regret rate), 2.7 (worker queue depth — needs sampler daemon, more involved).</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-054.html">← iter-054</a><a href="iter-056.html">iter-056 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li>Eighteen metrics live (39% of the 46-metric taxonomy).</li><li>The barge-in dimension is now exhaustively covered: Five orthogonal lenses on barge-in events.<ul><li>Did it fire? (<code>barge_in</code>)</li><li>Where did it land? (<code>barge_in_phase</code>: llm_stream / playback)</li><li>How fast did we respond? (<code>barge_in_latency</code>)</li><li>Did it cut a sentence mid-stream? (<code>sentences_cancelled</code>)</li><li>Was the bot wrong to start speaking? (<code>barge_in_regret</code>)</li></ul></li><li>Next candidates: 2.7 (worker queue depth — sampler daemon), 1.2 (EoT detection latency — needs frame-by-frame VAD timing), 3.6 (interruption recovery — multi-turn).</li></ul><nav><a href="index.html">← Index</a><a href="iter-055.html">← iter-055</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>
