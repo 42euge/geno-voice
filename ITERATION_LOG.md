@@ -5550,3 +5550,62 @@ Notes:
   rate — turns where transcript exists but ttfs == 0), 1.6
   (WER, needs ground truth corpus), 1.17 (audio underrun/
   overrun count — needs PyAudio plumbing).
+
+## iter-079 — silent-turn rate (taxonomy 3.11)
+
+**Branch:** iter-079-silent-turn  **Commit:** e92461b  **Date:** 2026-05-25
+
+Added silent-turn rate — counts turns where the user spoke
+(transcript captured) but the bot produced no audio (`ttfs == 0`).
+Distinct from worker errors: no exception fires, no console
+warning, the user just experiences "I said something and got
+silence." The invisible failure mode the operator most needs to
+catch.
+
+Common causes:
+- `worker.errors` took out every sentence (per-sentence
+  isolation kept the turn from raising but no audio remained).
+- LLM returned an empty response (model produced 0 tokens).
+- All sentences pre-empted before `first_audio_at` (barge fired
+  before any synth landed).
+- LLM produced no terminator-bearing tokens, so no synth
+  submissions ever happened (the trailing remainder also got
+  dropped via cancel).
+
+Implementation:
+- Pure session-level derivation in `print_session_summary`. No
+  new `TurnMetrics` field — uses existing `transcript` and `ttfs`.
+- Filter: `m.transcript and m.ttfs == 0`. Emit only when the
+  count is non-zero — clean sessions stay clutter-free.
+- Output: "Silent turns: M/N (X%) — bot produced no audio".
+
+Tests (8 in `tests/unit/test_silent_turn_rate.py`):
+- No-emit boundaries: clean session, zero turns, transcript-less
+  ttfs==0 (false trigger, not silent).
+- Emit cases: 1/3, 2/2 (100%), 1/10.
+- Distinction from worker errors: silent-without-errors emits
+  alone; silent-with-errors emits both metrics with consistent
+  counts (recovery rate's denominator is "error turns,"
+  silent-rate's denominator is "all turns").
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **981 passed, 1 skipped in 24s** (973 existing
++ 8 new).
+
+Notes:
+- **Forty metrics live (87% of the 46-metric taxonomy).**
+- The "silent partial degradation" sentinel cluster (iter-067
+  worker recovery, iter-074 bargeable fraction, iter-079 silent
+  turns) now fully covers the failure modes where externally
+  successful turns hide internal trouble:
+  - Worker recovery rate: errors that DID surface but were
+    recovered from.
+  - Bargeable fraction: watcher coverage of bot speech.
+  - Silent-turn rate: the most user-visible failure — no audio
+    despite a clean transcript.
+- Next candidates: 3.7 (pre-empted-content loss — bot tokens
+  generated but not played on barge turns; needs response token
+  count alongside spoken count), 3.8 (filler novelty index —
+  unique fillers / total played), 1.6 (WER, needs ground truth
+  corpus), 1.17 (audio underrun/overrun count — needs PyAudio
+  plumbing).

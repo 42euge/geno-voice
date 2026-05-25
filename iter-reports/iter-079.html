@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-078 — trim event rate (taxonomy 2.24)</title>
+<title>iter-079 — silent-turn rate (taxonomy 3.11)</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,20 +168,20 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-077.html">← iter-077</a><a href="iter-079.html">iter-079 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-078 — trim event rate (taxonomy 2.24)</h1>
-<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+11</code> (total 973)</span></div>
-</header><p><strong>Branch:</strong> iter-078-trim-rate  <strong>Commit:</strong> 3a6ef5c  <strong>Date:</strong> 2026-05-25</p>
-<p>Added trim event rate — counts how many times across a session <code>trim_history</code> actually evicted at least one message, plus the cumulative count of evicted messages. Pairs with iter-077: validates the iter-024 <code>max_user_assistant=20</code> threshold is calibrated.</p>
-<p>Reading the metric:</p>
-<ul><li><code>events == 0</code> across a long session → trim threshold too loose; <code>Context tokens: max</code> (iter-077) will be growing in lockstep.</li><li><code>evicted/events == 1</code> → calibrated steady-state (each turn trims exactly the one new pair that pushed past the cap).</li><li><code>evicted/events &gt;&gt; 1</code> → trim catching up after a longer gap (e.g. <code>max_user_assistant</code> was lowered mid-session).</li></ul>
+<nav><a href="index.html">← Index</a><a href="iter-078.html">← iter-078</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-079 — silent-turn rate (taxonomy 3.11)</h1>
+<div class="meta"><span>2026-05-25</span> · <span>tests: <code>+8</code> (total 981)</span></div>
+</header><p><strong>Branch:</strong> iter-079-silent-turn  <strong>Commit:</strong> e92461b  <strong>Date:</strong> 2026-05-25</p>
+<p>Added silent-turn rate — counts turns where the user spoke (transcript captured) but the bot produced no audio (<code>ttfs == 0</code>). Distinct from worker errors: no exception fires, no console warning, the user just experiences &quot;I said something and got silence.&quot; The invisible failure mode the operator most needs to catch.</p>
+<p>Common causes:</p>
+<ul><li><code>worker.errors</code> took out every sentence (per-sentence isolation kept the turn from raising but no audio remained).</li><li>LLM returned an empty response (model produced 0 tokens).</li><li>All sentences pre-empted before <code>first_audio_at</code> (barge fired before any synth landed).</li><li>LLM produced no terminator-bearing tokens, so no synth submissions ever happened (the trailing remainder also got dropped via cancel).</li></ul>
 <p>Implementation:</p>
-<ul><li><code>print_session_summary</code> gained two new kwargs: <code>trim_events: int = 0</code> and <code>trim_messages_evicted: int = 0</code>. Both default to 0 — existing callers unaffected.</li><li>mic_chat tracks both counters by diffing message-list lengths around each <code>ChatLoop.trim_messages</code> call. Non-invasive: no changes to <code>trim_history</code> or <code>ChatLoop.trim_messages</code> signatures.</li><li>Output: &quot;Trim events: N (M evicted, X.X/event)&quot; emitted only when <code>trim_events &gt; 0</code>. The per-event ratio surfaces severity immediately.</li></ul>
-<p>Tests (11 in <code>tests/unit/test_trim_event_rate.py</code>):</p>
-<ul><li>print_session_summary kwargs: default omits, zero omits, one event emits, steady-state 1.0/event, high ratio (catch-up).</li><li><code>trim_history</code> length-diff contract: no-op below threshold, evicts above threshold, empty case.</li><li><code>ChatLoop.trim_messages</code> passthrough preserves the same semantics.</li><li>Co-emission with iter-077 context tokens: both lines visible in a session that has both.</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>973 passed, 1 skipped in 24s</strong> (962 existing + 11 new).</p>
+<ul><li>Pure session-level derivation in <code>print_session_summary</code>. No new <code>TurnMetrics</code> field — uses existing <code>transcript</code> and <code>ttfs</code>.</li><li>Filter: <code>m.transcript and m.ttfs == 0</code>. Emit only when the count is non-zero — clean sessions stay clutter-free.</li><li>Output: &quot;Silent turns: M/N (X%) — bot produced no audio&quot;.</li></ul>
+<p>Tests (8 in <code>tests/unit/test_silent_turn_rate.py</code>):</p>
+<ul><li>No-emit boundaries: clean session, zero turns, transcript-less ttfs==0 (false trigger, not silent).</li><li>Emit cases: 1/3, 2/2 (100%), 1/10.</li><li>Distinction from worker errors: silent-without-errors emits alone; silent-with-errors emits both metrics with consistent counts (recovery rate&#x27;s denominator is &quot;error turns,&quot; silent-rate&#x27;s denominator is &quot;all turns&quot;).</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>981 passed, 1 skipped in 24s</strong> (973 existing + 8 new).</p>
 <p>Notes:</p>
-<ul><li><strong>Thirty-nine metrics live (85% of the 46-metric taxonomy).</strong></li><li>The conversation-state dimension is now bilateral: context size (iter-077, growth signal) and trim activity (this, calibration signal). A session where context_tokens grows unbounded AND trim_events stays at 0 is the unambiguous &quot;trim broken&quot; signal — both metrics agree.</li><li>The pattern of &quot;session-level kwargs to print_session_summary&quot; is paying off (false_triggers, llm_errors, session_seconds, trim_events, trim_messages_evicted). Each new session-level signal is one new kwarg, no per-turn churn.</li><li>Next candidates: 3.7 (pre-empted-content loss — bot tokens generated but not spoken on barge turns), 3.11 (silent-turn rate — turns where transcript exists but ttfs == 0), 1.6 (WER, needs ground truth corpus), 1.17 (audio underrun/ overrun count — needs PyAudio plumbing).</li></ul><nav><a href="index.html">← Index</a><a href="iter-077.html">← iter-077</a><a href="iter-079.html">iter-079 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li><strong>Forty metrics live (87% of the 46-metric taxonomy).</strong></li><li>The &quot;silent partial degradation&quot; sentinel cluster (iter-067 worker recovery, iter-074 bargeable fraction, iter-079 silent turns) now fully covers the failure modes where externally successful turns hide internal trouble: recovered from. despite a clean transcript.<ul><li>Worker recovery rate: errors that DID surface but were</li><li>Bargeable fraction: watcher coverage of bot speech.</li><li>Silent-turn rate: the most user-visible failure — no audio</li></ul></li><li>Next candidates: 3.7 (pre-empted-content loss — bot tokens generated but not played on barge turns; needs response token count alongside spoken count), 3.8 (filler novelty index — unique fillers / total played), 1.6 (WER, needs ground truth corpus), 1.17 (audio underrun/overrun count — needs PyAudio plumbing).</li></ul><nav><a href="index.html">← Index</a><a href="iter-078.html">← iter-078</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>
