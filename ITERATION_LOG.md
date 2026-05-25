@@ -6953,3 +6953,86 @@ Notes:
     opt-ins.
   - Extract `_emit_recording_block` (still pending from iter-097).
   - WER fixture (1.6) heavyweight iteration.
+
+## iter-101 — Per-token-delay grid for auto-aggressive savings curve
+
+**Goal:** Replace iter-100's single A/B with a 3-point grid that
+varies the dominant cost factor — `per_token_delay` — to surface
+the savings curve. iter-100's note flagged the 30ms savings as
+artificially small because of the 10ms stub delay; this iteration
+adds the 50ms ("production-like") and 100ms ("slow LLM") points
+so the chart shows what the auto-flip actually buys at real-world
+TPS.
+
+**Change:** Four new scenarios — two paired (off/on) at 50ms/token,
+two paired at 100ms/token. iter-100's existing pair at 10ms/token
+stays as the third grid point. No new plumbing — the existing
+`_run_scenario` already accepts `per_token_delay`.
+
+```python
+test_auto_aggressive_off_50ms     test_auto_aggressive_on_50ms     # 50ms
+test_auto_aggressive_off_100ms    test_auto_aggressive_on_100ms    # 100ms
+# (iter-100 pair at 10ms stays — third grid point)
+```
+
+**Empirical savings curve** (this run, x86_64 Linux stub pipeline):
+
+| per_token_delay | off TTFS  | on TTFS   | Δ TTFS  | mean_chars off→on |
+|-----------------|-----------|-----------|---------|-------------------|
+| 10 ms           | 1431.3 ms | 1401.2 ms | -30 ms  | 49.0 → 32.3       |
+| 50 ms           | 1951.7 ms | 1801.4 ms | -150 ms | 49.0 → 32.3       |
+| 100 ms          | 2601.8 ms | 2301.6 ms | -300 ms | 49.0 → 32.3       |
+
+Two clean observations:
+
+1. **Savings scale linearly with per-token-delay.** Every extra
+   5ms of token cost = ~30ms additional TTFS savings from the
+   auto-flip. The slope is the post-stall path-length: about 6
+   tokens between "moment," and "twelve.", times the per-token
+   delay = the TTFS gap the splitter saves by not waiting.
+
+2. **The splitter behavior itself is delay-independent.**
+   `mean_sentence_chars` stays 49.0 (off) and 32.3 (on) across
+   all three grid points. The auto-flip mechanism is a pure
+   timing trigger; once it fires, the slice is determined by
+   buffer content, not stream rate. Validates the iter-093
+   design — the threshold acts as a wall-clock filter, not a
+   token-count filter.
+
+**Implication for production tuning:** if the operator's real
+LLM averages 50ms/token TTFB (the iter-052 baseline), enabling
+`auto_aggressive_threshold=0.3` saves ~150ms TTFS per stalled
+turn — a meaningful UX win. At 100ms/token (slow models or
+network-bound), savings double to 300ms.
+
+Verification: `python -m pytest tests/performance/ -q` → **19
+passed in 12.6s** (was 15, +4 new — the suite is now 13s because
+of the 100ms-delay scenarios; acceptable for a per-iter snapshot
+that runs once). Full unit + integration suite: `tests/ --ignore=
+tests/performance --ignore=tests/test_session.py --ignore=tests/
+e2e -q` → **1148 passed, 1 skipped** (identical to main).
+
+Notes:
+- **Pattern: pair-grids for delay-sensitive features.** Where a
+  feature's value scales with a continuous parameter (token speed,
+  filler threshold, context size), a single A/B undersells the
+  feature. The grid pattern is the natural extension.
+- **Wall-time budget.** This added ~7s to the perf suite (4 new
+  scenarios at avg 1.7s each). Fine for the per-iter snapshot,
+  but the suite is now 13s — worth keeping in mind before
+  another grid extension. Future iterations could group all
+  delay-grids behind a `pytest -m grid` marker if it grows.
+- **The 10ms point is now redundant.** It exists as the iter-100
+  baseline but contributes little signal beyond the 50ms point.
+  Could be removed in a future cleanup, but keeping it makes the
+  curve's slope visible at low delays. Ship-as-is.
+- Next directions:
+  - Pair scenarios for `max_user_assistant` cap (5 vs 20) on a
+    long-context session — the still-unvalidated user-facing
+    opt-in.
+  - Extract `_emit_recording_block` (still pending from iter-097).
+  - WER fixture (1.6) heavyweight iteration.
+  - Consider extracting the iter-100/iter-101 pair-scenario
+    boilerplate (shared `_STALLED_PREAMBLE`, shared kwarg set)
+    into a `_run_auto_aggressive_pair(delay)` helper if a fourth
+    iteration adds yet more grid points.

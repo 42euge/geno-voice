@@ -589,6 +589,65 @@ class TestPerfScenarios:
         )
         assert r.sentences_spoken >= 1
 
+    # iter-101: extends the iter-100 pair into a 3-point grid by
+    # varying per_token_delay — the dominant factor in how much
+    # auto-aggressive saves. iter-100 only used 0.01 (artificially
+    # fast); iter-052's "real LLM TPS" baseline puts production
+    # somewhere in the 0.05-0.10s range. By pairing each delay
+    # value (off vs on), the time-series chart now shows the
+    # savings curve, not just a single delta.
+    def test_auto_aggressive_off_50ms(self):
+        r = _run_scenario(
+            "auto_aggressive_off_50ms",
+            "Mid-stream stall, off, 50ms/token — production-like TPS",
+            speech_seconds=1.0,
+            response=self._STALLED_PREAMBLE,
+            per_token_delay=0.05,
+            stall_after="moment,",
+            stall_seconds=0.5,
+            auto_aggressive_threshold=0.0,
+        )
+        assert r.sentences_spoken >= 1
+
+    def test_auto_aggressive_on_50ms(self):
+        r = _run_scenario(
+            "auto_aggressive_on_50ms",
+            "Mid-stream stall, on, 50ms/token — production-like TPS",
+            speech_seconds=1.0,
+            response=self._STALLED_PREAMBLE,
+            per_token_delay=0.05,
+            stall_after="moment,",
+            stall_seconds=0.5,
+            auto_aggressive_threshold=0.3,
+        )
+        assert r.sentences_spoken >= 1
+
+    def test_auto_aggressive_off_100ms(self):
+        r = _run_scenario(
+            "auto_aggressive_off_100ms",
+            "Mid-stream stall, off, 100ms/token — slow LLM",
+            speech_seconds=1.0,
+            response=self._STALLED_PREAMBLE,
+            per_token_delay=0.1,
+            stall_after="moment,",
+            stall_seconds=0.5,
+            auto_aggressive_threshold=0.0,
+        )
+        assert r.sentences_spoken >= 1
+
+    def test_auto_aggressive_on_100ms(self):
+        r = _run_scenario(
+            "auto_aggressive_on_100ms",
+            "Mid-stream stall, on, 100ms/token — slow LLM",
+            speech_seconds=1.0,
+            response=self._STALLED_PREAMBLE,
+            per_token_delay=0.1,
+            stall_after="moment,",
+            stall_seconds=0.5,
+            auto_aggressive_threshold=0.3,
+        )
+        assert r.sentences_spoken >= 1
+
     def test_barge_in_during_playback(self):
         # iter-042: deterministic barge-in scenario.
         #
