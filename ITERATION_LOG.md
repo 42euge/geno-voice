@@ -6126,3 +6126,73 @@ Notes:
     from print_session_summary.
   - WER (1.6) as a heavyweight iteration with built-in test
     fixture corpus.
+
+## iter-088 — aggressive first-sentence splitter (architecture)
+
+**Branch:** iter-088-aggressive-split  **Commit:** b05ba49  **Date:** 2026-05-25
+
+Reduces TTFS on long-preamble LLM responses ("Well, let me think
+about that for a moment, ...") by allowing the splitter to break
+on a comma+whitespace as the FIRST sentence terminator — but only
+when the pre-comma content exceeds 20 characters so short
+interjections like "Sure," don't trigger early splits.
+
+Strict `.!?` matching resumes from sentence 2 onward — only the
+preamble gets the aggressive treatment. ChatLoop tracks per-turn
+state, flipping the flag off as soon as the first sentence
+emerges.
+
+Opt-in via `chat.aggressive_first_sentence` in `config.local.yaml`
+(default off — there's a prosody tradeoff for the TTFS reduction;
+operators choose).
+
+Implementation:
+- New `AGGRESSIVE_COMMA_END = re.compile(r'(?<=,)\s+')` regex and
+  `AGGRESSIVE_MIN_CHARS = 20` threshold in `_chat_helpers.py`.
+- `split_complete_sentences` gained `aggressive_first: bool =
+  False` kwarg. When True, finds the EARLIEST qualifying comma
+  match (start ≥ MIN_CHARS) and inserts it as the first split
+  candidate IF it precedes any strict `.!?` match. The strict
+  matches still win when they appear earlier — periods take
+  priority on ties.
+- `ChatLoop.__init__` gained `aggressive_first_sentence: bool =
+  False`. The for-token loop tracks `aggressive_active` per turn,
+  starts True only when the loop's config enabled it, flips False
+  as soon as the splitter returns ANY complete sentence.
+- `mic_chat` reads from `chat_cfg.get("aggressive_first_sentence",
+  False)` and passes through to ChatLoop.
+
+Tests (11 in `tests/unit/test_aggressive_splitter.py`):
+- Splitter contract: default-off behavior unchanged; long-preamble
+  splits at the qualifying comma; short pre-comma doesn't trigger;
+  period earlier in buffer wins over comma later; only the FIRST
+  qualifying comma is considered (subsequent commas in the buffer
+  don't split); AGGRESSIVE_MIN_CHARS exposed as a public constant;
+  empty buffer.
+- ChatLoop wiring: default-off long-preamble still single-sentence;
+  aggressive-on splits at the preamble comma producing 2 sentences;
+  even with multiple long-preamble commas, only the FIRST splits
+  aggressively; default constructor kwarg is off.
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **1073 passed, 1 skipped in 25s** (1062
+existing + 11 new). All prior tests pass — backwards-compat
+guaranteed.
+
+Notes:
+- This is the second consecutive architectural iteration after
+  iter-087 (multi-shot fillers). Both are opt-in features that
+  improve TTFS / UX with explicit tradeoffs the operator chooses.
+- The TTFS attribution metric (iter-076) and the FT-A gap
+  (iter-083) provide ready-made instrumentation to measure the
+  TTFS impact of enabling this. Future work could compare two
+  perf-test runs (aggressive on/off) to quantify.
+- Next directions:
+  - Wire iter-076 perf-snapshot to optionally A/B aggressive
+    on/off and graph the TTFS delta.
+  - Continue refactoring momentum: extract a TTFS-block helper
+    from print_session_summary (1500+ lines).
+  - Continue architecture: maybe an "aggressive on long stalls"
+    mode that flips the aggressive flag mid-turn if a long stall
+    is detected (combines iter-085 max_token_gap signal with
+    iter-088 splitter behavior).
