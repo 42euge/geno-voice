@@ -3906,3 +3906,69 @@ Notes:
 - Next candidates: 2.7 (worker queue depth — needs a sampler
   daemon), 1.15 (turn count / session length — derivable from
   metrics_list), 3.1 (naturalness gap — interesting novel metric).
+
+---
+
+## iter-053 — naturalness bucket metric (taxonomy 3.1)
+
+**Branch:** `iter-053-naturalness` (merged ff to main, commit `a6c4015`)
+**Date:** 2026-05-24
+
+Fifteenth metric pulled from `docs/perf-metrics-taxonomy.md`.
+**First "Novel/speculative" bucket entry** — earlier 14 metrics
+were all "Standard" or "Architecture-specific." Time to start
+pulling from the speculative bucket.
+
+**The insight:** humans don't optimize for minimum latency in
+conversation — they optimize for natural pause. A bot responding
+in 50ms feels robotic / interrupting; one in 250ms feels
+conversational. Most voice-agent dashboards report only "lower
+TTFS is better" — this metric explicitly identifies the sweet
+spot.
+
+Buckets:
+  **<200ms**: rushed (bot interrupted natural pause)
+  **200-400ms**: natural (matches human conversational rhythm)
+  **>400ms**: slow (user notices lag)
+  **""**: no audio this turn
+
+Implementation:
+- `TurnMetrics.naturalness_bucket: str = ""` (new field).
+- ChatLoop assigns the bucket immediately after `metrics.ttfs` is
+  computed. Bucketing logic is inline (no helper function — three
+  branches, simple to read).
+- Per-turn print: appends bucket to the TTFS line:
+  `"TTFS: 250ms (speech stop → speaker, natural)"`.
+- Session summary: distribution counts —
+  `"Naturalness: 1 rushed, 2 natural, 1 slow"`. Emits only when
+  at least one bucket has a count.
+- `ScenarioResult.naturalness_bucket` on perf snapshots.
+
+Tests (19 in `tests/unit/test_naturalness_bucket.py`):
+- Default empty.
+- Per-turn print: empty omits, all four bucket states tagged.
+- Session aggregate: no-buckets omits, mixed distribution shown,
+  single-bucket case.
+- ChatLoop wiring: bucket set when audio played; "" when no audio.
+- Boundary parametrize: 9 boundary values (0/50/199/200/300/400/
+  401/1000/5000) → expected bucket. Documents the inclusive
+  upper bound at 400ms (≤400 = natural).
+
+Verification: `python -m pytest tests/unit/ tests/integration/
+tests/performance/` → **693 passed, 1 skipped in 23s** (674
+existing + 19 new).
+
+Notes:
+- **Fifteen metrics live (33% of the 46-metric taxonomy).** First
+  speculative metric. The category labels are turning out to be
+  useful — Standard metrics expose conventional ops measures;
+  Architecture-specific surface design choices; Novel reframe
+  what "good" looks like.
+- The naturalness bucket might surprise users running in test
+  scenarios. Stub LLM + stub TTS frequently produce sub-200ms
+  TTFS → "rushed" — accurate but may seem alarming. The metric
+  is calibrated for the production pipeline (real LLM TTFT 150-500ms,
+  kokoro synth ~100ms first sentence) where 200-400ms is achievable.
+- Next candidates: 1.15 (turn count + session length — derive in
+  print_session_summary), 2.7 (worker queue depth — needs a
+  sampler daemon), 3.2 (conversation rhythm score).

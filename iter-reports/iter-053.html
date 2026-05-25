@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iter-052 — LLM tokens-per-second metric (taxonomy 1.9)</title>
+<title>iter-053 — naturalness bucket metric (taxonomy 3.1)</title>
 <style>
 :root {
   --bg: #0f1115;
@@ -168,24 +168,20 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-051.html">← iter-051</a><a href="iter-053.html">iter-053 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
-<h1>iter-052 — LLM tokens-per-second metric (taxonomy 1.9)</h1>
-<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-052-llm-tps</code></span> · <span>commit: <code>1097340</code></span> · <span>tests: <code>+10</code> (total 674)</span></div>
-</header><p><strong>Branch:</strong> <code>iter-052-llm-tps</code> (merged ff to main, commit <code>1097340</code>) <strong>Date:</strong> 2026-05-24</p>
-<p>Fourteenth metric pulled from <code>docs/perf-metrics-taxonomy.md</code>. <strong>Metric 1.9 — LLM tokens-per-second</strong>, &quot;Standard&quot; bucket.</p>
-<p>Stream throughput of the LLM measured AFTER first token:</p>
-<p>llm_tps = (token_count - 1) / (llm_stream_done_at - first_token_at)</p>
-<p>Excluding the first-token wait avoids conflating TTFT (already on <code>metrics.llm_first_token</code> since iter-001) with steady-state throughput. The taxonomy separation: TTFT is &quot;did the LLM start fast?&quot;, TPS is &quot;is the LLM keeping up?&quot; Two different problems with two different fixes.</p>
-<p>Operational context:</p>
-<ul><li>Local 7B-13B models on Apple Silicon: 30-80 tps.</li><li>Cloud APIs (Anthropic, OpenAI): 20-60 tps.</li><li>&lt;20 tps with no first-token issue → endpoint is overloaded, pre-token cache is cold, or model is too large for hardware.</li><li>LLM TPS directly gates <code>llm_first_sentence</code> (iter-038), which gates <code>ttfs</code> (iter-001), so this metric explains downstream slowness.</li></ul>
+<nav><a href="index.html">← Index</a><a href="iter-052.html">← iter-052</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-053 — naturalness bucket metric (taxonomy 3.1)</h1>
+<div class="meta"><span>2026-05-24</span> · <span>branch: <code>iter-053-naturalness</code></span> · <span>commit: <code>a6c4015</code></span> · <span>tests: <code>+19</code> (total 693)</span></div>
+</header><p><strong>Branch:</strong> <code>iter-053-naturalness</code> (merged ff to main, commit <code>a6c4015</code>) <strong>Date:</strong> 2026-05-24</p>
+<p>Fifteenth metric pulled from <code>docs/perf-metrics-taxonomy.md</code>. <strong>First &quot;Novel/speculative&quot; bucket entry</strong> — earlier 14 metrics were all &quot;Standard&quot; or &quot;Architecture-specific.&quot; Time to start pulling from the speculative bucket.</p>
+<p><strong>The insight:</strong> humans don&#x27;t optimize for minimum latency in conversation — they optimize for natural pause. A bot responding in 50ms feels robotic / interrupting; one in 250ms feels conversational. Most voice-agent dashboards report only &quot;lower TTFS is better&quot; — this metric explicitly identifies the sweet spot.</p>
+<p>Buckets: <strong>&lt;200ms</strong>: rushed (bot interrupted natural pause) <strong>200-400ms</strong>: natural (matches human conversational rhythm) <strong>&gt;400ms</strong>: slow (user notices lag) <strong>&quot;&quot;</strong>: no audio this turn</p>
 <p>Implementation:</p>
-<ul><li><code>TurnMetrics.llm_tps: float = 0.0</code> (new field).</li><li>ChatLoop adds <code>token_count += 1</code> inside the existing for-token loop. After <code>llm_stream_done_at</code> is set, computes the ratio with three guards: ≥2 tokens, positive interval, both endpoints set. Single-token / empty / barge-cut streams leave TPS at 0.</li><li>Per-turn print: extends LLM-total line to <code>&quot;NNms (model, NN tps)&quot;</code> when measurable.</li><li>Session summary: <code>Median LLM TPS: NN</code> filtered for &gt;0.</li><li><code>ScenarioResult.llm_tps</code> on perf snapshots.</li></ul>
-<p>Tests (10 in <code>tests/unit/test_llm_tps.py</code>):</p>
-<ul><li>Default 0.</li><li>Per-turn print: zero omits the suffix, non-zero shows it, high TPS rendered with <code>:.0f</code> rounding.</li><li>Session aggregate: no-data omits, with-data shows median, zero-filter (parallel to iter-031 / iter-038 / iter-049 / iter-050).</li><li>ChatLoop arithmetic: 6 tokens with 20ms each yields 20-100 TPS (real timing has overhead — bound is loose); single token yields 0 (need ≥2); empty stream yields 0.</li></ul>
-<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>674 passed, 1 skipped in 23s</strong> (664 existing + 10 new).</p>
+<ul><li><code>TurnMetrics.naturalness_bucket: str = &quot;&quot;</code> (new field).</li><li>ChatLoop assigns the bucket immediately after <code>metrics.ttfs</code> is computed. Bucketing logic is inline (no helper function — three branches, simple to read).</li><li>Per-turn print: appends bucket to the TTFS line: <code>&quot;TTFS: 250ms (speech stop → speaker, natural)&quot;</code>.</li><li>Session summary: distribution counts — <code>&quot;Naturalness: 1 rushed, 2 natural, 1 slow&quot;</code>. Emits only when at least one bucket has a count.</li><li><code>ScenarioResult.naturalness_bucket</code> on perf snapshots.</li></ul>
+<p>Tests (19 in <code>tests/unit/test_naturalness_bucket.py</code>):</p>
+<ul><li>Default empty.</li><li>Per-turn print: empty omits, all four bucket states tagged.</li><li>Session aggregate: no-buckets omits, mixed distribution shown, single-bucket case.</li><li>ChatLoop wiring: bucket set when audio played; &quot;&quot; when no audio.</li><li>Boundary parametrize: 9 boundary values (0/50/199/200/300/400/ 401/1000/5000) → expected bucket. Documents the inclusive upper bound at 400ms (≤400 = natural).</li></ul>
+<p>Verification: <code>python -m pytest tests/unit/ tests/integration/ tests/performance/</code> → <strong>693 passed, 1 skipped in 23s</strong> (674 existing + 19 new).</p>
 <p>Notes:</p>
-<ul><li>Fourteen metrics live (30% of the 46-metric taxonomy).</li><li>The LLM diagnostic now has TTFT, TTFsent, TPS, total — the full picture from &quot;did it start&quot; to &quot;is it keeping up&quot; to &quot;did it finish.&quot;</li><li>Next candidates: 2.7 (worker queue depth — needs a sampler daemon), 1.15 (turn count / session length — derivable from metrics_list), 3.1 (naturalness gap — interesting novel metric).</li></ul>
-<hr><nav><a href="index.html">← Index</a><a href="iter-051.html">← iter-051</a><a href="iter-053.html">iter-053 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li><strong>Fifteen metrics live (33% of the 46-metric taxonomy).</strong> First speculative metric. The category labels are turning out to be useful — Standard metrics expose conventional ops measures; Architecture-specific surface design choices; Novel reframe what &quot;good&quot; looks like.</li><li>The naturalness bucket might surprise users running in test scenarios. Stub LLM + stub TTS frequently produce sub-200ms TTFS → &quot;rushed&quot; — accurate but may seem alarming. The metric is calibrated for the production pipeline (real LLM TTFT 150-500ms, kokoro synth ~100ms first sentence) where 200-400ms is achievable.</li><li>Next candidates: 1.15 (turn count + session length — derive in print_session_summary), 2.7 (worker queue depth — needs a sampler daemon), 3.2 (conversation rhythm score).</li></ul><nav><a href="index.html">← Index</a><a href="iter-052.html">← iter-052</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>
