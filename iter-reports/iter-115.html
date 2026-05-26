@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-115 — Naturalness-consistency check</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-114.html">← iter-114</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-115 — Naturalness-consistency check</h1>
+<div class="meta"></div>
+</header><p><strong>Goal:</strong> Two-fer iteration:</p>
+<p>1. Apply iter-114&#x27;s <code>_emit_X_diversity_line</code> shape to a different metric — proves the pattern is reusable (third instance after iter-114 itself, or rather second since iter-114 was the first). 2. Surface a real config-tuning signal: when 5+ consecutive turns land in <code>naturalness_bucket=&quot;rushed&quot;</code> or <code>&quot;slow&quot;</code>, the operator&#x27;s <code>speed</code> setting is wrong.</p>
+<p><strong>Pre-iteration investigation that got pivoted:</strong> First attempted to find an architectural improvement for <code>bargeable_fraction</code> (iter-074). Inspecting the latest perf snapshot showed every scenario reports 1.000 — the metric is a pure regression sentinel, no improvement headroom. Pivoted to the diversity-check shape.</p>
+<p><strong>Change:</strong> New helper <code>_emit_naturalness_consistency_line</code> in <code>_chat_metrics.py</code>, structured identically to iter-114&#x27;s filler diversity check:</p>
+<pre class="code-block"><code>def _emit_naturalness_consistency_line(
+    emit, buckets: list[str], threshold: int = 5,
+) -&gt; None:
+    non_empty = [b for b in buckets if b]
+    if not non_empty:
+        return
+    # Find longest consecutive-same run in `non_empty`.
+    longest_run, longest_bucket = 1, non_empty[0]
+    cur_run, cur = 1, non_empty[0]
+    for b in non_empty[1:]:
+        if b == cur:
+            cur_run += 1
+            if cur_run &gt; longest_run:
+                longest_run, longest_bucket = cur_run, cur
+        else:
+            cur, cur_run = b, 1
+    if longest_run &lt; threshold:
+        return
+    if longest_bucket == &quot;natural&quot;:
+        return  # natural is the goal — never flag
+    if longest_bucket == &quot;rushed&quot;:
+        suggestion = &quot;consider reducing speed&quot;
+    elif longest_bucket == &quot;slow&quot;:
+        suggestion = &quot;consider increasing speed&quot;
+    else:
+        suggestion = &quot;consider tuning speed&quot;
+    emit(f&quot;    Naturalness:      {longest_run} consecutive &quot;
+         f&quot;{longest_bucket!r} turns — {suggestion} (iter-053 bucket)&quot;)</code></pre>
+<p>Two design choices recorded in the docstring:</p>
+<p>1. <strong>&quot;natural&quot; runs are never flagged.</strong> Unlike iter-114&#x27;s filler diversity (where ANY repeated id is concerning), the naturalness check targets only the off-bucket states. A 10-turn run of &quot;natural&quot; is the desired outcome. 2. <strong>Threshold = 5</strong> (vs iter-114&#x27;s 3). Natural speech-rate variation produces brief &quot;rushed&quot; / &quot;slow&quot; streaks even with correct config; 5+ consecutive same-bucket is the smallest pattern where &quot;config wrong&quot; is more likely than &quot;noise.&quot;</p>
+<p><strong>Wired into <code>print_session_summary</code></strong> right after the iter-114 filler diversity line. Same call-site pattern:</p>
+<pre class="code-block"><code>_emit_naturalness_consistency_line(
+    _emit,
+    [m.naturalness_bucket for m in metrics_list],
+)</code></pre>
+<p><strong>Tests</strong> (<code>tests/unit/test_emit_naturalness_consistency_line.py</code>, 18 tests):</p>
+<p><em>Empty / no-bucket suppression (2 tests):</em> empty list, all-empty- strings — neither emits.</p>
+<p><em>&quot;natural&quot; exclusion (2 tests):</em> 10-turn natural run silent; long natural run with brief outliers (longest = natural) silent.</p>
+<p><em>Below threshold (2 tests):</em> 4-rushed below default; alternating rushed+natural — neither fires.</p>
+<p><em>At/above threshold (4 tests):</em> 5-rushed → reduce-speed suggestion; 6-slow → increase-speed suggestion; run-at-end detected; longest-of-multiple correctly selected.</p>
+<p><em>Empty filtering (2 tests):</em> empty buckets between same-bucket turns don&#x27;t break runs; leading empties also filter.</p>
+<p><em>Custom threshold (2 tests):</em> threshold=3 catches smaller patterns; threshold=10 suppresses default 5-run.</p>
+<p><em>Output formatting (3 tests):</em> leading 4-space indent; iter-053 attribution; unknown bucket falls back to generic suggestion (defensive against a future bucket addition).</p>
+<p><em>Edge case (1 test):</em> documented limitation — the function reports ONLY the longest run; if &quot;natural&quot; is longest and a shorter &quot;rushed&quot; run also crosses threshold, NOTHING fires. Recorded as a known limitation rather than fixed; a future iteration could scan each non-natural bucket independently if this becomes a real signal.</p>
+<p>Verification:</p>
+<ul><li>`python -m pytest tests/unit/test_emit_naturalness_consistency_line.py -q` → <strong>18 passed in 30ms</strong>.</li><li>Regression sentinel (162 session-summary tests pass byte-for- byte): `pytest tests/unit/test_emit_*.py tests/unit/test_session_*.py -q` → <strong>162 passed</strong>.</li><li>Full unit + integration: <strong>1345 passed, 1 skipped</strong> (1327 prior + 18 new).</li><li>Perf snapshot: <strong>23 passed</strong>.</li></ul>
+<p>Notes:</p>
+<ul><li><strong>The diversity-check pattern is now twice-instantiated</strong> (iter-114 + iter-115). Both share:<ul><li>Filter empties before scanning</li><li>Track longest run with single-pass O(N)</li><li>Configurable threshold kwarg</li><li>&quot;name the responsible iteration&quot; in the warning</li><li>Suppress when run &lt; threshold</li></ul></li></ul>
+<p>A third instance (e.g., barge_in_phase repetition) would warrant extracting the run-finder into a shared helper.</p>
+<ul><li>**The &quot;natural&quot; exclusion is a key differentiator from iter-114.** Filler diversity wants ALL runs flagged; this check wants only OFF-BUCKET runs flagged. Demonstrates the pattern is flexible — the inclusion/exclusion logic is per-instance, not part of the shared shape.</li><li>**The &quot;longest-of-multiple-buckets&quot; limitation is documented as a known weakness.** A pathological session with 7 natural + 5 rushed wouldn&#x27;t fire even though the rushed run is concerning. In practice this would require the user to flip between modes mid-session — unusual. If it becomes real, the fix is to track each non-natural bucket separately. Listed as a future iteration if needed.</li><li><strong>The unknown-bucket defensive case</strong> matters because <code>naturalness_bucket</code> is a free-form string field. iter-053 defined three values (rushed/natural/slow) but a future iteration could add (e.g., &quot;very_slow&quot;). The fallback ensures the warning still fires with a generic suggestion.</li><li>Next directions: iter-106). Seven iterations now overdue. a third instance lands. 7-50% across scenarios) for headroom — much lower than the 1.0 ceiling, suggests the worker often waits for sentences rather than synthesizing concurrently.<ul><li>Real audio fixtures + CPU-only STT (still pending from</li><li>Eval/replay tool using SessionState (iter-110).</li><li>Extract the diversity-run-finder into a shared helper if</li><li>Architecture: examine <code>streaming_overlap_ratio</code> (currently</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-114.html">← iter-114</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>
