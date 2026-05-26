@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-110 — Extract run_session from run_chat</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-109.html">← iter-109</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-110 — Extract run_session from run_chat</h1>
+<div class="meta"></div>
+</header><p><strong>Goal:</strong> Complete the <code>run_chat</code> decomposition started in iter-107. Pull the main turn loop + KeyboardInterrupt handler (~50 lines mixing per-turn flow, session counters, trim plumbing, and exit handling) into a tested module.</p>
+<p>This is the 4th mic_chat.py extraction in four iterations and the most complex — it has 6 mutable locals that needed to be bundled into a <code>SessionState</code> dataclass per the GENO.md pattern&#x27;s rule 4.</p>
+<p><strong>Original block:</strong> Lines 285-354 of mic_chat.py — system_prompt setup + 7 declared locals + the while-True loop + the KeyboardInterrupt handler that hands the locals to <code>print_session_summary</code> via <code>SessionMeta</code>.</p>
+<p><strong>Change:</strong> New module <code>examples/_chat_session.py</code> exposing:</p>
+<pre class="code-block"><code>@dataclass
+class SessionState:
+    messages: list[dict]
+    all_metrics: list
+    false_triggers: int = 0
+    llm_errors: int = 0
+    trim_events: int = 0
+    trim_messages_evicted: int = 0
+    primed_frames: Optional[list[bytes]] = None
+    session_start: float = 0.0
+
+def run_session(
+    chat_loop, system_prompt: str, *,
+    max_user_assistant: int = 20,
+    log: Callable[[str], None] = print,
+    prompt_log: Callable[[int], None] = ...,
+    clock: Callable[[], float] = time.monotonic,
+    trim_messages: Optional[Callable] = None,
+) -&gt; SessionState:</code></pre>
+<p><code>SessionState</code> field names line up 1:1 with the existing <code>SessionMeta</code> dataclass — conversion in the caller is mechanical:</p>
+<pre class="code-block"><code>SessionMeta(
+    false_triggers=state.false_triggers,
+    session_seconds=time.monotonic() - state.session_start,
+    llm_errors=state.llm_errors,
+    trim_events=state.trim_events,
+    trim_messages_evicted=state.trim_messages_evicted,
+    idle_threshold=filler_idle_threshold,
+)</code></pre>
+<p><strong>Three orthogonal injection seams</strong> (each test-relevant):</p>
+<ul><li><code>prompt_log(turn: int)</code> — the &quot;[N] waiting...&quot; prompt. Default re-creates the mic_chat.py styling. Tests capture turn counter.</li><li><code>log(line: str)</code> — the post-stream newline emitter. Default <code>print</code>. Tests silence it with <code>lambda s: None</code>.</li><li><code>trim_messages</code> — the context cap callable. When <code>None</code>, lazy- imports <code>ChatLoop.trim_messages</code> per GENO.md rule 5. Tests pass a stub that doesn&#x27;t import ChatLoop at all.</li></ul>
+<p><strong>Caller (mic_chat.py) shrinks from ~50 lines to ~12:</strong></p>
+<pre class="code-block"><code>from examples._chat_session import run_session
+
+system_prompt = llm_config.get(
+    &quot;system_prompt&quot;, &quot;You are a concise voice assistant.&quot;,
+)
+state = run_session(
+    chat_loop, system_prompt, max_user_assistant=20,
+    prompt_log=lambda turn: print(
+        f&quot;  {DIM}[{turn}] waiting...{RESET}&quot;, end=&quot;&quot;, flush=True,
+    ),
+)
+# … then SessionMeta conversion + print_session_summary</code></pre>
+<p>ANSI styling stays at the caller (rule 3). The <code>prompt_log</code> callable wraps <code>DIM</code>/<code>RESET</code> styling around the plain &quot;[N] waiting...&quot; text the module would otherwise emit.</p>
+<p><strong>Tests</strong> (<code>tests/unit/test_chat_session.py</code>, 14 tests):</p>
+<p>Three buckets, mirroring the loop&#x27;s three result-shapes:</p>
+<p><em>Successful turn flow (5 tests):</em></p>
+<ul><li>Empty queue → immediate KI returns SessionState with system prompt seeded and counters at zero.</li><li>session_start reflects clock callable.</li><li>One success → metrics appended + <code>metric.print(turn)</code> called.</li><li>Multiple successes → turn counter increments correctly.</li><li>system_prompt is always the first message.</li></ul>
+<p><em>Error / false-trigger handling (2 tests):</em></p>
+<ul><li>iter-058: <code>had_error=True</code> increments <code>llm_errors</code>, reuses turn counter — sequence <code>[1, 1, 2]</code> validates the no-advance on error.</li><li>iter-048: <code>metrics=None</code> increments <code>false_triggers</code>, same no-advance shape.</li></ul>
+<p><em>Trim + state plumbing (5 tests):</em></p>
+<ul><li>iter-025/057: <code>next_primed_frames</code> from turn N becomes <code>primed_frames</code> input to turn N+1.</li><li>iter-078: trim event recorded when eviction happens (with an <code>_AppendingChatLoop</code> that adds messages each turn so the shrinker has work to do).</li><li>No trim event when no eviction.</li><li>iter-058 invariant: trim only runs after SUCCESSFUL turns, never on error / false-trigger.</li><li>max_user_assistant kwarg threads through to <code>trim_messages</code>.</li></ul>
+<p><em>Logging discipline (2 tests):</em></p>
+<ul><li>prompt_log fires every turn including the eventual KI prompt.</li><li>log emits exactly once per successful turn (never on error / false-trigger).</li></ul>
+<p>Verification:</p>
+<ul><li><code>python -m pytest tests/unit/test_chat_session.py -q</code> → **14 passed in 20ms**.</li><li>Full unit + integration: <strong>1261 passed, 1 skipped</strong> (1247 prior + 14 new).</li><li>Perf snapshot: <strong>21 passed</strong>.</li></ul>
+<p><strong>The run_chat decomposition is now complete.</strong> Original mic_chat.py:run_chat was ~195 lines (pre-iter-107). After this iteration it&#x27;s ~95 lines, and structurally it&#x27;s now five function calls plus a small finally block:</p>
+<pre class="code-block"><code>def run_chat(...):
+    llm_config = load_llm_config()
+    chat_cfg = load_chat_config()                      # iter-018
+    engines = load_engines(...)                        # iter-108
+    rendered_fillers = prerender_fillers(...)          # iter-107
+    audio_io = build_audio_io(...)                     # iter-109
+    chat_loop = ChatLoop(...)                          # iter-015
+    state = run_session(chat_loop, system_prompt, ...) # iter-110
+    print_session_summary(state.all_metrics, ..., meta=...)
+    # finally: mic.stop_stream(), mic.close(), pa.terminate()</code></pre>
+<p>Every block is now its own tested module. The <code>run_chat</code> function itself is essentially declarative — it threads configuration into pre-built components and dispatches to the session driver.</p>
+<p>Notes:</p>
+<ul><li><strong>Trace-of-counters tests are subtle.</strong> Three test failures during writing came from miscounting what <code>[N] waiting...</code> fires when. The pattern: prompt_log fires ONCE per iteration, INCLUDING the iteration that raises KeyboardInterrupt. So an N-success session shows N+1 prompts (N successes + 1 final KI prompt). Worth recording for future loop-shaped extractions.</li><li><strong>Lazy import of <code>ChatLoop.trim_messages</code></strong> (rule 5) saved the test from needing to import <code>ChatLoop</code> at all. Tests inject <code>trim_messages=_stub_trim</code> and never touch the real class. This is the cleanest application of rule 5 yet — the earlier instances (iter-109 pyaudio) had platform-specific motivation; this one has a pure decoupling motivation.</li><li><strong>SessionState vs SessionMeta:</strong> the field-name overlap is intentional — the dataclasses serve different layers (state during the run vs metadata for the summary) but carry the same per-session signals. A future cleanup could unify them, but the current 1:1 mapping is clear enough that the duplication is fine.</li><li>Next directions: iter-106). Now ready to land — <code>stt_factory</code> from iter-108 is the swap point, and <code>run_session</code> accepts any chat_loop matching the <code>.run_one_turn</code> shape so integration tests can drive it without booting the real mic. iter-102). structurally complete. New work should target architecture (streaming-overlap improvements, multi- turn metric correlations) or testing depth (eval suite, fault-injection scenarios).<ul><li>Real audio fixtures + CPU-only STT (still pending from</li><li>Per-token-delay grid for context cap (still pending from</li><li>Pivot away from refactoring — <code>run_chat</code> is</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-109.html">← iter-109</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>
