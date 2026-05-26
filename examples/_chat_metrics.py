@@ -1401,6 +1401,74 @@ def _emit_wer_line(emit, wer_values: list[float]) -> None:
     )
 
 
+def _emit_filler_diversity_line(
+    emit, filler_ids: list[int], threshold: int = 3,
+) -> None:
+    """iter-114: defensive sentinel for iter-113's cross-turn
+    filler variety fix.
+
+    Scans the per-turn ``last_filler_id`` sequence for runs of
+    the SAME id ≥ ``threshold`` (default 3). When found, emits a
+    warning line so the operator notices when the cross-turn FIFO
+    regression happened — without iter-113's `recent_filler_ids`
+    deque, the picker can pick the same filler turn after turn.
+
+    Filtering rules:
+      - 0 (no filler fired this turn) is excluded — only consecutive
+        non-zero ids count.
+      - Runs are counted in the FILTERED sequence (zeroed turns
+        don't break a run). Rationale: the user perception is
+        "same filler 3 times in a row" regardless of whether
+        intervening turns happened to skip the filler.
+
+    Suppressed when:
+      - No turn ever fired a filler (filler_ids is all zeros) —
+        non-filler sessions don't need the line.
+      - The longest run is below threshold — clean variety.
+
+    Output format mirrors the iter-074 bargeable-warning style:
+
+        Filler diversity:  filler X repeated 4 turns running
+                           — iter-113 cross-turn FIFO may not be wired
+
+    Threshold rationale: 3 consecutive same-fillers is the
+    smallest pattern a user typically perceives as repetition. 2
+    is too noisy (random can trivially produce 2 in a row); 4+
+    raises the bar so far that real regressions wouldn't fire it
+    until many turns later.
+    """
+    # Filter out zero (no-filler turns) but preserve the sequence
+    # of fillers AS PLAYED — runs are counted on this filtered
+    # list.
+    fired = [fid for fid in filler_ids if fid != 0]
+    if not fired:
+        return
+
+    # Find the longest consecutive-same run in `fired`.
+    longest_run = 1
+    longest_id = fired[0]
+    cur_run = 1
+    cur_id = fired[0]
+    for fid in fired[1:]:
+        if fid == cur_id:
+            cur_run += 1
+            if cur_run > longest_run:
+                longest_run = cur_run
+                longest_id = cur_id
+        else:
+            cur_id = fid
+            cur_run = 1
+
+    if longest_run < threshold:
+        return
+
+    emit(
+        f"    Filler diversity: filler {longest_id} repeated "
+        f"{longest_run} turns running "
+        f"— iter-113 cross-turn FIFO may not be wired"
+    )
+
+
 def _emit_bargeable_line(emit, bargeable_values: list[float]) -> None:
     """iter-104: extracted from print_session_summary's iter-074
     bargeable line. Reports the WORST bargeable fraction across
@@ -1918,6 +1986,13 @@ def print_session_summary(
             unique_filler_count=len(unique_filler_ids),
             recommended_idle_threshold=recommended_idle,
         ),
+    )
+    # iter-114: cross-turn filler-diversity sentinel. Only fires
+    # when 3+ consecutive turns played the same filler id —
+    # would surface if iter-113's FIFO regressed.
+    _emit_filler_diversity_line(
+        _emit,
+        [m.last_filler_id for m in metrics_list],
     )
     # iter-090: barge block extracted to _emit_barge_block helper.
     # ~76 lines of co-emitted lines (count, interruption rate,

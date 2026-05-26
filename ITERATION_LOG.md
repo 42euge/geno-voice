@@ -8668,3 +8668,147 @@ Notes:
   - Architecture: investigate whether the bargeable_fraction
     metric (iter-074) has room to improve via earlier watcher
     start.
+
+## iter-114 — Session-summary filler diversity check
+
+**Goal:** Defensive sentinel for iter-113's cross-turn filler
+variety fix. Without an explicit check, a future regression in
+the FIFO logic (e.g., the deque accidentally becoming a no-op
+container, or the `recent_filler_ids` kwarg being dropped from
+the SentenceWorker constructor) could land silently — the user
+would hear repetition again, but no test would fire because
+filler-picking is randomized.
+
+This iteration adds an empirical check: scan the per-turn
+`last_filler_id` sequence for runs of the same id ≥ N
+(default 3). When found, emit a warning line in the session
+summary so the operator notices the regression on their next
+session.
+
+**Change:** New helper `_emit_filler_diversity_line` in
+`_chat_metrics.py` next to the other emit-line family
+(`_emit_wer_line`, `_emit_bargeable_line`, etc):
+
+```python
+def _emit_filler_diversity_line(
+    emit, filler_ids: list[int], threshold: int = 3,
+) -> None:
+    fired = [fid for fid in filler_ids if fid != 0]
+    if not fired:
+        return
+    # Find longest consecutive-same run in `fired`.
+    longest_run = 1
+    longest_id = fired[0]
+    cur_run = 1
+    cur_id = fired[0]
+    for fid in fired[1:]:
+        if fid == cur_id:
+            cur_run += 1
+            if cur_run > longest_run:
+                longest_run = cur_run
+                longest_id = cur_id
+        else:
+            cur_id = fid
+            cur_run = 1
+    if longest_run < threshold:
+        return
+    emit(
+        f"    Filler diversity: filler {longest_id} repeated "
+        f"{longest_run} turns running "
+        f"— iter-113 cross-turn FIFO may not be wired"
+    )
+```
+
+Two design choices recorded in the docstring:
+
+1. **Zero-filtering before run counting.** A turn with
+   `last_filler_id == 0` (no filler fired) is FILTERED OUT
+   before the run scan, not treated as a break. Rationale:
+   user perception is "same filler 3 times in a row"
+   regardless of intervening no-filler turns. The pattern
+   `[101, 0, 101, 0, 101]` should fire; the user heard 101,
+   silence, 101, silence, 101 — clearly the same filler.
+
+2. **Threshold = 3 default.** 2 is too noisy (random.choice
+   produces 2-in-a-row trivially even with the FIFO working);
+   4+ raises the bar so far that real regressions wouldn't
+   fire it for many turns. 3 is the smallest pattern a user
+   typically perceives as repetition.
+
+**Wired into `print_session_summary`** right after the
+`_emit_filler_block` call:
+
+```python
+_emit_filler_diversity_line(
+    _emit,
+    [m.last_filler_id for m in metrics_list],
+)
+```
+
+The line is silent on clean sessions (the common case), so the
+session-summary regression sentinel passes byte-for-byte
+unchanged for any existing test.
+
+**Tests** (`tests/unit/test_emit_filler_diversity_line.py`,
+18 tests):
+
+*Empty / no-filler suppression (2 tests):* empty list, all-zero
+list — neither emits.
+
+*Below threshold (3 tests):* no repetition, 2-in-a-row
+(default-threshold passes), alternating pattern — none emit.
+
+*At/above threshold (5 tests):* 3-in-a-row fires; 4-in-a-row
+reports actual run length; runs at end / start / longest-of-
+multiple are correctly identified.
+
+*Zero-filtering (3 tests):* zeros between same fillers don't
+break the run; leading + trailing zeros filter out cleanly.
+
+*Custom threshold (3 tests):* threshold=5 suppresses 4-runs
+but fires on 5-runs; threshold=2 catches shorter patterns.
+
+*Output formatting (2 tests):* leading 4-space indent matches
+family convention; warning includes the "iter-113" attribution
+so operators know which fix to investigate.
+
+Verification:
+- `python -m pytest tests/unit/test_emit_filler_diversity_line.py
+  -q` → **18 passed in 30ms**.
+- Regression sentinel (144 session-summary tests pass byte-for-
+  byte): `pytest tests/unit/test_emit_*.py
+  tests/unit/test_session_*.py -q` → **144 passed**.
+- Full unit + integration: **1327 passed, 1 skipped** (1309
+  prior + 18 new).
+- Perf snapshot: **23 passed**.
+
+Notes:
+- **The "warns on regression" line includes the responsible
+  iter number.** Operator searches for "iter-113" in the
+  ITERATION_LOG.md, gets the full context. Compare to the
+  iter-074 bargeable-warning which just says "watcher coverage
+  regression" — operator has to grep to find the fix iter.
+  Future warnings should follow iter-114's pattern of naming
+  the fix.
+- **The scan is O(N) and exits early.** The longest_run search
+  doesn't allocate, doesn't sort, doesn't re-scan. For typical
+  sessions (≤50 turns), this is a single linear pass.
+- **Threshold parameterization is the kind of "if you ever
+  need it" knob that pays off later.** None of the current
+  tests need a non-default threshold to validate behavior, but
+  exposing it makes the helper composable for future eval
+  scenarios (e.g., a session-replay tool that wants to flag
+  even 2-runs in a side-by-side comparison).
+- **The pattern is generalizable** — a `_emit_X_diversity_line`
+  shape would also work for sentence-length variety or
+  user-WPM swing. iter-114 is the first instance; future
+  diversity checks can copy the structure.
+- Next directions:
+  - Real audio fixtures + CPU-only STT (still pending from
+    iter-106). Six iterations now overdue.
+  - Eval/replay tool using SessionState (iter-110). Could
+    measure filler diversity empirically across recorded
+    sessions and compare to iter-113's expected variety.
+  - Architecture: investigate whether the bargeable_fraction
+    metric (iter-074) has room to improve via earlier watcher
+    start.
