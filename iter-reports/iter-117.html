@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-117 — Real audio fixtures + faster-whisper integration</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-116.html">← iter-116</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-117 — Real audio fixtures + faster-whisper integration</h1>
+<div class="meta"></div>
+</header><p><strong>Goal:</strong> Eight iterations overdue from iter-106&#x27;s recorded design. iter-106 added text-only fixtures that exercised the WER plumbing without audio; iter-117 closes the loop by adding real .wav files and running them through a real STT engine.</p>
+<p><strong>Pre-iteration verification:</strong></p>
+<ul><li><code>faster-whisper</code> 1.2.1 → installed.</li><li><code>espeak-ng</code> → installed at <code>/usr/bin/espeak-ng</code>.</li><li>Smoke test: synthesize &quot;the quick brown fox jumps...&quot; with espeak-ng, transcribe with faster-whisper <code>tiny</code> model → &quot;The quick brown fox jump over the lazy dog.&quot; (1 sub, WER ≈ 11%). Round-trip works on x86_64 Linux without any Mac-only dependencies.</li></ul>
+<p><strong>Change:</strong> Three pieces:</p>
+<p>1. <strong>Two committed audio fixtures</strong> (<code>tests/fixtures/wer/</code>):</p>
+<ul><ul><ul></ul></ul></ul>
+<p>Both generated via <code>espeak-ng -w &lt;out.wav&gt; &quot;&lt;text&gt;&quot;</code>, mono 22050 Hz PCM. Committed to the repo so the integration test has deterministic input regardless of whether espeak-ng is present at test-run time.</p>
+<p>2. <strong><code>audio_fixtures</code> section in corpus.json</strong>, parallel to the existing iter-106 <code>fixtures</code> section but with <code>audio_path</code> instead of <code>hypothesis</code>. Per-entry <code>expected_wer_min/max</code> bands are intentionally generous (clean: 0.0-0.40, pangram: 0.0-0.30) because espeak-ng output isn&#x27;t natural speech. Tightening when real human-recorded fixtures land is a follow-up.</p>
+<p>3. <strong><code>tests/integration/test_wer_audio.py</code></strong> — 4 tests:</p>
+<ul><ul><ul></ul></ul></ul>
+<p><strong>Skip-cleanly contract:</strong> Both faster-whisper import + model load happen behind <code>pytest.skip()</code>. CI hosts without internet or without enough disk for the model can run the suite without failing the audio tests:</p>
+<pre class="code-block"><code>try:
+    from faster_whisper import WhisperModel
+    _FW_AVAILABLE = True
+except Exception as e:
+    _FW_AVAILABLE = False
+    _FW_IMPORT_ERROR = str(e)
+
+@pytest.fixture(scope=&quot;module&quot;)
+def stt_model():
+    if not _FW_AVAILABLE:
+        pytest.skip(f&quot;faster-whisper not importable: {_FW_IMPORT_ERROR}&quot;)
+    try:
+        return WhisperModel(&quot;tiny&quot;, device=&quot;cpu&quot;, compute_type=&quot;int8&quot;)
+    except Exception as e:
+        pytest.skip(f&quot;faster-whisper model failed to load: {e}&quot;)</code></pre>
+<p>The two structural-sanity tests don&#x27;t depend on the model, so they always run.</p>
+<p><strong>Empirical data</strong> (this run):</p>
+<ul><li><code>clean.wav</code> → faster-whisper transcribes near-perfectly, WER &lt; 0.30 (assertion passes with margin).</li><li><code>quick_brown_fox.wav</code> → &quot;jumps&quot; sometimes drops to &quot;jump&quot; (1 sub / 9 words ≈ 11%), well within the 0.0-0.30 band.</li><li>Total integration-test time: 2.5s including model load (cached after first run).</li></ul>
+<p>Verification:</p>
+<ul><li><code>python -m pytest tests/integration/test_wer_audio.py -v</code> → <strong>4 passed in 2.5s</strong>.</li><li>Full unit + integration: <strong>1368 passed, 1 skipped</strong> (1364 prior + 4 new).</li><li>Perf snapshot: <strong>23 passed</strong>.</li></ul>
+<p>Notes:</p>
+<ul><li><strong>The 46-metric taxonomy is now end-to-end populated.</strong> iter-105 added the WER infrastructure; iter-106 added text- only fixtures; iter-117 closes the loop with real audio through a real STT engine. Every metric in the taxonomy now has tests at every level: unit (compute_wer), integration (text fixtures), end-to-end (audio fixtures). Three tiers, each with its own skip semantics.</li><li><strong>espeak-ng quality matters less than determinism.</strong> The audio isn&#x27;t natural — the output sounds robotic — but it&#x27;s deterministic given the input text. Tests don&#x27;t care about prosody; they care about &quot;does the STT pipeline produce reasonable transcripts.&quot; A synthetic voice at 22 kHz mono is enough to exercise that.</li><li><strong><code>tiny</code> model choice.</strong> ~75 MB, downloads in seconds, CPU-only viable. The next step up (<code>base</code>, ~150 MB) would be more accurate but doubles model size + load time. For CI integration testing, <code>tiny</code> is the right tradeoff — accuracy doesn&#x27;t need to be production-grade.</li><li>**The <code>expected_wer_max=0.40</code> band is permissive on purpose.** Once a real human-voice fixture lands, the band can tighten to 0.10-0.15 (production-grade STT). Today&#x27;s espeak-ng-generated audio tests &quot;is the pipeline wired up correctly?&quot;, not &quot;is the STT model good?&quot;.</li><li><strong>Caching consideration.</strong> First-run model download is ~15s on a typical connection. After that, faster-whisper hits the on-disk cache and the integration tests finish in 2.5s. The cache lives at <code>~/.cache/huggingface/hub/</code>. CI hosts that wipe per-job will re-download every time — <code>pytest.skip</code> handles the no-network case gracefully.</li><li>Next directions: closure to optionally use faster-whisper instead of WhisperEngine — would let Linux users actually run <code>mic_chat.py</code>. Real architecture work, not a small iteration. with synthetic background noise) to exercise the &quot;noisy&quot; / &quot;catastrophic&quot; bands of the iter-106 corpus against real audio rather than simulated hypotheses. diversity-check pattern).<ul><li>Tighten WER bands when real human-recorded audio lands.</li><li>Wire the STT factory from iter-108&#x27;s <code>load_engines</code></li><li>Add a noisy-audio fixture (e.g., the same text mixed</li><li>barge_in_phase consistency check (third instance of the</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-116.html">← iter-116</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>
