@@ -1340,6 +1340,46 @@ def _emit_recording_block(emit, stats: RecordingStats) -> None:
         )
 
 
+def _emit_primed_audio_line(emit, primed_seconds_total: float) -> None:
+    """iter-104: extracted from print_session_summary's iter-057
+    primed-audio line. Reports cumulative seconds of audio carried
+    into the next turn via the primed_frames mechanism.
+
+    Suppressed when total is 0 (no priming happened — clean
+    sessions don't need the line). Behavior-preserving: the
+    formatting and "validates iter-025" rationale are unchanged
+    from the inline version.
+    """
+    if primed_seconds_total > 0:
+        emit(
+            f"    Primed audio:     "
+            f"{primed_seconds_total:.1f}s "
+            f"(carried into next turn — validates iter-025)"
+        )
+
+
+def _emit_bargeable_line(emit, bargeable_values: list[float]) -> None:
+    """iter-104: extracted from print_session_summary's iter-074
+    bargeable line. Reports the WORST bargeable fraction across
+    turns when any turn dipped below 99% — that's the threshold
+    where watcher-coverage regressions become operator-visible.
+
+    Suppressed when bargeable_values is empty OR every turn was
+    ≥99% bargeable (clean sessions don't need the line).
+    Behavior-preserving: the "worst%" + "below_count/total turns
+    < 99%" pattern is unchanged from the inline version.
+    """
+    if bargeable_values and min(bargeable_values) < 0.99:
+        worst = min(bargeable_values) * 100
+        below_count = sum(1 for v in bargeable_values if v < 0.99)
+        emit(
+            f"    Bargeable:        "
+            f"{worst:.0f}% worst "
+            f"({below_count}/{len(bargeable_values)} turns < 99%) — "
+            f"watcher coverage regression"
+        )
+
+
 @dataclass
 class SessionMeta:
     """iter-086: session-level signals collected by the driver
@@ -1861,12 +1901,8 @@ def print_session_summary(
     # the barge-block above (the metric is technically only set on
     # barge turns, but its reporting is independent of barge-count
     # totals).
-    if primed_seconds_total > 0:
-        _emit(
-            f"    Primed audio:     "
-            f"{primed_seconds_total:.1f}s "
-            f"(carried into next turn — validates iter-025)"
-        )
+    # iter-104: extracted to _emit_primed_audio_line helper.
+    _emit_primed_audio_line(_emit, primed_seconds_total)
     # iter-058: error rate per stage. LLM errors are session-level
     # (kill the turn outright); worker errors are per-turn (partial
     # turn — some sentences synthed, others raised). Show only when
@@ -1940,15 +1976,8 @@ def print_session_summary(
     # least one turn dropped below the healthy threshold — clean
     # sessions don't need the line, but a regression should be
     # impossible to miss.
-    if bargeable_values and min(bargeable_values) < 0.99:
-        worst = min(bargeable_values) * 100
-        below_count = sum(1 for v in bargeable_values if v < 0.99)
-        _emit(
-            f"    Bargeable:        "
-            f"{worst:.0f}% worst "
-            f"({below_count}/{len(bargeable_values)} turns < 99%) — "
-            f"watcher coverage regression"
-        )
+    # iter-104: extracted to _emit_bargeable_line helper.
+    _emit_bargeable_line(_emit, bargeable_values)
     # iter-095: sentence block extracted to _emit_sentence_block.
     longest = max(
         (m.max_sentence_chars for m in metrics_list

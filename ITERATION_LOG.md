@@ -7227,3 +7227,102 @@ Notes:
   - Per-token-delay grid for context cap (still pending from
     iter-102).
   - WER fixture (1.6) heavyweight iteration.
+
+## iter-104 — Extract single-line recording helpers
+
+**Goal:** 9th and 10th block helpers — `_emit_primed_audio_line`
+(iter-057) and `_emit_bargeable_line` (iter-074). Both are
+single-line emits scattered (non-contiguous) across
+`print_session_summary`. Bundling them in one iteration matches
+iter-103's documented "non-contiguity" pattern: extract isolated
+lines as their own helpers rather than reordering output.
+
+**Why bundle them in one iteration:** Each is a 6-line inline
+block. Two in one PR matches the "iter-097 semantic-grouping"
+shape — keeps the iteration log entry useful (one rationale, one
+verification step) and keeps the per-iteration overhead low for
+small extractions.
+
+**Change:**
+
+```python
+def _emit_primed_audio_line(emit, primed_seconds_total: float) -> None:
+    """iter-057 single line."""
+    if primed_seconds_total > 0:
+        emit(f"    Primed audio:     {primed_seconds_total:.1f}s ...")
+
+def _emit_bargeable_line(emit, bargeable_values: list[float]) -> None:
+    """iter-074 single line."""
+    if bargeable_values and min(bargeable_values) < 0.99:
+        worst = min(bargeable_values) * 100
+        below_count = sum(1 for v in bargeable_values if v < 0.99)
+        emit(f"    Bargeable:        {worst:.0f}% worst ...")
+```
+
+Both helpers take a free-function shape (no `*Stats` dataclass)
+because each takes a single primitive — overkill to wrap in a
+dataclass for one int/float/list. The `*Stats` pattern earned
+its weight in iter-097 + iter-103 where 2-3 fields needed
+bundling; here the simpler signature wins.
+
+**Tests:**
+- `tests/unit/test_emit_primed_audio_line.py`: 6 tests covering
+  zero suppression, defensive negative, positive emission, .1f
+  formatting, large values, indent.
+- `tests/unit/test_emit_bargeable_line.py`: 8 tests covering
+  empty/all-above suppression, one-turn-below, multi-turn-below,
+  .0f rounding, threshold boundary (exactly 0.99 vs 0.989),
+  indent.
+
+Verification:
+- Direct tests: **14 passed in 30ms**.
+- Regression sentinel: `python -m pytest tests/unit/test_emit_*.py
+  tests/unit/test_session_*.py -q` → **121 passed** (was 113;
+  new 8 are the iter-104 helpers).
+- Full unit + integration: `tests/ --ignore=tests/performance
+  --ignore=tests/test_session.py --ignore=tests/e2e -q` →
+  **1170 passed, 1 skipped** (1156 prior + 14 new).
+- Perf snapshot: `tests/performance/ -q` → **21 passed**.
+
+Notes:
+- **Ten block helpers extracted now.** The session-summary
+  emit-line shape is fully covered:
+  - 7 `*Block` helpers + `*Stats` dataclasses (TTFS, Barge,
+    Filler, Errors, WPM, Sentence, History, Recording).
+  - 2 single-line free-function helpers (Primed Audio, Bargeable).
+
+  What's left inline in `print_session_summary` is mostly the
+  *aggregation* code that builds the inputs (median/max
+  computations, list comprehensions over metrics_list). That's
+  data-flow logic, not formatting — not a candidate for
+  extraction in the same shape.
+- **Free-function vs `*Stats`-shaped: clear rule of thumb.**
+  ≥2 inputs → dataclass (lets future signal additions extend
+  the dataclass without churning the helper signature).
+  Exactly 1 input → free function. iter-104 codifies this.
+- **Cumulative refactor savings.** Per-iter line counts:
+  - iter-089 (TTFS): -65
+  - iter-090 (Barge): -28
+  - iter-091 (Filler): -45
+  - iter-092 (Errors): -32
+  - iter-094 (WPM): -52
+  - iter-095 (Sentence): -39
+  - iter-097 (History): -49
+  - iter-103 (Recording): -17
+  - iter-104 (PrimedAudio + Bargeable): -12
+  Total **~339 lines** reduced from the original ~1500.
+- The remaining inline code in `print_session_summary` is now
+  ~1160 lines, almost all aggregation/computation. The
+  formatting layer is ~80% extracted.
+- Next directions:
+  - WER fixture (1.6) heavyweight iteration — the last metric
+    in the 46-metric taxonomy that's still incomplete.
+  - Per-token-delay grid for context cap (still pending from
+    iter-102) — applies iter-101's grid pattern to session helper.
+  - `_push_after_flush` helper to dedupe iter-042 + iter-102
+    thread+sleep pattern (only 2 sites; might wait for a 3rd).
+  - Move on from `print_session_summary` extractions —
+    diminishing returns; consider extracting the aggregation
+    layer if a clean grouping emerges, or pivot to other
+    refactor targets (mic_chat.py main loop, llm_stream
+    error handling).
