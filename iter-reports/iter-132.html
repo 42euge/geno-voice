@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-132 — STT benchmark CLI + corpus documentation</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-131.html">← iter-131</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-132 — STT benchmark CLI + corpus documentation</h1>
+<div class="meta"></div>
+</header><p><strong>Goal:</strong> Operators evaluating a new <code>STTEngine</code> subclass need a one-command way to see how it stacks up against the iter-117 through iter-127 audio fixture corpus. iter-132 adds the benchmark CLI:</p>
+<p>python scripts/run_stt_benchmark.py --engine faster_whisper</p>
+<p><strong>Output:</strong></p>
+<p>clean_audio               PASS  WER 0.20  band [0.00, 0.40]  elapsed 1.93s quick_brown_fox_audio     PASS  WER 0.11  band [0.00, 0.30]  elapsed 0.27s noisy_audio               PASS  WER 0.20  band [0.10, 0.50]  elapsed 0.71s catastrophic_audio        PASS  WER 1.00  band [0.80, 1.30]  elapsed 0.69s multispeaker_audio        PASS  WER 0.80  band [0.60, 1.10]  elapsed 0.71s</p>
+<p>5/5 fixtures passed in 4.3s</p>
+<p><strong>Pre-iteration discovery: greedy decoding is mandatory for the benchmark.</strong> First version routed through <code>FasterWhisperEngine.transcribe()</code> which uses default beam-search + temperature fallback. The multispeaker fixture failed reproducibly (WER 1.4-1.6) because the band [0.60, 1.10] was set assuming <strong>greedy decoding</strong> (iter-125&#x27;s deterministic-decoding choice for the integration test).</p>
+<p>The fix recorded the same lesson iter-125 learned: deterministic decoding is required when asserting on output. The benchmark CLI takes the same approach as <code>tests/integration/test_wer_audio.py:_transcribe</code>:</p>
+<pre class="code-block"><code>if engine == &quot;faster_whisper&quot;:
+    # Bypass the engine wrapper, use greedy directly.
+    from faster_whisper import WhisperModel
+    m = WhisperModel(resolved, device=device, compute_type=compute)
+    def transcribe(audio_path):
+        segments, _ = m.transcribe(
+            audio_path, language=&quot;en&quot;,
+            beam_size=1, temperature=0,
+        )
+        return &quot; &quot;.join(s.text for s in segments).strip()</code></pre>
+<p>For non-<code>faster_whisper</code> engines (whisper / gemma4 / future custom), the CLI uses <code>stt.get_engine</code> + the standard transcribe contract. If those engines have non-deterministic output, that&#x27;s their concern.</p>
+<p><strong>Three pieces:</strong></p>
+<p>1. <strong><code>scripts/run_stt_benchmark.py</code></strong> — CLI with three layers:</p>
+<ul><ul><ul></ul></ul></ul>
+<p>2. <strong><code>tests/unit/test_run_stt_benchmark.py</code></strong> (14 tests):</p>
+<ul><ul><ul></ul></ul></ul>
+<p>3. <strong>End-to-end smoke test</strong> (verified manually): <code>python scripts/run_stt_benchmark.py --engine faster_whisper --model tiny</code> → <strong>5/5 PASS in ~1.3s</strong>, deterministic across runs.</p>
+<p>Verification:</p>
+<ul><li><code>python -m pytest tests/unit/test_run_stt_benchmark.py -q</code> → <strong>14 passed in 30ms</strong>.</li><li>Full unit + integration: <strong>1552 passed, 1 skipped</strong> (1538 prior + 14 new).</li><li>Perf snapshot: <strong>23 passed</strong>.</li><li>CLI run x3: <strong>5/5 PASS deterministically</strong>.</li></ul>
+<p>Notes:</p>
+<ul><li><strong>Pure-function design pays off.</strong> The 14 unit tests don&#x27;t touch faster-whisper at all — they exercise <code>run_benchmark</code> with stub callables. This is the iter-108/iter-109 dependency- injection pattern again: test the orchestration, leave the engine boundary to integration tests.</li><li>**The CLI now serves as canonical reference for what the corpus looks like in practice.** Future contributors who add a fixture (say, <code>multispeaker_high_amp_16khz.wav</code>) just: 1. Generate the audio + add to corpus.json 2. Run the CLI; observe the WER 3. Set the band from the observed value ± reasonable margin</li><li>**Engine-specific bypass is a minor layering violation, but justified.** Adding <code>**transcribe_kwargs</code> to <code>STTEngine.transcribe</code> would make the contract leaky (each engine has different decode params). Keeping the contract clean and bypassing it in the benchmark for the engines we know about is pragmatic — and the benchmark is the only caller that needs decode control.</li><li><strong>The corpus is now an operator-facing benchmark.</strong> Up to iter-131 the fixtures were used only by the integration test (skipped on hosts without faster-whisper). iter-132 surfaces them as a reusable evaluation tool. A <code>README.md</code> pointer to the script would close the documentation loop — saving for a future iteration.</li><li><strong>Future engine-eval flow:</strong> 1. Implement custom STTEngine + register in <code>stt.ENGINES</code>. 2. Run `python scripts/run_stt_benchmark.py --engine custom_engine`. 3. See per-fixture pass/fail in seconds. 4. If most fixtures fail, the engine isn&#x27;t ready. 5. If only edge-case fixtures fail (multispeaker, catastrophic), the engine has limitations to document.</li><li><strong>Pattern for future CLI scripts:</strong> same shape as iter-132 — pure function (testable) + thin CLI wrapper. The pattern is now in two places: <code>scripts/generate_iteration_reports.py</code> has a similar separation with <code>render_*</code> pure functions + <code>main()</code> wrapper.</li><li>Next directions: default with the corpus. STT engine&quot;) — closes the documentation loop. format into a CSV / JSON output mode if a future iter needs machine-readable benchmark results.<ul><li>Architecture: A/B <code>aggressive_first_sentence: true</code> as</li><li>README pointer to the benchmark CLI (&quot;Evaluating a new</li><li>Extract the <code>(name, status, WER, band, elapsed)</code> per-row</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-131.html">← iter-131</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>
