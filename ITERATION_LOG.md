@@ -8256,3 +8256,127 @@ Notes:
     architecture (streaming-overlap improvements, multi-
     turn metric correlations) or testing depth (eval suite,
     fault-injection scenarios).
+
+## iter-111 — Feature savings table on performance.html
+
+**Goal:** Pivot from refactoring (iter-107–110 completed the
+`run_chat` decomposition) to making the perf data more
+actionable. Five iterations (iter-098/099/100/101/102) added
+pair-scenarios that empirically validate user-facing opt-ins,
+but the only place the deltas were summarized was in the
+iteration log entries themselves. This iteration surfaces them
+as a curated table at the top of `performance.html` so an
+operator looking at the live perf page sees the empirical value
+of each opt-in immediately.
+
+**Change:** Three new pieces in `scripts/generate_iteration_reports.py`:
+
+1. **`FEATURE_SAVINGS_TABLE`** — curated list of pair entries.
+   Each entry binds a `feature` label to a `control_scenario`
+   name + `treatment_scenario` name in `perf-results.json`,
+   plus a `primary_metric` (the headline number — usually
+   `ttfs_ms`), a `secondary_metric` (the behavior marker
+   that proves the mechanism fired — usually `mean_sentence_chars`
+   or `last_filler_id` or `context_tokens`), and a one-line
+   takeaway.
+
+2. **`_format_pair_value` / `_format_pair_delta`** — pure
+   formatters. Per-metric formatting rules (ms with 1 decimal,
+   tokens as int, last_filler_id as state-change description).
+   Tested in isolation.
+
+3. **`_render_feature_savings_section(scenarios)`** — composes
+   the HTML. Lookups by name; pairs missing either control or
+   treatment are silently skipped so old perf JSONs (pre-iter-098)
+   render without an empty table.
+
+**Six curated entries** corresponding to the iter-098–102
+pair-scenarios:
+
+| Feature | Control | Treatment | Primary | Secondary |
+|---|---|---|---|---|
+| Aggressive splitter (iter-088) | `long_preamble_aggressive_off` | `long_preamble_aggressive_on` | TTFS | mean_chars |
+| Filler idle_threshold (iter-051) | `filler_threshold_default` | `filler_threshold_aggressive` | TTFS | filler fired? |
+| Auto-aggressive @ 10ms (iter-093) | `auto_aggressive_off` | `auto_aggressive_on` | TTFS | mean_chars |
+| Auto-aggressive @ 50ms (iter-093) | `auto_aggressive_off_50ms` | `auto_aggressive_on_50ms` | TTFS | mean_chars |
+| Auto-aggressive @ 100ms (iter-093) | `auto_aggressive_off_100ms` | `auto_aggressive_on_100ms` | TTFS | mean_chars |
+| Context cap (iter-024) | `context_cap_default` | `context_cap_tight` | context_tokens | TTFS |
+
+When a future iteration adds a new pair-scenario family, the
+log writer appends one entry to `FEATURE_SAVINGS_TABLE`. The
+rendering does the rest.
+
+**Tests** (`tests/unit/test_feature_savings.py`, 28 tests):
+
+*`_format_pair_value` (6 tests):* ms / int / float / None /
+unknown-metric formatting.
+
+*`_format_pair_delta` (8 tests):* ms positive + negative +
+sub-decimal; context_tokens with + without zero-control;
+last_filler_id state-change description (both directions);
+None handling.
+
+*Table structure invariants (3 tests):* ≥6 entries; every
+entry has the required keys; no duplicate treatment names
+(would render two rows for the same data).
+
+*`_render_feature_savings_section` (8 tests):* empty when no
+pairs match; renders when one pair complete; skips half-present
+pairs (missing treatment OR missing control); context_cap pair
+uses token metric formatting; filler pair surfaces fire/no-fire
+state-change; full snapshot renders all 6 rows; uses perf-table
+CSS class; HTML-escapes feature names + takeaways (defensive).
+
+*Integration with `render_performance_page` (2 tests):* page
+includes section when pair scenarios are present; section is
+absent when no pairs in snapshot (graceful degradation for
+old JSONs).
+
+Verification:
+- `python -m pytest tests/unit/test_feature_savings.py -q` →
+  **28 passed in 30ms**.
+- Full unit + integration: **1289 passed, 1 skipped** (1261
+  prior + 28 new).
+- Perf snapshot: **21 passed**.
+- Report regen: confirmed `performance.html` contains the new
+  section with all 6 rows populated from the latest snapshot.
+
+Notes:
+- **Curated > auto-detected.** I considered automatic
+  pair-detection by scenario-name pattern (e.g., split on
+  `_off`/`_on` suffixes), but the names vary too much — iter-099
+  uses `default`/`aggressive`, iter-102 uses `default`/`tight`,
+  iter-101 uses `_off_50ms`/`_on_50ms` (off/on AND a delay
+  tag). A curated list is unambiguous, surfaces the operator-
+  meaningful labels (e.g., "Aggressive first-sentence splitter"
+  vs the cryptic `long_preamble_*`), and keeps the takeaways
+  inline. Cost: one new entry per pair-iteration.
+- **HTML escaping discipline.** The
+  `test_section_escapes_html_in_takeaway` test seeds a
+  malicious entry to confirm `html.escape()` is applied. This
+  is the sentinel for "future curated entries don't break the
+  page" — it's not paranoia, it's the regression test for the
+  one type of change someone would actually make to this list.
+- **The "graceful degradation for old JSONs" property.** The
+  iter-reports/ folder retains every per-iter perf snapshot
+  (perf-iter-NNN.json). When the report generator regenerates
+  iter-{036–097}.html using their respective snapshots, the
+  feature-savings section is empty for those iterations
+  (because their snapshots predate the pair-scenarios). The
+  page just shows the legacy bar charts as before. No flag
+  to set, no version-pinning — the feature is forward-only.
+- **The pair-scenario pattern is now closed-loop.** iter-098
+  added the first pair, iter-099/100/101/102 extended it.
+  iter-111 surfaces the result data in a way an operator can
+  read at a glance. A new pair iter is now a one-line addition
+  to FEATURE_SAVINGS_TABLE — the friction is at its lowest.
+- Next directions:
+  - Real audio fixtures + CPU-only STT (still pending from
+    iter-106). Three iterations now overdue.
+  - Per-token-delay grid for context cap (still pending from
+    iter-102). Would scale the iter-102 row in the savings
+    table from one entry to a 3-entry grid (matching iter-101's
+    auto-aggressive grid shape).
+  - Eval/replay tool that uses SessionState (iter-110) to
+    re-run a past conversation without booting the real mic —
+    the dataclass surface makes this much easier than before.

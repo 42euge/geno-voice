@@ -1270,6 +1270,7 @@ def render_performance_page(perf_payload: dict | None, history: list[dict] | Non
         'reflect <em>pipeline overhead</em>, not neural-net latency. '
         'Real-engine perf testing belongs in a separate live suite.</p>'
         + table_html
+        + _render_feature_savings_section(scenarios)
         + '<h2>Latest snapshot</h2>'
         '<p class="meta">Most recent run; one bar per scenario per metric.</p>'
         '<h3>Time-to-first-speech (TTFS)</h3>'
@@ -1291,6 +1292,208 @@ def render_performance_page(perf_payload: dict | None, history: list[dict] | Non
         + nav_html
     )
     return _page_template("Performance — geno-voice", body_html)
+
+
+# iter-111: curated feature-savings table. Each entry pairs a
+# pair-scenario family (introduced in iter-098 onwards) with the
+# specific scenario rows in perf-results.json that act as
+# control vs. treatment, and the metric whose delta is the
+# headline number. The table renders empty when none of the
+# named scenarios are present in the current snapshot — keeps
+# old perf JSONs renderable without forcing a re-run.
+#
+# When a new pair-scenario lands, append an entry here. The
+# rendering logic does the rest.
+FEATURE_SAVINGS_TABLE = [
+    {
+        "feature": "Aggressive first-sentence splitter (iter-088)",
+        "control_scenario": "long_preamble_aggressive_off",
+        "treatment_scenario": "long_preamble_aggressive_on",
+        "primary_metric": "ttfs_ms",
+        "primary_label": "TTFS",
+        "secondary_metric": "mean_sentence_chars",
+        "secondary_label": "Mean sentence chars",
+        "secondary_lower_is": "shorter (more aggressive cut)",
+        "takeaway": (
+            "Slices on the early comma instead of waiting for the "
+            "first period. Saves real synth+dispatch work."
+        ),
+    },
+    {
+        "feature": "Filler idle_threshold (iter-051)",
+        "control_scenario": "filler_threshold_default",
+        "treatment_scenario": "filler_threshold_aggressive",
+        "primary_metric": "ttfs_ms",
+        "primary_label": "TTFS",
+        "secondary_metric": "last_filler_id",
+        "secondary_label": "Filler fired",
+        "secondary_lower_is": "0 = no fire; non-zero = fired",
+        "takeaway": (
+            "Lower threshold catches faster LLM stalls. Hides LLM "
+            "warmup behind a filler clip; fires more often on "
+            "naturally-fast turns."
+        ),
+    },
+    {
+        "feature": "Auto-aggressive on stall (iter-093) @ 10ms/token",
+        "control_scenario": "auto_aggressive_off",
+        "treatment_scenario": "auto_aggressive_on",
+        "primary_metric": "ttfs_ms",
+        "primary_label": "TTFS",
+        "secondary_metric": "mean_sentence_chars",
+        "secondary_label": "Mean sentence chars",
+        "secondary_lower_is": "shorter (auto-flip fired)",
+        "takeaway": (
+            "Stub LLM at 10ms/token — small absolute savings; the "
+            "mechanism (mean_chars 49→32) is what's verified."
+        ),
+    },
+    {
+        "feature": "Auto-aggressive on stall (iter-093) @ 50ms/token",
+        "control_scenario": "auto_aggressive_off_50ms",
+        "treatment_scenario": "auto_aggressive_on_50ms",
+        "primary_metric": "ttfs_ms",
+        "primary_label": "TTFS",
+        "secondary_metric": "mean_sentence_chars",
+        "secondary_label": "Mean sentence chars",
+        "secondary_lower_is": "shorter (auto-flip fired)",
+        "takeaway": (
+            "Production-like LLM TPS. ~150ms savings at 50ms/token."
+        ),
+    },
+    {
+        "feature": "Auto-aggressive on stall (iter-093) @ 100ms/token",
+        "control_scenario": "auto_aggressive_off_100ms",
+        "treatment_scenario": "auto_aggressive_on_100ms",
+        "primary_metric": "ttfs_ms",
+        "primary_label": "TTFS",
+        "secondary_metric": "mean_sentence_chars",
+        "secondary_label": "Mean sentence chars",
+        "secondary_lower_is": "shorter (auto-flip fired)",
+        "takeaway": (
+            "Slow-LLM scenario. Savings scale linearly with token "
+            "delay; the auto-flip is delay-independent in mechanism."
+        ),
+    },
+    {
+        "feature": "max_user_assistant context cap (iter-024)",
+        "control_scenario": "context_cap_default",
+        "treatment_scenario": "context_cap_tight",
+        "primary_metric": "context_tokens",
+        "primary_label": "Context tokens (turn 8)",
+        "secondary_metric": "ttfs_ms",
+        "secondary_label": "TTFS",
+        "secondary_lower_is": "(stub LLM, no context-scaling)",
+        "takeaway": (
+            "Cap=5 vs 20 in an 8-turn session. Tight cap halves "
+            "billed tokens on late turns; stub LLM doesn't model "
+            "context-dependent TTFB so wall time is identical here."
+        ),
+    },
+]
+
+
+def _format_pair_value(value, metric: str) -> str:
+    """Render a metric value as a string suitable for the savings
+    table. ms-keyed metrics use 1 decimal; integer-keyed metrics
+    show as integers; float ratios use 2 decimals."""
+    if value is None:
+        return "—"
+    if metric.endswith("_ms"):
+        return f"{value:.1f}"
+    if metric in ("context_tokens", "last_filler_id"):
+        return str(int(value))
+    if isinstance(value, float):
+        return f"{value:.2f}"
+    return str(value)
+
+
+def _format_pair_delta(control_v, treatment_v, metric: str) -> str:
+    """Format the delta as a signed value with the right unit."""
+    if control_v is None or treatment_v is None:
+        return "—"
+    delta = treatment_v - control_v
+    if metric.endswith("_ms"):
+        return f"{delta:+.1f}ms"
+    if metric == "context_tokens":
+        # Show as ratio when nonzero, otherwise raw delta.
+        if control_v > 0:
+            ratio = (treatment_v - control_v) / control_v * 100
+            return f"{int(delta):+d} ({ratio:+.0f}%)"
+        return f"{int(delta):+d}"
+    if metric == "last_filler_id":
+        # Nonzero treatment + zero control = filler newly fires.
+        if control_v == 0 and treatment_v != 0:
+            return "filler now fires"
+        if control_v != 0 and treatment_v == 0:
+            return "filler no longer fires"
+        return "—"
+    if isinstance(delta, float):
+        return f"{delta:+.2f}"
+    return f"{delta:+d}"
+
+
+def _render_feature_savings_section(scenarios: list[dict]) -> str:
+    """iter-111: render the curated 'Feature savings' table. Pairs
+    a control scenario row with a treatment scenario row; shows
+    the delta on the primary + secondary metric and a one-line
+    takeaway.
+
+    Only entries whose BOTH control + treatment scenarios appear
+    in the snapshot are rendered. Entries with one or both
+    missing are skipped silently — keeps the section useful as
+    the suite grows or shrinks.
+    """
+    by_name = {s["name"]: s for s in scenarios}
+    rendered_rows: list[str] = []
+    for entry in FEATURE_SAVINGS_TABLE:
+        ctrl = by_name.get(entry["control_scenario"])
+        treat = by_name.get(entry["treatment_scenario"])
+        if ctrl is None or treat is None:
+            continue
+        primary = entry["primary_metric"]
+        secondary = entry["secondary_metric"]
+        ctrl_p = ctrl.get(primary)
+        treat_p = treat.get(primary)
+        ctrl_s = ctrl.get(secondary)
+        treat_s = treat.get(secondary)
+        rendered_rows.append(
+            "<tr>"
+            f"<td>{html.escape(entry['feature'])}</td>"
+            f"<td><code>{html.escape(entry['control_scenario'])}</code></td>"
+            f"<td><code>{html.escape(entry['treatment_scenario'])}</code></td>"
+            f"<td class='num'>{html.escape(_format_pair_value(ctrl_p, primary))}</td>"
+            f"<td class='num'>{html.escape(_format_pair_value(treat_p, primary))}</td>"
+            f"<td class='num'>{html.escape(_format_pair_delta(ctrl_p, treat_p, primary))}</td>"
+            f"<td class='num'>{html.escape(_format_pair_value(ctrl_s, secondary))}</td>"
+            f"<td class='num'>{html.escape(_format_pair_value(treat_s, secondary))}</td>"
+            f"<td>{html.escape(entry['takeaway'])}</td>"
+            "</tr>"
+        )
+    if not rendered_rows:
+        return ""
+    return (
+        '<h2>Feature savings (iter-098+ pair-scenarios)</h2>'
+        '<p class="meta">Curated A/B comparisons. Each row pairs a '
+        'control scenario with a treatment scenario that varies '
+        'exactly one opt-in. Deltas show the empirical impact '
+        'on the primary metric; secondary column surfaces the '
+        'behavior marker that proves the mechanism actually fired.</p>'
+        '<table class="perf-table">'
+        '<thead><tr>'
+        '<th>Feature</th>'
+        '<th>Control scenario</th>'
+        '<th>Treatment scenario</th>'
+        '<th>Control</th>'
+        '<th>Treatment</th>'
+        '<th>Δ primary</th>'
+        '<th>Control 2nd</th>'
+        '<th>Treatment 2nd</th>'
+        '<th>Takeaway</th>'
+        '</tr></thead><tbody>'
+        + "".join(rendered_rows)
+        + '</tbody></table>'
+    )
 
 
 def _render_perf_history_section(history: list[dict]) -> str:
