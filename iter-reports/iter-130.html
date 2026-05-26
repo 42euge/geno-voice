@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-130 — Drift-sentinel for mic_chat extraction pattern</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-129.html">← iter-129</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-130 — Drift-sentinel for mic_chat extraction pattern</h1>
+<div class="meta"></div>
+</header><p><strong>Goal:</strong> Apply iter-129&#x27;s drift-sentinel pattern to iter-109&#x27;s mic_chat extraction-pattern docs. The two pattern sections in GENO.md are now both protected against doc/code divergence.</p>
+<p><strong>Pre-iteration discovery: the doc was already drifting.</strong> iter-110&#x27;s <code>run_session</code> extraction follows the same 5-rule shape as iter-107/108/109:</p>
+<ul><li>Callable dependency injection (<code>chat_loop</code> instead of an engine class)</li><li>Log injection (<code>log</code> callable, default <code>print</code>)</li><li>ANSI styling stays at the caller (<code>prompt_log</code> closure re-applies DIM/RESET)</li><li>Returns a dataclass (<code>SessionState</code>)</li><li>Lazy-imports <code>ChatLoop.trim_messages</code> per rule 5</li></ul>
+<p>But the GENO.md section still said &quot;three instances confirm it&quot; and didn&#x27;t list iter-110. The drift was silent — no test caught it. iter-130 fixes the drift AND adds the test that prevents future drift.</p>
+<p><strong>Two changes:</strong></p>
+<p>1. <strong>GENO.md updated</strong>:</p>
+<ul><ul><ul></ul></ul></ul>
+<p>2. <strong><code>tests/unit/test_extraction_pattern_doc.py</code></strong> — 9 tests mirroring iter-129&#x27;s diversity-pattern sentinel:</p>
+<ul><ul><ul></ul></ul></ul>
+<p><strong>The &quot;rules-vs-instances cross-check&quot; is new this iteration.</strong> iter-129&#x27;s diversity-pattern test only covered helper-vs-doc sync; iter-130 adds:</p>
+<ul><li><strong>Rule count check</strong> (<code>test_doc_lists_5_numbered_rules</code>): catches a contributor adding a 6th rule without updating the cross-pattern guidance.</li><li><strong>Test-file existence check</strong>: catches an extraction landing without dedicated tests.</li></ul>
+<p>These extensions are worth backporting to iter-129&#x27;s diversity-pattern test in a future iteration if a 5th diversity instance lands.</p>
+<p>Verification:</p>
+<ul><li>`python -m pytest tests/unit/test_extraction_pattern_doc.py -q` → <strong>9 passed in 50ms</strong>.</li><li>`python -m pytest tests/unit/test_diversity_pattern_doc.py -q` → <strong>8 passed</strong> (iter-129 sentinel still passes).</li><li>Full unit + integration: <strong>1536 passed, 1 skipped</strong> (1527 prior + 9 new).</li><li>Perf snapshot: <strong>23 passed</strong>.</li></ul>
+<p>Notes:</p>
+<ul><li><strong>Both GENO.md pattern sections now have drift sentinels.</strong> iter-129 covered diversity-check; iter-130 covers extraction. The shape is reusable: any future documented pattern in GENO.md should ship with a sibling drift-sentinel test.</li><li><strong>Discovery-during-iteration is itself a sentinel.</strong> iter-130 found stale documentation that no human had reported. Adding the sentinel test means the next contributor who lands a pattern-conforming change gets a friendly test failure reminding them to update the doc — instead of silently letting the doc rot.</li><li><strong>The two pattern docs in GENO.md form a small ecosystem.</strong> Reading one helps a contributor understand the other: per rule / show concrete examples&quot; truth) that can be extended to add an instance<ul><li>Both follow &quot;lead with trigger / number rules / cite iter</li><li>Both have a backing tuple (the test file&#x27;s source of</li><li>Both fire when the doc and code diverge</li></ul></li></ul>
+<p>This consistency makes it cheap to add a third documented pattern in the future — copy the structure, write the sentinel test from the same template.</p>
+<ul><li><strong>Extraction count is now 4.</strong> iter-110 brought this to parity with iter-129&#x27;s diversity count. Five extractions would justify a &quot;you&#x27;ve done this enough times that the rules are stable&quot; note in the doc; for now, four feels like the right level of evidence.</li><li>Next directions: default with the iter-127 5-fixture corpus. benchmark&quot; (the still-pending option). iter-129&#x27;s diversity-pattern sentinel test.<ul><li>Architecture: A/B <code>aggressive_first_sentence: true</code> as</li><li>Document the 5-fixture corpus as a &quot;standard test</li><li>Backport iter-130&#x27;s rule-count + test-file checks to</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-129.html">← iter-129</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>
