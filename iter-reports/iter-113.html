@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-113 — Cross-turn filler variety via recent-IDs FIFO</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-112.html">← iter-112</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-113 — Cross-turn filler variety via recent-IDs FIFO</h1>
+<div class="meta"></div>
+</header><p><strong>Goal:</strong> First architecture-pivot iteration after the refactor + perf-data milestones. Targets a real UX issue: filler-word repetition across turns.</p>
+<p><code>played_filler_ids</code> (iter-087) tracks fillers within a single turn so the picker doesn&#x27;t pick &quot;umm umm&quot; back-to-back. But each turn creates a fresh SentenceWorker with an empty set, so across turns the same filler can be picked every time. With 3 fillers configured and an unlucky <code>random.choice</code>, the user can hear the exact same &quot;umm&quot; five turns running. Visible repetition, easy to fix.</p>
+<p><strong>Change:</strong> Add a cross-turn FIFO that lives at the ChatLoop level and threads down to each SentenceWorker.</p>
+<p>In <code>_chat_loop.py:ChatLoop.__init__</code>:</p>
+<pre class="code-block"><code>from collections import deque as _deque
+n_fillers = len(self._fillers)
+self._recent_filler_ids = (
+    _deque(maxlen=max(1, n_fillers - 1))
+    if n_fillers &gt; 0 else None
+)</code></pre>
+<p><code>maxlen = n_fillers - 1</code> is the right size: with 3 fillers, the last 2 played are blocked, leaving 1 fresh option always available. The picker is forced to rotate. With 1 filler, <code>maxlen=1</code> means the picker&#x27;s preferred set is sometimes empty — the fallback &quot;all-recent → use full available&quot; branch ensures the filler still plays.</p>
+<p>In <code>_chat_pipeline.py:SentenceWorker.__init__</code>:</p>
+<pre class="code-block"><code>recent_filler_ids: Optional[Any] = None,  # added kwarg
+self._recent_filler_ids = recent_filler_ids</code></pre>
+<p>Picker integration (the only behavior change):</p>
+<pre class="code-block"><code>available = [c for c in self._fillers if id(c) not in played_filler_ids]
+# iter-113: prefer clips NOT in the cross-turn FIFO.
+if self._recent_filler_ids:
+    fresh = [c for c in available if id(c) not in self._recent_filler_ids]
+    if fresh:
+        available = fresh
+clip = self._filler_picker(available)</code></pre>
+<p>The fallback (&quot;everything&#x27;s recent → use full available&quot;) matters because when n_fillers ≤ maxlen, the FIFO can fill up to the point where every clip is recent. Refusing to play a filler in that case would defeat the iter-011 purpose; the better failure mode is &quot;play one even if it repeats.&quot;</p>
+<p>After successful play, the worker appends to the FIFO:</p>
+<pre class="code-block"><code>if self._recent_filler_ids is not None:
+    if hasattr(self._recent_filler_ids, &quot;append&quot;):
+        self._recent_filler_ids.append(id(clip))
+    else:
+        self._recent_filler_ids.add(id(clip))</code></pre>
+<p>Duck-typed append vs add so future callers can pass a <code>set</code> (unbounded, fine for tests) or a <code>list</code>. Production passes a <code>deque(maxlen=N)</code>.</p>
+<p><strong>Tests</strong> (<code>tests/unit/test_cross_turn_fillers.py</code>, 12 tests):</p>
+<ul><li>Constructor wiring: default <code>recent_filler_ids=None</code>; passed kwarg stored as same reference (so mutations propagate).</li><li>Filter behavior: prefer non-recent when fresh available; fall back to full when all recent; empty FIFO behaves like no FIFO.</li><li>ChatLoop integration: deque sized n_fillers-1 (with min 1); None when no fillers; same-deque-reference passed to SentenceWorker; cross-turn append behavior (add 3 ids, oldest evicted).</li><li>Append shape compat: works with deque (.append), list (.append), set (.add).</li></ul>
+<p>Verification:</p>
+<ul><li><code>python -m pytest tests/unit/test_cross_turn_fillers.py -q</code> → <strong>12 passed in 60ms</strong>.</li><li>Filler regression sentinel (iter-061/087/091/093/096/099): <code>pytest tests/unit/ -k &#x27;filler or Filler&#x27; -q</code> → **93 passed in 12s**. No regressions in any prior filler test.</li><li>Full unit + integration: <strong>1309 passed, 1 skipped</strong> (1297 prior + 12 new).</li><li>Perf snapshot: <strong>23 passed</strong>.</li></ul>
+<p>Notes:</p>
+<ul><li><strong>The fallback shape matters more than the filter.</strong> Most multi-turn sessions never hit the all-recent fallback — with 3 fillers and maxlen=2, the fresh set always has 1 candidate. The fallback exists for the edge case (1 filler, long session) where it WOULD fire, so the test <code>test_picker_falls_back_to_full_when_all_recent</code> is the regression sentinel for that path.</li><li><strong>Append-vs-add duck typing is a small smell but justified.</strong> The cleaner alternative would be a thin <code>_FillerHistory</code> protocol class with a single method. Wasn&#x27;t worth the abstraction for two backends — a future iter could promote if a third storage shape lands (e.g., a max-frequency map rather than a FIFO).</li><li><strong>No new metric for this iteration.</strong> The TurnMetrics <code>last_filler_id</code> field (iter-081) is already enough for session-summary diversity reporting (median/mode of distinct fillers across turns). A future session-summary check could warn when <code>last_filler_id</code> is the SAME value across N+ consecutive turns, which would now be rare due to iter-113.</li><li><strong>No perf scenario for this iteration.</strong> The cross-turn variety effect is only observable across many turns and is inherently random (filler picker is <code>random.choice</code> in production). A perf scenario testing variety would need a large N + fixed seed, and the result would be a categorical &quot;yes, fillers vary&quot; not a continuous metric.</li><li>**The pattern: cross-turn state at ChatLoop, threaded to SentenceWorker per turn.** This is the second cross-turn state field on ChatLoop after iter-082&#x27;s <code>_last_first_audio_at</code>. A third would justify a <code>ChatLoopState</code> dataclass; the two current fields are clear enough as instance attributes.</li><li>Next directions: iter-106). Five iterations now overdue. measure filler variety empirically across recorded sessions. appears in N+ consecutive turns. Becomes a defensive sentinel that iter-113 didn&#x27;t break. metric (iter-074) has room to improve via earlier watcher start.<ul><li>Real audio fixtures + CPU-only STT (still pending from</li><li>Eval/replay tool using SessionState (iter-110). Could</li><li>Session-summary check: warn when the same <code>last_filler_id</code></li><li>Architecture: investigate whether the bargeable_fraction</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-112.html">← iter-112</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>
