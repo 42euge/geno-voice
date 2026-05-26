@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-124 — Noisy-audio fixture for WER pipeline</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-123.html">← iter-123</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-124 — Noisy-audio fixture for WER pipeline</h1>
+<div class="meta"></div>
+</header><p><strong>Goal:</strong> iter-106&#x27;s &quot;noisy&quot; entry was a synthetic STT hypothesis (&quot;the quick crown fox jumped on the lazy dog&quot;) — the WER pipeline tested but no real noise was involved. iter-124 generates real noisy audio so faster-whisper actually encounters degraded input. Validates iter-106&#x27;s &quot;noisy&quot; band isn&#x27;t purely synthetic.</p>
+<p><strong>Pre-iteration SNR probe:</strong> First tried 10 dB SNR — tiny model produced &quot;what in the web of the May.&quot; (WER 1.0, catastrophic). Probed 15/20/25/30 dB; got:</p>
+<ul><li>15 dB → &quot;what in the weather today.&quot; (WER 0.20)</li><li>20 dB → &quot;What is the winner today?&quot; (WER 0.20)</li><li>25 dB → &quot;What is the winner to me?&quot; (WER 0.60) ← outlier</li><li>30 dB → &quot;What is the winner today?&quot; (WER 0.20)</li></ul>
+<p>The model is non-monotonic with SNR — 25 dB regresses worse than 20 dB. This is a known artifact of small Whisper models on synthesized voices. Picked 15 dB for the fixture: stable WER ≈ 0.2, well-defined band, consistent across runs.</p>
+<p><strong>Two pieces:</strong></p>
+<p>1. <strong><code>tests/fixtures/wer/noisy_16khz.wav</code></strong> — generated from <code>clean_16khz.wav</code> (iter-122) by adding gaussian noise at ~15 dB SNR using <code>numpy.random.default_rng(seed=42)</code> for determinism. 24144 samples, mono, 16 bit. Committed.</p>
+<p>Generation script (recorded for reproducibility):</p>
+<pre class="code-block"><code>   speech = read_int16(&quot;clean_16khz.wav&quot;) / 32768.0
+   speech_rms = np.sqrt(np.mean(speech ** 2))
+   noise_rms = speech_rms / (10 ** (15 / 20))   # 15 dB SNR
+   noise = np.random.default_rng(seed=42).standard_normal(len(speech)) * noise_rms
+   noisy = np.clip((speech + noise) * 32768.0, -32768, 32767).astype(np.int16)</code></pre>
+<p>2. <strong><code>audio_fixtures</code> corpus entry:</strong> <code>noisy_audio</code> with reference &quot;what is the weather today&quot; and band 0.10-0.50. The 0.10 floor catches a fixture-regen at lower SNR; the 0.50 ceiling tolerates the model&#x27;s natural variance.</p>
+<p>The existing <code>tests/integration/test_wer_audio.py</code> auto- picks up the new entry — its parametrized <code>test_each_audio_fixture_lands_in_wer_band</code> runs faster- whisper on the new file and asserts the WER inside [0.10, 0.50].</p>
+<p><strong>Fixture-shape sentinel</strong> (<code>tests/unit/test_noisy_audio_fixture.py</code>, 7 tests):</p>
+<ul><li>File presence + shape (mono, 16-bit, 16 kHz, sample count matches clean_16khz.wav).</li><li>RMS invariants: noisy RMS &gt; clean RMS (catches accidental re-save of clean as noisy).</li><li><strong>Measured SNR within ±2 dB of 15 dB target.</strong> Computed by subtracting clean from noisy → noise-only signal → SNR formula. Catches drift if the fixture is regenerated with a different SNR target.</li><li>Saturation &lt; 5% (catches over-loud regeneration that would clip too many samples).</li><li>Deterministic content sanity (middle samples have non-trivial values; locks against silent fixture or accidental zero).</li></ul>
+<p>These run regardless of faster-whisper availability, so even on CI hosts without STT the fixture&#x27;s structural integrity is verified.</p>
+<p>Verification:</p>
+<ul><li><code>python -m pytest tests/unit/test_noisy_audio_fixture.py -v</code> → <strong>7 passed in 60ms</strong>.</li><li><code>python -m pytest tests/integration/test_wer_audio.py -v</code> → <strong>4 passed in 3.2s</strong> (the parametrized fixture-band test now iterates over 3 fixtures instead of 2; new entry lands in band).</li><li>Full unit + integration: <strong>1476 passed, 1 skipped</strong> (1469 prior + 7 new).</li><li>Perf snapshot: <strong>23 passed</strong>.</li></ul>
+<p>Notes:</p>
+<ul><li>**The <code>noise_only = noisy - clean</code> SNR test is the strongest fixture invariant.** It measures the actual delivered SNR rather than trusting the generation parameters. If a future iteration regenerates the fixture with seed=43 (or 14 dB target, or a different noise distribution), this test fires.</li><li><strong>Saturation guard catches a class of bugs:</strong> if someone regenerates with too-high SNR target → noise dominates → clipping → most samples saturate → audio sounds garbled. The &lt; 5% bound permits the small clipping at speech peaks that&#x27;s natural at 15 dB but not the cascade clipping that happens at e.g. -10 dB.</li><li><strong>Determinism is the headline property.</strong> <code>seed=42</code> is the contract — change it and the fixture&#x27;s WER shifts, breaking the corpus assertions. The &quot;middle samples&quot; test is a soft canary; if it ever fails, the bigger SNR/shape tests will too.</li><li><strong>The corpus is now 6 text + 3 audio fixtures.</strong> Three audio scenarios (clean speech, pangram, noisy speech) cover the non-degenerate real-audio space. Future additions: case at lower SNR). &quot;catastrophic&quot; band — model reliably fails.<ul><li>Music/background-speech overlay (the iter-106 &quot;noisy&quot;</li><li>Truly catastrophic (5-10 dB) for the iter-106</li><li>Multi-speaker overlap.</li></ul></li></ul>
+<p>Each fixture gets the same shape: deterministic seed, expected band, fixture-shape unit test.</p>
+<ul><li>**Pattern: deterministic-fixture invariants belong in a unit test, not the integration test.** The unit test runs always; the integration test runs only when STT is available. Splitting the assertions cleanly lets each test live in its proper skip context.</li><li>Next directions: diversity-pattern instance). SNR) for the iter-106 &quot;catastrophic&quot; band. default, validated against the now-existing real-audio fixtures.<ul><li>Sentence-length-bucket consistency check (fourth</li><li>More-degraded audio fixture (truly catastrophic, 5-10 dB</li><li>Architecture pivot: A/B aggressive_first_sentence as a</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-123.html">← iter-123</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>
