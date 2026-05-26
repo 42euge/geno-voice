@@ -8071,3 +8071,188 @@ Notes:
     iter-108 is the swap point.
   - Per-token-delay grid for context cap (still pending from
     iter-102).
+
+## iter-110 — Extract run_session from run_chat
+
+**Goal:** Complete the `run_chat` decomposition started in
+iter-107. Pull the main turn loop + KeyboardInterrupt handler
+(~50 lines mixing per-turn flow, session counters, trim
+plumbing, and exit handling) into a tested module.
+
+This is the 4th mic_chat.py extraction in four iterations and
+the most complex — it has 6 mutable locals that needed to be
+bundled into a `SessionState` dataclass per the GENO.md pattern's
+rule 4.
+
+**Original block:** Lines 285-354 of mic_chat.py — system_prompt
+setup + 7 declared locals + the while-True loop + the
+KeyboardInterrupt handler that hands the locals to
+`print_session_summary` via `SessionMeta`.
+
+**Change:** New module `examples/_chat_session.py` exposing:
+
+```python
+@dataclass
+class SessionState:
+    messages: list[dict]
+    all_metrics: list
+    false_triggers: int = 0
+    llm_errors: int = 0
+    trim_events: int = 0
+    trim_messages_evicted: int = 0
+    primed_frames: Optional[list[bytes]] = None
+    session_start: float = 0.0
+
+def run_session(
+    chat_loop, system_prompt: str, *,
+    max_user_assistant: int = 20,
+    log: Callable[[str], None] = print,
+    prompt_log: Callable[[int], None] = ...,
+    clock: Callable[[], float] = time.monotonic,
+    trim_messages: Optional[Callable] = None,
+) -> SessionState:
+```
+
+`SessionState` field names line up 1:1 with the existing
+`SessionMeta` dataclass — conversion in the caller is mechanical:
+
+```python
+SessionMeta(
+    false_triggers=state.false_triggers,
+    session_seconds=time.monotonic() - state.session_start,
+    llm_errors=state.llm_errors,
+    trim_events=state.trim_events,
+    trim_messages_evicted=state.trim_messages_evicted,
+    idle_threshold=filler_idle_threshold,
+)
+```
+
+**Three orthogonal injection seams** (each test-relevant):
+- `prompt_log(turn: int)` — the "[N] waiting..." prompt. Default
+  re-creates the mic_chat.py styling. Tests capture turn counter.
+- `log(line: str)` — the post-stream newline emitter. Default
+  `print`. Tests silence it with `lambda s: None`.
+- `trim_messages` — the context cap callable. When `None`, lazy-
+  imports `ChatLoop.trim_messages` per GENO.md rule 5. Tests
+  pass a stub that doesn't import ChatLoop at all.
+
+**Caller (mic_chat.py) shrinks from ~50 lines to ~12:**
+
+```python
+from examples._chat_session import run_session
+
+system_prompt = llm_config.get(
+    "system_prompt", "You are a concise voice assistant.",
+)
+state = run_session(
+    chat_loop, system_prompt, max_user_assistant=20,
+    prompt_log=lambda turn: print(
+        f"  {DIM}[{turn}] waiting...{RESET}", end="", flush=True,
+    ),
+)
+# … then SessionMeta conversion + print_session_summary
+```
+
+ANSI styling stays at the caller (rule 3). The `prompt_log`
+callable wraps `DIM`/`RESET` styling around the plain
+"[N] waiting..." text the module would otherwise emit.
+
+**Tests** (`tests/unit/test_chat_session.py`, 14 tests):
+
+Three buckets, mirroring the loop's three result-shapes:
+
+*Successful turn flow (5 tests):*
+- Empty queue → immediate KI returns SessionState with system
+  prompt seeded and counters at zero.
+- session_start reflects clock callable.
+- One success → metrics appended + `metric.print(turn)` called.
+- Multiple successes → turn counter increments correctly.
+- system_prompt is always the first message.
+
+*Error / false-trigger handling (2 tests):*
+- iter-058: `had_error=True` increments `llm_errors`, reuses
+  turn counter — sequence `[1, 1, 2]` validates the no-advance
+  on error.
+- iter-048: `metrics=None` increments `false_triggers`, same
+  no-advance shape.
+
+*Trim + state plumbing (5 tests):*
+- iter-025/057: `next_primed_frames` from turn N becomes
+  `primed_frames` input to turn N+1.
+- iter-078: trim event recorded when eviction happens (with
+  an `_AppendingChatLoop` that adds messages each turn so the
+  shrinker has work to do).
+- No trim event when no eviction.
+- iter-058 invariant: trim only runs after SUCCESSFUL turns,
+  never on error / false-trigger.
+- max_user_assistant kwarg threads through to `trim_messages`.
+
+*Logging discipline (2 tests):*
+- prompt_log fires every turn including the eventual KI prompt.
+- log emits exactly once per successful turn (never on
+  error / false-trigger).
+
+Verification:
+- `python -m pytest tests/unit/test_chat_session.py -q` → **14
+  passed in 20ms**.
+- Full unit + integration: **1261 passed, 1 skipped** (1247
+  prior + 14 new).
+- Perf snapshot: **21 passed**.
+
+**The run_chat decomposition is now complete.** Original
+mic_chat.py:run_chat was ~195 lines (pre-iter-107). After this
+iteration it's ~95 lines, and structurally it's now five
+function calls plus a small finally block:
+
+```python
+def run_chat(...):
+    llm_config = load_llm_config()
+    chat_cfg = load_chat_config()                      # iter-018
+    engines = load_engines(...)                        # iter-108
+    rendered_fillers = prerender_fillers(...)          # iter-107
+    audio_io = build_audio_io(...)                     # iter-109
+    chat_loop = ChatLoop(...)                          # iter-015
+    state = run_session(chat_loop, system_prompt, ...) # iter-110
+    print_session_summary(state.all_metrics, ..., meta=...)
+    # finally: mic.stop_stream(), mic.close(), pa.terminate()
+```
+
+Every block is now its own tested module. The `run_chat`
+function itself is essentially declarative — it threads
+configuration into pre-built components and dispatches to the
+session driver.
+
+Notes:
+- **Trace-of-counters tests are subtle.** Three test failures
+  during writing came from miscounting what `[N] waiting...`
+  fires when. The pattern: prompt_log fires ONCE per
+  iteration, INCLUDING the iteration that raises
+  KeyboardInterrupt. So an N-success session shows N+1 prompts
+  (N successes + 1 final KI prompt). Worth recording for
+  future loop-shaped extractions.
+- **Lazy import of `ChatLoop.trim_messages`** (rule 5) saved
+  the test from needing to import `ChatLoop` at all. Tests
+  inject `trim_messages=_stub_trim` and never touch the real
+  class. This is the cleanest application of rule 5 yet — the
+  earlier instances (iter-109 pyaudio) had platform-specific
+  motivation; this one has a pure decoupling motivation.
+- **SessionState vs SessionMeta:** the field-name overlap is
+  intentional — the dataclasses serve different layers
+  (state during the run vs metadata for the summary) but
+  carry the same per-session signals. A future cleanup could
+  unify them, but the current 1:1 mapping is clear enough
+  that the duplication is fine.
+- Next directions:
+  - Real audio fixtures + CPU-only STT (still pending from
+    iter-106). Now ready to land — `stt_factory` from
+    iter-108 is the swap point, and `run_session` accepts
+    any chat_loop matching the `.run_one_turn` shape so
+    integration tests can drive it without booting the real
+    mic.
+  - Per-token-delay grid for context cap (still pending from
+    iter-102).
+  - Pivot away from refactoring — `run_chat` is
+    structurally complete. New work should target
+    architecture (streaming-overlap improvements, multi-
+    turn metric correlations) or testing depth (eval suite,
+    fault-injection scenarios).

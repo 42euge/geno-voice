@@ -1,0 +1,156 @@
+"""Main turn loop — extracted from mic_chat.py:run_chat.
+
+iter-110: completes the run_chat decomposition started in
+iter-107 (filler pre-render), iter-108 (engine load), iter-109
+(audio I/O closures). The remaining big block was the turn loop
+itself — ~50 lines mixing per-turn flow, session-level counters,
+KeyboardInterrupt handling, and trim plumbing.
+
+Pulled into `run_session(...)` returning a `SessionState` so
+the caller can pass it straight to `print_session_summary`.
+The state bundle replaces the 6 mutable locals that previously
+lived in `run_chat`'s scope.
+
+Follows the GENO.md "mic_chat.py extraction pattern":
+- chat_loop is a callable dependency (the .run_one_turn shape
+  is what we actually use, not the class)
+- log injected (default print)
+- ANSI styling stays at the caller — the prompt line "[N]
+  waiting..." gets re-styled via a `prompt_log` callable
+- Returns SessionState dataclass
+- No platform deps to lazy-import here (this module is pure
+  orchestration over already-extracted pieces)
+"""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass, field
+from typing import Any, Callable, Optional
+
+
+@dataclass
+class SessionState:
+    """Bundle of session-level state collected across turns.
+
+    Each field corresponds to one of the 6 mutable locals that
+    previously lived in `run_chat`'s scope. After `run_session`
+    returns (KeyboardInterrupt or other exit), the caller hands
+    this bundle to `print_session_summary` — the field names
+    line up with `SessionMeta` 1:1 so the conversion is mechanical.
+
+    The `messages` list is mutated in place across turns and held
+    here so a future eval/replay tool can inspect the conversation
+    history post-mortem.
+    """
+
+    messages: list[dict] = field(default_factory=list)
+    all_metrics: list = field(default_factory=list)
+    false_triggers: int = 0
+    llm_errors: int = 0
+    trim_events: int = 0
+    trim_messages_evicted: int = 0
+    primed_frames: Optional[list[bytes]] = None
+    session_start: float = 0.0
+
+
+def run_session(
+    chat_loop: Any,
+    system_prompt: str,
+    *,
+    max_user_assistant: int = 20,
+    log: Callable[[str], None] = print,
+    prompt_log: Callable[[int], None] = lambda turn: print(
+        f"  [{turn}] waiting...", end="", flush=True
+    ),
+    clock: Callable[[], float] = time.monotonic,
+    trim_messages: Optional[Callable[[list[dict], int], list[dict]]] = None,
+) -> SessionState:
+    """Run the chat loop until KeyboardInterrupt.
+
+    Args:
+        chat_loop: object with `.run_one_turn(messages, primed_frames=None)`
+            returning a result with `.metrics`, `.had_error`,
+            `.next_primed_frames`. The production wiring is a
+            `ChatLoop` instance; tests pass any object matching
+            the contract.
+        system_prompt: first message added to the conversation.
+        max_user_assistant: cap passed to `trim_messages` after
+            each successful turn (iter-024).
+        log: emit callable for the post-turn newline that flushes
+            the streamed bot text. Default `print`. Tests can
+            silence with `log=lambda s: None`.
+        prompt_log: emit callable for the "[N] waiting..." prompt
+            shown before each turn. Default re-creates the
+            mic_chat.py styling. Tests can capture turn count.
+        clock: monotonic-time source for `session_start`.
+        trim_messages: callable for context-cap enforcement. When
+            None (default), defers to the `ChatLoop.trim_messages`
+            staticmethod. Tests pass a stub to avoid the import.
+
+    Returns:
+        Populated SessionState. The caller is responsible for
+        passing it to print_session_summary (or any other
+        terminal aggregator).
+
+    Side effects:
+        Mutates `state.messages` in place across turns.
+        Catches `KeyboardInterrupt` and returns normally — that's
+        the expected exit path. Other exceptions propagate.
+
+    iter-048 false-trigger semantics: a turn that produced no
+    metrics and no error is counted as a false trigger and the
+    loop continues without consuming the turn counter (the
+    operator sees the same `[N] waiting...` prompt next time).
+
+    iter-058 LLM-error semantics: a turn flagged `had_error` is
+    counted in `llm_errors` and the loop continues; the same turn
+    counter is reused.
+
+    iter-078 trim semantics: after every SUCCESSFUL turn (metrics
+    populated, no error), `trim_messages` is called and any
+    eviction increments both counters.
+    """
+    if trim_messages is None:
+        # Lazy import — keeps run_session importable without
+        # pulling in ChatLoop (and its transitive deps). Same
+        # rule 5 of the GENO.md pattern.
+        from examples._chat_loop import ChatLoop
+        trim_messages = ChatLoop.trim_messages
+
+    state = SessionState(
+        messages=[{"role": "system", "content": system_prompt}],
+        session_start=clock(),
+    )
+
+    try:
+        turn = 0
+        while True:
+            prompt_log(turn + 1)
+            result = chat_loop.run_one_turn(
+                state.messages, primed_frames=state.primed_frames,
+            )
+            state.primed_frames = result.next_primed_frames
+            if result.had_error:
+                state.llm_errors += 1
+                continue
+            if result.metrics is None:
+                state.false_triggers += 1
+                continue
+            log("")  # newline after streamed bot text
+            result.metrics.print(turn + 1)
+            state.all_metrics.append(result.metrics)
+            turn += 1
+            len_before = len(state.messages)
+            state.messages = trim_messages(
+                state.messages, max_user_assistant=max_user_assistant,
+            )
+            evicted = len_before - len(state.messages)
+            if evicted > 0:
+                state.trim_events += 1
+                state.trim_messages_evicted += evicted
+    except KeyboardInterrupt:
+        # Expected exit path — the caller knows to dump the summary.
+        pass
+
+    return state

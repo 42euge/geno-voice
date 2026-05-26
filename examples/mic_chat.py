@@ -282,73 +282,39 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
         auto_aggressive_threshold=auto_aggressive_threshold,
     )
 
-    system_prompt = llm_config.get("system_prompt", "You are a concise voice assistant.")
-    messages = [{"role": "system", "content": system_prompt}]
-    all_metrics = []
-    # iter-048: count VAD false triggers (no transcription, no
-    # error). High count → tune silence_threshold up or
-    # min_speech_duration up.
-    false_triggers = 0
-    # iter-058: count LLM errors at session level so the summary
-    # can report a per-stage error rate.
-    llm_errors = 0
-    # iter-078: trim-event counters. Validates the iter-024
-    # max_user_assistant=20 threshold is calibrated.
-    trim_events = 0
-    trim_messages_evicted = 0
-    primed_frames: list[bytes] | None = None
-    # iter-054: track session start so the summary can report
-    # total wall-clock + turns/min.
-    session_start = time.monotonic()
+    # iter-110: main turn loop + KeyboardInterrupt handler moved
+    # to examples/_chat_session.run_session. State that previously
+    # lived as 6 mutable locals now flows through SessionState.
+    from examples._chat_session import run_session
 
+    system_prompt = llm_config.get(
+        "system_prompt", "You are a concise voice assistant.",
+    )
+    state = run_session(
+        chat_loop,
+        system_prompt,
+        max_user_assistant=20,
+        prompt_log=lambda turn: print(
+            f"  {DIM}[{turn}] waiting...{RESET}", end="", flush=True,
+        ),
+    )
+
+    # iter-017 / iter-086: hand the populated SessionState to the
+    # session-summary aggregator. Field names line up 1:1 with
+    # SessionMeta so this is mechanical.
     try:
-        turn = 0
-        while True:
-            print(f"  {DIM}[{turn + 1}] waiting...{RESET}", end="", flush=True)
-            result = chat_loop.run_one_turn(messages, primed_frames=primed_frames)
-            primed_frames = result.next_primed_frames
-            if result.had_error:
-                # iter-058: record LLM-error turn.
-                llm_errors += 1
-                continue
-            if result.metrics is None:
-                # iter-048: no metrics + no error = false trigger.
-                false_triggers += 1
-                continue
-            print()  # newline after the streamed bot text
-            result.metrics.print(turn + 1)
-            all_metrics.append(result.metrics)
-            turn += 1
-            # iter-078: capture how many messages the trim actually
-            # evicted by diffing list lengths around the call.
-            len_before = len(messages)
-            messages = ChatLoop.trim_messages(messages, max_user_assistant=20)
-            evicted = len_before - len(messages)
-            if evicted > 0:
-                trim_events += 1
-                trim_messages_evicted += evicted
-
-    except KeyboardInterrupt:
-        # iter-017: extracted to _chat_metrics.print_session_summary
-        # so it's testable and uses statistics.median (proper
-        # even-length handling).
-        # iter-086: bundle session-level signals into SessionMeta.
-        # Future session-level signals extend the dataclass instead
-        # of growing this call site's kwarg list.
         from examples._chat_metrics import (
             print_session_summary,
             SessionMeta,
         )
         print_session_summary(
-            all_metrics, llm_config,
+            state.all_metrics, llm_config,
             meta=SessionMeta(
-                false_triggers=false_triggers,
-                session_seconds=time.monotonic() - session_start,
-                llm_errors=llm_errors,
-                trim_events=trim_events,
-                trim_messages_evicted=trim_messages_evicted,
-                # iter-096: pass the configured idle_threshold so
-                # the FP-rate line can recommend a value.
+                false_triggers=state.false_triggers,
+                session_seconds=time.monotonic() - state.session_start,
+                llm_errors=state.llm_errors,
+                trim_events=state.trim_events,
+                trim_messages_evicted=state.trim_messages_evicted,
                 idle_threshold=filler_idle_threshold,
             ),
         )
