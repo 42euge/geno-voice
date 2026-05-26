@@ -57,5 +57,34 @@
       "expected_wer_min": 0.95,
       "expected_wer_max": 1.05
     }
+  ],
+  "_audio_comment": [
+    "iter-117 audio fixtures. Each entry is a real .wav file",
+    "(generated via espeak-ng) plus the reference transcript.",
+    "The integration test loads faster-whisper, transcribes the",
+    "audio, and asserts WER lands in the expected band.",
+    "",
+    "espeak-ng output isn't natural speech, so the WER bands are",
+    "more permissive than what production-grade STT would do on",
+    "real recordings. Tightening the bands later (when real",
+    "human-recorded fixtures land) is a follow-up."
+  ],
+  "audio_fixtures": [
+    {
+      "name": "clean_audio",
+      "description": "Short utterance via espeak-ng + faster-whisper round-trip.",
+      "audio_path": "clean.wav",
+      "reference": "what is the weather today",
+      "expected_wer_min": 0.0,
+      "expected_wer_max": 0.40
+    },
+    {
+      "name": "quick_brown_fox_audio",
+      "description": "Pangram via espeak-ng + faster-whisper round-trip.",
+      "audio_path": "quick_brown_fox.wav",
+      "reference": "the quick brown fox jumps over the lazy dog",
+      "expected_wer_min": 0.0,
+      "expected_wer_max": 0.30
+    }
   ]
 }

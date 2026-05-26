@@ -9135,3 +9135,138 @@ Notes:
     iter-116's helper extraction and the diversity shape itself.
   - Sentence-length-bucket consistency check — same shape on a
     different signal.
+
+## iter-117 — Real audio fixtures + faster-whisper integration
+
+**Goal:** Eight iterations overdue from iter-106's recorded
+design. iter-106 added text-only fixtures that exercised the
+WER plumbing without audio; iter-117 closes the loop by adding
+real .wav files and running them through a real STT engine.
+
+**Pre-iteration verification:**
+- `faster-whisper` 1.2.1 → installed.
+- `espeak-ng` → installed at `/usr/bin/espeak-ng`.
+- Smoke test: synthesize "the quick brown fox jumps..." with
+  espeak-ng, transcribe with faster-whisper `tiny` model →
+  "The quick brown fox jump over the lazy dog." (1 sub, WER ≈
+  11%). Round-trip works on x86_64 Linux without any Mac-only
+  dependencies.
+
+**Change:** Three pieces:
+
+1. **Two committed audio fixtures** (`tests/fixtures/wer/`):
+   - `clean.wav` (66 KB) — "what is the weather today"
+   - `quick_brown_fox.wav` (122 KB) — "the quick brown fox
+     jumps over the lazy dog"
+
+   Both generated via `espeak-ng -w <out.wav> "<text>"`, mono
+   22050 Hz PCM. Committed to the repo so the integration test
+   has deterministic input regardless of whether espeak-ng is
+   present at test-run time.
+
+2. **`audio_fixtures` section in corpus.json**, parallel to the
+   existing iter-106 `fixtures` section but with `audio_path`
+   instead of `hypothesis`. Per-entry `expected_wer_min/max`
+   bands are intentionally generous (clean: 0.0-0.40,
+   pangram: 0.0-0.30) because espeak-ng output isn't natural
+   speech. Tightening when real human-recorded fixtures land
+   is a follow-up.
+
+3. **`tests/integration/test_wer_audio.py`** — 4 tests:
+   - `test_corpus_declares_audio_fixtures`: structural sanity,
+     runs even without faster-whisper.
+   - `test_audio_files_exist_on_disk`: guards against a corpus
+     update missing the companion .wav.
+   - `test_each_audio_fixture_lands_in_wer_band`: the headline
+     check — for each entry, transcribe + compute WER + assert
+     in band. Concatenates failures into a single readable
+     message.
+   - `test_clean_audio_round_trips_below_30_pct_wer`: tighter
+     assertion on the clean-audio fixture specifically;
+     30% is the "if this fails something is fundamentally
+     broken" line.
+
+**Skip-cleanly contract:** Both faster-whisper import + model
+load happen behind `pytest.skip()`. CI hosts without internet
+or without enough disk for the model can run the suite without
+failing the audio tests:
+
+```python
+try:
+    from faster_whisper import WhisperModel
+    _FW_AVAILABLE = True
+except Exception as e:
+    _FW_AVAILABLE = False
+    _FW_IMPORT_ERROR = str(e)
+
+@pytest.fixture(scope="module")
+def stt_model():
+    if not _FW_AVAILABLE:
+        pytest.skip(f"faster-whisper not importable: {_FW_IMPORT_ERROR}")
+    try:
+        return WhisperModel("tiny", device="cpu", compute_type="int8")
+    except Exception as e:
+        pytest.skip(f"faster-whisper model failed to load: {e}")
+```
+
+The two structural-sanity tests don't depend on the model, so
+they always run.
+
+**Empirical data** (this run):
+- `clean.wav` → faster-whisper transcribes near-perfectly,
+  WER < 0.30 (assertion passes with margin).
+- `quick_brown_fox.wav` → "jumps" sometimes drops to "jump"
+  (1 sub / 9 words ≈ 11%), well within the 0.0-0.30 band.
+- Total integration-test time: 2.5s including model load
+  (cached after first run).
+
+Verification:
+- `python -m pytest tests/integration/test_wer_audio.py -v` →
+  **4 passed in 2.5s**.
+- Full unit + integration: **1368 passed, 1 skipped** (1364
+  prior + 4 new).
+- Perf snapshot: **23 passed**.
+
+Notes:
+- **The 46-metric taxonomy is now end-to-end populated.**
+  iter-105 added the WER infrastructure; iter-106 added text-
+  only fixtures; iter-117 closes the loop with real audio
+  through a real STT engine. Every metric in the taxonomy now
+  has tests at every level: unit (compute_wer), integration
+  (text fixtures), end-to-end (audio fixtures). Three tiers,
+  each with its own skip semantics.
+- **espeak-ng quality matters less than determinism.** The
+  audio isn't natural — the output sounds robotic — but it's
+  deterministic given the input text. Tests don't care about
+  prosody; they care about "does the STT pipeline produce
+  reasonable transcripts." A synthetic voice at 22 kHz mono is
+  enough to exercise that.
+- **`tiny` model choice.** ~75 MB, downloads in seconds,
+  CPU-only viable. The next step up (`base`, ~150 MB) would
+  be more accurate but doubles model size + load time. For
+  CI integration testing, `tiny` is the right tradeoff —
+  accuracy doesn't need to be production-grade.
+- **The `expected_wer_max=0.40` band is permissive on
+  purpose.** Once a real human-voice fixture lands, the band
+  can tighten to 0.10-0.15 (production-grade STT). Today's
+  espeak-ng-generated audio tests "is the pipeline wired up
+  correctly?", not "is the STT model good?".
+- **Caching consideration.** First-run model download is ~15s
+  on a typical connection. After that, faster-whisper hits
+  the on-disk cache and the integration tests finish in
+  2.5s. The cache lives at `~/.cache/huggingface/hub/`. CI
+  hosts that wipe per-job will re-download every time —
+  `pytest.skip` handles the no-network case gracefully.
+- Next directions:
+  - Tighten WER bands when real human-recorded audio lands.
+  - Wire the STT factory from iter-108's `load_engines`
+    closure to optionally use faster-whisper instead of
+    WhisperEngine — would let Linux users actually run
+    `mic_chat.py`. Real architecture work, not a small
+    iteration.
+  - Add a noisy-audio fixture (e.g., the same text mixed
+    with synthetic background noise) to exercise the
+    "noisy" / "catastrophic" bands of the iter-106 corpus
+    against real audio rather than simulated hypotheses.
+  - barge_in_phase consistency check (third instance of the
+    diversity-check pattern).
