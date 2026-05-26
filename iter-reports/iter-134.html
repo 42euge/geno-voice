@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-134 — --diff baseline mode for benchmark CLI</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-133.html">← iter-133</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-134 — --diff baseline mode for benchmark CLI</h1>
+<div class="meta"></div>
+</header><p><strong>Goal:</strong> Operators iterating on an STT engine want a &quot;did my change improve or regress?&quot; workflow. iter-134 adds <code>--diff baseline.json</code>: load a saved JSON output from before a change, run the benchmark again, see per-fixture deltas + status flips highlighted.</p>
+<p># Save a baseline before changes python scripts/run_stt_benchmark.py --engine faster_whisper \ --format json &gt; baseline.json</p>
+<p># ...make engine changes...</p>
+<p># Compare against baseline python scripts/run_stt_benchmark.py --engine faster_whisper \ --diff baseline.json</p>
+<p><strong>Output:</strong></p>
+<p>clean_audio               PASS   WER 0.20 -&gt; 0.20  Δ +0.000 noisy_audio               PASS   WER 0.20 -&gt; 0.25  Δ +0.050 multispeaker_audio        FAIL   WER 0.80 -&gt; 1.20  Δ +0.400 (regressed)</p>
+<p>4/5 → 5/5 fixtures passing (+1) Improvements: noisy_audio Regressions: multispeaker_audio</p>
+<p><strong>Three additions:</strong></p>
+<p>1. <strong><code>FixtureDiff</code> dataclass</strong> — per-fixture diff with <code>current_wer</code>, <code>baseline_wer</code>, <code>current_passed</code>, <code>baseline_passed</code> (each can be <code>None</code> for new/removed fixtures). Computed properties: <code>wer_delta</code> and <code>status_change</code> (one of &quot;unchanged&quot; / &quot;regressed&quot; / &quot;improved&quot; / &quot;new&quot; / &quot;removed&quot;).</p>
+<p>2. <strong><code>BenchmarkDiff</code> aggregate dataclass</strong> with derived properties: <code>regressions</code>, <code>improvements</code>, <code>new_fixtures</code>, <code>removed_fixtures</code> — each a filtered list of <code>FixtureDiff</code>s. Plus <code>current_passing/total</code> and <code>baseline_passing/total</code> for the headline summary line.</p>
+<p>3. <strong><code>compute_diff(summary, baseline_dict)</code></strong> matches fixtures by name, builds <code>FixtureDiff</code> entries, handles new/removed cases. <strong><code>format_diff_text(diff)</code></strong> renders the result — per-row WER comparison, status markers, summary line, and explicit &quot;Improvements:&quot;/&quot;Regressions:&quot;/&quot;New:&quot;/&quot;Removed:&quot; sections when relevant.</p>
+<p>4. <strong><code>--diff &lt;path&gt;</code> CLI flag</strong> — loads the baseline, runs the benchmark silently (<code>verbose=False</code>), feeds both into the diff path. Overrides <code>--format</code> (always text). Exit codes: 3 if baseline file missing or unparseable.</p>
+<p><strong>Tests</strong> (16 new, 44 total):</p>
+<p><em>compute_diff (8 tests):</em> unchanged / regression / improvement / new fixture / removed fixture / wer_delta correct / wer_delta None for new+removed / aggregate counts match.</p>
+<p><em>format_diff_text (8 tests):</em> per-fixture rows show &quot;baseline -&gt; current&quot; / regression marker / improvement marker / summary line &quot;X/Y → A/B (+N)&quot; / Regressions list / New + Removed lists / unchanged session has no Improvements/ Regressions sections / negative deltas render with sign.</p>
+<p>End-to-end smoke verified:</p>
+<ul><li>Identical runs: all Δ +0.000, summary &quot;5/5 → 5/5 (+0)&quot;.</li><li>Missing baseline file → &quot;baseline JSON not found&quot; + exit 3.</li><li>Unparseable baseline → &quot;baseline JSON parse error&quot; + exit 3.</li></ul>
+<p>Verification:</p>
+<ul><li><code>python -m pytest tests/unit/test_run_stt_benchmark.py -q</code> → <strong>44 passed in 50ms</strong> (28 prior + 16 new).</li><li>Full unit + integration: <strong>1582 passed, 1 skipped</strong> (1566 prior + 16 new).</li><li>Perf snapshot: <strong>23 passed</strong>.</li></ul>
+<p>Notes:</p>
+<ul><li>**The diff workflow is the canonical &quot;engine change evaluation&quot; loop.** Steps: 1. Run benchmark, save JSON: <code>--format json &gt; baseline.json</code>. 2. Make engine change (faster-whisper version bump, model size change, custom STTEngine implementation). 3. Run with <code>--diff baseline.json</code>. 4. Read regressions/improvements at a glance.</li></ul>
+<p>This converts &quot;is the engine still good?&quot; from a manual per-fixture comparison into a one-command answer.</p>
+<ul><li><strong><code>status_change</code> is the most actionable column.</strong> Operators scanning the output focus on rows with markers (regressed / improved / new / removed) — those rows changed something worth noting. Unchanged rows blend into the noise. Future enhancement could color-code status_change for terminals that support it.</li><li><strong>Pure-function discipline carries through.</strong> <code>compute_diff</code> takes a summary + a parsed dict; <code>format_diff_text</code> takes a diff object. Neither touches the filesystem. The CLI does the JSON loading and the print. Easy to test, easy to reuse: a future <code>--diff &lt;baseline.csv&gt;</code> could land by adding a parser, no changes to compute_diff.</li><li><strong>Why <code>wer_delta</code> is signed.</strong> The natural reading of &quot;Δ +0.05&quot; is &quot;got worse by 0.05&quot; — operators reading the diff see the sign and immediately know which direction the metric moved. Negative deltas are improvements; positive are regressions (in WER terms). Matching this with the <code>status_change</code> marker on status flips gives operators two signals: per-fixture WER change AND threshold crossings.</li><li><strong>The benchmark CLI is now a complete eval workflow:</strong<ul><li>Run (iter-132)</li><li>Save in machine-readable formats (iter-133)</li><li>Diff against a baseline (iter-134)</li></ul></li></ul>
+<p>Together: a CI pipeline can run benchmark → save JSON → diff against the previous build&#x27;s JSON → fail PR if any fixture regresses. That&#x27;s a real engineering primitive, not just a debugging tool.</p>
+<ul><li>Next directions: STT engine&quot; — covers iter-132/133/134 together). for machine-readable diff output (CI pipelines). using the diff workflow against a saved baseline.<ul><li>README pointer to the benchmark CLI (&quot;Evaluating a new</li><li><code>--diff</code> could optionally support <code>--format json/csv</code></li><li>Architecture: A/B <code>aggressive_first_sentence: true</code></li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-133.html">← iter-133</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>
