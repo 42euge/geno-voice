@@ -11681,3 +11681,112 @@ Notes:
     the diff workflow against a saved baseline.
   - Pre-commit hook or CI workflow example showing how to
     gate PRs with `passing_delta` from the JSON diff output.
+
+## iter-136 — README "Evaluating a new STT engine" section
+
+**Goal:** The benchmark CLI evolved through iter-132 → 135 with
+no operator-facing documentation. The README still listed only
+the high-level project description. iter-136 adds an
+"Evaluating a new STT engine" section that walks an operator
+through the full eval workflow.
+
+**Three pieces:**
+
+1. **README section added** (~70 lines, between Installation
+   and Project Structure):
+
+   - Quick benchmark example (`--engine faster_whisper`)
+   - Saving a baseline + diffing changes
+   - CI integration with `--diff --format json` + `jq`
+   - Output format reference (text/json/csv)
+   - Step-by-step "Adding a new STT engine" guide
+
+   Each subsection has copy-pasteable shell commands. Operators
+   can run `python scripts/run_stt_benchmark.py --engine
+   faster_whisper --model tiny` directly from the README and
+   see real output.
+
+2. **Drift-sentinel test** (`tests/unit/test_readme_benchmark_docs.py`,
+   12 tests). Same shape as iter-129/iter-130's GENO.md
+   sentinels, applied to the README. Catches:
+   - Section disappearing
+   - Script path moving (catches a future rename)
+   - Format choices in argparse not mentioned in README
+   - `--diff` / `--engine` flags missing from documentation
+   - Corpus path / count drift (5 fixtures today; if a 6th lands
+     without README update, this fires)
+   - Code-block invocations referencing wrong script paths
+
+3. **The format-choices test parses the script source as text
+   instead of importing it** because importing under a non-
+   canonical name conflicts with `@dataclass` lookups (Python
+   dataclass internals reach into `sys.modules[cls.__module__]`).
+   Recorded for future doc-of-script tests: parse with regex,
+   don't import.
+
+**Drift-sentinel highlights** (catch real failure modes):
+
+- `test_readme_format_choices_match_argparse_choices`: extracts
+  the argparse `choices=[...]` list from the script source and
+  asserts each appears in the README. Adding a new format
+  (HTML, Markdown) without doc update will fire this.
+
+- `test_readme_corpus_count_matches_actual`: parses
+  `corpus.json:audio_fixtures`, counts the entries, requires
+  the matching numeral ("5 audio fixtures") in the README.
+  Currently 5; if a 6th fixture lands the test fires.
+
+- `test_readme_code_blocks_use_real_script_invocation`: regex
+  finds every `python scripts/<path>` invocation in the README
+  and verifies it resolves to the actual script path. Catches
+  typos like `python scripts/run_benchmark.py` (missing `_stt`)
+  that would silently fail.
+
+Verification:
+- `python -m pytest tests/unit/test_readme_benchmark_docs.py
+  -q` → **12 passed in 20ms**.
+- Full unit + integration: **1607 passed, 1 skipped** (1595
+  prior + 12 new).
+- Perf snapshot: **23 passed**.
+
+Notes:
+- **The README is now the canonical operator entry point.**
+  Pre-iter-136 a Linux operator hitting the repo had to read
+  CHANGELOG-equivalents (ITERATION_LOG.md) to discover the
+  benchmark CLI. iter-136 surfaces the workflow at the
+  top-level README — discoverable in 30 seconds.
+
+- **Drift sentinels for documentation are now standard.**
+  iter-129 covered diversity-pattern doc, iter-130 covered
+  extraction-pattern doc, iter-136 covers README. Three
+  documentation surfaces, all with code-vs-doc sync tests.
+  The shape: source of truth (corpus.json count, argparse
+  choices, real file paths) compared against README text.
+
+- **The "parse script source instead of importing it" pattern
+  is reusable.** When a doc test wants to verify CLI flags
+  match argparse choices, importing the script can fire
+  dataclass-lookup errors if loaded under non-canonical
+  names. Regex-based parsing is the safer path. Recorded
+  here for future doc tests of CLI scripts.
+
+- **The benchmark eval pipeline is now feature-complete and
+  documented.** Five iterations:
+  - iter-132: CLI + run_benchmark
+  - iter-133: text → json/csv summary formats
+  - iter-134: --diff with text rendering
+  - iter-135: --diff with json/csv rendering
+  - iter-136: README documentation + drift sentinel
+
+  Every code path has tests, every output format has examples,
+  every feature is discoverable from the top-level README.
+  An operator dropping into the repo can evaluate a new STT
+  engine without reading the iteration log.
+
+- Next directions:
+  - Architecture: A/B `aggressive_first_sentence: true` using
+    the now-documented diff workflow against a saved baseline.
+  - Pre-commit hook example showing `passing_delta` gating.
+  - Document the GENO.md patterns in the README too — point
+    contributors at the diversity-check + extraction patterns
+    (currently only discoverable from GENO.md).

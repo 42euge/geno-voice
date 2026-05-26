@@ -28,6 +28,86 @@ Or from within an agent session:
 /geno-tools install geno-voice
 ```
 
+## Evaluating a new STT engine
+
+`scripts/run_stt_benchmark.py` runs any registered `STTEngine` against
+the WER fixture corpus (`tests/fixtures/wer/`) and reports per-fixture
+pass/fail against recorded WER bands. The corpus has 5 audio fixtures
+covering common failure modes: clean speech, pangram, noise, heavy
+noise, and multi-speaker cross-talk.
+
+### Quick benchmark
+
+```bash
+python scripts/run_stt_benchmark.py --engine faster_whisper --model tiny
+```
+
+```
+clean_audio               PASS  WER 0.20  band [0.00, 0.40]  elapsed 0.29s
+quick_brown_fox_audio     PASS  WER 0.11  band [0.00, 0.30]  elapsed 0.24s
+noisy_audio               PASS  WER 0.20  band [0.10, 0.50]  elapsed 0.26s
+catastrophic_audio        PASS  WER 1.00  band [0.80, 1.30]  elapsed 0.26s
+multispeaker_audio        PASS  WER 0.80  band [0.60, 1.10]  elapsed 0.26s
+
+5/5 fixtures passed in 1.3s
+```
+
+### Saving a baseline + diffing changes
+
+The benchmark supports machine-readable output (`--format json|csv`)
+and a `--diff` mode for comparing against a saved baseline:
+
+```bash
+# Save baseline before changes
+python scripts/run_stt_benchmark.py --engine faster_whisper \
+    --format json > baseline.json
+
+# ...iterate on engine code...
+
+# Compare against baseline
+python scripts/run_stt_benchmark.py --engine faster_whisper \
+    --diff baseline.json
+```
+
+```
+clean_audio               PASS   WER 0.20 -> 0.20  Δ +0.000
+noisy_audio               PASS   WER 0.20 -> 0.25  Δ +0.050
+multispeaker_audio        FAIL   WER 0.80 -> 1.20  Δ +0.400 (regressed)
+
+4/5 → 5/5 fixtures passing (+1)
+Improvements: noisy_audio
+Regressions: multispeaker_audio
+```
+
+### CI integration
+
+Combine `--diff` with `--format json` to gate PRs on regression
+detection:
+
+```bash
+python scripts/run_stt_benchmark.py --engine faster_whisper \
+    --diff baseline.json --format json \
+    | jq '.regression_count > 0' | grep -q true && exit 1
+```
+
+Output formats:
+- `text` (default) — human-readable per-row report
+- `json` — full result/diff dump (top-level aggregates +
+  per-fixture records)
+- `csv` — header + one row per fixture, RFC-4180 compliant
+
+### Adding a new STT engine
+
+1. Implement `stt.base.STTEngine` (transcribe a wav blob → text).
+2. Register in `stt/__init__.py:ENGINES`.
+3. Run `python scripts/run_stt_benchmark.py --engine <your_name>`.
+4. If most fixtures pass, the engine is ready for production wiring
+   in `mic_chat.py:run_chat`.
+
+The corpus is forgiving on espeak-ng-generated audio. Production-
+grade STT (whisper-large, etc.) typically lands at WER 0.0-0.10 on
+the clean fixtures.
+
 ## Project Structure
 
 ```
