@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-120 — Barge-phase consistency check</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-119.html">← iter-119</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-120 — Barge-phase consistency check</h1>
+<div class="meta"></div>
+</header><p><strong>Goal:</strong> Third instance of the diversity-check pattern after iter-114 (filler diversity) and iter-115 (naturalness). Validates that iter-116&#x27;s <code>_longest_consecutive_run</code> extraction was justified — the helper is now used by three distinct emit-line callers, all sharing the same single-pass scan without re-implementing.</p>
+<p><strong>The signal:</strong> <code>barge_in_phase</code> (iter-047) records WHEN the user barged in:</p>
+<ul><li><code>&quot;llm_stream&quot;</code> — barge happened BEFORE bot speech started. Means the user is impatient with LLM TTFB or the bot is slow.</li><li><code>&quot;playback&quot;</code> — barge happened DURING bot speech. Means the bot speaks too long or the user is interrupt-happy.</li></ul>
+<p>A single-turn barge is fine. Four consecutive barges in the same phase is a UX problem worth surfacing.</p>
+<p><strong>Change:</strong> New <code>_emit_barge_phase_consistency_line</code> in <code>_chat_metrics.py</code>. Same shape as iter-114/iter-115:</p>
+<pre class="code-block"><code>def _emit_barge_phase_consistency_line(
+    emit, phases: list[str], threshold: int = 4,
+) -&gt; None:
+    non_empty = [p for p in phases if p]
+    if not non_empty:
+        return
+    longest_run, longest_phase = _longest_consecutive_run(non_empty)
+    if longest_run &lt; threshold:
+        return
+    if longest_phase == &quot;llm_stream&quot;:
+        suggestion = &quot;user impatient with LLM TTFB, or bot slow to start&quot;
+    elif longest_phase == &quot;playback&quot;:
+        suggestion = &quot;user habit or bot speaks too long&quot;
+    else:
+        suggestion = &quot;consistent barge phase — investigate&quot;
+    emit(...)</code></pre>
+<p><strong>Three design choices recorded:</strong></p>
+<p>1. <strong>Both phases warrant warnings</strong> (unlike iter-115 which excluded &quot;natural&quot;). Each barge phase carries a different UX signal — neither is &quot;good.&quot; <code>if longest_phase == &quot;natural&quot;: return</code> would be the wrong rule here.</p>
+<p>2. <strong>Threshold = 4</strong> (lower than iter-115&#x27;s 5). Barge events are rarer + more semantically loaded than naturalness buckets. 4 consecutive same-phase barges is rare enough in normal use that the warning&#x27;s signal-to-noise stays high.</p>
+<p>3. <strong>Per-phase suggestion text</strong> — iter-115&#x27;s <code>rushed</code> / <code>slow</code> recommendation pattern carries over. The two phases suggest opposite remediation (faster TTFB vs shorter bot speech), so the suggestion isn&#x27;t a one-size-fits-all message.</p>
+<p><strong>Wired into <code>print_session_summary</code></strong> right after iter-115&#x27;s naturalness check:</p>
+<pre class="code-block"><code>_emit_barge_phase_consistency_line(
+    _emit,
+    [m.barge_in_phase for m in metrics_list],
+)</code></pre>
+<p><strong>Tests</strong> (<code>tests/unit/test_emit_barge_phase_consistency_line.py</code>, 18 tests):</p>
+<p><em>Empty / no-barge suppression (2 tests):</em> empty list, all-empty- strings.</p>
+<p><em>Below threshold (2 tests):</em> 3-in-a-row default, alternating phases.</p>
+<p><em>Both phases fire (3 tests):</em> 4 playback → &quot;speaks too long&quot; suggestion; 5 llm_stream → &quot;TTFB&quot; suggestion; both phases not excluded (sanity test).</p>
+<p><em>Empty filtering (3 tests):</em> empties between barges don&#x27;t break runs; leading + trailing empties; a phase change DOES break the run.</p>
+<p><em>Custom threshold (2 tests):</em> threshold=3 catches; threshold=10 suppresses.</p>
+<p><em>Longest-of-multiple (2 tests):</em> longer run wins; run at end detected.</p>
+<p><em>Output formatting (3 tests):</em> leading 4-space indent; iter-047 attribution; unknown-phase defensive fallback.</p>
+<p><em>Pattern parity (1 test):</em> 1000-element list works (sanity that the iter-116 helper handles big inputs).</p>
+<p>Verification:</p>
+<ul><li>`python -m pytest tests/unit/test_emit_barge_phase_consistency_line.py -q` → <strong>18 passed in 30ms</strong>.</li><li>Regression sentinel (199 prior session-summary + diversity-check + run-finder tests): <strong>199 passed</strong> byte-for-byte.</li><li>Full unit + integration: <strong>1440 passed, 1 skipped</strong> (1422 prior + 18 new).</li><li>Perf snapshot: <strong>23 passed</strong>.</li></ul>
+<p>Notes:</p>
+<ul><li><strong>iter-116 helper extraction validated by use.</strong> Three callers now consume <code>_longest_consecutive_run</code>:<ul><li><code>_emit_filler_diversity_line</code> (iter-114, threshold 3)</li><li><code>_emit_naturalness_consistency_line</code> (iter-115, threshold 5)</li><li><code>_emit_barge_phase_consistency_line</code> (iter-120, threshold 4)</li></ul></li></ul>
+<p>Each uses the same primitive, then applies its own filtering and threshold + suggestion logic. The helper-extraction pattern is doing exactly what extraction is supposed to do: <strong>the loop body lives in one place; the policy decisions live in their own helpers.</strong></p>
+<ul><li><strong>The diversity-check shape is now a documented family.</strong> All three helpers share: none)<ul><li>Filter empties before scanning (zeros, empty strings)</li><li>Use <code>_longest_consecutive_run</code></li><li>Apply per-instance threshold (3/5/4)</li><li>Apply per-instance excluded-value rule (zeros / &quot;natural&quot; /</li><li>Emit suggestion based on the value type</li><li>Name the responsible iteration in the warning text</li></ul></li></ul>
+<p>A future fourth instance (e.g., consecutive <code>_too_short</code> utterances flagging a noisy mic) lands by copying the template.</p>
+<ul><li><strong>Pattern: per-instance suggestion mapping.</strong> When an emit helper has multiple meaningful values (rushed/slow, llm_stream/playback), the suggestion text per value lives inside the helper. Don&#x27;t externalize it (would require passing a dict from the caller — overkill for two values). Don&#x27;t make it a one-size-fits-all message (would lose the signal). Per-value branches in the helper are the right shape.</li></ul>
+<ul><li><strong>mic_chat.py size unchanged.</strong> This iteration only touches <code>_chat_metrics.py</code> + a new test file. The session-summary layer continues to grow but <code>run_chat</code> itself stays at ~100 lines.</li></ul>
+<ul><li>Next directions: <code>FasterWhisperEngine</code> + virtual mic + iter-117&#x27;s <code>clean.wav</code>. Closes the iter-118+iter-119 cross-platform STT story at the integration level. iter-106&#x27;s noisy/catastrophic bands against real audio. of the diversity pattern — would justify promoting the template into a documented protocol or factory function).<ul><li>End-to-end test driving <code>mic_chat.py:run_chat</code> with</li><li>Add a noisy-audio fixture (synthesized + bgm) to exercise</li><li>Sentence-length-bucket consistency check (fourth instance</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-119.html">← iter-119</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>
