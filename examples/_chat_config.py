@@ -263,3 +263,76 @@ def parse_filler_config(chat_cfg: Any) -> dict:
         out["idle_threshold"] = float(raw_threshold)
 
     return out
+
+
+# iter-119: STT engine + model config.
+#
+# Pre-iter-119, mic_chat.run_chat hardcoded WhisperEngine with a
+# model_repo passed as a function argument. iter-118 added
+# FasterWhisperEngine but left config wiring deferred until a
+# real Linux user wanted to run mic_chat. iter-119 closes that
+# gap: operators choose engine + model + device + compute via
+# config.local.yaml:
+#
+#     chat:
+#       stt_engine: "faster_whisper"   # or "whisper" (default)
+#       stt_model: "tiny"              # passes through to engine
+#       stt_device: "cpu"              # faster_whisper only
+#       stt_compute: "int8"            # faster_whisper only
+#
+# Each key is independently optional. Tolerant of malformed
+# input — a typo'd value silently falls back to default rather
+# than crashing startup. Mirrors iter-020's parse_vad_config and
+# iter-034's parse_filler_config conventions.
+STT_DEFAULTS = {
+    "engine": "whisper",
+    "model": "",            # empty = let the engine class default
+    "device": "cpu",        # faster_whisper-only
+    "compute_type": "int8", # faster_whisper-only
+}
+
+
+def parse_stt_config(chat_cfg: Any) -> dict:
+    """Extract the optional STT config from a parsed chat config.
+
+    Returns a dict with always-present keys
+    (``engine``, ``model``, ``device``, ``compute_type``)
+    backfilled from ``STT_DEFAULTS`` for any missing/invalid
+    entries.
+
+    Tolerant — a malformed value (wrong type, empty string,
+    whitespace-only) falls back to default rather than raising.
+
+    The ``model`` default is intentionally an empty string
+    rather than a real model name — when empty, mic_chat passes
+    nothing to the engine constructor so the engine class's own
+    default kicks in. Avoids hardcoding a Mac-only default
+    ("mlx-community/whisper-large-v3-turbo") that would be
+    misleading on Linux.
+
+    Caveat for callers: device / compute_type are only meaningful
+    for the ``faster_whisper`` engine. They're always returned
+    regardless of engine — callers decide which to use based on
+    the chosen engine.
+    """
+    out = dict(STT_DEFAULTS)
+    if not isinstance(chat_cfg, Mapping):
+        return out
+
+    raw_engine = chat_cfg.get("stt_engine")
+    if isinstance(raw_engine, str) and raw_engine.strip():
+        out["engine"] = raw_engine.strip()
+
+    raw_model = chat_cfg.get("stt_model")
+    if isinstance(raw_model, str) and raw_model.strip():
+        out["model"] = raw_model.strip()
+
+    raw_device = chat_cfg.get("stt_device")
+    if isinstance(raw_device, str) and raw_device.strip():
+        out["device"] = raw_device.strip()
+
+    raw_compute = chat_cfg.get("stt_compute")
+    if isinstance(raw_compute, str) and raw_compute.strip():
+        out["compute_type"] = raw_compute.strip()
+
+    return out

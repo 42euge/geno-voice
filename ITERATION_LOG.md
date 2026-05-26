@@ -9430,3 +9430,155 @@ Notes:
     "noisy"/"catastrophic" bands against real audio.
   - barge_in_phase consistency check (third diversity
     instance).
+
+## iter-119 — Wire chat_cfg.stt_engine + parse_stt_config
+
+**Goal:** Close iter-118's deferred work. iter-118 added
+`FasterWhisperEngine` + factory registration but left config
+wiring deferred ("adding knobs without an end-to-end use case is
+a smell"). The use case now exists — Linux operators want to run
+mic_chat. iter-119 wires the engine choice through
+`config.local.yaml`.
+
+**Change:** Three pieces:
+
+1. **`STT_DEFAULTS` + `parse_stt_config`** in
+   `examples/_chat_config.py`, matching the iter-020 +
+   iter-034 parse-family conventions:
+
+   ```python
+   STT_DEFAULTS = {
+       "engine": "whisper",
+       "model": "",            # empty = engine class default
+       "device": "cpu",        # faster_whisper-only
+       "compute_type": "int8", # faster_whisper-only
+   }
+
+   def parse_stt_config(chat_cfg) -> dict:
+       # Tolerant: malformed values fall back to defaults,
+       # never raises. Strips whitespace from string values.
+       # ...
+   ```
+
+   Two design choices recorded in the docstring:
+
+   - **`model` default is empty string** rather than a real
+     model name. Avoids hardcoding a Mac-only default that
+     would mislead Linux operators. When the value is empty,
+     mic_chat skips passing it and the engine class's own
+     default kicks in.
+   - **`device` and `compute_type` are always present** in the
+     output regardless of engine. Callers decide which to use
+     based on the chosen engine. Keeps the dict shape uniform.
+
+2. **`mic_chat.py:run_chat` reorganization** — chat_cfg loading
+   moved BEFORE the load_engines call so stt_cfg is available:
+
+   ```python
+   chat_cfg = load_chat_config()
+   stt_cfg = parse_stt_config(chat_cfg)
+   stt_model = stt_cfg["model"] or model_repo  # function-arg fallback
+   stt_engine_name = stt_cfg["engine"]
+
+   def _stt_factory():
+       kwargs = {}
+       if stt_model:
+           kwargs["model_repo"] = stt_model
+       if stt_engine_name == "faster_whisper":
+           kwargs["device"] = stt_cfg["device"]
+           kwargs["compute_type"] = stt_cfg["compute_type"]
+       return _get_stt_engine(stt_engine_name, **kwargs)
+
+   engines = load_engines(stt_factory=_stt_factory, ...)
+   ```
+
+   The `model_repo` function arg becomes a fallback only —
+   honored when chat config doesn't set `stt_model`. Backwards
+   compatible: existing callers (CLI invocations passing
+   `model_repo` directly) keep working.
+
+   The startup-print line now shows the chosen engine + model:
+   `stt: faster_whisper/tiny │ llm: ... │ tts: ...`.
+
+3. **Operator-facing config** (documented inline):
+
+   ```yaml
+   chat:
+     stt_engine: "faster_whisper"   # or "whisper" (default)
+     stt_model: "tiny"              # any size or repo string
+     stt_device: "cpu"              # faster_whisper only
+     stt_compute: "int8"            # faster_whisper only
+   ```
+
+**Tests** (`tests/unit/test_parse_stt_config.py`, 28 tests):
+
+*Defaults (5 tests):* all keys present; engine="whisper";
+model=""; device/compute defaults; STT_DEFAULTS matches output
+for empty input.
+
+*Malformed input (6 tests):* non-mapping (None, list, string,
+int, object) → defaults; missing section → defaults; engine not
+string / empty string / whitespace-only / with surrounding
+whitespace.
+
+*Per-key parsing (12 tests):* model string extraction,
+full-repo passthrough, whitespace strip, non-string fallback,
+empty fallback (4 tests for model); device cpu/cuda + strip +
+non-string (4 tests); compute_type extracted + strip + non-
+string (3 tests); engine valid + strip (already in malformed
+section).
+
+*Composite (4 tests):* full config flows through; partial
+config backfills defaults; does NOT mutate input; does NOT
+mutate STT_DEFAULTS constant.
+
+*Independence (1 test):* unrelated chat-cfg keys don't bleed
+in.
+
+Verification:
+- `python -m pytest tests/unit/test_parse_stt_config.py -q` →
+  **28 passed in 30ms**.
+- Full unit + integration: **1422 passed, 1 skipped** (1394
+  prior + 28 new).
+- Perf snapshot: **23 passed**.
+- AST sanity check on `mic_chat.py`: parse OK.
+
+Notes:
+- **The iter-118 → iter-119 unit is now complete.** Together,
+  they form the cross-platform STT story:
+  - iter-118: implementation + factory registration.
+  - iter-119: config wiring + operator UX.
+
+  Linux operators can now opt into faster-whisper with one
+  yaml-section change.
+- **Backwards compatibility preserved.** Existing callers that
+  pass `model_repo` to `run_chat` still work — the arg becomes
+  the fallback when `stt_model` is empty in config. No CLI
+  flag changes, no breaking config changes.
+- **The empty-string default for `model` is the cleanest signal.**
+  Three alternatives considered:
+  1. `None` — would require explicit `if model is not None`
+     checks at every consumer.
+  2. Per-engine-default dict — duplicates knowledge that
+     already lives in the engine class's `__init__` defaults.
+  3. Empty string — Pythonic falsy, single-knob `if model:`
+     check at the consumer site.
+
+  The third choice is what the implementation uses.
+- **No new pattern introduced.** This iteration is "apply the
+  established parse-config pattern (iter-020, iter-034) to the
+  next config knob." Documenting the choice between alternatives
+  for future iterations that add more chat-cfg knobs.
+- **mic_chat.py size:** ~370 lines total / ~100 in run_chat
+  (up from ~340/95 pre-iter-119 because the stt config wiring
+  added ~20 lines). Still significantly smaller than the pre-
+  iter-107 baseline (~395/155).
+- Next directions:
+  - End-to-end test driving `mic_chat.py:run_chat` with
+    `FasterWhisperEngine` + virtual mic + iter-117's
+    `clean.wav` playing through the speaker. Validates the
+    cross-platform path at the integration level.
+  - Add a noisy-audio fixture (synthesized + bgm) to exercise
+    the iter-106 noisy/catastrophic bands against real audio.
+  - barge_in_phase consistency check (third diversity-check
+    instance).

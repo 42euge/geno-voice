@@ -177,22 +177,58 @@ def play_aligned(pa, audio_np, tokens, is_first_sentence=False):
 
 
 def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
-    """Main chat loop with streaming LLM + sentence-by-sentence TTS."""
-    model_short = model_repo.split("/")[-1]
+    """Main chat loop with streaming LLM + sentence-by-sentence TTS.
+
+    ``model_repo`` is the FALLBACK STT model when chat config
+    omits ``stt_model``. iter-119 lets operators set
+    ``chat.stt_engine`` / ``stt_model`` in config.local.yaml to
+    pick faster_whisper for x86_64 Linux; the function arg is
+    still honored for backwards compatibility.
+    """
     llm_config = load_llm_config()
 
+    # iter-119: load chat_cfg up front so stt_config is available
+    # before load_engines. The original code loaded chat_cfg AFTER
+    # the STT engine was constructed, hardcoding WhisperEngine.
+    # Now stt_cfg drives the engine choice.
+    from examples._chat_config import (
+        parse_filler_config, parse_stt_config, parse_vad_config,
+    )
+    chat_cfg = load_chat_config()
+    stt_cfg = parse_stt_config(chat_cfg)
+    # Empty `stt_model` → use the function-arg `model_repo` so
+    # legacy callers without yaml-set models keep working.
+    stt_model = stt_cfg["model"] or model_repo
+    stt_engine_name = stt_cfg["engine"]
+
+    model_short = stt_model.split("/")[-1] if stt_model else "(default)"
     print(f"\n{BOLD}gv chat{RESET}")
-    print(f"{DIM}stt: {model_short} │ llm: {llm_config['model']} │ tts: kokoro/{voice}{RESET}")
+    print(
+        f"{DIM}stt: {stt_engine_name}/{model_short} │ "
+        f"llm: {llm_config['model']} │ tts: kokoro/{voice}{RESET}"
+    )
     print()
 
     # iter-108: engine loading + timing + log moved to
     # examples/_chat_engines so the sequence is testable without
-    # importing mlx-whisper / kokoro at the test level. The
-    # factory closures here preserve the previous wiring exactly.
+    # importing mlx-whisper / kokoro at the test level.
     from examples._chat_engines import load_engines
+    from stt import get_engine as _get_stt_engine
+
+    def _stt_factory():
+        # iter-119: route to whichever engine the chat config
+        # selected. faster_whisper takes device + compute_type;
+        # whisper accepts only model_repo.
+        kwargs = {}
+        if stt_model:
+            kwargs["model_repo"] = stt_model
+        if stt_engine_name == "faster_whisper":
+            kwargs["device"] = stt_cfg["device"]
+            kwargs["compute_type"] = stt_cfg["compute_type"]
+        return _get_stt_engine(stt_engine_name, **kwargs)
 
     engines = load_engines(
-        stt_factory=lambda: WhisperEngine(model_repo=model_repo),
+        stt_factory=_stt_factory,
         tts_factory=lambda: get_tts_engine("kokoro"),
         log=lambda line: print(f"  {line}"),
     )
@@ -204,11 +240,8 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
     #   chat:
     #     fillers: ["hmm", "let me think", "well,"]
     #     fillers_idle_threshold: 0.6
-    chat_cfg = load_chat_config()
-    # iter-034: tolerant filler config — was inline + brittle
-    # (string-as-list bug, ValueError on bad threshold). Now
-    # mirrors the iter-020 parse_vad_config pattern.
-    from examples._chat_config import parse_filler_config, parse_vad_config
+    # iter-119: chat_cfg + parse_*_config imports moved up to
+    # support stt_cfg. Reused here.
     filler_cfg = parse_filler_config(chat_cfg)
     filler_texts: list[str] = filler_cfg["texts"]
     filler_idle_threshold: float = filler_cfg["idle_threshold"]
