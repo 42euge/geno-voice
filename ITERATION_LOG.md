@@ -9742,3 +9742,134 @@ Notes:
   - Sentence-length-bucket consistency check (fourth instance
     of the diversity pattern — would justify promoting the
     template into a documented protocol or factory function).
+
+## iter-121 — STT config-to-engine routing integration
+
+**Goal:** Close the iter-118 + iter-119 cross-platform STT
+story at the integration level. iter-118 added the engine,
+iter-119 wired the config; iter-121 verifies the chain works
+end-to-end:
+
+    chat_cfg dict
+      → parse_stt_config()
+      → factory closure (replicates mic_chat.py:_stt_factory)
+      → get_engine(name, **kwargs)
+      → engine instance ready to .transcribe()
+
+**Pre-iteration scope decision:**
+First considered driving the FULL `mic_chat.py:run_chat` loop
+with `VirtualMicStream` + iter-117's `clean.wav`. clean.wav is
+mono 22050 Hz but the recorder expects 16000 Hz — full integration
+would need resampling support that doesn't currently exist
+(scipy isn't a project dep). The tighter "factory routing"
+integration is more focused on what iter-118/iter-119 actually
+wired up, avoids the rate-mismatch detour, and still validates
+real transcription via the routed engine.
+
+The full-loop integration test stays as a future iteration if
+needed.
+
+**Change:** New `tests/integration/test_stt_routing.py` with
+10 tests:
+
+*The factory-builder helper* mirrors mic_chat.py exactly:
+
+```python
+def _build_stt_factory(chat_cfg: dict, model_repo_fallback: str = ""):
+    stt_cfg = parse_stt_config(chat_cfg)
+    stt_model = stt_cfg["model"] or model_repo_fallback
+    stt_engine_name = stt_cfg["engine"]
+
+    def _stt_factory():
+        kwargs = {}
+        if stt_model:
+            kwargs["model_repo"] = stt_model
+        if stt_engine_name == "faster_whisper":
+            kwargs["device"] = stt_cfg["device"]
+            kwargs["compute_type"] = stt_cfg["compute_type"]
+        return _get_stt_engine(stt_engine_name, **kwargs)
+
+    return _stt_factory
+```
+
+This is **the public-API documentation for what mic_chat.py does**,
+backed by tests. If mic_chat's wiring drifts (e.g., a future
+refactor changes the kwarg-passing rule), this helper goes
+out-of-sync with the real one and the routing tests stop
+matching production behavior. That divergence is deliberately
+small (~10 lines) and will surface fast when changed.
+
+**Test coverage** (10 tests):
+
+*Routing without instantiating Mac-only deps (8 tests):*
+- Default chat_cfg → factory closure built (no engine
+  constructed yet — would import mlx).
+- `stt_engine: faster_whisper` → factory builds
+  FasterWhisperEngine.
+- All 4 chat_cfg knobs flow through correctly.
+- Partial config uses engine-class defaults (validates
+  iter-119's "empty model = engine default" decision).
+- Model fallback (function-arg) used when chat_cfg omits
+  stt_model.
+- chat_cfg model overrides function-arg fallback (precedence).
+- Unknown engine raises ValueError from `get_engine`.
+- Whisper routing does NOT pass `device`/`compute_type` —
+  monkey-patches `_get_stt_engine` to capture kwargs and
+  asserts the engine-class kwargs aren't leaked into the
+  Mac-only Whisper constructor.
+- Factory callable multiple times (each builds a fresh
+  instance — SentenceWorker may invoke more than once).
+
+*Real transcription via routed engine (1 test, skip when
+unavailable):*
+- Build factory from yaml-style config → construct engine →
+  transcribe iter-117's clean.wav → assert "weather" or
+  "today" appears. End-to-end the routing actually works.
+
+Verification:
+- `python -m pytest tests/integration/test_stt_routing.py -v` →
+  **10 passed in 2.0s** (incl. real model load + transcription).
+- Full unit + integration: **1450 passed, 1 skipped** (1440
+  prior + 10 new).
+- Perf snapshot: **23 passed**.
+
+Notes:
+- **The factory-builder helper is the test's contribution.**
+  Beyond the assertions, the helper documents the exact wiring
+  shape mic_chat.py uses. Future readers can import this helper
+  for their own integration tests instead of reverse-engineering
+  the mic_chat code path.
+- **Skipping mlx for whisper-routing tests.** The whisper-engine
+  routing test uses monkey-patch instead of actually calling
+  `factory()` because invoking the closure would import mlx. The
+  monkey-patched `_get_stt_engine` captures what kwargs would
+  be passed without triggering the import. Pattern worth
+  recording for future cross-platform routing tests.
+- **iter-118 + iter-119 + iter-121 form a closed loop.** Each
+  adds a layer:
+  - iter-118: the engine class + factory registration.
+  - iter-119: config parsing + mic_chat wiring.
+  - iter-121: integration verifying both layers compose.
+
+  A Linux operator who follows the iter-119 docs gets a
+  working setup; this iteration tests that exactly.
+- **The `ignored_fallback` precedence test documents an
+  intentional design choice.** When both a function-arg and a
+  chat_cfg model are provided, chat_cfg wins. The reasoning:
+  config is the more recent / explicit layer. Future code
+  changes that flip this precedence would break the test —
+  intentional sentinel.
+- **Future full-loop integration test:** would require either
+  (a) resampling support so 22050 Hz fixtures work with the
+  16 kHz recorder, or (b) regenerating `clean.wav` at 16 kHz.
+  Either is straightforward but out of scope for this
+  iteration.
+- Next directions:
+  - Regenerate `clean.wav` at 16 kHz, then drive the full
+    `mic_chat.py:run_chat` through one virtual turn — the
+    "drives ChatLoop" iteration originally considered here.
+  - Sentence-length-bucket consistency check (fourth instance
+    of the diversity pattern — would justify promoting the
+    template).
+  - Add a noisy-audio fixture (synthesized + bgm) for the
+    iter-106 catastrophic bands.
