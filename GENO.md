@@ -36,9 +36,9 @@ geno-voice/
 ### mic_chat.py extraction pattern
 
 When pulling a subroutine out of `examples/mic_chat.py:run_chat`,
-default to this shape (three instances confirm it: iter-107
+default to this shape (four instances confirm it: iter-107
 `prerender_fillers`, iter-108 `load_engines`, iter-109
-`build_audio_io`):
+`build_audio_io`, iter-110 `run_session`):
 
 1. **Inject callable dependencies, not engines.** Caller wraps
    the engine + voice + speed in a closure / factory. The
@@ -56,7 +56,7 @@ default to this shape (three instances confirm it: iter-107
    entrypoint.
 4. **Return a dataclass, not a tuple.** Future fields can extend
    without breaking call sites. `LoadedEngines`, `AudioIO`,
-   `RecordingStats` all follow this shape.
+   `SessionState`, `RecordingStats` all follow this shape.
 5. **Lazy-import platform deps inside the closures, not at
    module scope.** `build_audio_io` defers `import pyaudio`
    into `speaker_factory` so the module is importable on x86_64

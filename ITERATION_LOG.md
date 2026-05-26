@@ -10908,3 +10908,113 @@ Notes:
   - Apply iter-129's drift-sentinel pattern to iter-109's
     mic_chat extraction pattern docs (catalog the four
     extracted modules; verify doc/code parity).
+
+## iter-130 — Drift-sentinel for mic_chat extraction pattern
+
+**Goal:** Apply iter-129's drift-sentinel pattern to iter-109's
+mic_chat extraction-pattern docs. The two pattern sections in
+GENO.md are now both protected against doc/code divergence.
+
+**Pre-iteration discovery: the doc was already drifting.**
+iter-110's `run_session` extraction follows the same 5-rule
+shape as iter-107/108/109:
+- Callable dependency injection (`chat_loop` instead of an
+  engine class)
+- Log injection (`log` callable, default `print`)
+- ANSI styling stays at the caller (`prompt_log` closure
+  re-applies DIM/RESET)
+- Returns a dataclass (`SessionState`)
+- Lazy-imports `ChatLoop.trim_messages` per rule 5
+
+But the GENO.md section still said "three instances confirm it"
+and didn't list iter-110. The drift was silent — no test caught
+it. iter-130 fixes the drift AND adds the test that prevents
+future drift.
+
+**Two changes:**
+
+1. **GENO.md updated**:
+   - "three instances" → "four instances".
+   - iter-110 + `run_session` added to the bullet list.
+   - `SessionState` added to the rule-4 dataclass examples
+     alongside `LoadedEngines`, `AudioIO`, `RecordingStats`.
+
+2. **`tests/unit/test_extraction_pattern_doc.py`** — 9 tests
+   mirroring iter-129's diversity-pattern sentinel:
+
+   - `_EXTRACTION_INSTANCES` tuple: source of truth listing
+     all four (`iter_num`, `module_path`, `callable_name`)
+     entries.
+   - Section presence + `run_chat` reference in the doc text.
+   - Each instance's module imports cleanly (catches a module
+     rename).
+   - Each instance's public callable exists + is callable.
+   - Doc text references every iter number AND every callable
+     name (catches partial updates that update one but not
+     the other).
+   - English numeral matches `_EXTRACTION_INSTANCES` length —
+     "four instances" today; a 5th instance must update both
+     the tuple and the doc atomically.
+   - Section enumerates exactly 5 numbered rules — if a 6th
+     is added, this nudges the contributor to confirm the
+     rule generalizes.
+   - Every instance has a corresponding `tests/unit/test_*.py`
+     file.
+
+**The "rules-vs-instances cross-check" is new this iteration.**
+iter-129's diversity-pattern test only covered helper-vs-doc
+sync; iter-130 adds:
+
+- **Rule count check** (`test_doc_lists_5_numbered_rules`):
+  catches a contributor adding a 6th rule without updating the
+  cross-pattern guidance.
+- **Test-file existence check**: catches an extraction landing
+  without dedicated tests.
+
+These extensions are worth backporting to iter-129's
+diversity-pattern test in a future iteration if a 5th
+diversity instance lands.
+
+Verification:
+- `python -m pytest tests/unit/test_extraction_pattern_doc.py
+  -q` → **9 passed in 50ms**.
+- `python -m pytest tests/unit/test_diversity_pattern_doc.py
+  -q` → **8 passed** (iter-129 sentinel still passes).
+- Full unit + integration: **1536 passed, 1 skipped** (1527
+  prior + 9 new).
+- Perf snapshot: **23 passed**.
+
+Notes:
+- **Both GENO.md pattern sections now have drift sentinels.**
+  iter-129 covered diversity-check; iter-130 covers extraction.
+  The shape is reusable: any future documented pattern in
+  GENO.md should ship with a sibling drift-sentinel test.
+- **Discovery-during-iteration is itself a sentinel.** iter-130
+  found stale documentation that no human had reported. Adding
+  the sentinel test means the next contributor who lands a
+  pattern-conforming change gets a friendly test failure
+  reminding them to update the doc — instead of silently
+  letting the doc rot.
+- **The two pattern docs in GENO.md form a small ecosystem.**
+  Reading one helps a contributor understand the other:
+  - Both follow "lead with trigger / number rules / cite iter
+    per rule / show concrete examples"
+  - Both have a backing tuple (the test file's source of
+    truth) that can be extended to add an instance
+  - Both fire when the doc and code diverge
+
+  This consistency makes it cheap to add a third documented
+  pattern in the future — copy the structure, write the
+  sentinel test from the same template.
+- **Extraction count is now 4.** iter-110 brought this to
+  parity with iter-129's diversity count. Five extractions
+  would justify a "you've done this enough times that the
+  rules are stable" note in the doc; for now, four feels
+  like the right level of evidence.
+- Next directions:
+  - Architecture: A/B `aggressive_first_sentence: true` as
+    default with the iter-127 5-fixture corpus.
+  - Document the 5-fixture corpus as a "standard test
+    benchmark" (the still-pending option).
+  - Backport iter-130's rule-count + test-file checks to
+    iter-129's diversity-pattern sentinel test.
