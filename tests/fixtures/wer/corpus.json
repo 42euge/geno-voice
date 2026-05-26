@@ -85,6 +85,14 @@
       "reference": "the quick brown fox jumps over the lazy dog",
       "expected_wer_min": 0.0,
       "expected_wer_max": 0.30
+    },
+    {
+      "name": "noisy_audio",
+      "description": "iter-124: clean speech + gaussian noise at ~15 dB SNR (deterministic seed=42). Tests faster-whisper noise tolerance against real audio rather than simulated hypotheses (iter-106 'noisy' band).",
+      "audio_path": "noisy_16khz.wav",
+      "reference": "what is the weather today",
+      "expected_wer_min": 0.10,
+      "expected_wer_max": 0.50
     }
   ]
 }

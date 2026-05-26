@@ -10165,3 +10165,125 @@ Notes:
     end-to-end perf wins — e.g., `aggressive_first_sentence:
     true` as a default once an A/B with real audio confirms
     the prosody tradeoff is acceptable.
+
+## iter-124 — Noisy-audio fixture for WER pipeline
+
+**Goal:** iter-106's "noisy" entry was a synthetic STT
+hypothesis ("the quick crown fox jumped on the lazy dog") —
+the WER pipeline tested but no real noise was involved.
+iter-124 generates real noisy audio so faster-whisper actually
+encounters degraded input. Validates iter-106's "noisy" band
+isn't purely synthetic.
+
+**Pre-iteration SNR probe:**
+First tried 10 dB SNR — tiny model produced "what in the web of
+the May." (WER 1.0, catastrophic). Probed 15/20/25/30 dB; got:
+- 15 dB → "what in the weather today." (WER 0.20)
+- 20 dB → "What is the winner today?" (WER 0.20)
+- 25 dB → "What is the winner to me?" (WER 0.60) ← outlier
+- 30 dB → "What is the winner today?" (WER 0.20)
+
+The model is non-monotonic with SNR — 25 dB regresses worse than
+20 dB. This is a known artifact of small Whisper models on
+synthesized voices. Picked 15 dB for the fixture: stable WER ≈
+0.2, well-defined band, consistent across runs.
+
+**Two pieces:**
+
+1. **`tests/fixtures/wer/noisy_16khz.wav`** — generated from
+   `clean_16khz.wav` (iter-122) by adding gaussian noise at
+   ~15 dB SNR using `numpy.random.default_rng(seed=42)` for
+   determinism. 24144 samples, mono, 16 bit. Committed.
+
+   Generation script (recorded for reproducibility):
+   ```python
+   speech = read_int16("clean_16khz.wav") / 32768.0
+   speech_rms = np.sqrt(np.mean(speech ** 2))
+   noise_rms = speech_rms / (10 ** (15 / 20))   # 15 dB SNR
+   noise = np.random.default_rng(seed=42).standard_normal(len(speech)) * noise_rms
+   noisy = np.clip((speech + noise) * 32768.0, -32768, 32767).astype(np.int16)
+   ```
+
+2. **`audio_fixtures` corpus entry:** `noisy_audio` with
+   reference "what is the weather today" and band 0.10-0.50.
+   The 0.10 floor catches a fixture-regen at lower SNR; the
+   0.50 ceiling tolerates the model's natural variance.
+
+   The existing `tests/integration/test_wer_audio.py` auto-
+   picks up the new entry — its parametrized
+   `test_each_audio_fixture_lands_in_wer_band` runs faster-
+   whisper on the new file and asserts the WER inside
+   [0.10, 0.50].
+
+**Fixture-shape sentinel** (`tests/unit/test_noisy_audio_fixture.py`,
+7 tests):
+
+- File presence + shape (mono, 16-bit, 16 kHz, sample count
+  matches clean_16khz.wav).
+- RMS invariants: noisy RMS > clean RMS (catches accidental
+  re-save of clean as noisy).
+- **Measured SNR within ±2 dB of 15 dB target.** Computed by
+  subtracting clean from noisy → noise-only signal → SNR formula.
+  Catches drift if the fixture is regenerated with a different
+  SNR target.
+- Saturation < 5% (catches over-loud regeneration that would
+  clip too many samples).
+- Deterministic content sanity (middle samples have non-trivial
+  values; locks against silent fixture or accidental zero).
+
+These run regardless of faster-whisper availability, so even on
+CI hosts without STT the fixture's structural integrity is
+verified.
+
+Verification:
+- `python -m pytest tests/unit/test_noisy_audio_fixture.py -v` →
+  **7 passed in 60ms**.
+- `python -m pytest tests/integration/test_wer_audio.py -v` →
+  **4 passed in 3.2s** (the parametrized fixture-band test now
+  iterates over 3 fixtures instead of 2; new entry lands in
+  band).
+- Full unit + integration: **1476 passed, 1 skipped** (1469
+  prior + 7 new).
+- Perf snapshot: **23 passed**.
+
+Notes:
+- **The `noise_only = noisy - clean` SNR test is the strongest
+  fixture invariant.** It measures the actual delivered SNR
+  rather than trusting the generation parameters. If a future
+  iteration regenerates the fixture with seed=43 (or 14 dB
+  target, or a different noise distribution), this test fires.
+- **Saturation guard catches a class of bugs:** if someone
+  regenerates with too-high SNR target → noise dominates →
+  clipping → most samples saturate → audio sounds garbled.
+  The < 5% bound permits the small clipping at speech peaks
+  that's natural at 15 dB but not the cascade clipping that
+  happens at e.g. -10 dB.
+- **Determinism is the headline property.** `seed=42` is the
+  contract — change it and the fixture's WER shifts, breaking
+  the corpus assertions. The "middle samples" test is a soft
+  canary; if it ever fails, the bigger SNR/shape tests will
+  too.
+- **The corpus is now 6 text + 3 audio fixtures.** Three audio
+  scenarios (clean speech, pangram, noisy speech) cover the
+  non-degenerate real-audio space. Future additions:
+  - Music/background-speech overlay (the iter-106 "noisy"
+    case at lower SNR).
+  - Truly catastrophic (5-10 dB) for the iter-106
+    "catastrophic" band — model reliably fails.
+  - Multi-speaker overlap.
+
+  Each fixture gets the same shape: deterministic seed,
+  expected band, fixture-shape unit test.
+- **Pattern: deterministic-fixture invariants belong in a
+  unit test, not the integration test.** The unit test runs
+  always; the integration test runs only when STT is
+  available. Splitting the assertions cleanly lets each test
+  live in its proper skip context.
+- Next directions:
+  - Sentence-length-bucket consistency check (fourth
+    diversity-pattern instance).
+  - More-degraded audio fixture (truly catastrophic, 5-10 dB
+    SNR) for the iter-106 "catastrophic" band.
+  - Architecture pivot: A/B aggressive_first_sentence as a
+    default, validated against the now-existing real-audio
+    fixtures.
