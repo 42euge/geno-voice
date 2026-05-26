@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-123 — Wire max_user_assistant via chat_cfg</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-122.html">← iter-122</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-123 — Wire max_user_assistant via chat_cfg</h1>
+<div class="meta"></div>
+</header><p><strong>Goal:</strong> Promote the iter-024 context cap from a hardcoded literal to a tunable config knob. iter-102 + iter-112 proved empirically the knob has real production value:</p>
+<ul><li>-55% billed tokens on turn 8 (cap=5 vs 20)</li><li>-346ms TTFS on turn 8 with <code>context_factor=2ms/char</code></li></ul>
+<p>Different LLMs and different conversation patterns benefit from different caps. iter-123 lets operators tune it without editing mic_chat.py:</p>
+<p>chat: max_user_assistant: 10   # 0 = no cap (eval/replay)</p>
+<p><strong>Three pieces:</strong></p>
+<p>1. <strong><code>MAX_USER_ASSISTANT_DEFAULT</code> + <code>parse_max_user_assistant</code></strong> in <code>examples/_chat_config.py</code>:</p>
+<pre class="code-block"><code>   MAX_USER_ASSISTANT_DEFAULT = 20
+
+   def parse_max_user_assistant(chat_cfg) -&gt; int:
+       if not isinstance(chat_cfg, Mapping):
+           return MAX_USER_ASSISTANT_DEFAULT
+       raw = chat_cfg.get(&quot;max_user_assistant&quot;)
+       if isinstance(raw, bool):
+           return MAX_USER_ASSISTANT_DEFAULT  # bool ⊂ int defense
+       if isinstance(raw, int) and raw &gt;= 0:
+           return raw
+       return MAX_USER_ASSISTANT_DEFAULT</code></pre>
+<p>Three design choices documented in the docstring:</p>
+<ul><ul><ul></ul></ul></ul>
+<p>2. <strong><code>mic_chat.py:run_chat</code> updated</strong> to read the cap from chat_cfg:</p>
+<pre class="code-block"><code>   from examples._chat_config import parse_max_user_assistant
+   max_user_assistant = parse_max_user_assistant(chat_cfg)
+   state = run_session(
+       chat_loop, system_prompt,
+       max_user_assistant=max_user_assistant,
+       ...
+   )</code></pre>
+<p>Backwards-compatible: any operator who hasn&#x27;t set the new key still gets the iter-024 default of 20.</p>
+<p>3. <strong>The <code>cap=0</code> invariant verified at the trim layer.</strong> <code>trim_history</code> already handles 0 correctly — Python&#x27;s <code>tail[-0:]</code> is <code>tail[0:]</code> which is the full tail (because <code>-0 == 0</code>). The wiring relies on this idiom, so iter-123&#x27;s tests lock it down explicitly:</p>
+<pre class="code-block"><code>   def test_cap_zero_passes_full_history_through_trim():
+       messages = [system_msg, u1, a1, u2, a2]
+       out = trim_history(messages, max_user_assistant=0)
+       assert out == messages   # no eviction</code></pre>
+<p>Without this test, a future &quot;optimization&quot; that adds an early-return on <code>max_user_assistant == 0</code> could evict everything (Python idiom is non-obvious).</p>
+<p><strong>Tests</strong> (<code>tests/unit/test_parse_max_user_assistant.py</code>, 17 tests):</p>
+<p><em>Defaults (3 tests):</em> return type is int; default is 20; missing key → 20.</p>
+<p><em>Malformed input (5 tests):</em> non-mapping inputs → default; string &quot;10&quot; → default; float 10.0 → default; negative → default; bool True/False → default.</p>
+<p><em>Valid values (4 tests):</em> 0 returned as 0; small positive (5); large positive (100); default value 20 explicitly honored.</p>
+<p><em>Cap=0 round-trip semantics (3 tests):</em> full history preserved through trim_history; empty-tail edge case; no-system edge case.</p>
+<p><em>Independence (2 tests):</em> doesn&#x27;t mutate input dict; doesn&#x27;t mutate the default constant.</p>
+<p>Verification:</p>
+<ul><li>`python -m pytest tests/unit/test_parse_max_user_assistant.py -q` → <strong>17 passed in 20ms</strong>.</li><li>AST sanity check on <code>mic_chat.py</code>: parse OK.</li><li>Full unit + integration: <strong>1469 passed, 1 skipped</strong> (1452 prior + 17 new).</li><li>Perf snapshot: <strong>23 passed</strong>.</li></ul>
+<p>Notes:</p>
+<ul><li><strong>The &quot;0 = no cap&quot; sentinel was a deliberate UX choice.</strong> Alternatives: 1. None — would require explicit None checks at every consumer. 2. <code>-1</code> — common UNIX idiom but fragile (someone might &quot;validate&quot; it as invalid and reject it). 3. A separate boolean <code>disable_cap_trim</code> — would split a single concern across two yaml keys. 4. <strong><code>0</code> as sentinel</strong> — chosen. Yaml&#x27;s natural integer, unambiguous in Python, naturally produces &quot;no cap&quot; via the <code>tail[-0:]</code> idiom without requiring caller-side branches.</li></ul>
+<p>Documented + tested explicitly because the choice isn&#x27;t obvious from the code.</p>
+<ul><li><strong>The bool-is-int defense is a recurring pattern.</strong> This is the second config parser that defends against <code>bool</code> being mistreated as <code>int</code> (the first was iter-119&#x27;s parse_stt_config — wait, that was string-based, no overlap). Actually iter-123 is the first integer-config parser in the family. If a fourth comes along, the pattern is documented here.</li><li><strong>Python&#x27;s <code>tail[-0:]</code> idiom isn&#x27;t widely known.</strong> The explicit test that exercises it lives in iter-123 to prevent a future contributor from &quot;cleaning up&quot; the trim_history function with an <code>if max_user_assistant &lt;= 0: return ...</code> branch that eats the no-cap behavior.</li><li><strong>The full chat_cfg config schema is now:</strong> ```yaml chat: # iter-018 (chat config) aggressive_first_sentence: false auto_aggressive_threshold: 0.0 # iter-011 (fillers) fillers: [] fillers_idle_threshold: 0.6 # iter-020 (vad) vad: silence_threshold: 0.02 silence_duration: 0.8 min_speech_duration: 0.3 # iter-119 (stt) stt_engine: &quot;whisper&quot; stt_model: &quot;&quot; stt_device: &quot;cpu&quot; stt_compute: &quot;int8&quot; # iter-123 (history cap) max_user_assistant: 20 ```</li></ul>
+<p>Every operator-tunable knob is now in chat_cfg with a parse_*_config helper backing it. No more hardcoded literals in run_chat.</p>
+<ul><li>Next directions: iter-106 catastrophic bands. of the diversity pattern). end-to-end perf wins — e.g., `aggressive_first_sentence: true` as a default once an A/B with real audio confirms the prosody tradeoff is acceptable.<ul><li>Add a noisy-audio fixture (synthesized + bgm) for the</li><li>Sentence-length-bucket consistency check (fourth instance</li><li>Architecture pivot: with config wiring done, focus on</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-122.html">← iter-122</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>
