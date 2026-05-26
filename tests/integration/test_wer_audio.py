@@ -92,9 +92,19 @@ def test_audio_files_exist_on_disk(audio_fixtures):
 
 
 def _transcribe(stt_model, audio_path: Path) -> str:
-    """Run STT and return concatenated text."""
+    """Run STT and return concatenated text.
+
+    iter-125: forced to greedy decoding (``beam_size=1,
+    temperature=0``) so per-fixture WER is deterministic across
+    runs. Without this, faster-whisper's default beam-search +
+    temperature-fallback gives different transcripts on
+    repeated runs of the same audio — catastrophic-band
+    fixtures sometimes land at WER 0.2 (recovers) and sometimes
+    1.0 (fails). Greedy decoding makes WER bands testable.
+    """
     segments, _info = stt_model.transcribe(
         str(audio_path), language="en",
+        beam_size=1, temperature=0,
     )
     # Generator — consume immediately.
     return " ".join(s.text for s in segments).strip()

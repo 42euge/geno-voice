@@ -10287,3 +10287,133 @@ Notes:
   - Architecture pivot: A/B aggressive_first_sentence as a
     default, validated against the now-existing real-audio
     fixtures.
+
+## iter-125 — Catastrophic-audio fixture (10 dB SNR)
+
+**Goal:** iter-124 added a noisy-audio fixture (15 dB SNR)
+matching iter-106's "noisy" band. iter-125 adds the
+catastrophic-audio counterpart — completes the iter-106
+band coverage with real audio at every level.
+
+**Pre-iteration probe rediscovered an issue iter-124 didn't
+catch:**
+First generated `catastrophic_16khz.wav` at 10 dB SNR with
+seed=42. The iter-117 integration test (which iterates over
+`audio_fixtures`) ran it and got **WER 0.200** ("what in the
+weather today"), well below the 0.80 minimum I'd set for
+"catastrophic." Initial probe (run during iter-124) had
+consistently gotten WER 1.0 ("what in the web of the May.").
+
+Root cause: **faster-whisper's default decoding is non-
+deterministic across runs.** Default `beam_size=5` plus
+temperature-fallback sampling (0..1.0 in 0.2 steps) produces
+different transcripts on repeated runs of the same audio.
+The catastrophic fixture is right at the edge where the
+model sometimes recovers a partial transcript.
+
+**The fix:** force greedy decoding (`beam_size=1,
+temperature=0`) in the iter-117 `_transcribe` helper.
+With greedy decoding, all four audio fixtures produce
+deterministic WERs:
+
+| Fixture                  | Band         | Greedy WER (3 runs)    |
+|--------------------------|--------------|------------------------|
+| clean_audio              | [0.0, 0.4]   | [0.20, 0.20, 0.20]     |
+| quick_brown_fox_audio    | [0.0, 0.3]   | [0.11, 0.11, 0.11]     |
+| noisy_audio              | [0.1, 0.5]   | [0.20, 0.20, 0.20]     |
+| catastrophic_audio       | [0.8, 1.3]   | [1.00, 1.00, 1.00]     |
+
+Without the fix, the iter-124 noisy fixture happened to land
+in band by luck (its 0.10-0.50 band was wide enough to
+absorb the variance). The catastrophic band was tight enough
+to expose the issue. iter-125's fix retroactively makes
+iter-124's fixture deterministic too.
+
+**Three pieces:**
+
+1. **`tests/fixtures/wer/catastrophic_16khz.wav`** — generated
+   from `clean_16khz.wav` via gaussian noise at 10 dB SNR with
+   seed=42. Same generation pattern as iter-124's noisy fixture
+   but at the lower SNR.
+
+2. **`audio_fixtures` corpus entry** `catastrophic_audio` with
+   reference "what is the weather today" and band 0.80-1.30.
+   The iter-117 parametrized integration test auto-picks it up.
+
+3. **`tests/integration/test_wer_audio.py:_transcribe` updated**
+   to use `beam_size=1, temperature=0`. Comment in the function
+   explains why — future contributors who try to "improve"
+   accuracy by switching back to beam search will be reminded
+   that determinism is the contract.
+
+**Fixture-shape sentinel** (`tests/unit/test_catastrophic_audio_fixture.py`,
+8 tests):
+
+- File presence + shape (mono, 16-bit, 16 kHz, sample-count
+  matches clean).
+- SNR ordering: catastrophic noise RMS > iter-124 noisy noise
+  RMS (catches a swap between the two fixtures).
+- **Measured SNR within ±2 dB of 10 dB target** — strongest
+  invariant via `noise_only = catastrophic - clean`.
+- Saturation < 10% (looser than iter-124's 5% because more
+  noise → more clipping at peaks; 10% is still well below
+  "negative SNR" disasters).
+- Determinism (middle samples non-trivial).
+- **Distinct from noisy fixture** — explicit byte-array
+  comparison. Catches accidental copy.
+
+Verification:
+- `python -m pytest tests/unit/test_catastrophic_audio_fixture.py
+  -v` → **8 passed in 60ms**.
+- `python -m pytest tests/integration/test_wer_audio.py -v` →
+  **4 passed in ~4s** (now exercises 4 fixtures including
+  catastrophic; greedy decoding enabled).
+- All faster-whisper-using tests (42 total): **42 passed in
+  4.7s**.
+- Full unit + integration: **1484 passed, 1 skipped** (1476
+  prior + 8 new).
+- Perf snapshot: **23 passed**.
+
+Notes:
+- **The non-determinism discovery is the big takeaway.**
+  iter-124's seed=42 + 15 dB SNR happened to be in a region
+  where the model gave the same answer most of the time, so
+  the bug stayed hidden. iter-125's tighter band on a more
+  fragile fixture exposed it. Recorded for future fixture
+  iterations: **always run the integration test 3+ times
+  before committing the band**, and prefer greedy decoding
+  for any band-based assertion.
+- **The greedy-decoding tradeoff.** Beam search with temperature
+  fallback is what production STT typically uses — it's more
+  accurate on average. Greedy is faster but slightly worse
+  WER. For a TEST harness, deterministic-and-slightly-worse is
+  the right tradeoff: tests that flake destroy trust faster
+  than slightly-low accuracy hurts the band. For PRODUCTION,
+  the existing FasterWhisperEngine.transcribe still uses the
+  default beam search. iter-125 only changes the test path.
+- **The corpus is now 6 text + 4 audio fixtures.**
+  - clean_audio (production-grade STT, espeak-ng output)
+  - quick_brown_fox_audio (pangram, espeak-ng output)
+  - noisy_audio (15 dB SNR)
+  - catastrophic_audio (10 dB SNR)
+
+  Together they cover the iter-106 corpus's bands with real
+  audio rather than simulated hypotheses.
+- **Pattern recorded for future model-using fixtures:**
+  > Decode deterministically (greedy, temperature=0) when
+  > asserting on output. Match production decoding only when
+  > asserting on the *engine path*, not the *output content*.
+- **The probing methodology — generate at multiple SNRs,
+  observe WER, pick the SNR with stable behavior — is the
+  third instance** (iter-117 model size choice, iter-124 SNR
+  choice, iter-125 SNR choice + decoding-mode choice). It's
+  becoming a documented procedure for fixture-based STT
+  testing.
+- Next directions:
+  - Sentence-length-bucket consistency check (4th diversity
+    instance — would be the first that uses iter-116's helper
+    after iter-120).
+  - Architecture pivot: A/B aggressive_first_sentence as a
+    default with real audio fixtures.
+  - Multi-speaker overlap fixture for the "two speakers
+    talking at once" stress-test.

@@ -93,6 +93,14 @@
       "reference": "what is the weather today",
       "expected_wer_min": 0.10,
       "expected_wer_max": 0.50
+    },
+    {
+      "name": "catastrophic_audio",
+      "description": "iter-125: clean speech + gaussian noise at ~10 dB SNR (deterministic seed=42). At this SNR the tiny model fails — observed transcript 'what in the web of the May' (WER 1.0). Validates iter-106's 'catastrophic' band against real degraded audio.",
+      "audio_path": "catastrophic_16khz.wav",
+      "reference": "what is the weather today",
+      "expected_wer_min": 0.80,
+      "expected_wer_max": 1.30
     }
   ]
 }
