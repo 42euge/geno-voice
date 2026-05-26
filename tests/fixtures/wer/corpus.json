@@ -101,6 +101,14 @@
       "reference": "what is the weather today",
       "expected_wer_min": 0.80,
       "expected_wer_max": 1.30
+    },
+    {
+      "name": "multispeaker_audio",
+      "description": "iter-127: two espeak-ng voices overlapping. Reference (en-us) speaks 'what is the weather today' starting at t=0; distractor (en-gb-x-rp) speaks 'I am cooking dinner now' at amp=0.75 starting at t=0.4s. Tests faster-whisper's behavior under cross-talk — observed transcript 'What is my window taking out?' (WER 0.8). Real-world failure mode: a second speaker interrupts mid-utterance.",
+      "audio_path": "multispeaker_16khz.wav",
+      "reference": "what is the weather today",
+      "expected_wer_min": 0.60,
+      "expected_wer_max": 1.10
     }
   ]
 }

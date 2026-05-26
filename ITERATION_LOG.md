@@ -10556,3 +10556,120 @@ Notes:
   - Sentence-length-bucket consistency check would be the 4th
     diversity instance — useful but not urgent given the
     pattern has 3 stable instances.
+
+## iter-127 — Multi-speaker overlap fixture
+
+**Goal:** Add a real-world failure mode to the corpus: two
+speakers overlapping. iter-124 + iter-125 added gaussian-noise
+fixtures (acoustic degradation); iter-127 adds cross-talk
+(linguistic degradation). Both stress-test faster-whisper but
+exercise different failure modes.
+
+**Pre-iteration probe rediscovered the iter-125 lesson:**
+faster-whisper handles light cross-talk very well. At a 50%
+distractor amplitude, the tiny model nailed the reference
+("What is the weather today?" → WER 0.0). Probed 0.5 / 0.75 /
+1.0 / 1.25 / 1.5 amplitudes:
+
+| Amp  | WER (3 runs) | Sample transcript                     |
+|------|--------------|---------------------------------------|
+| 0.50 | 0.0          | "What is the weather today?"          |
+| 0.75 | 0.8          | "What is my window taking out?"       |
+| 1.00 | 1.0          | "What's in my mind?"                  |
+| 1.25 | 1.2          | "what's in the power of the internet" |
+| 1.50 | 37.0 (looped)| "what's in the eye and what's in..."  |
+
+Picked **amp=0.75** as the fixture: meaningful confusion (WER
+0.8) without runaway output. At 1.5 the model loops, which is
+diagnostically interesting but produces a fixture WER that's
+both hard to band and noisy.
+
+**Three pieces:**
+
+1. **`tests/fixtures/wer/multispeaker_16khz.wav`** — generated
+   from two espeak-ng voices:
+   - Reference (en-us): "what is the weather today" — starts at
+     t=0.
+   - Distractor (en-gb-x-rp): "I am cooking dinner now" —
+     starts at t=0.4s, mixed at amp=0.75.
+
+   30253 samples, mono, 16 kHz. Resampled from each voice's
+   native rate via scipy.
+
+2. **`audio_fixtures` corpus entry** `multispeaker_audio` with
+   reference "what is the weather today" and band 0.60-1.10.
+   Wider than iter-124's noisy band (0.10-0.50) because the
+   model's response to cross-talk is more sensitive to
+   per-token alignment.
+
+3. **8 fixture-shape unit tests** (`tests/unit/
+   test_multispeaker_audio_fixture.py`):
+
+   - File presence + mono/16-bit/16 kHz shape.
+   - Length >= clean fixture (catches truncated distractor).
+   - Distinct from clean / noisy / catastrophic byte-arrays.
+   - Saturation < 5% (catches over-loud regeneration).
+   - **Overlap-region RMS > pre-overlap RMS** — sanity that
+     the distractor actually got mixed in. If a future regen
+     forgets to add the second voice, this fires.
+   - Distractor-window has non-trivial samples (silent regen
+     check).
+
+**Pattern recorded for synthesized-mix fixtures:**
+> When generating a mix from multiple sources, include an
+> RMS-based "overlap region carries more energy" sanity test.
+> The simple "distinct bytes" check fires on any difference,
+> but the RMS check specifically validates that the mixing
+> step did its work.
+
+Verification:
+- `python -m pytest tests/unit/test_multispeaker_audio_fixture.py
+  -v` → **8 passed in 60ms**.
+- `python -m pytest tests/integration/test_wer_audio.py -q` →
+  **4 passed in 3.4s** (now exercises 5 fixtures including
+  multispeaker; greedy decoding makes WER deterministic).
+- Full unit + integration: **1495 passed, 1 skipped** (1487
+  prior + 8 new).
+- Perf snapshot: **23 passed**.
+
+Notes:
+- **The corpus is now 6 text + 5 audio fixtures.** Audio
+  fixtures span:
+  - clean_audio (production-grade STT)
+  - quick_brown_fox_audio (pangram)
+  - noisy_audio (15 dB SNR — light noise)
+  - catastrophic_audio (10 dB SNR — heavy noise)
+  - multispeaker_audio (cross-talk, amp=0.75)
+
+  Different failure modes, deterministic across runs (greedy
+  decoding from iter-125), each with band sentinels in
+  corpus.json.
+- **The probing methodology continues to scale.** iter-117
+  (model size), iter-124 (noise SNR), iter-125 (more SNR + decoding
+  mode), iter-127 (distractor amp) all used the same approach:
+  generate at multiple settings → observe WER distribution →
+  pick the setting with stable WER and meaningful signal.
+- **Two-voice mixing is reproducible.** Both espeak-ng outputs
+  are deterministic given the input text + voice. The mix
+  amplitude + offset are recorded in the iteration log + the
+  fixture-shape tests, so regeneration produces an identical
+  fixture.
+- **Why band 0.60-1.10 and not tighter?** Observed WER 0.8 on
+  3 runs. Wider band tolerates faster-whisper version drift
+  without breaking the test. Tightening to 0.75-0.85 might
+  fire if a future model release shifts the output by one
+  word.
+- **The "RMS in overlap region" test is the strongest
+  generation invariant.** It catches a class of bugs (forgot
+  to mix in the distractor; mixed at zero amplitude;
+  truncated the distractor) that a simple byte-comparison
+  check might miss.
+- Next directions:
+  - Architecture: A/B `aggressive_first_sentence: true` as
+    default with the now-existing 5-fixture audio corpus.
+  - Sentence-length-bucket consistency check (4th diversity
+    instance).
+  - Document the 5-fixture corpus as a "standard test
+    benchmark" — operators wanting to evaluate a new STT
+    wrapper can run their engine through these fixtures and
+    compare bands.
