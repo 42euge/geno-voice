@@ -10673,3 +10673,114 @@ Notes:
     benchmark" — operators wanting to evaluate a new STT
     wrapper can run their engine through these fixtures and
     compare bands.
+
+## iter-128 — Sentence-length-bucket consistency check
+
+**Goal:** Fourth instance of the diversity-check pattern after
+iter-114 (filler), iter-115/iter-126 (naturalness), iter-120
+(barge-phase). First instance applied to a CONTINUOUS metric —
+buckets `mean_sentence_chars` (iter-095) into discrete
+categories before scanning. Validates that the pattern
+generalizes beyond string-valued signals.
+
+**The signal:** `mean_sentence_chars` per-turn captures how
+verbose the bot was. Buckets:
+
+- `very_short` (< 15 chars): choppy. Caused by an over-aggressive
+  splitter (iter-088 `AGGRESSIVE_MIN_CHARS` too low) or a one-
+  word-answer LLM.
+- `short` (15-30): brief, not problematic.
+- `medium` (30-60): the desired state.
+- `long` (> 60): wall-of-text. LLM rambles, or splitter is too
+  lax.
+
+5+ consecutive turns in `very_short` or `long` warrants a
+warning. `medium` and `short` are the "fine" states — filtered
+before scanning, mirroring iter-126's "natural" filter.
+
+**Change:** Two new helpers in `_chat_metrics.py`:
+
+```python
+def _sentence_length_bucket(mean_chars: float) -> str:
+    if mean_chars <= 0: return ""
+    if mean_chars < 15: return "very_short"
+    if mean_chars < 30: return "short"
+    if mean_chars < 60: return "medium"
+    return "long"
+
+
+def _emit_sentence_length_consistency_line(
+    emit, mean_chars_list: list[float], threshold: int = 5,
+) -> None:
+    interesting = {"very_short", "long"}
+    filtered = [
+        b for b in (
+            _sentence_length_bucket(mc) for mc in mean_chars_list
+        )
+        if b in interesting
+    ]
+    ...
+```
+
+Wired into `print_session_summary` after iter-120's barge-phase
+check.
+
+**Tests** (24 in `test_emit_sentence_length_consistency_line.py`):
+
+- Bucket boundaries (7 tests): zero/negative → empty; very_short
+  upper edge 14; short edges 15-29; medium edges 30-59; long ≥ 60;
+  float handling.
+- Empty / no-sentences (2): empty list, all-zero list.
+- Medium/short exclusion (3): 10-turn medium silent; 10-turn short
+  silent; alternating medium+long → only long counts.
+- At/above threshold (3): 5 very_short → fires with "over-aggressive"
+  suggestion; 6 long → fires with "too lax"; below threshold silent.
+- Filter behavior (3): medium between very_short doesn't break run;
+  short between long doesn't break run; phase change between flagged
+  buckets DOES break run.
+- Custom threshold (2): smaller catches via threshold=3; larger
+  suppresses default 5-run.
+- Longest-of-multiple (1): when both very_short and long pass
+  threshold, longer wins.
+- Output formatting (2): leading 4-space indent; iter-095
+  attribution.
+- Pattern parity (1): 1000-element input handled.
+
+Verification:
+- `python -m pytest tests/unit/test_emit_sentence_length_consistency_line.py
+  -q` → **24 passed in 30ms**.
+- Regression sentinel (220 prior tests pass byte-for-byte).
+- Full unit + integration: **1519 passed, 1 skipped** (1495
+  prior + 24 new).
+- Perf snapshot: **23 passed**.
+
+Notes:
+- **Pattern continues to scale.** Four diversity-check instances
+  now use iter-116's `_longest_consecutive_run`:
+  - iter-114 (filler diversity) — int values, threshold 3
+  - iter-115/126 (naturalness) — string values, threshold 5
+  - iter-120 (barge-phase) — string values, threshold 4
+  - iter-128 (sentence length) — bucketed continuous values,
+    threshold 5
+- **First continuous-metric application.** Bucketing is the new
+  step. The bucketing function is testable in isolation
+  (7 boundary tests), then the run-finder consumes the buckets
+  like any other categorical signal. Generalizes the pattern.
+- **Filter-before-scan rule applies.** All four instances filter
+  uninteresting values before the scan. The "uninteresting"
+  set varies per-helper (zeros / empties / "natural" / "medium"
+  + "short") but the structural pattern is identical.
+- **The pattern could now be promoted to a documented
+  protocol.** Five instances would justify it (4th makes it
+  obvious; 5th locks it in). For now, GENO.md's
+  "mic_chat.py extraction pattern" is the only documented
+  pattern; a "diversity-check pattern" section could
+  catalog filter rules + threshold conventions + suggestion
+  mapping for future instances.
+- Next directions:
+  - Promote the diversity-check pattern to documented
+    guidance (5th instance threshold reached).
+  - Architecture: A/B aggressive_first_sentence as default
+    using the iter-127 5-fixture audio corpus.
+  - Document the corpus as a "standard test benchmark" for
+    operators evaluating new STT engines.

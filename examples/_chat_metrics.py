@@ -1621,6 +1621,93 @@ def _emit_barge_phase_consistency_line(
     )
 
 
+def _sentence_length_bucket(mean_chars: float) -> str:
+    """iter-128: bucket a per-turn ``mean_sentence_chars`` into a
+    coarse category. Used by ``_emit_sentence_length_consistency_line``
+    to detect runs of unusually-short or unusually-long bot output.
+
+    Buckets (chosen against iter-095 perf-data observations
+    where typical mean_sentence_chars sits at 25-50):
+
+        ``very_short`` — < 15 chars: choppy. Caused by an
+            over-aggressive splitter (iter-088 with
+            ``AGGRESSIVE_MIN_CHARS`` set too low) or an LLM that
+            keeps emitting one-word answers.
+        ``short``      — 15-30 chars: brief but not problematic.
+        ``medium``     — 30-60 chars: the desired state.
+        ``long``       — > 60 chars: wall-of-text. Either LLM
+            rambles or the splitter is too lax.
+
+    Returns ``""`` when ``mean_chars`` is non-positive (no
+    sentences this turn) — empty-string filter applies in the
+    consumer, mirroring iter-114/115/120/126.
+    """
+    if mean_chars <= 0:
+        return ""
+    if mean_chars < 15:
+        return "very_short"
+    if mean_chars < 30:
+        return "short"
+    if mean_chars < 60:
+        return "medium"
+    return "long"
+
+
+def _emit_sentence_length_consistency_line(
+    emit, mean_chars_list: list[float], threshold: int = 5,
+) -> None:
+    """iter-128: detect consecutive runs of unusually-short or
+    unusually-long sentence output. Fourth instance of the
+    diversity-check pattern after iter-114 (filler), iter-115
+    (naturalness), iter-120 (barge-phase). First instance applied
+    to a CONTINUOUS metric — buckets it via
+    ``_sentence_length_bucket`` before running the scan.
+
+    Filter rule (mirrors iter-126's "natural" exclusion): drop
+    "medium" and "short" buckets before the scan. They're the
+    "fine" states; only "very_short" and "long" warrant warning.
+    Empty buckets (turns with no sentences) also drop.
+
+    Threshold = 5: same as iter-115, since sentence-length is a
+    similarly noisy signal where brief excursions are normal.
+
+    Output:
+
+        Sentence length: 5 consecutive 'very_short' turns
+                         — splitter may be over-aggressive
+                         (iter-095 mean_sentence_chars)
+    """
+    # Bucketize, then drop "uninteresting" buckets (empty,
+    # medium, short).
+    interesting = {"very_short", "long"}
+    filtered = [
+        b for b in (
+            _sentence_length_bucket(mc) for mc in mean_chars_list
+        )
+        if b in interesting
+    ]
+    if not filtered:
+        return
+
+    longest_run, longest_bucket = _longest_consecutive_run(filtered)
+    if longest_run < threshold:
+        return
+
+    if longest_bucket == "very_short":
+        suggestion = "splitter may be over-aggressive"
+    elif longest_bucket == "long":
+        suggestion = "splitter may be too lax (or LLM rambles)"
+    else:
+        # Defensive: future buckets that pass the filter rule.
+        suggestion = "consider tuning splitter"
+
+    emit(
+        f"    Sentence length:  {longest_run} consecutive "
+        f"{longest_bucket!r} turns — {suggestion} "
+        f"(iter-095 mean_sentence_chars)"
+    )
+
+
 def _emit_bargeable_line(emit, bargeable_values: list[float]) -> None:
     """iter-104: extracted from print_session_summary's iter-074
     bargeable line. Reports the WORST bargeable fraction across
@@ -2159,6 +2246,14 @@ def print_session_summary(
     _emit_barge_phase_consistency_line(
         _emit,
         [m.barge_in_phase for m in metrics_list],
+    )
+    # iter-128: sentence-length-bucket consistency check. Only
+    # fires when 5+ consecutive turns produced very_short
+    # (< 15 chars) or long (> 60 chars) sentences — surfaces a
+    # splitter-tuning issue.
+    _emit_sentence_length_consistency_line(
+        _emit,
+        [m.mean_sentence_chars for m in metrics_list],
     )
     # iter-090: barge block extracted to _emit_barge_block helper.
     # ~76 lines of co-emitted lines (count, interruption rate,
