@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-109 — Extract pyaudio closures into _chat_audio_io module</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-108.html">← iter-108</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-109 — Extract pyaudio closures into _chat_audio_io module</h1>
+<div class="meta"></div>
+</header><p><strong>Goal:</strong> Third mic_chat.py extraction in three iterations. Pulls the speaker_factory + synth + play closures (~22 lines including the ChatLoop wiring) out of <code>run_chat</code> into a tested module. <strong>Promotes the extraction shape to documented guidance in GENO.md</strong> — three instances is the threshold where pattern becomes convention.</p>
+<p><strong>Original block:</strong></p>
+<pre class="code-block"><code>def _speaker_factory():
+    return pa.open(format=pyaudio.paInt16, channels=1, rate=TTS_RATE,
+                   output=True, frames_per_buffer=1024)
+
+def _synth(sentence: str):
+    return synthesize_with_alignment(tts_engine, sentence, voice, speed)
+
+def _play(speaker, audio_np, tokens, *, is_first_sentence=False,
+          cancel_event=None, lag_out=None):
+    return _play_aligned_core(speaker, audio_np, tokens,
+        is_first_sentence=is_first_sentence, rate=TTS_RATE,
+        cancel_event=cancel_event, lag_out=lag_out)
+
+# ...later in ChatLoop(...):
+chat_loop = ChatLoop(
+    speaker_factory=_speaker_factory,
+    synth_fn=_synth,
+    play_fn=_play,
+    ...
+)</code></pre>
+<p>The closures had grown subtle — <code>lag_out</code> (iter-071), the <code>is_first_sentence</code> flag (iter-006), the rate threading. All production-only behavior, all entangled with pyaudio + kokoro imports.</p>
+<p><strong>Change:</strong> New module <code>examples/_chat_audio_io.py</code> exposing:</p>
+<pre class="code-block"><code>@dataclass
+class AudioIO:
+    speaker_factory: Callable[[], Any]
+    synth_fn: Callable[[str], tuple[Any, Any]]
+    play_fn: Callable[..., float]
+
+def build_audio_io(
+    pa, tts_engine, voice, speed, *,
+    pyaudio_module=None, speaker_chunk=1024, rate=TTS_RATE,
+) -&gt; AudioIO:</code></pre>
+<p><strong>One new pattern element added in this iteration: lazy import inside the closure.</strong> Earlier iterations (107 + 108) didn&#x27;t deal with pyaudio because their work was string-shaped. Here, the <code>speaker_factory</code> closure is the only spot that touches <code>pyaudio.paInt16</code>, so the import lives inside that closure:</p>
+<pre class="code-block"><code>def speaker_factory():
+    nonlocal pyaudio_module
+    if pyaudio_module is None:
+        import pyaudio as pyaudio_module
+    return pa.open(format=pyaudio_module.paInt16, ...)</code></pre>
+<p>This makes <code>build_audio_io</code> itself importable on x86_64 Linux (pyaudio not installed) — the import only fires when the closure is CALLED. Tests inject <code>pyaudio_module=_PyAudioModule()</code> to avoid the runtime import entirely.</p>
+<p><strong>Caller (mic_chat.py) shrinks from 23 lines to 3:</strong></p>
+<pre class="code-block"><code>from examples._chat_audio_io import build_audio_io
+audio_io = build_audio_io(pa, tts_engine, voice, speed)
+# then ChatLoop(speaker_factory=audio_io.speaker_factory,
+#               synth_fn=audio_io.synth_fn,
+#               play_fn=audio_io.play_fn, ...)</code></pre>
+<p><strong>Tests</strong> (<code>tests/unit/test_chat_audio_io.py</code>, 12 tests):</p>
+<ul><li>Return type: AudioIO dataclass with three callable fields.</li><li>speaker_factory: kwargs match original (paInt16, channels=1, output=True, frames_per_buffer=1024); returns pa.open&#x27;s value; callable multiple times; speaker_chunk + rate kwargs override defaults.</li><li>synth_fn: delegates to synthesize_with_alignment with (engine, sentence, voice, speed); speed kwarg is threaded through.</li><li>play_fn: delegates to _play_aligned_core; is_first_sentence / cancel_event / lag_out forwarded intact (iter-071 reveal-lag contract preserved); rate kwarg captured in closure.</li><li>Lazy import: build_audio_io constructs without pyaudio installed (the import fires inside speaker_factory only).</li></ul>
+<p>Verification:</p>
+<ul><li><code>python -m pytest tests/unit/test_chat_audio_io.py -q</code> → <strong>12 passed in 50ms</strong>.</li><li>Full unit + integration: <strong>1247 passed, 1 skipped</strong> (1235 prior + 12 new).</li><li>Perf snapshot: <strong>21 passed</strong>.</li></ul>
+<p><strong>Pattern promoted to GENO.md.</strong> A new &quot;mic_chat.py extraction pattern&quot; section codifies the five rules earned across iter-107, iter-108, iter-109:</p>
+<p>1. Inject callable dependencies, not engines. 2. Inject <code>log</code> (callable, default <code>print</code>). Skip when the extracted code is silent. 3. ANSI styling stays at the caller. 4. Return a dataclass, not a tuple. 5. Lazy-import platform deps inside the closures, not at module scope.</p>
+<p>The first three were implicit in iter-107 + iter-108. Rule 4 was explicit but unmotivated — now justified by 3 dataclass returns (<code>LoadedEngines</code>, <code>AudioIO</code>, plus the <code>RecordingStats</code> from iter-103). Rule 5 is new this iteration and makes platform abstraction concrete.</p>
+<p>Notes:</p>
+<ul><li><strong>mic_chat.py size after iter-109:</strong> ~340 lines total / ~100 in <code>run_chat</code> (down from ~365 / ~125 pre-iter-109). Cumulative reduction in <code>run_chat</code>: 55 lines across three iterations (107: 16 → 13; 108: 13 → 9; 109: 23 → 3).</li><li><strong>The <code>lazy import inside closure</code> trick is reusable.</strong> Future extractions that touch pyaudio, mlx-whisper, or any Mac-only library should follow rule 5. The closure-as-import- boundary pattern lets the module pass-through importable even when the lib isn&#x27;t available — important for CI parity on x86_64.</li><li>**Last big block in <code>run_chat</code> is the main turn loop with KeyboardInterrupt handler** (~30 lines). Extracting that would complete the <code>run_chat</code> decomposition — it&#x27;d become config-load + load_engines + prerender_fillers + build_audio_io + run_session, with run_session owning the loop.</li><li>**<code>run_session</code> extraction would surface a non-trivial question:** the loop owns <code>messages</code>, <code>all_metrics</code>, <code>false_triggers</code>, <code>llm_errors</code>, <code>trim_events</code>, <code>primed_frames</code>, <code>session_start</code>. That&#x27;s a lot of mutable state. The extraction would need to either (a) pass them as a single <code>SessionState</code> dataclass, or (b) make <code>run_session</code> return a <code>SessionState</code> to print_session_summary. (a) is the natural fit given the dataclass-return rule.</li><li>Next directions: decomposition). Largest single iter-pivot remaining in mic_chat.py. iter-106). Ready to land — the <code>stt_factory</code> closure in iter-108 is the swap point. iter-102).<ul><li>Extract main turn loop into <code>run_session</code> (closes the</li><li>Real audio fixtures + CPU-only STT (still pending from</li><li>Per-token-delay grid for context cap (still pending from</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-108.html">← iter-108</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>
