@@ -68,7 +68,7 @@ default to this shape (four instances confirm it: iter-107
 When adding a session-summary warning that fires on **N+
 consecutive turns sharing the same problematic value**, follow
 this template (four instances confirm it: iter-114
-`_emit_filler_diversity_line`, iter-115/126
+`_emit_filler_diversity_line`, iter-115 + iter-126
 `_emit_naturalness_consistency_line`, iter-120
 `_emit_barge_phase_consistency_line`, iter-128
 `_emit_sentence_length_consistency_line`):
@@ -76,7 +76,7 @@ this template (four instances confirm it: iter-114
 1. **Filter "uninteresting" values BEFORE the run scan.**
    Each instance has its own filter rule:
    - iter-114 drops `0` (no filler that turn).
-   - iter-115/126 drops `""` (no audio) and `"natural"` (the
+   - iter-115 + iter-126 drops `""` (no audio) and `"natural"` (the
      desired state).
    - iter-120 drops `""` (no barge that turn).
    - iter-128 drops `""` (no sentences) and `"medium"`/`"short"`

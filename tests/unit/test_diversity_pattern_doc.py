@@ -90,11 +90,23 @@ def test_each_documented_helper_is_callable():
 
 def test_doc_references_each_responsible_iteration():
     """The pattern bullet list mentions each iteration that
-    contributed an instance. Not strict full-name-match — just
-    verifying the iter numbers appear so a reader can find them
-    in ITERATION_LOG.md."""
+    contributed an instance OR a meaningful fix. Not strict
+    full-name-match — just verifying the iter numbers appear
+    so a reader can find them in ITERATION_LOG.md.
+
+    iter-131: iter-126 added — it's the fix-iter for iter-115's
+    documented limitation, and the doc references it via
+    "iter-115/126 naturalness". The attribution should survive
+    future doc edits.
+    """
     doc = _read_doc()
-    expected_iters = ["iter-114", "iter-115", "iter-120", "iter-128"]
+    expected_iters = [
+        "iter-114",  # filler diversity
+        "iter-115",  # naturalness (initial)
+        "iter-120",  # barge-phase
+        "iter-126",  # naturalness (filter fix; iter-131 added to list)
+        "iter-128",  # sentence-length (continuous-metric instance)
+    ]
     for it in expected_iters:
         assert it in doc, f"missing {it} attribution in GENO.md"
 
@@ -149,6 +161,41 @@ def test_doc_template_claims_match_actual_instance_count():
 
 
 # ---- All instances are tested ----------------------------------------
+
+
+def test_doc_references_each_callable_name():
+    """iter-131: backport from iter-130's extraction-pattern
+    sentinel. Each documented helper is name-dropped somewhere
+    in the doc — readers can search for the helper name. If a
+    future contributor renames a helper without updating the
+    doc, this fires."""
+    doc = _read_doc()
+    for name in _DIVERSITY_HELPERS:
+        assert name in doc, f"missing reference to {name} in GENO.md"
+
+
+def test_doc_lists_8_numbered_rules():
+    """iter-131: backport from iter-130. The pattern section
+    enumerates exactly 8 rules. If someone adds a 9th rule,
+    this nudges them to confirm the rule generalizes across
+    all instances (and to update this test)."""
+    doc = _read_doc()
+    section_start = doc.index("### Session-summary diversity-check pattern")
+    # The diversity section is the LAST pattern section in
+    # GENO.md — it ends at the next "## " (top-level header).
+    # Search forward from the section start for the next
+    # top-level heading.
+    section_text = doc[section_start:]
+    next_top = section_text.find("\n## ")
+    if next_top != -1:
+        section_text = section_text[:next_top]
+    numbered_lines = re.findall(
+        r"^\d+\.\s+\*\*", section_text, re.MULTILINE,
+    )
+    assert len(numbered_lines) == 8, (
+        f"expected 8 numbered rules, got {len(numbered_lines)}: "
+        f"{numbered_lines!r}"
+    )
 
 
 def test_each_helper_has_a_corresponding_test_file():

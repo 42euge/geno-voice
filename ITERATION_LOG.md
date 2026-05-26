@@ -11018,3 +11018,125 @@ Notes:
     benchmark" (the still-pending option).
   - Backport iter-130's rule-count + test-file checks to
     iter-129's diversity-pattern sentinel test.
+
+## iter-131 — Sentinel symmetry: backport iter-130 checks to iter-129
+
+**Goal:** Make the iter-129 diversity-pattern sentinel and the
+iter-130 extraction-pattern sentinel structurally consistent.
+iter-130 introduced two check types that iter-129 didn't have:
+rule count and per-callable name reference. iter-131 backports
+both, plus adds iter-126 to the diversity sentinel's expected-
+iters list (it's the fix-iter for iter-115's limitation).
+
+**Pre-iteration discovery: the doc had a hidden drift.**
+The diversity-pattern section attributed naturalness to
+"iter-115/126" — the slash-form. The substring `iter-126`
+doesn't appear in `iter-115/126`, so the new attribution test
+caught the missing standalone reference. Fixed by changing
+"iter-115/126" → "iter-115 + iter-126" globally in the doc.
+This is exactly the kind of drift the sentinels exist to
+catch — a silent attribution gap that worked visually but
+failed an explicit substring check.
+
+**Three changes to `tests/unit/test_diversity_pattern_doc.py`:**
+
+1. **Added iter-126 to `expected_iters`**:
+   ```python
+   expected_iters = [
+       "iter-114",  # filler diversity
+       "iter-115",  # naturalness (initial)
+       "iter-120",  # barge-phase
+       "iter-126",  # naturalness (filter fix; iter-131 added)
+       "iter-128",  # sentence-length
+   ]
+   ```
+
+2. **New `test_doc_references_each_callable_name`** (mirrors
+   iter-130's). For every name in `_DIVERSITY_HELPERS`, assert
+   the name appears somewhere in the doc text. Catches a
+   helper rename without doc update.
+
+3. **New `test_doc_lists_8_numbered_rules`** (mirrors
+   iter-130's `test_doc_lists_5_numbered_rules`). Counts
+   `^\d+\.\s+\*\*` patterns inside the diversity-pattern
+   section. The diversity pattern has 8 rules vs the
+   extraction pattern's 5 — different counts, same shape.
+
+**One change to `GENO.md`:**
+
+- Replaced two occurrences of `iter-115/126` with
+  `iter-115 + iter-126`. The slash form was visually clear
+  but didn't satisfy a substring search for `iter-126` —
+  exactly the drift the sentinel is designed to catch.
+
+**Both sentinels now share the same coverage:**
+
+| Check                              | iter-129 | iter-130 |
+|------------------------------------|:--------:|:--------:|
+| Section presence in GENO.md        |   ✅     |   ✅     |
+| Top-level reference                |   ✅(116)|   ✅(run_chat)|
+| Each documented entry resolves     |   ✅     |   ✅     |
+| Each callable IS callable          |   ✅     |   ✅     |
+| Each iter referenced in doc        |   ✅     |   ✅     |
+| Each callable named in doc         |   ✅⭐   |   ✅     |
+| English-numeral count matches      |   ✅     |   ✅     |
+| Pattern-specific check             |   ✅(thresholds)| n/a |
+| Numbered-rule count                |   ✅⭐   |   ✅     |
+| Each entry has a test file         |   ✅     |   ✅     |
+
+⭐ = added by iter-131.
+
+The pattern-specific check (thresholds 3/4/5) is intentionally
+asymmetric: it's domain-specific to diversity-check (the
+iter-129 doc lists threshold conventions; iter-130's extraction
+pattern doesn't have a comparable convention to verify).
+
+Verification:
+- `python -m pytest tests/unit/test_diversity_pattern_doc.py
+  tests/unit/test_extraction_pattern_doc.py -v` → **19 passed
+  in 70ms** (10 + 9).
+- Full unit + integration: **1538 passed, 1 skipped** (1536
+  prior + 2 net new — added 2 tests, no removals).
+- Perf snapshot: **23 passed**.
+
+Notes:
+- **The doc-drift catch is the headline result.** iter-131
+  found that `iter-126` wasn't a clean substring in the doc,
+  even though human readers would interpret `iter-115/126` as
+  attributing both. The sentinel pattern's value is partly
+  catching exactly these "looks fine but mechanically
+  inconsistent" gaps.
+- **The two sentinels are structurally close enough to share
+  a future template.** If a third documented pattern lands in
+  GENO.md (e.g., a `cross-platform engine pattern` formalizing
+  iter-118/119/121/122), the test file shape is now obvious:
+  - `_INSTANCES` tuple: source of truth.
+  - Section presence + top-level reference.
+  - Per-entry: imports / callable / referenced in doc by both
+    iter and name.
+  - Numbered-rule count (extraction's 5, diversity's 8 — pick
+    a count, lock it in).
+  - English-numeral count matches tuple length.
+  - Per-entry test file existence.
+  - Optional pattern-specific check.
+
+  Could be extracted into a generic `_assert_pattern_doc_in_sync`
+  helper later. For now, the duplication is small (~20 lines
+  per file) and explicit (each pattern owns its source of
+  truth).
+- **iter-131 is the natural close to the doc-pattern arc**
+  started by iter-129 + iter-130. Both pattern sections are
+  now equally protected. A 5th instance of either pattern
+  must update both the source-of-truth tuple AND the doc
+  numeral atomically.
+- **No new assertion types needed yet.** iter-130's two
+  contributions are the right level of coverage for this
+  doc shape. Future iterations can add new check types if
+  a new failure mode emerges.
+- Next directions:
+  - Architecture: A/B `aggressive_first_sentence: true` as
+    default with the iter-127 5-fixture corpus.
+  - Document the 5-fixture corpus as a "standard test
+    benchmark" (still pending from iter-127).
+  - If a third pattern lands in GENO.md, extract the shared
+    sentinel scaffolding into a helper.
