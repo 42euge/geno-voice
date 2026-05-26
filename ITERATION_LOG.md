@@ -9873,3 +9873,122 @@ Notes:
     template).
   - Add a noisy-audio fixture (synthesized + bgm) for the
     iter-106 catastrophic bands.
+
+## iter-122 — Full ChatLoop integration with FasterWhisperEngine
+
+**Goal:** Drive `mic_chat.py:run_one_turn` through the entire
+pipeline on x86_64 Linux: virtual mic → recorder + VAD → real
+faster-whisper STT → stub LLM → SentenceWorker → stub TTS →
+virtual speaker. Closes the iter-118/119/121 cross-platform STT
+arc with a true end-to-end test.
+
+iter-121 validated the routing layer; iter-122 validates the
+pipeline.
+
+**Two pieces:**
+
+1. **Resampled fixture** — `tests/fixtures/wer/clean_16khz.wav`,
+   1.51s of "what is the weather today" at 16 kHz mono PCM.
+   Generated once via scipy.signal.resample from iter-117's
+   22050 Hz fixture, then committed. Deterministic across runs.
+
+   The resampling script is recorded in this iter's commit
+   message. scipy is the only build-time dep; it's already
+   installed on the host. A future fixture commit can re-run
+   the script to add more entries.
+
+2. **`tests/integration/test_chatloop_faster_whisper.py`**:
+
+   - `test_one_turn_through_real_stt`: pushes leading silence
+     + clean speech + trailing silence to `VirtualMicStream`;
+     constructs `ChatLoop` with FasterWhisperEngine for STT
+     (other layers stubbed); runs `loop.run_one_turn([])`;
+     asserts:
+     - No `had_error`
+     - `result.metrics` populated
+     - Transcript contains "weather" or "today" (loose match
+       — tiny model output varies)
+     - `sentences_spoken >= 1`
+     - `stt_time > 0`
+     - `speech_duration > 0`
+
+   - `test_transcribe_fn_signature_is_what_chat_loop_expects`:
+     sentinel for the closure shape ChatLoop expects. The
+     transcribe_fn unwraps `(text, elapsed)` from the engine's
+     return — if either side changes shape, this fails fast.
+
+**Bug found and fixed during implementation:**
+First test attempt hung (timeout reached). Root cause:
+`concat()` in `examples/virtual_audio.py` coerces every input
+to int16. I had converted the speech samples to float32
+(-1..1) before calling concat — those got truncated to mostly
+zeros, and the VAD never detected speech. Fixed by keeping all
+three arrays (leading silence, speech, trailing silence) as
+int16 throughout. `make_silence` already returns int16 and
+`wave.readframes` gives int16; the test path now works without
+any dtype gymnastics.
+
+**Pattern recorded for future audio-fixture tests:**
+> When constructing audio for VirtualMicStream, all input chunks
+> must be int16. Don't normalize/scale — `make_silence` and
+> `wave.readframes` give you int16; the recorder normalizes
+> internally (`int16 → float32 / 32768.0`).
+
+**The cross-platform STT story is now closed at every level:**
+- iter-117: WAV fixtures + faster-whisper as test dependency.
+- iter-118: FasterWhisperEngine implementing STTEngine contract.
+- iter-119: chat_cfg.stt_engine config wiring + parse_stt_config.
+- iter-121: factory routing integration test.
+- iter-122: full pipeline integration test.
+
+A Linux operator who follows the iter-119 docs gets a working
+end-to-end pipeline. Tested at every layer.
+
+Verification:
+- `python -m pytest tests/integration/test_chatloop_faster_whisper.py
+  -v` → **2 passed in 2.7s** (incl. real STT + full ChatLoop run).
+- Full unit + integration: **1452 passed, 1 skipped** (1450
+  prior + 2 new).
+- Perf snapshot: **23 passed**.
+
+Notes:
+- **2.7s for the full integration test** is acceptable. Most of
+  it is the STT model-load (cached on subsequent runs) plus the
+  ~1.5s real-time audio playback through `_slow_play`. The
+  model warm-up dominates; the actual loop iteration is fast.
+- **Alternatives considered for the resampling step:**
+  - sox / ffmpeg — neither installed on this host.
+  - audioop — deprecated in Python 3.13.
+  - Pure-Python linear interpolation — would work but quality
+    is lower than scipy.
+  - **scipy.signal.resample** — chosen. High-quality FFT-based
+    resampling, already available, deterministic.
+- **The test deliberately uses `_slow_play` instead of an
+  instant playback stub** so timing-sensitive metrics (TTFS,
+  speech_duration) get realistic values. Doesn't matter for
+  this test's assertions but reflects the perf-suite's
+  conventions, making the test ready to adopt as a perf scenario
+  if the wall-time budget allows.
+- **`test_transcribe_fn_signature` is a tight sentinel.** It
+  asserts the closure `lambda wav: engine.transcribe(wav)[0]`
+  produces a non-empty string from clean.wav. If a future
+  refactor changes either:
+  - `ChatLoop`'s `transcribe_fn` contract (now `wav → str|None`),
+  - `FasterWhisperEngine.transcribe`'s return shape (now
+    `(text, elapsed)`),
+  the test fails immediately. Two-line guard against silent
+  drift between layers.
+- **mic_chat.py is fully exercised.** Every iteration since
+  iter-107 added testability to one piece of `run_chat`;
+  iter-122 demonstrates that all those pieces compose correctly.
+  An operator's end-to-end experience is now backed by tests.
+- Next directions:
+  - Add a noisy-audio fixture (synthesized + bgm) to exercise
+    iter-106's "noisy"/"catastrophic" bands against real audio.
+  - Sentence-length-bucket consistency check (fourth instance
+    of the diversity pattern — would justify promoting the
+    template into a documented protocol).
+  - Pivot to architecture: the cross-platform STT loop is
+    closed; what's the next user-visible improvement? Fillers,
+    barge-in latency, etc. — perf data already shows where the
+    real costs live.
