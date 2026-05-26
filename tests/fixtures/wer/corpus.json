@@ -1,0 +1,61 @@
+{
+  "_comment": [
+    "iter-106 WER fixture corpus. Each entry pairs a hand-curated",
+    "reference (the ground-truth transcript) with a simulated STT",
+    "hypothesis that exercises a specific error pattern. The",
+    "expected_wer_min/max bounds are tight enough to catch a",
+    "regression in the compute_wer primitive but loose enough to",
+    "survive the natural rounding of the (S+D+I)/N formula.",
+    "",
+    "When a real CPU-only STT lands (faster-whisper, whisper.cpp",
+    "wrapper, etc.), the integration test can swap the simulated",
+    "hypothesis for the STT output and the same expected ranges",
+    "still apply — production-grade STT lands in 0.0-0.2 WER on",
+    "clean audio, well within the 'clean' / 'substitution' /",
+    "'dropped_filler' bands here. The 'noisy' and 'catastrophic'",
+    "entries simulate degraded conditions that real audio fixtures",
+    "would need separate noisy-mic recordings to reproduce."
+  ],
+  "fixtures": [
+    {
+      "name": "clean",
+      "description": "Perfect transcription — production-grade STT on clean audio.",
+      "reference": "what is the weather today",
+      "hypothesis": "what is the weather today",
+      "expected_wer_min": 0.0,
+      "expected_wer_max": 0.0
+    },
+    {
+      "name": "substitution",
+      "description": "Single homophone error (whether vs weather).",
+      "reference": "what is the weather today",
+      "hypothesis": "what is the whether today",
+      "expected_wer_min": 0.15,
+      "expected_wer_max": 0.25
+    },
+    {
+      "name": "dropped_filler",
+      "description": "STT drops the leading filler 'um' — common.",
+      "reference": "um what is the weather today",
+      "hypothesis": "what is the weather today",
+      "expected_wer_min": 0.10,
+      "expected_wer_max": 0.20
+    },
+    {
+      "name": "noisy",
+      "description": "Multiple errors, declining audio quality.",
+      "reference": "the quick brown fox jumps over the lazy dog",
+      "hypothesis": "the quick crown fox jumped on the lazy dog",
+      "expected_wer_min": 0.25,
+      "expected_wer_max": 0.40
+    },
+    {
+      "name": "catastrophic",
+      "description": "STT misheard the entire utterance — every word wrong.",
+      "reference": "what is the weather today",
+      "hypothesis": "lorem ipsum dolor sit amet",
+      "expected_wer_min": 0.95,
+      "expected_wer_max": 1.05
+    }
+  ]
+}

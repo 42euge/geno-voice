@@ -7504,3 +7504,127 @@ Notes:
   - Per-token-delay grid for context cap (still pending from
     iter-102).
   - `_push_after_flush` helper to dedupe iter-042/iter-102.
+
+## iter-106 — WER fixture corpus + integration test
+
+**Goal:** Populate iter-105's infrastructure with a deterministic
+corpus that exercises the full WER pipeline end-to-end. iter-105
+intentionally split the metric work; this iteration completes the
+"data-side" half by providing the reference/hypothesis pairs and
+the integration test that drives them through compute_wer →
+TurnMetrics → print_session_summary.
+
+**Why text-only fixtures (no audio yet):** mlx-whisper is
+Mac-only, and we work on x86_64 Linux. A real audio corpus would
+either need a CPU-only STT (faster-whisper, whisper.cpp wrapper)
+that's not yet wired up, or it would have to skip on this platform.
+Text fixtures sidestep that — they exercise the full plumbing
+(WER computation + TurnMetrics population + summary aggregation
++ wer_measured filter) and stay deterministic across CI hosts.
+When a CPU-only STT lands, the integration runner can swap
+simulated hypotheses for real STT output and the same
+`expected_wer_min/max` bands still apply.
+
+**Corpus** (`tests/fixtures/wer/corpus.json`, 5 fixtures):
+
+| Name           | Pattern                                | Expected WER |
+|----------------|----------------------------------------|--------------|
+| clean          | Identical reference & hypothesis       | 0.0          |
+| substitution   | Single homophone error                 | 0.15-0.25    |
+| dropped_filler | STT drops leading "um"                 | 0.10-0.20    |
+| noisy          | Multiple errors, declining audio       | 0.25-0.40    |
+| catastrophic   | Every word wrong (STT failed entirely) | 0.95-1.05    |
+
+The bands are tight enough to catch a regression in compute_wer
+(say, an off-by-one in the DP table) but loose enough to survive
+the natural rounding of (S+D+I)/N — adding/removing a single
+fixture word doesn't blow the band.
+
+**Integration test** (`tests/integration/test_wer_corpus.py`,
+9 tests):
+
+- **Corpus structural check** — size + names match design.
+- **Per-fixture WER bands** — parametrized over all 5 fixtures;
+  each computed WER must fall inside its `[min, max]` window.
+- **End-to-end summary emission** — drive `print_session_summary`
+  with all 5 fixtures wrapped as TurnMetrics; assert the WER line
+  emits with the expected median + max + turn count.
+- **Suppression invariant** — drive a session with `wer_measured
+  =False` on every turn; assert the WER line does NOT emit. This
+  is the regression sentinel for the `wer_measured` filter
+  introduced in iter-105 — without it, `0.0 = "perfect"` would
+  collide with `0.0 = "not measured"`.
+- **Mixed-measurement session** — some turns measured, others
+  not; assert only measured turns count in the aggregate (2
+  measured + 2 unmeasured → "(2 turns measured)").
+
+```python
+def _build_turn_with_wer(reference: str, hypothesis: str) -> TurnMetrics:
+    """Real prod path is:
+        text = stt_engine.transcribe(audio_bytes)
+        m.wer = compute_wer(reference, text)
+        m.wer_measured = True
+    We simulate without the audio + STT step."""
+    m = TurnMetrics(transcript=hypothesis)
+    m.wer = compute_wer(reference, hypothesis)
+    m.wer_measured = True
+    ...
+```
+
+The `_build_turn_with_wer` helper documents the production code
+path so a future iter that swaps in real STT can copy-paste the
+shape and just replace one line.
+
+Verification:
+- `python -m pytest tests/integration/test_wer_corpus.py -q` →
+  **9 passed in 20ms**.
+- Full unit + integration: **1211 passed, 1 skipped** (1202
+  prior + 9 new).
+- Perf snapshot: **21 passed**.
+
+Notes:
+- **The 46-metric taxonomy is now complete.** Both the
+  infrastructure (iter-105) and a populating corpus (iter-106)
+  exist. Real audio fixtures are a "polish" iteration — the
+  metric is functional today, just on simulated hypotheses.
+- **The `wer_measured` regression sentinel is now real.** Two
+  tests (`test_session_summary_omits_wer_line_when_no_turn_measured`
+  and `test_partial_measurement_session`) directly exercise the
+  flag's purpose. Future TurnMetrics fields with the same
+  "optional measurement" shape (e.g., reference_audio_present,
+  ground_truth_intent_match) can copy this pattern.
+- **Pattern: corpus-as-JSON.** Single-file JSON with a
+  `_comment` array beats per-fixture .txt files for this size of
+  corpus (5 entries). Easy to extend, version control diffs are
+  readable, no filename-collision concerns. If the corpus grows
+  past ~30 fixtures the per-file approach starts winning, but
+  we're well below that.
+- **Future iter for real audio:**
+  - Add `audio_*.wav` files alongside `corpus.json` (ref text
+    is already in JSON).
+  - Wire a CPU-only STT (faster-whisper, whisper.cpp Python
+    binding). Skip the integration test if the engine can't
+    load (`pytest.skip(reason=...)`).
+  - Each fixture's hypothesis becomes
+    `stt.transcribe(audio_path)` instead of the hand-curated
+    string. The expected_wer_min/max bands should still hold
+    for production-grade STT on clean audio (the "clean" /
+    "substitution" / "dropped_filler" entries); the "noisy"
+    and "catastrophic" entries would need separate audio
+    recordings of degraded conditions.
+- **`compute_wer` is now battle-tested.** 23 unit tests in
+  iter-105 + 5 fixture-driven tests + the cross-test where the
+  integration suite recomputes WER from fixtures and matches
+  the session-summary output. Three independent paths confirm
+  the same results.
+- Next directions:
+  - Real audio fixtures for `clean` + `substitution` +
+    `dropped_filler` (the three bands a real STT can hit). Add
+    `requirements-dev.txt` entry for faster-whisper or
+    whisper.cpp wrapper.
+  - Per-token-delay grid for context cap (still pending from
+    iter-102).
+  - `_push_after_flush` helper to dedupe iter-042/iter-102.
+  - Pivot to mic_chat.py refactor — extract `run_chat`'s
+    config-loading / startup-sequence into a tested module
+    (currently it's the largest unrefactored function).
