@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-108 — Extract load_engines into _chat_engines module</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-107.html">← iter-107</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-108 — Extract load_engines into _chat_engines module</h1>
+<div class="meta"></div>
+</header><p><strong>Goal:</strong> Continue iter-107&#x27;s mic_chat.py refactor. Pull the 13-line STT + TTS engine loading + timing block out of <code>run_chat</code> into a tested module. Side benefit: abstracts the Mac-only <code>WhisperEngine</code> import behind a factory callable, which opens the door for x86_64 STT integration without touching <code>mic_chat.py</code> itself.</p>
+<p><strong>Original block:</strong></p>
+<pre class="code-block"><code># Load STT
+t0 = time.monotonic()
+stt_engine = WhisperEngine(model_repo=model_repo)
+stt_engine._load()
+stt_load = time.monotonic() - t0
+
+# Load TTS
+t1 = time.monotonic()
+tts_engine = get_tts_engine(&quot;kokoro&quot;)
+tts_engine._load()
+tts_load = time.monotonic() - t1
+
+print(f&quot;  STT loaded in {stt_load*1000:.0f}ms&quot;)
+print(f&quot;  TTS loaded in {tts_load*1000:.0f}ms&quot;)</code></pre>
+<p>Three concerns tangled: hardcoded engine classes, timing logic, ANSI-styled stdout logging. Untestable without spinning up real mlx-whisper + kokoro.</p>
+<p><strong>Change:</strong> New module <code>examples/_chat_engines.py</code> exposing:</p>
+<pre class="code-block"><code>@dataclass
+class LoadedEngines:
+    stt: Any
+    tts: Any
+    stt_load_seconds: float
+    tts_load_seconds: float
+
+def load_engines(
+    stt_factory: Callable[[], Any],
+    tts_factory: Callable[[], Any],
+    *,
+    log: Callable[[str], None] = print,
+) -&gt; LoadedEngines:</code></pre>
+<p>Three test seams (matching the iter-107 <code>prerender_fillers</code> shape):</p>
+<ul><li><code>stt_factory</code> / <code>tts_factory</code> — <code>() -&gt; engine</code> callables. The caller bakes <code>model_repo</code> / voice / preferences into a closure; <code>load_engines</code> itself knows nothing about engine constructors.</li><li><code>log</code> — callable, default <code>print</code>. Module emits plain text; caller (<code>mic_chat.py</code>) re-applies ANSI styling and 2-space indent.</li><li>Returns a <code>LoadedEngines</code> dataclass — not a tuple or dict — so future fields (e.g., <code>vad_engine</code>) can extend without breaking callers.</li></ul>
+<p><strong>Caller (mic_chat.py) shrinks from 13 lines to 9:</strong></p>
+<pre class="code-block"><code>from examples._chat_engines import load_engines
+
+engines = load_engines(
+    stt_factory=lambda: WhisperEngine(model_repo=model_repo),
+    tts_factory=lambda: get_tts_engine(&quot;kokoro&quot;),
+    log=lambda line: print(f&quot;  {line}&quot;),
+)
+stt_engine = engines.stt
+tts_engine = engines.tts</code></pre>
+<p>The factory closures preserve the existing wiring exactly — no behavior change for production. The log adapter prepends 2 spaces to match the original indented output.</p>
+<p><strong>Tests</strong> (<code>tests/unit/test_chat_engines.py</code>, 12 tests):</p>
+<ul><li>Happy path: bundle returned, both factories called once, both <code>_load()</code> invoked.</li><li>Timing: timings are non-negative; a 50ms <code>_load()</code> delay shows up in <code>stt_load_seconds ≥ 0.04</code> (permissive lower bound for sleep granularity).</li><li>Logging: 2 lines emitted in STT-then-TTS order; both lines are plain text (no ANSI / leading spaces); default `log= print` flows to stdout via capsys.</li><li>Error propagation: STT factory exception propagates; TTS factory NOT called on STT failure (no half-load); TTS <code>_load()</code> exceptions also propagate.</li><li>Factory contract: factories receive <code>()</code> — no positional or keyword args added by <code>load_engines</code> itself.</li><li>Return shape: <code>LoadedEngines</code> dataclass with the 4 named fields, locking in the API.</li></ul>
+<p>Verification:</p>
+<ul><li><code>python -m pytest tests/unit/test_chat_engines.py -q</code> → <strong>12 passed in 70ms</strong>.</li><li>Full unit + integration: `tests/ --ignore=tests/performance --ignore=tests/test_session.py --ignore=tests/e2e -q` → <strong>1235 passed, 1 skipped</strong> (1223 prior + 12 new).</li><li>Perf snapshot: <strong>21 passed</strong>.</li></ul>
+<p>Notes:</p>
+<ul><li><strong>Two mic_chat.py extractions in two iterations.</strong> iter-107 + iter-108 share the exact same shape: <code>(callable_dep, log)</code> injection, plain-text emit, ANSI ownership at the caller, dataclass return. This is now the **default extraction shape for any mic_chat.py subroutine** — a third instance would let me promote it to a documented pattern in GENO.md.</li><li><strong>WhisperEngine is no longer a hard import boundary.</strong> The factory callable means <code>_chat_engines.py</code> could be tested on x86_64 Linux even if <code>WhisperEngine</code> itself can&#x27;t be imported (its module-level <code>mlx-whisper</code> import would fail on Linux). A future faster-whisper or whisper.cpp wrapper can drop in by changing the factory closure in <code>mic_chat.py</code> — no other call site touched.</li><li>**The &quot;fail-fast on engine load error&quot; decision is now tested.** The <code>test_stt_factory_failure_skips_tts</code> invariant prevents a future refactor from accidentally introducing a partial-load state. This isn&#x27;t speculative: a try/except around the STT load would be a tempting &quot;robustness&quot; addition; the test makes the cost explicit.</li><li><strong>mic_chat.py size after iter-107 + iter-108:</strong> ~365 lines total, ~125 in <code>run_chat</code>. Down from ~395 / ~155 pre-iter-107. Remaining extractable blocks in run_chat: config read (~6 lines, very small — probably stays inline) largest remaining block)<ul><li>speaker_factory + synth + play closures (~17 lines)</li><li>aggressive_first_sentence + auto_aggressive_threshold</li><li>main turn loop with KeyboardInterrupt handler (~30 lines —</li></ul></li><li>Next directions: into a single factory builder. Would round out the &quot;everything before the turn loop&quot; extraction. iter-106). Now easier given iter-108 — the <code>stt_factory</code> closure can return a faster-whisper wrapper instead of <code>WhisperEngine</code>. into a <code>run_session</code> function — would complete the <code>run_chat</code> decomposition.<ul><li>Extract the 3 closures (<code>_speaker_factory</code>, <code>_synth</code>, <code>_play</code>)</li><li>Real audio fixtures + CPU-only STT (still pending from</li><li>Extract the main turn loop with KeyboardInterrupt handler</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-107.html">← iter-107</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>
