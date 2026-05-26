@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-112 — Context-dependent TTFB knob + extended cap grid</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-111.html">← iter-111</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-112 — Context-dependent TTFB knob + extended cap grid</h1>
+<div class="meta"></div>
+</header><p><strong>Goal:</strong> Validate iter-111&#x27;s &quot;append one entry to FEATURE_SAVINGS_TABLE&quot; workflow with a real new pair while also fixing iter-102&#x27;s disclosed limitation: the stub LLM didn&#x27;t model context-dependent TTFB, so the iter-102 cap=20 vs cap=5 row showed identical TTFS (only the token-count delta was meaningful).</p>
+<p><strong>Two changes:</strong></p>
+<p>1. <strong><code>context_factor</code> kwarg on <code>_yield_tokens</code></strong> — seconds per input character, applied as a sleep BEFORE the first token yields. Simulates real LLM TTFB scaling with prompt length (KV-cache fill cost). Default 0.0 preserves all pre-iter-112 behavior.</p>
+<pre class="code-block"><code>   def _yield_tokens(text, *, ..., context_factor=0.0):
+       def factory(messages, config):
+           if context_factor &gt; 0:
+               total_chars = sum(
+                   len(str(m.get(&quot;content&quot;, &quot;&quot;)))
+                   for m in messages
+               )
+               time.sleep(total_chars * context_factor)
+           ...</code></pre>
+<p>2. <strong>Two new paired session scenarios</strong> at <code>context_factor=0.002</code> (2ms/char):</p>
+<ul><ul><ul></ul></ul></ul>
+<p>These extend iter-102&#x27;s pair into a 2-point grid showing both the no-scaling baseline (iter-102 original pair) and the scaling-on case (iter-112).</p>
+<p><strong>Empirical numbers</strong> (this run, x86_64 stub, 8-turn session):</p>
+<table class="iter-table"><thead><tr><th>Metric</th><th>cap=20 ctx0</th><th>cap=5 ctx0</th><th>cap=20 ctx2ms</th><th>cap=5 ctx2ms</th></tr></thead><tbody><tr><td>context_tokens</td><td>53</td><td>24 (-55%)</td><td>53</td><td>24 (-55%)</td></tr><tr><td>TTFS (turn 8)</td><td>800.4ms</td><td>800.3ms</td><td>1424.7ms</td><td>1078.7ms (-346)</td></tr><tr><td>llm_first_token</td><td>0.0ms</td><td>0.0ms</td><td>624.2ms</td><td>278.1ms (-346)</td></tr></tbody></table>
+<p>The headline number: <strong>with context_factor=2ms/char, the tight cap saves 346ms TTFS on turn 8</strong> — the exact <code>llm_first_token</code> delta, which is the mechanism. Without context_factor (the iter-102 baseline), cap=5 and cap=20 produce identical TTFS because nothing depends on prompt length. With context_factor on, the savings track the trim&#x27;s effect on token count.</p>
+<p><strong>Wall-time tradeoff considered.</strong> First implementation used <code>context_factor=0.005</code> (5ms/char, more production-realistic) but that pushed the perf suite from 14s to 26.5s. Dropping to 0.002 kept the savings ratio identical (-30%) and limited the extra wall time to ~5s (suite is now 19.8s). 5ms/char would be the right number when run on a perf-only CI or with a faster mic.</p>
+<p><strong>FEATURE_SAVINGS_TABLE update.</strong> Validates iter-111&#x27;s design — the new pair lands on <code>performance.html</code> with one entry append:</p>
+<pre class="code-block"><code>{
+    &quot;feature&quot;: &quot;Context cap @ context_factor=2ms/char (iter-112)&quot;,
+    &quot;control_scenario&quot;: &quot;context_cap_default_ctx2ms&quot;,
+    &quot;treatment_scenario&quot;: &quot;context_cap_tight_ctx2ms&quot;,
+    &quot;primary_metric&quot;: &quot;ttfs_ms&quot;,
+    &quot;primary_label&quot;: &quot;TTFS (turn 8)&quot;,
+    &quot;secondary_metric&quot;: &quot;context_tokens&quot;,
+    &quot;secondary_label&quot;: &quot;Context tokens&quot;,
+    &quot;secondary_lower_is&quot;: &quot;fewer (trim kept history bounded)&quot;,
+    &quot;takeaway&quot;: &quot;Same 8-turn session, but with the LLM stub charging &quot;
+                &quot;2ms per input character (KV-fill cost). The cap=5 &quot;
+                &quot;side now BENEFITS visibly — bounded context = bounded &quot;
+                &quot;TTFB. Real LLMs scale this way.&quot;,
+}</code></pre>
+<p>The HTML rendering picks it up automatically — no rendering changes needed. iter-111&#x27;s &quot;graceful degradation when scenario missing&quot; property means old perf JSONs (pre-iter-112) still render their pages without empty rows.</p>
+<p><strong>Tests</strong> (<code>tests/unit/test_perf_yield_tokens.py</code>, 8 tests):</p>
+<ul><li>Default behavior preserved: no context_factor → tokens yield immediately; messages list is ignored.</li><li>context_factor activates first-token delay proportional to total chars across all messages.</li><li>Sums across multiple messages correctly.</li><li>Zero context_factor explicitly disables (sentinel for iter-098-102 scenarios that pass empty messages but might carry data in unusual paths).</li><li>Defensive: missing &#x27;content&#x27; key → empty-string contribution, no KeyError.</li><li>Combines with per_token_delay (both delays compose).</li><li>Backwards compat: all pre-iter-112 kwarg combinations still work.</li></ul>
+<p>Verification:</p>
+<ul><li><code>python -m pytest tests/unit/test_perf_yield_tokens.py -q</code> → <strong>8 passed in 360ms</strong> (most of the time is the actual sleep in the context_factor tests).</li><li><code>python -m pytest tests/performance/ -q</code> → **23 passed in 19.8s** (was 21 in 14s, +2 scenarios, +5.8s wall time).</li><li>Full unit + integration: <strong>1297 passed, 1 skipped</strong> (1289 prior + 8 new).</li></ul>
+<p>Notes:</p>
+<ul><li><strong>iter-111&#x27;s append-one-entry workflow is validated.</strong> A new pair-scenario family lands with: 2 new test methods in test_pipeline_perf.py, 1 new entry in FEATURE_SAVINGS_TABLE, unit tests for any new mechanism. The performance.html page picks it up automatically. Lowest possible friction.</li><li><strong>The stub-vs-real fidelity gap is now smaller.</strong> Pre-iter-112, the perf suite produced TTFS numbers that didn&#x27;t reflect a major real-world cost (LLM TTFB scaling with prompt length). iter-112 closes that gap — operators reading the time-series chart see numbers that track production behavior shape, even if absolute magnitudes differ.</li><li><strong><code>context_factor</code> is reusable for future grids.</strong> Same pattern as iter-101&#x27;s per_token_delay grid: a single knob parameterized across multiple values produces a curve. A future iter could grid context_factor at 0.001/0.002/0.005 to plot the full sensitivity surface — but with the wall- time tradeoff understood.</li><li><strong>Wall-time budget watch.</strong> Perf suite is now 19.8s. If another grid lands at this scale, it&#x27;d push toward 25s+ — the 30s mark would warrant the <code>pytest -m grid</code> marker iter-101 noted.</li><li><strong>The perf snapshot&#x27;s per-iter file size is growing.</strong> Each perf-iter-NNN.json now has 23 scenarios; serialized JSON is ~30KB. With 100+ iterations this approaches 3MB on disk. Not a problem yet, but worth noting.</li><li>Next directions: iter-106). Now four iterations overdue. let an operator re-run a recorded session with different chat config opts to compare empirically. a code change targeting one of the surfaced costs (e.g., sentence-split coverage, first-synth overlap) has clear feedback loop.<ul><li>Real audio fixtures + CPU-only STT (still pending from</li><li>Eval/replay tool using SessionState (iter-110) — would</li><li>Pivot to architecture: perf data is rich enough now that</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-111.html">← iter-111</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>
