@@ -9992,3 +9992,176 @@ Notes:
     closed; what's the next user-visible improvement? Fillers,
     barge-in latency, etc. — perf data already shows where the
     real costs live.
+
+## iter-123 — Wire max_user_assistant via chat_cfg
+
+**Goal:** Promote the iter-024 context cap from a hardcoded
+literal to a tunable config knob. iter-102 + iter-112 proved
+empirically the knob has real production value:
+- -55% billed tokens on turn 8 (cap=5 vs 20)
+- -346ms TTFS on turn 8 with `context_factor=2ms/char`
+
+Different LLMs and different conversation patterns benefit from
+different caps. iter-123 lets operators tune it without editing
+mic_chat.py:
+
+    chat:
+      max_user_assistant: 10   # 0 = no cap (eval/replay)
+
+**Three pieces:**
+
+1. **`MAX_USER_ASSISTANT_DEFAULT` + `parse_max_user_assistant`**
+   in `examples/_chat_config.py`:
+
+   ```python
+   MAX_USER_ASSISTANT_DEFAULT = 20
+
+   def parse_max_user_assistant(chat_cfg) -> int:
+       if not isinstance(chat_cfg, Mapping):
+           return MAX_USER_ASSISTANT_DEFAULT
+       raw = chat_cfg.get("max_user_assistant")
+       if isinstance(raw, bool):
+           return MAX_USER_ASSISTANT_DEFAULT  # bool ⊂ int defense
+       if isinstance(raw, int) and raw >= 0:
+           return raw
+       return MAX_USER_ASSISTANT_DEFAULT
+   ```
+
+   Three design choices documented in the docstring:
+
+   - **0 = "no cap" sentinel.** Operators bypassing the trim
+     for eval/replay scenarios get explicit support. Negative
+     values fall back to default — only 0 is the special case.
+   - **Bool defense.** `bool` is an int subclass in Python, so
+     a typo'd yaml value `true` would silently become a cap of
+     1 without the explicit guard. The defensive branch
+     prevents this surprise.
+   - **No float coercion.** `10.0` falls back to default. The
+     cap is conceptually a count; floats indicate operator
+     confusion that's better surfaced via fallback than
+     silently rounded.
+
+2. **`mic_chat.py:run_chat` updated** to read the cap from
+   chat_cfg:
+
+   ```python
+   from examples._chat_config import parse_max_user_assistant
+   max_user_assistant = parse_max_user_assistant(chat_cfg)
+   state = run_session(
+       chat_loop, system_prompt,
+       max_user_assistant=max_user_assistant,
+       ...
+   )
+   ```
+
+   Backwards-compatible: any operator who hasn't set the new
+   key still gets the iter-024 default of 20.
+
+3. **The `cap=0` invariant verified at the trim layer.**
+   `trim_history` already handles 0 correctly — Python's
+   `tail[-0:]` is `tail[0:]` which is the full tail (because
+   `-0 == 0`). The wiring relies on this idiom, so iter-123's
+   tests lock it down explicitly:
+
+   ```python
+   def test_cap_zero_passes_full_history_through_trim():
+       messages = [system_msg, u1, a1, u2, a2]
+       out = trim_history(messages, max_user_assistant=0)
+       assert out == messages   # no eviction
+   ```
+
+   Without this test, a future "optimization" that adds an
+   early-return on `max_user_assistant == 0` could evict
+   everything (Python idiom is non-obvious).
+
+**Tests** (`tests/unit/test_parse_max_user_assistant.py`,
+17 tests):
+
+*Defaults (3 tests):* return type is int; default is 20;
+missing key → 20.
+
+*Malformed input (5 tests):* non-mapping inputs → default;
+string "10" → default; float 10.0 → default; negative → default;
+bool True/False → default.
+
+*Valid values (4 tests):* 0 returned as 0; small positive (5);
+large positive (100); default value 20 explicitly honored.
+
+*Cap=0 round-trip semantics (3 tests):* full history preserved
+through trim_history; empty-tail edge case; no-system edge case.
+
+*Independence (2 tests):* doesn't mutate input dict; doesn't
+mutate the default constant.
+
+Verification:
+- `python -m pytest tests/unit/test_parse_max_user_assistant.py
+  -q` → **17 passed in 20ms**.
+- AST sanity check on `mic_chat.py`: parse OK.
+- Full unit + integration: **1469 passed, 1 skipped** (1452
+  prior + 17 new).
+- Perf snapshot: **23 passed**.
+
+Notes:
+- **The "0 = no cap" sentinel was a deliberate UX choice.**
+  Alternatives:
+  1. None — would require explicit None checks at every
+     consumer.
+  2. `-1` — common UNIX idiom but fragile (someone might
+     "validate" it as invalid and reject it).
+  3. A separate boolean `disable_cap_trim` — would split a
+     single concern across two yaml keys.
+  4. **`0` as sentinel** — chosen. Yaml's natural integer,
+     unambiguous in Python, naturally produces "no cap" via
+     the `tail[-0:]` idiom without requiring caller-side
+     branches.
+
+  Documented + tested explicitly because the choice isn't
+  obvious from the code.
+- **The bool-is-int defense is a recurring pattern.** This is
+  the second config parser that defends against `bool` being
+  mistreated as `int` (the first was iter-119's
+  parse_stt_config — wait, that was string-based, no overlap).
+  Actually iter-123 is the first integer-config parser in the
+  family. If a fourth comes along, the pattern is documented
+  here.
+- **Python's `tail[-0:]` idiom isn't widely known.** The
+  explicit test that exercises it lives in iter-123 to prevent
+  a future contributor from "cleaning up" the trim_history
+  function with an `if max_user_assistant <= 0: return ...`
+  branch that eats the no-cap behavior.
+- **The full chat_cfg config schema is now:**
+  ```yaml
+  chat:
+    # iter-018 (chat config)
+    aggressive_first_sentence: false
+    auto_aggressive_threshold: 0.0
+    # iter-011 (fillers)
+    fillers: []
+    fillers_idle_threshold: 0.6
+    # iter-020 (vad)
+    vad:
+      silence_threshold: 0.02
+      silence_duration: 0.8
+      min_speech_duration: 0.3
+    # iter-119 (stt)
+    stt_engine: "whisper"
+    stt_model: ""
+    stt_device: "cpu"
+    stt_compute: "int8"
+    # iter-123 (history cap)
+    max_user_assistant: 20
+  ```
+
+  Every operator-tunable knob is now in chat_cfg with a
+  parse_*_config helper backing it. No more hardcoded literals
+  in run_chat.
+
+- Next directions:
+  - Add a noisy-audio fixture (synthesized + bgm) for the
+    iter-106 catastrophic bands.
+  - Sentence-length-bucket consistency check (fourth instance
+    of the diversity pattern).
+  - Architecture pivot: with config wiring done, focus on
+    end-to-end perf wins — e.g., `aggressive_first_sentence:
+    true` as a default once an A/B with real audio confirms
+    the prosody tradeoff is acceptable.

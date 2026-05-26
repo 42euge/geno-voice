@@ -323,10 +323,17 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
     system_prompt = llm_config.get(
         "system_prompt", "You are a concise voice assistant.",
     )
+    # iter-123: read the context cap from chat_cfg (default 20).
+    # 0 disables trimming entirely — trim_history's `tail[-0:]`
+    # returns the full tail (Python idiom; -0 == 0), so the
+    # cap=0 sentinel naturally produces no eviction without
+    # any short-circuit needed.
+    from examples._chat_config import parse_max_user_assistant
+    max_user_assistant = parse_max_user_assistant(chat_cfg)
     state = run_session(
         chat_loop,
         system_prompt,
-        max_user_assistant=20,
+        max_user_assistant=max_user_assistant,
         prompt_log=lambda turn: print(
             f"  {DIM}[{turn}] waiting...{RESET}", end="", flush=True,
         ),

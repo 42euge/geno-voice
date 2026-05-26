@@ -336,3 +336,53 @@ def parse_stt_config(chat_cfg: Any) -> dict:
         out["compute_type"] = raw_compute.strip()
 
     return out
+
+
+# iter-123: max_user_assistant context cap.
+#
+# iter-024 introduced the cap as a hardcoded 20 inside
+# mic_chat.py. iter-102 + iter-112 then proved empirically that
+# the knob carries real production value:
+#   - context_cap_default vs context_cap_tight (cap=20 vs 5):
+#     -55% billed tokens on turn 8.
+#   - context_cap_*_ctx2ms (with context_factor=2ms/char):
+#     -346ms TTFS on turn 8.
+# Different LLMs have different context-window sensitivities, so
+# the right cap value isn't universal. iter-123 surfaces it in
+# config.local.yaml:
+#
+#     chat:
+#       max_user_assistant: 10   # 0 means "no cap"
+#
+# 0 is treated as "disable trimming" (sentinel value for
+# operators wanting unbounded history during eval/replay). Any
+# other non-positive or non-integer value falls back to the
+# default 20.
+MAX_USER_ASSISTANT_DEFAULT = 20
+
+
+def parse_max_user_assistant(chat_cfg: Any) -> int:
+    """Extract the optional ``max_user_assistant`` cap from a
+    parsed chat config.
+
+    Returns the configured cap if it's a non-negative integer,
+    else ``MAX_USER_ASSISTANT_DEFAULT`` (20).
+
+    Special value: 0 means "no cap" — used by operators
+    bypassing the trim for eval / replay scenarios. Negative
+    values, non-integer types, and missing keys all fall back to
+    the default. Mirrors the iter-020 / iter-034 / iter-119
+    parser conventions: tolerant of malformed input, never raises.
+    """
+    if not isinstance(chat_cfg, Mapping):
+        return MAX_USER_ASSISTANT_DEFAULT
+    raw = chat_cfg.get("max_user_assistant")
+    if isinstance(raw, bool):
+        # Defensive: bool is a subclass of int — without this
+        # guard, ``True`` would silently become a cap of 1 and
+        # ``False`` a cap of 0 ("no cap"). Both are surprising
+        # interpretations of a typo'd yaml value.
+        return MAX_USER_ASSISTANT_DEFAULT
+    if isinstance(raw, int) and raw >= 0:
+        return raw
+    return MAX_USER_ASSISTANT_DEFAULT
