@@ -10784,3 +10784,127 @@ Notes:
     using the iter-127 5-fixture audio corpus.
   - Document the corpus as a "standard test benchmark" for
     operators evaluating new STT engines.
+
+## iter-129 — Promote diversity-check pattern to GENO.md
+
+**Goal:** Document the diversity-check pattern in GENO.md
+alongside iter-109's mic_chat extraction pattern. iter-128
+brought the count to **four instances** (iter-114 filler,
+iter-115/126 naturalness, iter-120 barge-phase, iter-128
+sentence-length); same threshold for promotion as iter-109's
+3-instance bar for the extraction pattern.
+
+The pattern is now stable: 8 template steps documented, each
+backed by concrete examples from the four existing instances.
+A 5th instance lands by following the template directly.
+
+**Change:** Two pieces:
+
+1. **New `Session-summary diversity-check pattern` section in
+   `GENO.md`** (between the existing mic_chat extraction
+   pattern and the Architecture section). Documents 8 template
+   steps:
+
+   1. Filter "uninteresting" values BEFORE the run scan
+      (per-instance policy)
+   2. Use `_longest_consecutive_run` (iter-116 primitive)
+   3. Apply per-instance threshold (3 / 4 / 5 conventions)
+   4. For continuous metrics, bucket BEFORE filtering
+      (iter-128 first instance)
+   5. Per-value suggestion mapping inside the helper
+   6. Defensive fallback for unknown values
+   7. Name the responsible iteration in the warning text
+   8. Tests cover the matrix (empty / threshold / filter /
+      formatting / defensive)
+
+   Each step is illustrated with examples from the four
+   existing helpers — readers see exactly how the abstract
+   rule maps to real code.
+
+2. **Doc-vs-code drift sentinel**
+   (`tests/unit/test_diversity_pattern_doc.py`, 8 tests):
+
+   - `test_geno_md_has_diversity_pattern_section`: doc
+     section exists.
+   - `test_doc_references_run_finder_helper`: pattern doc
+     mentions iter-116's primitive.
+   - `test_each_documented_helper_exists`: every name in
+     `_DIVERSITY_HELPERS` is a real attribute on
+     `_chat_metrics`.
+   - `test_each_documented_helper_is_callable`: not just
+     defined, but callable.
+   - `test_doc_references_each_responsible_iteration`:
+     iter-114 / iter-115 / iter-120 / iter-128 attribution
+     present in the doc text.
+   - `test_doc_template_lists_consistent_threshold_conventions`:
+     thresholds 3/4/5 pinned to their respective iter
+     numbers in the bullet text. Regex-based — survives
+     small rewording but catches a substantive change.
+   - `test_doc_template_claims_match_actual_instance_count`:
+     the doc says "four instances confirm it"; the test asserts
+     the English numeral matches `_DIVERSITY_HELPERS` length. A
+     future 5th instance landing without doc update fires this
+     test (with a useful nudge in the assertion message).
+   - `test_each_helper_has_a_corresponding_test_file`: every
+     diversity helper has `tests/unit/test_<helper_name>.py`.
+
+**The drift-sentinel pattern recorded for future doc-of-code
+sections:** when a documented pattern catalogs N instances by
+name + iter number, write a test that:
+
+1. Lists the canonical instances in a tuple (the test's source
+   of truth).
+2. Verifies each entry resolves to a real importable callable.
+3. Verifies the doc text mentions each instance's iter
+   attribution.
+4. Verifies the doc's "N instances" English numeral matches
+   the tuple length.
+
+Adding the 5th instance becomes "update the tuple AND the
+doc together" — the test ensures both happen.
+
+Verification:
+- `python -m pytest tests/unit/test_diversity_pattern_doc.py
+  -q` → **8 passed in 30ms**.
+- Full unit + integration: **1527 passed, 1 skipped** (1519
+  prior + 8 new).
+- Perf snapshot: **23 passed**.
+
+Notes:
+- **GENO.md now documents two patterns.** iter-109's
+  mic_chat extraction pattern + iter-129's diversity-check
+  pattern. Both follow the same documentation structure:
+  - Lead with the trigger (when to use)
+  - Number each rule
+  - Cite the responsible iter for each rule
+  - End with concrete examples from existing instances
+- **The doc-vs-code sentinel test is the meta-pattern.** It
+  protects documentation from going stale silently — the
+  alternative ("docs reference iter-114, but the helper got
+  renamed in iter-XYZ") is invisible until someone reads the
+  doc and follows a broken link. The sentinel makes the link
+  break a test failure instead.
+- **Extending to a 5th instance:** the new contributor
+  - Adds the helper.
+  - Adds its test file (matching naming convention).
+  - Adds the helper name to `_DIVERSITY_HELPERS` in
+    test_diversity_pattern_doc.py.
+  - Updates the GENO.md text to say "five instances" + add
+    the iter attribution + (optionally) a new threshold
+    convention.
+  - Runs `pytest tests/unit/test_diversity_pattern_doc.py` —
+    if any of the four sentinels fail, fix the doc.
+- **Pattern-promotion threshold is now established.** iter-109
+  (3 instances), iter-129 (4 instances). Both pattern docs
+  emerged from concrete code rather than upfront design — the
+  rules came from observing what worked. Future patterns
+  should accumulate ≥3-4 instances before being documented;
+  premature documentation locks in incorrect rules.
+- Next directions:
+  - Architecture: A/B aggressive_first_sentence as default
+    using the iter-127 5-fixture audio corpus.
+  - Document the 5-fixture corpus as a "standard test
+    benchmark" for operators evaluating new STT engines.
+  - Apply iter-129's drift-sentinel pattern to iter-109's
+    mic_chat extraction pattern docs (catalog the four
+    extracted modules; verify doc/code parity).

@@ -63,6 +63,78 @@ default to this shape (three instances confirm it: iter-107
    Linux. Same trick lets tests stub pyaudio without
    monkey-patching the runtime.
 
+### Session-summary diversity-check pattern
+
+When adding a session-summary warning that fires on **N+
+consecutive turns sharing the same problematic value**, follow
+this template (four instances confirm it: iter-114
+`_emit_filler_diversity_line`, iter-115/126
+`_emit_naturalness_consistency_line`, iter-120
+`_emit_barge_phase_consistency_line`, iter-128
+`_emit_sentence_length_consistency_line`):
+
+1. **Filter "uninteresting" values BEFORE the run scan.**
+   Each instance has its own filter rule:
+   - iter-114 drops `0` (no filler that turn).
+   - iter-115/126 drops `""` (no audio) and `"natural"` (the
+     desired state).
+   - iter-120 drops `""` (no barge that turn).
+   - iter-128 drops `""` (no sentences) and `"medium"`/`"short"`
+     (the fine states).
+
+   The filter rule is per-instance policy — never bake it into
+   the shared run-finder. Keeps `_longest_consecutive_run`
+   (iter-116) a pure list-scanning primitive.
+
+2. **Use `_longest_consecutive_run` from `_chat_metrics.py`.**
+   Returns `(length, value)` of the longest consecutive-equal
+   run. Earliest-tie rule: the first run wins on length.
+
+3. **Apply per-instance threshold.** Conventions earned across
+   instances:
+   - 3 (iter-114 filler) — for high-noise random-pick signals.
+   - 4 (iter-120 barge-phase) — for semantically-loaded events.
+   - 5 (iter-115 naturalness, iter-128 sentence-length) — for
+     general "natural variation is normal" signals.
+
+   Higher threshold = lower false-positive rate at the cost
+   of longer runs needed to fire. Pick based on how rare the
+   underlying event is.
+
+4. **For continuous metrics, bucket BEFORE filtering.**
+   iter-128 is the first instance applied to a non-string
+   signal: `_sentence_length_bucket` maps `mean_sentence_chars`
+   to `"very_short"`/`"short"`/`"medium"`/`"long"`. The
+   bucketing function is testable in isolation; the run-scan
+   then consumes the bucketed values like any other categorical
+   signal.
+
+5. **Per-value suggestion mapping inside the helper.** When
+   multiple values warrant warnings (rushed/slow,
+   llm_stream/playback, very_short/long), the suggestion text
+   per value lives inside the helper. Don't externalize to
+   the caller (overkill for two values), don't make it
+   one-size-fits-all (loses signal). Per-value branches are
+   the right shape.
+
+6. **Defensive fallback for unknown values.** Each helper has
+   an `else` branch that emits a generic suggestion when the
+   bucket value doesn't match any expected case. Catches future
+   additions without dropping the signal silently.
+
+7. **Name the responsible iteration in the warning text.** So
+   operators searching `ITERATION_LOG.md` for "iter-XYZ" find
+   the full context. Compare to iter-074's bargeable warning
+   ("watcher coverage regression") which forces the operator
+   to grep — the iter-114+ pattern names the fix iter directly.
+
+8. **Tests cover the matrix:** empty/no-value suppression,
+   below-threshold, at-or-above-threshold (per value), filter
+   semantics (intervening "uninteresting" values don't break
+   runs; phase changes between flagged values do break runs),
+   custom threshold, longest-of-multiple, output formatting,
+   defensive unknown-value path.
+
 ## Architecture
 
 ### Components
