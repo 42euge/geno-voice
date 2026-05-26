@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-131 — Sentinel symmetry: backport iter-130 checks to iter-129</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-130.html">← iter-130</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-131 — Sentinel symmetry: backport iter-130 checks to iter-129</h1>
+<div class="meta"></div>
+</header><p><strong>Goal:</strong> Make the iter-129 diversity-pattern sentinel and the iter-130 extraction-pattern sentinel structurally consistent. iter-130 introduced two check types that iter-129 didn&#x27;t have: rule count and per-callable name reference. iter-131 backports both, plus adds iter-126 to the diversity sentinel&#x27;s expected- iters list (it&#x27;s the fix-iter for iter-115&#x27;s limitation).</p>
+<p><strong>Pre-iteration discovery: the doc had a hidden drift.</strong> The diversity-pattern section attributed naturalness to &quot;iter-115/126&quot; — the slash-form. The substring <code>iter-126</code> doesn&#x27;t appear in <code>iter-115/126</code>, so the new attribution test caught the missing standalone reference. Fixed by changing &quot;iter-115/126&quot; → &quot;iter-115 + iter-126&quot; globally in the doc. This is exactly the kind of drift the sentinels exist to catch — a silent attribution gap that worked visually but failed an explicit substring check.</p>
+<p><strong>Three changes to <code>tests/unit/test_diversity_pattern_doc.py</code>:</strong></p>
+<p>1. <strong>Added iter-126 to <code>expected_iters</code></strong>:</p>
+<pre class="code-block"><code>   expected_iters = [
+       &quot;iter-114&quot;,  # filler diversity
+       &quot;iter-115&quot;,  # naturalness (initial)
+       &quot;iter-120&quot;,  # barge-phase
+       &quot;iter-126&quot;,  # naturalness (filter fix; iter-131 added)
+       &quot;iter-128&quot;,  # sentence-length
+   ]</code></pre>
+<p>2. <strong>New <code>test_doc_references_each_callable_name</code></strong> (mirrors iter-130&#x27;s). For every name in <code>_DIVERSITY_HELPERS</code>, assert the name appears somewhere in the doc text. Catches a helper rename without doc update.</p>
+<p>3. <strong>New <code>test_doc_lists_8_numbered_rules</code></strong> (mirrors iter-130&#x27;s <code>test_doc_lists_5_numbered_rules</code>). Counts <code>^\d+\.\s+\*\*</code> patterns inside the diversity-pattern section. The diversity pattern has 8 rules vs the extraction pattern&#x27;s 5 — different counts, same shape.</p>
+<p><strong>One change to <code>GENO.md</code>:</strong></p>
+<ul><li>Replaced two occurrences of <code>iter-115/126</code> with <code>iter-115 + iter-126</code>. The slash form was visually clear but didn&#x27;t satisfy a substring search for <code>iter-126</code> — exactly the drift the sentinel is designed to catch.</li></ul>
+<p><strong>Both sentinels now share the same coverage:</strong></p>
+<table class="iter-table"><thead><tr><th>Check</th><th>iter-129</th><th>iter-130</th></tr></thead><tbody><tr><td>Section presence in GENO.md</td><td>✅</td><td>✅</td></tr><tr><td>Top-level reference</td><td>✅(116)</td><td>✅(run_chat)</td></tr><tr><td>Each documented entry resolves</td><td>✅</td><td>✅</td></tr><tr><td>Each callable IS callable</td><td>✅</td><td>✅</td></tr><tr><td>Each iter referenced in doc</td><td>✅</td><td>✅</td></tr><tr><td>Each callable named in doc</td><td>✅⭐</td><td>✅</td></tr><tr><td>English-numeral count matches</td><td>✅</td><td>✅</td></tr><tr><td>Pattern-specific check</td><td>✅(thresholds)</td><td>n/a</td></tr><tr><td>Numbered-rule count</td><td>✅⭐</td><td>✅</td></tr><tr><td>Each entry has a test file</td><td>✅</td><td>✅</td></tr></tbody></table>
+<p>⭐ = added by iter-131.</p>
+<p>The pattern-specific check (thresholds 3/4/5) is intentionally asymmetric: it&#x27;s domain-specific to diversity-check (the iter-129 doc lists threshold conventions; iter-130&#x27;s extraction pattern doesn&#x27;t have a comparable convention to verify).</p>
+<p>Verification:</p>
+<ul><li>`python -m pytest tests/unit/test_diversity_pattern_doc.py tests/unit/test_extraction_pattern_doc.py -v` → **19 passed in 70ms** (10 + 9).</li><li>Full unit + integration: <strong>1538 passed, 1 skipped</strong> (1536 prior + 2 net new — added 2 tests, no removals).</li><li>Perf snapshot: <strong>23 passed</strong>.</li></ul>
+<p>Notes:</p>
+<ul><li><strong>The doc-drift catch is the headline result.</strong> iter-131 found that <code>iter-126</code> wasn&#x27;t a clean substring in the doc, even though human readers would interpret <code>iter-115/126</code> as attributing both. The sentinel pattern&#x27;s value is partly catching exactly these &quot;looks fine but mechanically inconsistent&quot; gaps.</li><li>**The two sentinels are structurally close enough to share a future template.** If a third documented pattern lands in GENO.md (e.g., a <code>cross-platform engine pattern</code> formalizing iter-118/119/121/122), the test file shape is now obvious: iter and name. a count, lock it in).<ul><li><code>_INSTANCES</code> tuple: source of truth.</li><li>Section presence + top-level reference.</li><li>Per-entry: imports / callable / referenced in doc by both</li><li>Numbered-rule count (extraction&#x27;s 5, diversity&#x27;s 8 — pick</li><li>English-numeral count matches tuple length.</li><li>Per-entry test file existence.</li><li>Optional pattern-specific check.</li></ul></li></ul>
+<p>Could be extracted into a generic <code>_assert_pattern_doc_in_sync</code> helper later. For now, the duplication is small (~20 lines per file) and explicit (each pattern owns its source of truth).</p>
+<ul><li><strong>iter-131 is the natural close to the doc-pattern arc</strong> started by iter-129 + iter-130. Both pattern sections are now equally protected. A 5th instance of either pattern must update both the source-of-truth tuple AND the doc numeral atomically.</li><li><strong>No new assertion types needed yet.</strong> iter-130&#x27;s two contributions are the right level of coverage for this doc shape. Future iterations can add new check types if a new failure mode emerges.</li><li>Next directions: default with the iter-127 5-fixture corpus. benchmark&quot; (still pending from iter-127). sentinel scaffolding into a helper.<ul><li>Architecture: A/B <code>aggressive_first_sentence: true</code> as</li><li>Document the 5-fixture corpus as a &quot;standard test</li><li>If a third pattern lands in GENO.md, extract the shared</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-130.html">← iter-130</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>
