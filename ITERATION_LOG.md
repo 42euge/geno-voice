@@ -7036,3 +7036,102 @@ Notes:
     boilerplate (shared `_STALLED_PREAMBLE`, shared kwarg set)
     into a `_run_auto_aggressive_pair(delay)` helper if a fourth
     iteration adds yet more grid points.
+
+## iter-102 — A/B perf scenarios for max_user_assistant context cap
+
+**Goal:** Fourth pair-scenario after iter-098, iter-099, iter-100.
+Validates iter-077 (context_tokens) + iter-078 (trim_events)
+empirically by running an 8-turn session twice — once at the
+default cap of 20 (never trims), once at a tight cap of 5
+(trims after turn 3). Completes the user-facing-opt-in coverage
+suite (splitter, filler threshold, auto-aggressive, context cap).
+
+**New plumbing — `_run_session_scenario`.** The first
+multi-turn perf helper; existing scenarios are all single-turn.
+The cap is a session-level concept — it only matters AFTER
+history accumulates — so a one-shot scenario can't see it.
+Records the LAST turn's metrics into a single `ScenarioResult`
+row + returns `trim_events` count for assertions.
+
+```python
+res, trim_events = _run_session_scenario(
+    "context_cap_default",
+    n_turns=8, max_user_assistant=20,
+)
+```
+
+**Subtle gotcha — `flush_pending_audio` and pre-loaded mics.**
+First attempt pre-loaded all 8 utterances at once. Worked for
+turn 1, then turn 2's flush drained the entire remaining buffer
+and the recorder waited forever for a tone burst. Fixed with the
+same delayed-push pattern as iter-042's barge-in scenario: a
+feeder thread that pushes utterance N+1 only AFTER turn N's
+flush has completed (50ms semaphore-gated delay).
+
+```python
+pending = _th.Semaphore(0)
+def _feeder():
+    for _ in range(n_turns - 1):
+        pending.acquire()       # block until turn N starts
+        time.sleep(0.05)        # land after flush
+        _utterance(speech_seconds, mic)
+```
+
+Inside the turn loop, `pending.release()` runs at the start of
+each turn after the first.
+
+**Empirical A/B** (this run, 8-turn session, x86_64 Linux stub):
+
+| Metric                   | cap=20 (default) | cap=5 (tight) | Δ      |
+|--------------------------|------------------|---------------|--------|
+| context_tokens (turn 8)  | 53               | 24            | -55%   |
+| TTFS (turn 8)            | 800.3 ms         | 800.3 ms      | 0      |
+| trim_events (8 turns)    | 0                | 4+            | —      |
+
+The 55% drop in billed tokens is the headline number. TTFS is
+identical because the stub LLM has zero per-token cost — in
+production, LLM TTFB scales with input context, so the cap
+delivers TTFS savings on top of cost savings. iter-101's
+per-token-delay grid pattern could be applied here too:
+parameterize per-token-delay across the cap A/B to surface the
+real-LLM TTFS benefit.
+
+Verification: `python -m pytest tests/performance/ -q` → **21
+passed in 13.9s** (was 19, +2 new). Full unit + integration
+suite: `tests/ --ignore=tests/performance --ignore=tests/
+test_session.py --ignore=tests/e2e -q` → **1148 passed, 1
+skipped** (identical to main).
+
+Notes:
+- **Pattern: session-shaped pair-scenarios.** The 4th pair, but
+  the FIRST that needs cross-turn state. The new helper
+  `_run_session_scenario` is the natural place to put any future
+  multi-turn metric (cumulative `llm_errors`, session-long
+  `false_triggers`, `last_filler_id` rotation, etc.). Current
+  shape is "drive N turns, record last-turn metrics + session
+  counter" — plenty of room to extend.
+- **The flush-vs-pre-load gotcha is a recurring trap.** Three
+  scenarios now (iter-042 barge-in, iter-100 stall, iter-102
+  session) hit "audio is in the buffer too early." All three
+  use the same fix: thread + 50ms delay. Worth distilling into
+  a `_push_after_flush(mic, audio, delay=0.05)` helper if a
+  fourth instance lands.
+- **The pair-scenario family is now 4 strong** with shared
+  shape but diverging mechanisms. The pattern handles:
+  - iter-098: behavior flag, single-turn (splitter)
+  - iter-099: timing threshold, single-turn (filler)
+  - iter-100: timing threshold, single-turn with stall (auto-flip)
+  - iter-101: per-token-delay grid, single-turn extension
+  - iter-102: session counter, multi-turn (context cap)
+
+  Each iteration adds one new dimension. Next dimensions
+  available: cumulative metric (e.g., `last_filler_id` rotation
+  across turns), preempted_words on barge across N turns.
+
+- Next directions:
+  - Per-token-delay grid for context cap (would surface real-LLM
+    TTFS scaling at different TPS).
+  - Extract `_emit_recording_block` (still pending from iter-097).
+  - WER fixture (1.6) heavyweight iteration.
+  - `_push_after_flush` helper to dedupe the three thread+sleep
+    sites (iter-042, iter-100, iter-102).

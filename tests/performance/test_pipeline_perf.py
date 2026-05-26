@@ -394,6 +394,134 @@ def _run_scenario(
     return res
 
 
+def _run_session_scenario(
+    name: str,
+    description: str,
+    *,
+    n_turns: int,
+    max_user_assistant: int,
+    response_per_turn: str = "Alright, that makes sense to me.",
+    speech_seconds: float = 1.0,
+) -> tuple[ScenarioResult, int]:
+    """Run a multi-turn dialog and record the LAST turn's metrics.
+
+    Returns ``(scenario_result, trim_events_total)`` so the caller
+    can assert on session-level signals that don't fit into a
+    single TurnMetrics row. iter-102 uses this to A/B the
+    context-cap (max_user_assistant=5 vs 20) — context_tokens on
+    the final turn is the dominant signal, but trim_events
+    reflects how often the cap actually fired.
+    """
+    import threading as _th
+
+    mic = VirtualMicStream(rate=RATE, chunk_size=CHUNK)
+    # Push utterance 1 up-front so turn 1's recorder has audio.
+    # Subsequent utterances are pushed by a feeder thread that
+    # waits for the previous turn's flush_pending_audio (run at
+    # the start of each turn) to complete — same trick as the
+    # iter-042 barge-in scenario. Without the delay, flush would
+    # drain the pre-loaded buffer and the recorder would wait
+    # forever for tone.
+    _utterance(speech_seconds, mic)
+    pending = _th.Semaphore(0)
+
+    def _feeder():
+        for _ in range(n_turns - 1):
+            pending.acquire()  # blocks until next turn signals ready
+            time.sleep(0.05)   # land after flush_pending_audio
+            _utterance(speech_seconds, mic)
+
+    feeder = _th.Thread(target=_feeder, daemon=True)
+    feeder.start()
+
+    engine, transcribe = _stt_engine(transcript="benchmark")
+    loop = ChatLoop(
+        mic=mic,
+        speaker_factory=lambda: VirtualSpeakerStream(rate=24000),
+        stt_engine=engine,
+        transcribe_fn=transcribe,
+        llm_stream_fn=_yield_tokens(response_per_turn, per_token_delay=0.0),
+        llm_config={"model": "stub"},
+        synth_fn=_const_synth(),
+        play_fn=_slow_play,
+    )
+
+    messages: list[dict] = [{"role": "system", "content": "You are concise."}]
+    trim_events = 0
+    last_metrics = None
+    last_wall = 0.0
+    for turn_idx in range(n_turns):
+        if turn_idx > 0:
+            # Tell the feeder to push the next utterance now.
+            pending.release()
+        t0 = time.monotonic()
+        result = loop.run_one_turn(messages)
+        last_wall = time.monotonic() - t0
+        if result.metrics is None:
+            continue
+        last_metrics = result.metrics
+        len_before = len(messages)
+        messages = ChatLoop.trim_messages(
+            messages, max_user_assistant=max_user_assistant,
+        )
+        if len_before - len(messages) > 0:
+            trim_events += 1
+
+    assert last_metrics is not None, f"{name}: no turns produced metrics"
+    m = last_metrics
+    res = ScenarioResult(
+        name=name,
+        description=description,
+        ttfs_ms=m.ttfs * 1000,
+        naturalness_bucket=m.naturalness_bucket,
+        stt_ms=m.stt_time * 1000,
+        stt_rtf=m.stt_rtf,
+        stt_preview_divergence=m.stt_preview_divergence,
+        tts_rtf=m.tts_rtf,
+        tts_ms=m.tts_time * 1000,
+        playback_ms=m.playback_time * 1000,
+        llm_first_token_ms=m.llm_first_token * 1000,
+        llm_tps=m.llm_tps,
+        llm_first_sentence_ms=m.llm_first_sentence * 1000,
+        llm_total_ms=m.llm_total * 1000,
+        speech_duration_ms=m.speech_duration * 1000,
+        sentences_spoken=m.sentences_spoken,
+        sentences_cancelled=m.sentences_cancelled,
+        streaming_overlap_ratio=m.streaming_overlap_ratio,
+        first_synth_overlap_ms=m.first_synth_overlap_seconds * 1000,
+        bargeable_fraction=m.bargeable_fraction,
+        synth_dispatch_ms=m.synth_dispatch_seconds * 1000,
+        context_tokens=m.context_tokens,
+        preempted_words=m.preempted_words,
+        last_filler_id=m.last_filler_id,
+        time_to_comprehension_ms=m.time_to_comprehension * 1000,
+        first_token_to_audio_ms=m.first_token_to_audio * 1000,
+        max_token_gap_ms=m.max_token_gap * 1000,
+        worker_idle_gap_ms=m.worker_idle_gap_total * 1000,
+        mean_sentence_chars=m.mean_sentence_chars,
+        sentence_split_coverage=m.sentence_split_coverage,
+        bot_wpm=m.bot_wpm,
+        wall_ms=last_wall * 1000,
+        barge_in=m.barge_in,
+        barge_in_latency_ms=m.barge_in_latency * 1000,
+        llm_cancel_to_close_ms=m.llm_cancel_to_close * 1000,
+        barge_in_phase=m.barge_in_phase,
+        primed_frames_seconds=m.primed_frames_seconds,
+        mic_stale_frames=m.mic_stale_frames,
+        speaker_open_ms=m.speaker_open_seconds * 1000,
+        max_queue_depth=m.max_queue_depth,
+        eot_latency_ms=m.eot_latency * 1000,
+        user_wpm=m.user_wpm,
+        eot_overhead_ms=m.eot_overhead * 1000,
+        min_sentence_chars=m.min_sentence_chars,
+        max_sentence_chars=m.max_sentence_chars,
+        mean_token_reveal_lag_ms=m.mean_token_reveal_lag * 1000,
+        max_token_reveal_lag_ms=m.max_token_reveal_lag * 1000,
+    )
+    _record(res)
+    return res, trim_events
+
+
 # ---- Scenarios --------------------------------------------------------------
 
 
@@ -647,6 +775,37 @@ class TestPerfScenarios:
             auto_aggressive_threshold=0.3,
         )
         assert r.sentences_spoken >= 1
+
+    # iter-102: A/B for max_user_assistant context cap. The default
+    # cap (20) is loose enough that an 8-turn session never trims;
+    # a tight cap (5) starts evicting after turn 3, so the late-
+    # session context_tokens is bounded. This is the first
+    # pair-scenario that needs MULTI-TURN state — the cap only
+    # matters AFTER history has accumulated. Single-turn perf
+    # scenarios can't see this.
+    _SESSION_TURNS = 8
+
+    def test_context_cap_default(self):
+        r, trim_events = _run_session_scenario(
+            "context_cap_default",
+            f"{self._SESSION_TURNS}-turn session, cap=20 (default — never trims)",
+            n_turns=self._SESSION_TURNS,
+            max_user_assistant=20,
+        )
+        assert r.sentences_spoken >= 1
+        assert trim_events == 0, f"expected no trims at cap=20, got {trim_events}"
+
+    def test_context_cap_tight(self):
+        r, trim_events = _run_session_scenario(
+            "context_cap_tight",
+            f"{self._SESSION_TURNS}-turn session, cap=5 (tight — trims after turn 3)",
+            n_turns=self._SESSION_TURNS,
+            max_user_assistant=5,
+        )
+        assert r.sentences_spoken >= 1
+        # Cap=5 means we keep the last 5 user+assistant messages.
+        # 8 turns produce 16 such messages → at least one trim event.
+        assert trim_events >= 1
 
     def test_barge_in_during_playback(self):
         # iter-042: deterministic barge-in scenario.
