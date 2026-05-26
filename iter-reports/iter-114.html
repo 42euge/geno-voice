@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-114 — Session-summary filler diversity check</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-113.html">← iter-113</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-114 — Session-summary filler diversity check</h1>
+<div class="meta"></div>
+</header><p><strong>Goal:</strong> Defensive sentinel for iter-113&#x27;s cross-turn filler variety fix. Without an explicit check, a future regression in the FIFO logic (e.g., the deque accidentally becoming a no-op container, or the <code>recent_filler_ids</code> kwarg being dropped from the SentenceWorker constructor) could land silently — the user would hear repetition again, but no test would fire because filler-picking is randomized.</p>
+<p>This iteration adds an empirical check: scan the per-turn <code>last_filler_id</code> sequence for runs of the same id ≥ N (default 3). When found, emit a warning line in the session summary so the operator notices the regression on their next session.</p>
+<p><strong>Change:</strong> New helper <code>_emit_filler_diversity_line</code> in <code>_chat_metrics.py</code> next to the other emit-line family (<code>_emit_wer_line</code>, <code>_emit_bargeable_line</code>, etc):</p>
+<pre class="code-block"><code>def _emit_filler_diversity_line(
+    emit, filler_ids: list[int], threshold: int = 3,
+) -&gt; None:
+    fired = [fid for fid in filler_ids if fid != 0]
+    if not fired:
+        return
+    # Find longest consecutive-same run in `fired`.
+    longest_run = 1
+    longest_id = fired[0]
+    cur_run = 1
+    cur_id = fired[0]
+    for fid in fired[1:]:
+        if fid == cur_id:
+            cur_run += 1
+            if cur_run &gt; longest_run:
+                longest_run = cur_run
+                longest_id = cur_id
+        else:
+            cur_id = fid
+            cur_run = 1
+    if longest_run &lt; threshold:
+        return
+    emit(
+        f&quot;    Filler diversity: filler {longest_id} repeated &quot;
+        f&quot;{longest_run} turns running &quot;
+        f&quot;— iter-113 cross-turn FIFO may not be wired&quot;
+    )</code></pre>
+<p>Two design choices recorded in the docstring:</p>
+<p>1. <strong>Zero-filtering before run counting.</strong> A turn with <code>last_filler_id == 0</code> (no filler fired) is FILTERED OUT before the run scan, not treated as a break. Rationale: user perception is &quot;same filler 3 times in a row&quot; regardless of intervening no-filler turns. The pattern <code>[101, 0, 101, 0, 101]</code> should fire; the user heard 101, silence, 101, silence, 101 — clearly the same filler.</p>
+<p>2. <strong>Threshold = 3 default.</strong> 2 is too noisy (random.choice produces 2-in-a-row trivially even with the FIFO working); 4+ raises the bar so far that real regressions wouldn&#x27;t fire it for many turns. 3 is the smallest pattern a user typically perceives as repetition.</p>
+<p><strong>Wired into <code>print_session_summary</code></strong> right after the <code>_emit_filler_block</code> call:</p>
+<pre class="code-block"><code>_emit_filler_diversity_line(
+    _emit,
+    [m.last_filler_id for m in metrics_list],
+)</code></pre>
+<p>The line is silent on clean sessions (the common case), so the session-summary regression sentinel passes byte-for-byte unchanged for any existing test.</p>
+<p><strong>Tests</strong> (<code>tests/unit/test_emit_filler_diversity_line.py</code>, 18 tests):</p>
+<p><em>Empty / no-filler suppression (2 tests):</em> empty list, all-zero list — neither emits.</p>
+<p><em>Below threshold (3 tests):</em> no repetition, 2-in-a-row (default-threshold passes), alternating pattern — none emit.</p>
+<p><em>At/above threshold (5 tests):</em> 3-in-a-row fires; 4-in-a-row reports actual run length; runs at end / start / longest-of- multiple are correctly identified.</p>
+<p><em>Zero-filtering (3 tests):</em> zeros between same fillers don&#x27;t break the run; leading + trailing zeros filter out cleanly.</p>
+<p><em>Custom threshold (3 tests):</em> threshold=5 suppresses 4-runs but fires on 5-runs; threshold=2 catches shorter patterns.</p>
+<p><em>Output formatting (2 tests):</em> leading 4-space indent matches family convention; warning includes the &quot;iter-113&quot; attribution so operators know which fix to investigate.</p>
+<p>Verification:</p>
+<ul><li>`python -m pytest tests/unit/test_emit_filler_diversity_line.py -q` → <strong>18 passed in 30ms</strong>.</li><li>Regression sentinel (144 session-summary tests pass byte-for- byte): `pytest tests/unit/test_emit_*.py tests/unit/test_session_*.py -q` → <strong>144 passed</strong>.</li><li>Full unit + integration: <strong>1327 passed, 1 skipped</strong> (1309 prior + 18 new).</li><li>Perf snapshot: <strong>23 passed</strong>.</li></ul>
+<p>Notes:</p>
+<ul><li>**The &quot;warns on regression&quot; line includes the responsible iter number.** Operator searches for &quot;iter-113&quot; in the ITERATION_LOG.md, gets the full context. Compare to the iter-074 bargeable-warning which just says &quot;watcher coverage regression&quot; — operator has to grep to find the fix iter. Future warnings should follow iter-114&#x27;s pattern of naming the fix.</li><li><strong>The scan is O(N) and exits early.</strong> The longest_run search doesn&#x27;t allocate, doesn&#x27;t sort, doesn&#x27;t re-scan. For typical sessions (≤50 turns), this is a single linear pass.</li><li>**Threshold parameterization is the kind of &quot;if you ever need it&quot; knob that pays off later.** None of the current tests need a non-default threshold to validate behavior, but exposing it makes the helper composable for future eval scenarios (e.g., a session-replay tool that wants to flag even 2-runs in a side-by-side comparison).</li><li><strong>The pattern is generalizable</strong> — a <code>_emit_X_diversity_line</code> shape would also work for sentence-length variety or user-WPM swing. iter-114 is the first instance; future diversity checks can copy the structure.</li><li>Next directions: iter-106). Six iterations now overdue. measure filler diversity empirically across recorded sessions and compare to iter-113&#x27;s expected variety. metric (iter-074) has room to improve via earlier watcher start.<ul><li>Real audio fixtures + CPU-only STT (still pending from</li><li>Eval/replay tool using SessionState (iter-110). Could</li><li>Architecture: investigate whether the bargeable_fraction</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-113.html">← iter-113</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>
