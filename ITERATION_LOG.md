@@ -8812,3 +8812,160 @@ Notes:
   - Architecture: investigate whether the bargeable_fraction
     metric (iter-074) has room to improve via earlier watcher
     start.
+
+## iter-115 — Naturalness-consistency check
+
+**Goal:** Two-fer iteration:
+
+1. Apply iter-114's `_emit_X_diversity_line` shape to a different
+   metric — proves the pattern is reusable (third instance after
+   iter-114 itself, or rather second since iter-114 was the
+   first).
+2. Surface a real config-tuning signal: when 5+ consecutive turns
+   land in `naturalness_bucket="rushed"` or `"slow"`, the
+   operator's `speed` setting is wrong.
+
+**Pre-iteration investigation that got pivoted:**
+First attempted to find an architectural improvement for
+`bargeable_fraction` (iter-074). Inspecting the latest perf
+snapshot showed every scenario reports 1.000 — the metric is a
+pure regression sentinel, no improvement headroom. Pivoted to
+the diversity-check shape.
+
+**Change:** New helper `_emit_naturalness_consistency_line` in
+`_chat_metrics.py`, structured identically to iter-114's filler
+diversity check:
+
+```python
+def _emit_naturalness_consistency_line(
+    emit, buckets: list[str], threshold: int = 5,
+) -> None:
+    non_empty = [b for b in buckets if b]
+    if not non_empty:
+        return
+    # Find longest consecutive-same run in `non_empty`.
+    longest_run, longest_bucket = 1, non_empty[0]
+    cur_run, cur = 1, non_empty[0]
+    for b in non_empty[1:]:
+        if b == cur:
+            cur_run += 1
+            if cur_run > longest_run:
+                longest_run, longest_bucket = cur_run, cur
+        else:
+            cur, cur_run = b, 1
+    if longest_run < threshold:
+        return
+    if longest_bucket == "natural":
+        return  # natural is the goal — never flag
+    if longest_bucket == "rushed":
+        suggestion = "consider reducing speed"
+    elif longest_bucket == "slow":
+        suggestion = "consider increasing speed"
+    else:
+        suggestion = "consider tuning speed"
+    emit(f"    Naturalness:      {longest_run} consecutive "
+         f"{longest_bucket!r} turns — {suggestion} (iter-053 bucket)")
+```
+
+Two design choices recorded in the docstring:
+
+1. **"natural" runs are never flagged.** Unlike iter-114's filler
+   diversity (where ANY repeated id is concerning), the
+   naturalness check targets only the off-bucket states. A 10-turn
+   run of "natural" is the desired outcome.
+2. **Threshold = 5** (vs iter-114's 3). Natural speech-rate
+   variation produces brief "rushed" / "slow" streaks even with
+   correct config; 5+ consecutive same-bucket is the smallest
+   pattern where "config wrong" is more likely than "noise."
+
+**Wired into `print_session_summary`** right after the
+iter-114 filler diversity line. Same call-site pattern:
+
+```python
+_emit_naturalness_consistency_line(
+    _emit,
+    [m.naturalness_bucket for m in metrics_list],
+)
+```
+
+**Tests** (`tests/unit/test_emit_naturalness_consistency_line.py`,
+18 tests):
+
+*Empty / no-bucket suppression (2 tests):* empty list, all-empty-
+strings — neither emits.
+
+*"natural" exclusion (2 tests):* 10-turn natural run silent; long
+natural run with brief outliers (longest = natural) silent.
+
+*Below threshold (2 tests):* 4-rushed below default; alternating
+rushed+natural — neither fires.
+
+*At/above threshold (4 tests):* 5-rushed → reduce-speed suggestion;
+6-slow → increase-speed suggestion; run-at-end detected;
+longest-of-multiple correctly selected.
+
+*Empty filtering (2 tests):* empty buckets between same-bucket
+turns don't break runs; leading empties also filter.
+
+*Custom threshold (2 tests):* threshold=3 catches smaller
+patterns; threshold=10 suppresses default 5-run.
+
+*Output formatting (3 tests):* leading 4-space indent; iter-053
+attribution; unknown bucket falls back to generic suggestion
+(defensive against a future bucket addition).
+
+*Edge case (1 test):* documented limitation — the function
+reports ONLY the longest run; if "natural" is longest and a
+shorter "rushed" run also crosses threshold, NOTHING fires.
+Recorded as a known limitation rather than fixed; a future
+iteration could scan each non-natural bucket independently if
+this becomes a real signal.
+
+Verification:
+- `python -m pytest tests/unit/test_emit_naturalness_consistency_line.py
+  -q` → **18 passed in 30ms**.
+- Regression sentinel (162 session-summary tests pass byte-for-
+  byte): `pytest tests/unit/test_emit_*.py
+  tests/unit/test_session_*.py -q` → **162 passed**.
+- Full unit + integration: **1345 passed, 1 skipped** (1327
+  prior + 18 new).
+- Perf snapshot: **23 passed**.
+
+Notes:
+- **The diversity-check pattern is now twice-instantiated**
+  (iter-114 + iter-115). Both share:
+  - Filter empties before scanning
+  - Track longest run with single-pass O(N)
+  - Configurable threshold kwarg
+  - "name the responsible iteration" in the warning
+  - Suppress when run < threshold
+
+  A third instance (e.g., barge_in_phase repetition) would
+  warrant extracting the run-finder into a shared helper.
+- **The "natural" exclusion is a key differentiator from
+  iter-114.** Filler diversity wants ALL runs flagged; this
+  check wants only OFF-BUCKET runs flagged. Demonstrates the
+  pattern is flexible — the inclusion/exclusion logic is
+  per-instance, not part of the shared shape.
+- **The "longest-of-multiple-buckets" limitation is
+  documented as a known weakness.** A pathological session
+  with 7 natural + 5 rushed wouldn't fire even though the
+  rushed run is concerning. In practice this would require
+  the user to flip between modes mid-session — unusual.
+  If it becomes real, the fix is to track each non-natural
+  bucket separately. Listed as a future iteration if needed.
+- **The unknown-bucket defensive case** matters because
+  `naturalness_bucket` is a free-form string field. iter-053
+  defined three values (rushed/natural/slow) but a future
+  iteration could add (e.g., "very_slow"). The fallback
+  ensures the warning still fires with a generic suggestion.
+- Next directions:
+  - Real audio fixtures + CPU-only STT (still pending from
+    iter-106). Seven iterations now overdue.
+  - Eval/replay tool using SessionState (iter-110).
+  - Extract the diversity-run-finder into a shared helper if
+    a third instance lands.
+  - Architecture: examine `streaming_overlap_ratio` (currently
+    7-50% across scenarios) for headroom — much lower than
+    the 1.0 ceiling, suggests the worker often waits for
+    sentences rather than synthesizing concurrently.

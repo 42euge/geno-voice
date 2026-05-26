@@ -1469,6 +1469,73 @@ def _emit_filler_diversity_line(
     )
 
 
+def _emit_naturalness_consistency_line(
+    emit, buckets: list[str], threshold: int = 5,
+) -> None:
+    """iter-115: detect consecutive runs of the same non-"natural"
+    naturalness bucket (iter-053). When 5+ turns in a row land in
+    "rushed" or "slow", the speed setting needs adjustment.
+
+    Built on the same shape as iter-114's
+    ``_emit_filler_diversity_line`` — confirms the diversity-check
+    pattern is reusable across different metrics. Same rationale
+    for filtering empty values (no audio played that turn) before
+    counting runs.
+
+    Threshold = 5 is higher than iter-114's 3 because natural
+    speech-rate variation is normal — a brief "rushed" or "slow"
+    streak isn't a config problem. 5+ consecutive same-bucket
+    turns is the smallest pattern where "the operator's speed
+    config is wrong" is more likely than "noise."
+
+    "natural" runs are NEVER flagged: the goal is to be in that
+    bucket. The check fires only on rushed/slow.
+
+    Output mirrors iter-114's "name the responsible iteration"
+    convention so operators can find the fix path:
+
+        Naturalness: 6 consecutive 'rushed' turns
+                     — consider reducing speed (iter-053 bucket)
+    """
+    non_empty = [b for b in buckets if b]
+    if not non_empty:
+        return
+
+    longest_run = 1
+    longest_bucket = non_empty[0]
+    cur_run = 1
+    cur = non_empty[0]
+    for b in non_empty[1:]:
+        if b == cur:
+            cur_run += 1
+            if cur_run > longest_run:
+                longest_run = cur_run
+                longest_bucket = cur
+        else:
+            cur = b
+            cur_run = 1
+
+    if longest_run < threshold:
+        return
+    if longest_bucket == "natural":
+        return
+
+    if longest_bucket == "rushed":
+        suggestion = "consider reducing speed"
+    elif longest_bucket == "slow":
+        suggestion = "consider increasing speed"
+    else:
+        # Defensive: an unknown bucket name shouldn't break the
+        # line — emit a generic suggestion.
+        suggestion = "consider tuning speed"
+
+    emit(
+        f"    Naturalness:      {longest_run} consecutive "
+        f"{longest_bucket!r} turns — {suggestion} "
+        f"(iter-053 bucket)"
+    )
+
+
 def _emit_bargeable_line(emit, bargeable_values: list[float]) -> None:
     """iter-104: extracted from print_session_summary's iter-074
     bargeable line. Reports the WORST bargeable fraction across
@@ -1993,6 +2060,13 @@ def print_session_summary(
     _emit_filler_diversity_line(
         _emit,
         [m.last_filler_id for m in metrics_list],
+    )
+    # iter-115: naturalness-consistency check. Only fires when
+    # 5+ consecutive turns landed in the same non-"natural"
+    # bucket (rushed/slow) — surfaces a speed-config problem.
+    _emit_naturalness_consistency_line(
+        _emit,
+        [m.naturalness_bucket for m in metrics_list],
     )
     # iter-090: barge block extracted to _emit_barge_block helper.
     # ~76 lines of co-emitted lines (count, interruption rate,
