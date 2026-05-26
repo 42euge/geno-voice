@@ -9270,3 +9270,163 @@ Notes:
     against real audio rather than simulated hypotheses.
   - barge_in_phase consistency check (third instance of the
     diversity-check pattern).
+
+## iter-118 — FasterWhisperEngine for x86_64 Linux
+
+**Goal:** Real architecture work. iter-117 verified
+faster-whisper round-trips through the WER pipeline as a test
+fixture; iter-118 makes it a first-class STT engine that
+mic_chat.py can use in production. **First STT path that runs
+on x86_64 Linux without mlx-whisper / Apple Silicon.**
+
+iter-108's `load_engines` factory was deliberately built to
+swap engines via a closure. The swap point was always `lambda:
+WhisperEngine(model_repo=...)` → operators on Linux had nothing
+to swap to. iter-118 closes that gap.
+
+**Change:** Three pieces:
+
+1. **`stt/faster_whisper_engine.py`** — `FasterWhisperEngine`
+   class implementing the same `STTEngine` contract as
+   `WhisperEngine`:
+   - `__init__(model_repo, device, compute_type, **kwargs)`
+   - `_load()` — idempotent, lazy-imports `faster_whisper`
+   - `transcribe(wav_bytes) -> (text|None, elapsed_seconds)`
+
+   Class-level model cache keyed by
+   `(resolved_repo, device, compute_type)` — mirrors
+   `WhisperEngine`'s class-level cache. ChatLoop construction
+   reuses the loaded model.
+
+   Defaults match iter-117's audio-fixture choices: `tiny` /
+   `cpu` / `int8`. A no-arg `FasterWhisperEngine()` is
+   operator-friendly on x86_64 Linux.
+
+2. **Repo-string translation** (`_resolve_model_repo`):
+   - Short aliases ("tiny", "base", "large-v3") pass through.
+   - Full HF repos and local paths pass through.
+   - MLX-style ("mlx-community/whisper-tiny") strip the
+     namespace + "whisper-" prefix → faster-whisper-recognizable
+     size token.
+
+   This means the same `model_repo` string in `config.local.yaml`
+   works on both Mac (MLX path) and Linux (faster-whisper path) —
+   the engine handles the translation. Operators don't have to
+   maintain two configs.
+
+3. **Factory registration** in `stt/__init__.py`:
+   ```python
+   ENGINES = {
+       "whisper": WhisperEngine,                  # MLX, Apple Silicon
+       "gemma4": Gemma4Engine,
+       "faster_whisper": FasterWhisperEngine,    # iter-118: x86_64 Linux + CUDA
+   }
+   ```
+
+   Lazy-imports `faster_whisper` inside `_load()`, not at module
+   scope. So `from stt import FasterWhisperEngine` works on
+   systems without the package — only `_load()` raises. Matches
+   iter-109 GENO.md rule 5: "lazy-import platform deps inside
+   the closures."
+
+**How an operator uses it:**
+
+```yaml
+# config.local.yaml
+chat:
+  stt_engine: "faster_whisper"
+  stt_model: "tiny"        # or "base", "large-v3", etc.
+  stt_device: "cpu"        # or "cuda"
+  stt_compute: "int8"      # or "float16", "int8_float16"
+```
+
+```python
+# mic_chat.py — iter-108 stt_factory closure adapts
+stt_factory=lambda: get_engine(
+    chat_cfg.get("stt_engine", "whisper"),
+    model_repo=chat_cfg.get("stt_model", default_repo),
+)
+```
+
+(The mic_chat config wiring is left for a follow-up — it
+needs new chat-config keys that don't exist yet. The engine
+itself is functional; ChatLoop's `stt_engine` parameter accepts
+any STTEngine subclass.)
+
+**Tests** (`tests/unit/test_faster_whisper_engine.py`,
+26 tests):
+
+*Repo-string translation (10 tests parametrized):* native strings
+pass through; MLX namespace stripped for tiny/base/small/medium/
+large-v3/large-v3-turbo; unrecognized MLX-namespace passes
+through (operator can debug).
+
+*Construction + contract (5 tests):* implements STTEngine; default
+construction matches iter-117 choices; overrides work; **kwargs
+accepted; no model load at construction (lazy).
+
+*Cache key behavior (2 tests):* uses resolved repo (so MLX +
+native strings sharing the same size share the cache); device +
+compute_type included in the key.
+
+*Factory registration (4 tests):* `get_engine("faster_whisper")`
+returns instance; kwargs forward; bogus name → ValueError;
+ENGINES dict has the entry.
+
+*Real round-trip (2 tests, skip when unavailable):*
+- Transcribe iter-117's `clean.wav` fixture → assert
+  "weather" or "today" appears in the transcript (loose match,
+  doesn't require exact text — model output varies).
+- Invalid model name → returns `(None, elapsed)`, never raises
+  (matches mic_chat.py error-handling expectations).
+
+Verification:
+- `python -m pytest tests/unit/test_faster_whisper_engine.py -v`
+  → **26 passed in 2.1s** (incl. real model load + transcription).
+- Full unit + integration: **1394 passed, 1 skipped** (1368
+  prior + 26 new).
+- Perf snapshot: **23 passed**.
+
+Notes:
+- **The swap point promised by iter-108 is now real.** Every
+  iteration since iter-108 has carried "ready to land — `stt_factory`
+  is the swap point" as a forward note. Eight iterations later,
+  the swap has a real backend.
+- **iter-117 + iter-118 form a coherent unit.** iter-117 proved
+  faster-whisper works with the WER pipeline as a test
+  dependency; iter-118 promotes it to a production engine. A
+  future iteration can add an integration test that drives
+  `mic_chat.py:run_chat` with the FasterWhisperEngine + a
+  virtual mic, end-to-end on x86_64 Linux.
+- **Model cache invariant.** `_resolve_model_repo` is the
+  shared key — two callers with different `model_repo` strings
+  that resolve to the same size share the cache. Tested
+  explicitly so a future regression that bypasses the resolver
+  (e.g., direct dict lookup with raw repo) gets caught.
+- **The `config.local.yaml` wiring is deferred** because adding
+  config knobs without an end-to-end use case is a smell.
+  Once a real Linux user wants to run mic_chat, the chat-config
+  schema gets extended with `stt_engine` / `stt_model` /
+  `stt_device` / `stt_compute` entries. Until then,
+  programmatic construction (`FasterWhisperEngine(...)`) is
+  available.
+- **Pattern for cross-platform engines:**
+  1. Implement the abstract class.
+  2. Lazy-import platform deps inside `_load()`.
+  3. Class-level cache for model reuse.
+  4. Repo-string translation if other engines use a different
+     namespace convention.
+  5. Register in the factory.
+  6. Tests across all three concerns: pure functions, contract,
+     real round-trip with skip.
+- Next directions:
+  - Wire `chat_cfg.stt_engine` / `stt_model` keys + a
+    `parse_stt_config` helper (matches iter-018's
+    `parse_chat_config` pattern).
+  - End-to-end test: full `mic_chat.py:run_chat` driven by
+    `FasterWhisperEngine` + virtual mic + the iter-117
+    `clean.wav` fixture playing through the speaker.
+  - Add a noisy-audio fixture to exercise the iter-106
+    "noisy"/"catastrophic" bands against real audio.
+  - barge_in_phase consistency check (third diversity
+    instance).
