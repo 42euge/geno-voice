@@ -168,7 +168,7 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-119.html">← iter-119</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-119.html">← iter-119</a><a href="iter-121.html">iter-121 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
 <h1>iter-120 — Barge-phase consistency check</h1>
 <div class="meta"></div>
 </header><p><strong>Goal:</strong> Third instance of the diversity-check pattern after iter-114 (filler diversity) and iter-115 (naturalness). Validates that iter-116&#x27;s <code>_longest_consecutive_run</code> extraction was justified — the helper is now used by three distinct emit-line callers, all sharing the same single-pass scan without re-implementing.</p>
@@ -219,7 +219,7 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 <p>A future fourth instance (e.g., consecutive <code>_too_short</code> utterances flagging a noisy mic) lands by copying the template.</p>
 <ul><li><strong>Pattern: per-instance suggestion mapping.</strong> When an emit helper has multiple meaningful values (rushed/slow, llm_stream/playback), the suggestion text per value lives inside the helper. Don&#x27;t externalize it (would require passing a dict from the caller — overkill for two values). Don&#x27;t make it a one-size-fits-all message (would lose the signal). Per-value branches in the helper are the right shape.</li></ul>
 <ul><li><strong>mic_chat.py size unchanged.</strong> This iteration only touches <code>_chat_metrics.py</code> + a new test file. The session-summary layer continues to grow but <code>run_chat</code> itself stays at ~100 lines.</li></ul>
-<ul><li>Next directions: <code>FasterWhisperEngine</code> + virtual mic + iter-117&#x27;s <code>clean.wav</code>. Closes the iter-118+iter-119 cross-platform STT story at the integration level. iter-106&#x27;s noisy/catastrophic bands against real audio. of the diversity pattern — would justify promoting the template into a documented protocol or factory function).<ul><li>End-to-end test driving <code>mic_chat.py:run_chat</code> with</li><li>Add a noisy-audio fixture (synthesized + bgm) to exercise</li><li>Sentence-length-bucket consistency check (fourth instance</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-119.html">← iter-119</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li>Next directions: <code>FasterWhisperEngine</code> + virtual mic + iter-117&#x27;s <code>clean.wav</code>. Closes the iter-118+iter-119 cross-platform STT story at the integration level. iter-106&#x27;s noisy/catastrophic bands against real audio. of the diversity pattern — would justify promoting the template into a documented protocol or factory function).<ul><li>End-to-end test driving <code>mic_chat.py:run_chat</code> with</li><li>Add a noisy-audio fixture (synthesized + bgm) to exercise</li><li>Sentence-length-bucket consistency check (fourth instance</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-119.html">← iter-119</a><a href="iter-121.html">iter-121 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>
