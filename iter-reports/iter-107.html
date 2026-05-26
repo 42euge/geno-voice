@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-107 — Extract prerender_fillers into _chat_fillers module</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-106.html">← iter-106</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-107 — Extract prerender_fillers into _chat_fillers module</h1>
+<div class="meta"></div>
+</header><p><strong>Goal:</strong> Pivot from session-summary refactor to mic_chat.py itself. iter-106 noted <code>run_chat</code> is the largest unrefactored function; the filler pre-rendering block (16 lines) is the clearest extractable chunk inside it.</p>
+<p>The block was previously inline:</p>
+<pre class="code-block"><code>rendered_fillers: list[tuple] = []
+if filler_texts:
+    t_fill = time.monotonic()
+    for text in filler_texts:
+        try:
+            audio_np, tokens = synthesize_with_alignment(
+                tts_engine, text, voice, speed,
+            )
+            if len(audio_np) &gt; 0:
+                rendered_fillers.append((audio_np, tokens))
+        except Exception as e:
+            print(f&quot;  {YELLOW}filler synth failed for {text!r}: {e}{RESET}&quot;)
+    print(
+        f&quot;  Pre-rendered {len(rendered_fillers)}/{len(filler_texts)} &quot;
+        f&quot;fillers in {(time.monotonic() - t_fill)*1000:.0f}ms &quot;
+        f&quot;(idle threshold {filler_idle_threshold:.2f}s)&quot;
+    )</code></pre>
+<p>Three concerns tangled together: TTS engine wiring, error handling/timing, and presentation (ANSI colors + leading spaces). Untestable without spinning up a real TTS engine.</p>
+<p><strong>Change:</strong> New module <code>examples/_chat_fillers.py</code> exposing:</p>
+<pre class="code-block"><code>def prerender_fillers(
+    synth_fn: Callable[[str], tuple[Any, Any]],
+    texts: Iterable[str],
+    *,
+    idle_threshold: float = 0.0,
+    log: Callable[[str], None] = print,
+) -&gt; list[FillerClip]:</code></pre>
+<p>Three test-friendly seams:</p>
+<ul><li><code>synth_fn</code> — callable, not engine. Caller wraps the engine/voice/speed closure once at the top of <code>run_chat</code>. Tests pass any <code>(text) -&gt; (audio, tokens)</code> callable.</li><li><code>log</code> — callable, not stdout. Default is <code>print</code> for production parity; tests capture into a list. Mirrors iter-009&#x27;s pattern for logger injection.</li><li>ANSI colors stay in <code>mic_chat.py</code>. The module emits plain text; the caller&#x27;s <code>_filler_log</code> re-applies YELLOW for failures and plain styling for the summary. Keeps presentation owned by the entrypoint.</li></ul>
+<p><strong>Caller (mic_chat.py) shrinks from 16 lines to 13:</strong></p>
+<pre class="code-block"><code>def _filler_log(line: str) -&gt; None:
+    if line.startswith(&quot;filler synth failed&quot;):
+        print(f&quot;  {YELLOW}{line}{RESET}&quot;)
+    else:
+        print(f&quot;  {line}&quot;)
+
+rendered_fillers = prerender_fillers(
+    lambda text: synthesize_with_alignment(tts_engine, text, voice, speed),
+    filler_texts,
+    idle_threshold=filler_idle_threshold,
+    log=_filler_log,
+)</code></pre>
+<p>Net line count is roughly the same in <code>run_chat</code> (the closure + log adapter eat the savings), but the <em>test surface</em> is now real: every behavior the original block had is verifiable without booting kokoro.</p>
+<p><strong>Tests</strong> (<code>tests/unit/test_chat_fillers.py</code>, 12 tests):</p>
+<ul><li>Edge cases: empty text iterable + iterable input.</li><li>Happy path: 3 texts → 3 clips, summary log emits once.</li><li>idle_threshold=0.0 case (operator may set explicitly).</li><li>Failure handling: per-text try/except isolates failures; failure log line exposes exception text; all-failures returns empty list with 0/N summary.</li><li>Empty-audio silent skip: matches the original inline behavior (no log on empty audio, only on exception).</li><li>Mixed empty + ok: only non-empty audio lands.</li><li>Default <code>log=print</code> flows to stdout via capsys.</li><li><code>synth_fn</code> invocation parity: receives just the text string, no engine/voice/speed details bleed in.</li></ul>
+<p>Verification:</p>
+<ul><li><code>python -m pytest tests/unit/test_chat_fillers.py -q</code> → **12 passed in 20ms**.</li><li>Full unit + integration: `tests/ --ignore=tests/performance --ignore=tests/test_session.py --ignore=tests/e2e -q` → <strong>1223 passed, 1 skipped</strong> (1211 prior + 12 new).</li><li>Perf snapshot: <strong>21 passed</strong>.</li></ul>
+<p>Notes:</p>
+<ul><li><strong>mic_chat.py is now 6% smaller in extractable concerns.</strong> 16 lines moved out into a tested module; ~145 lines of <code>run_chat</code> remain. Next-largest blocks (in line count): engine loading + timing (~13 lines), the closures <code>_speaker_factory</code> / <code>_synth</code> / <code>_play</code> (~17 lines), and the messages init + main turn loop (~30 lines). All candidates for follow-up extractions.</li><li>**Two log-failure-vs-summary discrimination patterns now exist.** This module + iter-097&#x27;s <code>_emit_history_block</code> both use a &quot;look at the log line prefix&quot; trick. If a third site lands, refactor: have the log function take a level (info/warning) + message instead of one line, and let the caller style by level.</li><li><strong>Reusable shape: <code>synth_fn</code> + <code>log</code> injection.</strong> The same pattern earned the <code>print_session_summary</code> tests in iter-017 (log via <code>print</code> parameter) and iter-019 (synthesize_with_alignment factored similarly). Three+ instances now — this is the default extraction shape for any mic_chat.py subroutine that mixes TTS + logging.</li><li><strong>Caller shape preserved.</strong> <code>mic_chat.py:run_chat</code> still uses the same locals (<code>rendered_fillers</code>, <code>filler_idle_threshold</code>) downstream — extraction was purely internal to the rendering block, not a refactor of the call site.</li><li>Next directions: + <code>_load()</code> + timing) into <code>_chat_engines.py</code>. Would abstract the Mac-only WhisperEngine import at the same time, opening the door for x86_64 STT integration. closures into a <code>ChatLoopFactory.from_engines(...)</code> builder. iter-102). iter-106).<ul><li>Extract engine loading (<code>stt_engine = WhisperEngine(...)</code></li><li>Extract the <code>_speaker_factory</code> / <code>_synth</code> / <code>_play</code></li><li>Per-token-delay grid for context cap (still pending from</li><li>Real audio fixtures + CPU-only STT (still pending from</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-106.html">← iter-106</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>
