@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-127 — Multi-speaker overlap fixture</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-126.html">← iter-126</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-127 — Multi-speaker overlap fixture</h1>
+<div class="meta"></div>
+</header><p><strong>Goal:</strong> Add a real-world failure mode to the corpus: two speakers overlapping. iter-124 + iter-125 added gaussian-noise fixtures (acoustic degradation); iter-127 adds cross-talk (linguistic degradation). Both stress-test faster-whisper but exercise different failure modes.</p>
+<p><strong>Pre-iteration probe rediscovered the iter-125 lesson:</strong> faster-whisper handles light cross-talk very well. At a 50% distractor amplitude, the tiny model nailed the reference (&quot;What is the weather today?&quot; → WER 0.0). Probed 0.5 / 0.75 / 1.0 / 1.25 / 1.5 amplitudes:</p>
+<table class="iter-table"><thead><tr><th>Amp</th><th>WER (3 runs)</th><th>Sample transcript</th></tr></thead><tbody><tr><td>0.50</td><td>0.0</td><td>&quot;What is the weather today?&quot;</td></tr><tr><td>0.75</td><td>0.8</td><td>&quot;What is my window taking out?&quot;</td></tr><tr><td>1.00</td><td>1.0</td><td>&quot;What&#x27;s in my mind?&quot;</td></tr><tr><td>1.25</td><td>1.2</td><td>&quot;what&#x27;s in the power of the internet&quot;</td></tr><tr><td>1.50</td><td>37.0 (looped)</td><td>&quot;what&#x27;s in the eye and what&#x27;s in...&quot;</td></tr></tbody></table>
+<p>Picked <strong>amp=0.75</strong> as the fixture: meaningful confusion (WER 0.8) without runaway output. At 1.5 the model loops, which is diagnostically interesting but produces a fixture WER that&#x27;s both hard to band and noisy.</p>
+<p><strong>Three pieces:</strong></p>
+<p>1. <strong><code>tests/fixtures/wer/multispeaker_16khz.wav</code></strong> — generated from two espeak-ng voices:</p>
+<ul><ul><ul></ul></ul></ul>
+<p>30253 samples, mono, 16 kHz. Resampled from each voice&#x27;s native rate via scipy.</p>
+<p>2. <strong><code>audio_fixtures</code> corpus entry</strong> <code>multispeaker_audio</code> with reference &quot;what is the weather today&quot; and band 0.60-1.10. Wider than iter-124&#x27;s noisy band (0.10-0.50) because the model&#x27;s response to cross-talk is more sensitive to per-token alignment.</p>
+<p>3. <strong>8 fixture-shape unit tests</strong> (<code>tests/unit/ test_multispeaker_audio_fixture.py</code>):</p>
+<ul><ul><ul></ul></ul></ul>
+<p><strong>Pattern recorded for synthesized-mix fixtures:</strong></p>
+<blockquote>When generating a mix from multiple sources, include an RMS-based &quot;overlap region carries more energy&quot; sanity test. The simple &quot;distinct bytes&quot; check fires on any difference, but the RMS check specifically validates that the mixing step did its work.</blockquote>
+<p>Verification:</p>
+<ul><li>`python -m pytest tests/unit/test_multispeaker_audio_fixture.py -v` → <strong>8 passed in 60ms</strong>.</li><li><code>python -m pytest tests/integration/test_wer_audio.py -q</code> → <strong>4 passed in 3.4s</strong> (now exercises 5 fixtures including multispeaker; greedy decoding makes WER deterministic).</li><li>Full unit + integration: <strong>1495 passed, 1 skipped</strong> (1487 prior + 8 new).</li><li>Perf snapshot: <strong>23 passed</strong>.</li></ul>
+<p>Notes:</p>
+<ul><li><strong>The corpus is now 6 text + 5 audio fixtures.</strong> Audio fixtures span:<ul><li>clean_audio (production-grade STT)</li><li>quick_brown_fox_audio (pangram)</li><li>noisy_audio (15 dB SNR — light noise)</li><li>catastrophic_audio (10 dB SNR — heavy noise)</li><li>multispeaker_audio (cross-talk, amp=0.75)</li></ul></li></ul>
+<p>Different failure modes, deterministic across runs (greedy decoding from iter-125), each with band sentinels in corpus.json.</p>
+<ul><li><strong>The probing methodology continues to scale.</strong> iter-117 (model size), iter-124 (noise SNR), iter-125 (more SNR + decoding mode), iter-127 (distractor amp) all used the same approach: generate at multiple settings → observe WER distribution → pick the setting with stable WER and meaningful signal.</li><li><strong>Two-voice mixing is reproducible.</strong> Both espeak-ng outputs are deterministic given the input text + voice. The mix amplitude + offset are recorded in the iteration log + the fixture-shape tests, so regeneration produces an identical fixture.</li><li><strong>Why band 0.60-1.10 and not tighter?</strong> Observed WER 0.8 on 3 runs. Wider band tolerates faster-whisper version drift without breaking the test. Tightening to 0.75-0.85 might fire if a future model release shifts the output by one word.</li><li>**The &quot;RMS in overlap region&quot; test is the strongest generation invariant.** It catches a class of bugs (forgot to mix in the distractor; mixed at zero amplitude; truncated the distractor) that a simple byte-comparison check might miss.</li><li>Next directions: default with the now-existing 5-fixture audio corpus. instance). benchmark&quot; — operators wanting to evaluate a new STT wrapper can run their engine through these fixtures and compare bands.<ul><li>Architecture: A/B <code>aggressive_first_sentence: true</code> as</li><li>Sentence-length-bucket consistency check (4th diversity</li><li>Document the 5-fixture corpus as a &quot;standard test</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-126.html">← iter-126</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>
