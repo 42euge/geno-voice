@@ -217,23 +217,25 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
     # match the _chat_recording module constants and tolerates
     # malformed user input.
     vad_cfg = parse_vad_config(chat_cfg)
-    rendered_fillers: list[tuple] = []
-    if filler_texts:
-        t_fill = time.monotonic()
-        for text in filler_texts:
-            try:
-                audio_np, tokens = synthesize_with_alignment(
-                    tts_engine, text, voice, speed,
-                )
-                if len(audio_np) > 0:
-                    rendered_fillers.append((audio_np, tokens))
-            except Exception as e:
-                print(f"  {YELLOW}filler synth failed for {text!r}: {e}{RESET}")
-        print(
-            f"  Pre-rendered {len(rendered_fillers)}/{len(filler_texts)} "
-            f"fillers in {(time.monotonic() - t_fill)*1000:.0f}ms "
-            f"(idle threshold {filler_idle_threshold:.2f}s)"
-        )
+    # iter-107: filler pre-rendering moved to examples/_chat_fillers
+    # so the loop is testable without a real TTS engine. The
+    # caller supplies a closure that wraps synthesize_with_alignment,
+    # plus a log callable that re-applies the YELLOW/leading-space
+    # styling for failure lines + plain styling for the summary.
+    from examples._chat_fillers import prerender_fillers
+
+    def _filler_log(line: str) -> None:
+        if line.startswith("filler synth failed"):
+            print(f"  {YELLOW}{line}{RESET}")
+        else:
+            print(f"  {line}")
+
+    rendered_fillers = prerender_fillers(
+        lambda text: synthesize_with_alignment(tts_engine, text, voice, speed),
+        filler_texts,
+        idle_threshold=filler_idle_threshold,
+        log=_filler_log,
+    )
 
     print(f"  {GREEN}Ready.{RESET} Speak and I'll respond. Ctrl+C to quit.\n")
 

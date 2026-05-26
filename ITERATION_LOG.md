@@ -7628,3 +7628,142 @@ Notes:
   - Pivot to mic_chat.py refactor — extract `run_chat`'s
     config-loading / startup-sequence into a tested module
     (currently it's the largest unrefactored function).
+
+## iter-107 — Extract prerender_fillers into _chat_fillers module
+
+**Goal:** Pivot from session-summary refactor to mic_chat.py
+itself. iter-106 noted `run_chat` is the largest unrefactored
+function; the filler pre-rendering block (16 lines) is the
+clearest extractable chunk inside it.
+
+The block was previously inline:
+
+```python
+rendered_fillers: list[tuple] = []
+if filler_texts:
+    t_fill = time.monotonic()
+    for text in filler_texts:
+        try:
+            audio_np, tokens = synthesize_with_alignment(
+                tts_engine, text, voice, speed,
+            )
+            if len(audio_np) > 0:
+                rendered_fillers.append((audio_np, tokens))
+        except Exception as e:
+            print(f"  {YELLOW}filler synth failed for {text!r}: {e}{RESET}")
+    print(
+        f"  Pre-rendered {len(rendered_fillers)}/{len(filler_texts)} "
+        f"fillers in {(time.monotonic() - t_fill)*1000:.0f}ms "
+        f"(idle threshold {filler_idle_threshold:.2f}s)"
+    )
+```
+
+Three concerns tangled together: TTS engine wiring, error
+handling/timing, and presentation (ANSI colors + leading spaces).
+Untestable without spinning up a real TTS engine.
+
+**Change:** New module `examples/_chat_fillers.py` exposing:
+
+```python
+def prerender_fillers(
+    synth_fn: Callable[[str], tuple[Any, Any]],
+    texts: Iterable[str],
+    *,
+    idle_threshold: float = 0.0,
+    log: Callable[[str], None] = print,
+) -> list[FillerClip]:
+```
+
+Three test-friendly seams:
+- `synth_fn` — callable, not engine. Caller wraps the
+  engine/voice/speed closure once at the top of `run_chat`. Tests
+  pass any `(text) -> (audio, tokens)` callable.
+- `log` — callable, not stdout. Default is `print` for
+  production parity; tests capture into a list. Mirrors
+  iter-009's pattern for logger injection.
+- ANSI colors stay in `mic_chat.py`. The module emits plain
+  text; the caller's `_filler_log` re-applies YELLOW for
+  failures and plain styling for the summary. Keeps
+  presentation owned by the entrypoint.
+
+**Caller (mic_chat.py) shrinks from 16 lines to 13:**
+
+```python
+def _filler_log(line: str) -> None:
+    if line.startswith("filler synth failed"):
+        print(f"  {YELLOW}{line}{RESET}")
+    else:
+        print(f"  {line}")
+
+rendered_fillers = prerender_fillers(
+    lambda text: synthesize_with_alignment(tts_engine, text, voice, speed),
+    filler_texts,
+    idle_threshold=filler_idle_threshold,
+    log=_filler_log,
+)
+```
+
+Net line count is roughly the same in `run_chat` (the closure +
+log adapter eat the savings), but the *test surface* is now
+real: every behavior the original block had is verifiable
+without booting kokoro.
+
+**Tests** (`tests/unit/test_chat_fillers.py`, 12 tests):
+
+- Edge cases: empty text iterable + iterable input.
+- Happy path: 3 texts → 3 clips, summary log emits once.
+- idle_threshold=0.0 case (operator may set explicitly).
+- Failure handling: per-text try/except isolates failures;
+  failure log line exposes exception text; all-failures returns
+  empty list with 0/N summary.
+- Empty-audio silent skip: matches the original inline
+  behavior (no log on empty audio, only on exception).
+- Mixed empty + ok: only non-empty audio lands.
+- Default `log=print` flows to stdout via capsys.
+- `synth_fn` invocation parity: receives just the text string,
+  no engine/voice/speed details bleed in.
+
+Verification:
+- `python -m pytest tests/unit/test_chat_fillers.py -q` → **12
+  passed in 20ms**.
+- Full unit + integration: `tests/ --ignore=tests/performance
+  --ignore=tests/test_session.py --ignore=tests/e2e -q` →
+  **1223 passed, 1 skipped** (1211 prior + 12 new).
+- Perf snapshot: **21 passed**.
+
+Notes:
+- **mic_chat.py is now 6% smaller in extractable concerns.**
+  16 lines moved out into a tested module; ~145 lines of
+  `run_chat` remain. Next-largest blocks (in line count):
+  engine loading + timing (~13 lines), the closures
+  `_speaker_factory` / `_synth` / `_play` (~17 lines), and
+  the messages init + main turn loop (~30 lines). All
+  candidates for follow-up extractions.
+- **Two log-failure-vs-summary discrimination patterns now
+  exist.** This module + iter-097's
+  `_emit_history_block` both use a "look at the log line
+  prefix" trick. If a third site lands, refactor: have the
+  log function take a level (info/warning) + message instead
+  of one line, and let the caller style by level.
+- **Reusable shape: `synth_fn` + `log` injection.** The same
+  pattern earned the `print_session_summary` tests in iter-017
+  (log via `print` parameter) and iter-019 (synthesize_with_alignment
+  factored similarly). Three+ instances now — this is the
+  default extraction shape for any mic_chat.py subroutine
+  that mixes TTS + logging.
+- **Caller shape preserved.** `mic_chat.py:run_chat` still
+  uses the same locals (`rendered_fillers`,
+  `filler_idle_threshold`) downstream — extraction was purely
+  internal to the rendering block, not a refactor of the
+  call site.
+- Next directions:
+  - Extract engine loading (`stt_engine = WhisperEngine(...)`
+    + `_load()` + timing) into `_chat_engines.py`. Would
+    abstract the Mac-only WhisperEngine import at the same
+    time, opening the door for x86_64 STT integration.
+  - Extract the `_speaker_factory` / `_synth` / `_play`
+    closures into a `ChatLoopFactory.from_engines(...)` builder.
+  - Per-token-delay grid for context cap (still pending from
+    iter-102).
+  - Real audio fixtures + CPU-only STT (still pending from
+    iter-106).
