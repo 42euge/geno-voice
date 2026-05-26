@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-119 — Wire chat_cfg.stt_engine + parse_stt_config</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-118.html">← iter-118</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-119 — Wire chat_cfg.stt_engine + parse_stt_config</h1>
+<div class="meta"></div>
+</header><p><strong>Goal:</strong> Close iter-118&#x27;s deferred work. iter-118 added <code>FasterWhisperEngine</code> + factory registration but left config wiring deferred (&quot;adding knobs without an end-to-end use case is a smell&quot;). The use case now exists — Linux operators want to run mic_chat. iter-119 wires the engine choice through <code>config.local.yaml</code>.</p>
+<p><strong>Change:</strong> Three pieces:</p>
+<p>1. <strong><code>STT_DEFAULTS</code> + <code>parse_stt_config</code></strong> in <code>examples/_chat_config.py</code>, matching the iter-020 + iter-034 parse-family conventions:</p>
+<pre class="code-block"><code>   STT_DEFAULTS = {
+       &quot;engine&quot;: &quot;whisper&quot;,
+       &quot;model&quot;: &quot;&quot;,            # empty = engine class default
+       &quot;device&quot;: &quot;cpu&quot;,        # faster_whisper-only
+       &quot;compute_type&quot;: &quot;int8&quot;, # faster_whisper-only
+   }
+
+   def parse_stt_config(chat_cfg) -&gt; dict:
+       # Tolerant: malformed values fall back to defaults,
+       # never raises. Strips whitespace from string values.
+       # ...</code></pre>
+<p>Two design choices recorded in the docstring:</p>
+<ul><ul><ul></ul></ul></ul>
+<p>2. <strong><code>mic_chat.py:run_chat</code> reorganization</strong> — chat_cfg loading moved BEFORE the load_engines call so stt_cfg is available:</p>
+<pre class="code-block"><code>   chat_cfg = load_chat_config()
+   stt_cfg = parse_stt_config(chat_cfg)
+   stt_model = stt_cfg[&quot;model&quot;] or model_repo  # function-arg fallback
+   stt_engine_name = stt_cfg[&quot;engine&quot;]
+
+   def _stt_factory():
+       kwargs = {}
+       if stt_model:
+           kwargs[&quot;model_repo&quot;] = stt_model
+       if stt_engine_name == &quot;faster_whisper&quot;:
+           kwargs[&quot;device&quot;] = stt_cfg[&quot;device&quot;]
+           kwargs[&quot;compute_type&quot;] = stt_cfg[&quot;compute_type&quot;]
+       return _get_stt_engine(stt_engine_name, **kwargs)
+
+   engines = load_engines(stt_factory=_stt_factory, ...)</code></pre>
+<p>The <code>model_repo</code> function arg becomes a fallback only — honored when chat config doesn&#x27;t set <code>stt_model</code>. Backwards compatible: existing callers (CLI invocations passing <code>model_repo</code> directly) keep working.</p>
+<p>The startup-print line now shows the chosen engine + model: <code>stt: faster_whisper/tiny │ llm: ... │ tts: ...</code>.</p>
+<p>3. <strong>Operator-facing config</strong> (documented inline):</p>
+<pre class="code-block"><code>   chat:
+     stt_engine: &quot;faster_whisper&quot;   # or &quot;whisper&quot; (default)
+     stt_model: &quot;tiny&quot;              # any size or repo string
+     stt_device: &quot;cpu&quot;              # faster_whisper only
+     stt_compute: &quot;int8&quot;            # faster_whisper only</code></pre>
+<p><strong>Tests</strong> (<code>tests/unit/test_parse_stt_config.py</code>, 28 tests):</p>
+<p><em>Defaults (5 tests):</em> all keys present; engine=&quot;whisper&quot;; model=&quot;&quot;; device/compute defaults; STT_DEFAULTS matches output for empty input.</p>
+<p><em>Malformed input (6 tests):</em> non-mapping (None, list, string, int, object) → defaults; missing section → defaults; engine not string / empty string / whitespace-only / with surrounding whitespace.</p>
+<p><em>Per-key parsing (12 tests):</em> model string extraction, full-repo passthrough, whitespace strip, non-string fallback, empty fallback (4 tests for model); device cpu/cuda + strip + non-string (4 tests); compute_type extracted + strip + non- string (3 tests); engine valid + strip (already in malformed section).</p>
+<p><em>Composite (4 tests):</em> full config flows through; partial config backfills defaults; does NOT mutate input; does NOT mutate STT_DEFAULTS constant.</p>
+<p><em>Independence (1 test):</em> unrelated chat-cfg keys don&#x27;t bleed in.</p>
+<p>Verification:</p>
+<ul><li><code>python -m pytest tests/unit/test_parse_stt_config.py -q</code> → <strong>28 passed in 30ms</strong>.</li><li>Full unit + integration: <strong>1422 passed, 1 skipped</strong> (1394 prior + 28 new).</li><li>Perf snapshot: <strong>23 passed</strong>.</li><li>AST sanity check on <code>mic_chat.py</code>: parse OK.</li></ul>
+<p>Notes:</p>
+<ul><li><strong>The iter-118 → iter-119 unit is now complete.</strong> Together, they form the cross-platform STT story:<ul><li>iter-118: implementation + factory registration.</li><li>iter-119: config wiring + operator UX.</li></ul></li></ul>
+<p>Linux operators can now opt into faster-whisper with one yaml-section change.</p>
+<ul><li><strong>Backwards compatibility preserved.</strong> Existing callers that pass <code>model_repo</code> to <code>run_chat</code> still work — the arg becomes the fallback when <code>stt_model</code> is empty in config. No CLI flag changes, no breaking config changes.</li><li><strong>The empty-string default for <code>model</code> is the cleanest signal.</strong> Three alternatives considered: 1. <code>None</code> — would require explicit <code>if model is not None</code> checks at every consumer. 2. Per-engine-default dict — duplicates knowledge that already lives in the engine class&#x27;s <code>__init__</code> defaults. 3. Empty string — Pythonic falsy, single-knob <code>if model:</code> check at the consumer site.</li></ul>
+<p>The third choice is what the implementation uses.</p>
+<ul><li><strong>No new pattern introduced.</strong> This iteration is &quot;apply the established parse-config pattern (iter-020, iter-034) to the next config knob.&quot; Documenting the choice between alternatives for future iterations that add more chat-cfg knobs.</li><li><strong>mic_chat.py size:</strong> ~370 lines total / ~100 in run_chat (up from ~340/95 pre-iter-119 because the stt config wiring added ~20 lines). Still significantly smaller than the pre- iter-107 baseline (~395/155).</li><li>Next directions: <code>FasterWhisperEngine</code> + virtual mic + iter-117&#x27;s <code>clean.wav</code> playing through the speaker. Validates the cross-platform path at the integration level. the iter-106 noisy/catastrophic bands against real audio. instance).<ul><li>End-to-end test driving <code>mic_chat.py:run_chat</code> with</li><li>Add a noisy-audio fixture (synthesized + bgm) to exercise</li><li>barge_in_phase consistency check (third diversity-check</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-118.html">← iter-118</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>
