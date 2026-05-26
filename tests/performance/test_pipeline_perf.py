@@ -258,7 +258,14 @@ def _slow_play(speaker, audio, tokens, *, is_first_sentence=False, cancel_event=
     return 0.0
 
 
-def _yield_tokens(text, *, per_token_delay=0.0, stall_after=None, stall_seconds=0.0):
+def _yield_tokens(
+    text,
+    *,
+    per_token_delay=0.0,
+    stall_after=None,
+    stall_seconds=0.0,
+    context_factor=0.0,
+):
     """Build a streaming-LLM stub.
 
     ``stall_after`` (optional): substring; the simulated stream
@@ -266,10 +273,24 @@ def _yield_tokens(text, *, per_token_delay=0.0, stall_after=None, stall_seconds=
     that contains this substring. Used by iter-100 to trigger the
     iter-093 auto-aggressive-on-stall logic at a deterministic
     point in the response.
+
+    ``context_factor`` (iter-112): seconds-per-input-character
+    delay applied BEFORE the first token yields. Simulates real
+    LLM TTFB scaling with input context size — production LLMs'
+    first-token latency grows with prompt length (KV-cache fill
+    dominates). 0.0 (default) = no scaling, matching pre-iter-112
+    behavior. A factor of 0.005 ≈ 5ms/char, roughly tracking
+    what production APIs report on small-context turns.
     """
     import re
 
     def factory(messages, config):
+        if context_factor > 0:
+            total_chars = sum(
+                len(str(m.get("content", "")))
+                for m in messages
+            )
+            time.sleep(total_chars * context_factor)
         parts = re.findall(r"\S+|\.|!|\?", text)
         for p in parts:
             if per_token_delay > 0:
@@ -402,6 +423,7 @@ def _run_session_scenario(
     max_user_assistant: int,
     response_per_turn: str = "Alright, that makes sense to me.",
     speech_seconds: float = 1.0,
+    context_factor: float = 0.0,
 ) -> tuple[ScenarioResult, int]:
     """Run a multi-turn dialog and record the LAST turn's metrics.
 
@@ -440,7 +462,11 @@ def _run_session_scenario(
         speaker_factory=lambda: VirtualSpeakerStream(rate=24000),
         stt_engine=engine,
         transcribe_fn=transcribe,
-        llm_stream_fn=_yield_tokens(response_per_turn, per_token_delay=0.0),
+        llm_stream_fn=_yield_tokens(
+            response_per_turn,
+            per_token_delay=0.0,
+            context_factor=context_factor,
+        ),
         llm_config={"model": "stub"},
         synth_fn=_const_synth(),
         play_fn=_slow_play,
@@ -805,6 +831,47 @@ class TestPerfScenarios:
         assert r.sentences_spoken >= 1
         # Cap=5 means we keep the last 5 user+assistant messages.
         # 8 turns produce 16 such messages → at least one trim event.
+        assert trim_events >= 1
+
+    # iter-112: paired session scenarios that exercise the new
+    # context_factor knob in _yield_tokens. With the stub LLM
+    # delaying its first token proportionally to total input
+    # chars, the cap=5 turn now BENEFITS visibly — trim keeps the
+    # message list shorter, so first-token latency stays low. The
+    # cap=20 turn pays the full context cost. iter-102 showed the
+    # token-billing delta (-55%); this row shows the latency delta.
+    # 2ms/char is a wall-time compromise: 5ms/char (production-
+    # realistic KV-fill cost) made the perf suite 12s longer per
+    # iteration; 2ms/char keeps the savings ratio identical and
+    # cuts the extra wall time to ~5s.
+    _CONTEXT_FACTOR_GRID = 0.002
+
+    def test_context_cap_default_ctx2ms(self):
+        r, trim_events = _run_session_scenario(
+            "context_cap_default_ctx2ms",
+            (
+                f"{self._SESSION_TURNS}-turn session, cap=20 + context_factor=2ms/char "
+                f"— full LLM TTFB cost on every turn"
+            ),
+            n_turns=self._SESSION_TURNS,
+            max_user_assistant=20,
+            context_factor=self._CONTEXT_FACTOR_GRID,
+        )
+        assert r.sentences_spoken >= 1
+        assert trim_events == 0
+
+    def test_context_cap_tight_ctx2ms(self):
+        r, trim_events = _run_session_scenario(
+            "context_cap_tight_ctx2ms",
+            (
+                f"{self._SESSION_TURNS}-turn session, cap=5 + context_factor=2ms/char "
+                f"— trim bounds the LLM TTFB cost"
+            ),
+            n_turns=self._SESSION_TURNS,
+            max_user_assistant=5,
+            context_factor=self._CONTEXT_FACTOR_GRID,
+        )
+        assert r.sentences_spoken >= 1
         assert trim_events >= 1
 
     def test_barge_in_during_playback(self):

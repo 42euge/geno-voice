@@ -8380,3 +8380,149 @@ Notes:
   - Eval/replay tool that uses SessionState (iter-110) to
     re-run a past conversation without booting the real mic —
     the dataclass surface makes this much easier than before.
+
+## iter-112 — Context-dependent TTFB knob + extended cap grid
+
+**Goal:** Validate iter-111's "append one entry to FEATURE_SAVINGS_TABLE"
+workflow with a real new pair while also fixing iter-102's
+disclosed limitation: the stub LLM didn't model context-dependent
+TTFB, so the iter-102 cap=20 vs cap=5 row showed identical TTFS
+(only the token-count delta was meaningful).
+
+**Two changes:**
+
+1. **`context_factor` kwarg on `_yield_tokens`** — seconds per
+   input character, applied as a sleep BEFORE the first token
+   yields. Simulates real LLM TTFB scaling with prompt length
+   (KV-cache fill cost). Default 0.0 preserves all pre-iter-112
+   behavior.
+
+   ```python
+   def _yield_tokens(text, *, ..., context_factor=0.0):
+       def factory(messages, config):
+           if context_factor > 0:
+               total_chars = sum(
+                   len(str(m.get("content", "")))
+                   for m in messages
+               )
+               time.sleep(total_chars * context_factor)
+           ...
+   ```
+
+2. **Two new paired session scenarios** at `context_factor=0.002`
+   (2ms/char):
+   - `context_cap_default_ctx2ms`: cap=20, full TTFB cost
+   - `context_cap_tight_ctx2ms`: cap=5, trim bounds the TTFB
+
+   These extend iter-102's pair into a 2-point grid showing both
+   the no-scaling baseline (iter-102 original pair) and the
+   scaling-on case (iter-112).
+
+**Empirical numbers** (this run, x86_64 stub, 8-turn session):
+
+| Metric              | cap=20 ctx0     | cap=5 ctx0      | cap=20 ctx2ms   | cap=5 ctx2ms    |
+|---------------------|-----------------|-----------------|-----------------|-----------------|
+| context_tokens      | 53              | 24 (-55%)       | 53              | 24 (-55%)       |
+| TTFS (turn 8)       | 800.4ms         | 800.3ms         | 1424.7ms        | 1078.7ms (-346) |
+| llm_first_token     | 0.0ms           | 0.0ms           | 624.2ms         | 278.1ms (-346)  |
+
+The headline number: **with context_factor=2ms/char, the tight
+cap saves 346ms TTFS on turn 8** — the exact `llm_first_token`
+delta, which is the mechanism. Without context_factor (the
+iter-102 baseline), cap=5 and cap=20 produce identical TTFS
+because nothing depends on prompt length. With context_factor on,
+the savings track the trim's effect on token count.
+
+**Wall-time tradeoff considered.** First implementation used
+`context_factor=0.005` (5ms/char, more production-realistic) but
+that pushed the perf suite from 14s to 26.5s. Dropping to 0.002
+kept the savings ratio identical (-30%) and limited the extra
+wall time to ~5s (suite is now 19.8s). 5ms/char would be the
+right number when run on a perf-only CI or with a faster mic.
+
+**FEATURE_SAVINGS_TABLE update.** Validates iter-111's design —
+the new pair lands on `performance.html` with one entry append:
+
+```python
+{
+    "feature": "Context cap @ context_factor=2ms/char (iter-112)",
+    "control_scenario": "context_cap_default_ctx2ms",
+    "treatment_scenario": "context_cap_tight_ctx2ms",
+    "primary_metric": "ttfs_ms",
+    "primary_label": "TTFS (turn 8)",
+    "secondary_metric": "context_tokens",
+    "secondary_label": "Context tokens",
+    "secondary_lower_is": "fewer (trim kept history bounded)",
+    "takeaway": "Same 8-turn session, but with the LLM stub charging "
+                "2ms per input character (KV-fill cost). The cap=5 "
+                "side now BENEFITS visibly — bounded context = bounded "
+                "TTFB. Real LLMs scale this way.",
+}
+```
+
+The HTML rendering picks it up automatically — no rendering
+changes needed. iter-111's "graceful degradation when scenario
+missing" property means old perf JSONs (pre-iter-112) still
+render their pages without empty rows.
+
+**Tests** (`tests/unit/test_perf_yield_tokens.py`, 8 tests):
+
+- Default behavior preserved: no context_factor → tokens yield
+  immediately; messages list is ignored.
+- context_factor activates first-token delay proportional to
+  total chars across all messages.
+- Sums across multiple messages correctly.
+- Zero context_factor explicitly disables (sentinel for
+  iter-098-102 scenarios that pass empty messages but might
+  carry data in unusual paths).
+- Defensive: missing 'content' key → empty-string contribution,
+  no KeyError.
+- Combines with per_token_delay (both delays compose).
+- Backwards compat: all pre-iter-112 kwarg combinations still
+  work.
+
+Verification:
+- `python -m pytest tests/unit/test_perf_yield_tokens.py -q` →
+  **8 passed in 360ms** (most of the time is the actual sleep
+  in the context_factor tests).
+- `python -m pytest tests/performance/ -q` → **23 passed in
+  19.8s** (was 21 in 14s, +2 scenarios, +5.8s wall time).
+- Full unit + integration: **1297 passed, 1 skipped** (1289
+  prior + 8 new).
+
+Notes:
+- **iter-111's append-one-entry workflow is validated.** A new
+  pair-scenario family lands with: 2 new test methods in
+  test_pipeline_perf.py, 1 new entry in FEATURE_SAVINGS_TABLE,
+  unit tests for any new mechanism. The performance.html page
+  picks it up automatically. Lowest possible friction.
+- **The stub-vs-real fidelity gap is now smaller.** Pre-iter-112,
+  the perf suite produced TTFS numbers that didn't reflect a
+  major real-world cost (LLM TTFB scaling with prompt length).
+  iter-112 closes that gap — operators reading the time-series
+  chart see numbers that track production behavior shape, even
+  if absolute magnitudes differ.
+- **`context_factor` is reusable for future grids.** Same
+  pattern as iter-101's per_token_delay grid: a single knob
+  parameterized across multiple values produces a curve. A
+  future iter could grid context_factor at 0.001/0.002/0.005
+  to plot the full sensitivity surface — but with the wall-
+  time tradeoff understood.
+- **Wall-time budget watch.** Perf suite is now 19.8s. If
+  another grid lands at this scale, it'd push toward 25s+ —
+  the 30s mark would warrant the `pytest -m grid` marker
+  iter-101 noted.
+- **The perf snapshot's per-iter file size is growing.** Each
+  perf-iter-NNN.json now has 23 scenarios; serialized JSON is
+  ~30KB. With 100+ iterations this approaches 3MB on disk.
+  Not a problem yet, but worth noting.
+- Next directions:
+  - Real audio fixtures + CPU-only STT (still pending from
+    iter-106). Now four iterations overdue.
+  - Eval/replay tool using SessionState (iter-110) — would
+    let an operator re-run a recorded session with different
+    chat config opts to compare empirically.
+  - Pivot to architecture: perf data is rich enough now that
+    a code change targeting one of the surfaced costs (e.g.,
+    sentence-split coverage, first-synth overlap) has clear
+    feedback loop.

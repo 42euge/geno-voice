@@ -1390,6 +1390,22 @@ FEATURE_SAVINGS_TABLE = [
             "context-dependent TTFB so wall time is identical here."
         ),
     },
+    {
+        "feature": "Context cap @ context_factor=2ms/char (iter-112)",
+        "control_scenario": "context_cap_default_ctx2ms",
+        "treatment_scenario": "context_cap_tight_ctx2ms",
+        "primary_metric": "ttfs_ms",
+        "primary_label": "TTFS (turn 8)",
+        "secondary_metric": "context_tokens",
+        "secondary_label": "Context tokens",
+        "secondary_lower_is": "fewer (trim kept history bounded)",
+        "takeaway": (
+            "Same 8-turn session, but with the LLM stub charging "
+            "2ms per input character (KV-fill cost). The cap=5 "
+            "side now BENEFITS visibly — bounded context = bounded "
+            "TTFB. Real LLMs scale this way."
+        ),
+    },
 ]
 
 
