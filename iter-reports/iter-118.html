@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-118 — FasterWhisperEngine for x86_64 Linux</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-117.html">← iter-117</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-118 — FasterWhisperEngine for x86_64 Linux</h1>
+<div class="meta"></div>
+</header><p><strong>Goal:</strong> Real architecture work. iter-117 verified faster-whisper round-trips through the WER pipeline as a test fixture; iter-118 makes it a first-class STT engine that mic_chat.py can use in production. <strong>First STT path that runs on x86_64 Linux without mlx-whisper / Apple Silicon.</strong></p>
+<p>iter-108&#x27;s <code>load_engines</code> factory was deliberately built to swap engines via a closure. The swap point was always <code>lambda: WhisperEngine(model_repo=...)</code> → operators on Linux had nothing to swap to. iter-118 closes that gap.</p>
+<p><strong>Change:</strong> Three pieces:</p>
+<p>1. <strong><code>stt/faster_whisper_engine.py</code></strong> — <code>FasterWhisperEngine</code> class implementing the same <code>STTEngine</code> contract as <code>WhisperEngine</code>:</p>
+<ul><ul><ul></ul></ul></ul>
+<p>Class-level model cache keyed by <code>(resolved_repo, device, compute_type)</code> — mirrors <code>WhisperEngine</code>&#x27;s class-level cache. ChatLoop construction reuses the loaded model.</p>
+<p>Defaults match iter-117&#x27;s audio-fixture choices: <code>tiny</code> / <code>cpu</code> / <code>int8</code>. A no-arg <code>FasterWhisperEngine()</code> is operator-friendly on x86_64 Linux.</p>
+<p>2. <strong>Repo-string translation</strong> (<code>_resolve_model_repo</code>):</p>
+<ul><ul><ul></ul></ul></ul>
+<p>This means the same <code>model_repo</code> string in <code>config.local.yaml</code> works on both Mac (MLX path) and Linux (faster-whisper path) — the engine handles the translation. Operators don&#x27;t have to maintain two configs.</p>
+<p>3. <strong>Factory registration</strong> in <code>stt/__init__.py</code>:</p>
+<pre class="code-block"><code>   ENGINES = {
+       &quot;whisper&quot;: WhisperEngine,                  # MLX, Apple Silicon
+       &quot;gemma4&quot;: Gemma4Engine,
+       &quot;faster_whisper&quot;: FasterWhisperEngine,    # iter-118: x86_64 Linux + CUDA
+   }</code></pre>
+<p>Lazy-imports <code>faster_whisper</code> inside <code>_load()</code>, not at module scope. So <code>from stt import FasterWhisperEngine</code> works on systems without the package — only <code>_load()</code> raises. Matches iter-109 GENO.md rule 5: &quot;lazy-import platform deps inside the closures.&quot;</p>
+<p><strong>How an operator uses it:</strong></p>
+<pre class="code-block"><code># config.local.yaml
+chat:
+  stt_engine: &quot;faster_whisper&quot;
+  stt_model: &quot;tiny&quot;        # or &quot;base&quot;, &quot;large-v3&quot;, etc.
+  stt_device: &quot;cpu&quot;        # or &quot;cuda&quot;
+  stt_compute: &quot;int8&quot;      # or &quot;float16&quot;, &quot;int8_float16&quot;</code></pre>
+<pre class="code-block"><code># mic_chat.py — iter-108 stt_factory closure adapts
+stt_factory=lambda: get_engine(
+    chat_cfg.get(&quot;stt_engine&quot;, &quot;whisper&quot;),
+    model_repo=chat_cfg.get(&quot;stt_model&quot;, default_repo),
+)</code></pre>
+<p>(The mic_chat config wiring is left for a follow-up — it needs new chat-config keys that don&#x27;t exist yet. The engine itself is functional; ChatLoop&#x27;s <code>stt_engine</code> parameter accepts any STTEngine subclass.)</p>
+<p><strong>Tests</strong> (<code>tests/unit/test_faster_whisper_engine.py</code>, 26 tests):</p>
+<p><em>Repo-string translation (10 tests parametrized):</em> native strings pass through; MLX namespace stripped for tiny/base/small/medium/ large-v3/large-v3-turbo; unrecognized MLX-namespace passes through (operator can debug).</p>
+<p><em>Construction + contract (5 tests):</em> implements STTEngine; default construction matches iter-117 choices; overrides work; **kwargs accepted; no model load at construction (lazy).</p>
+<p><em>Cache key behavior (2 tests):</em> uses resolved repo (so MLX + native strings sharing the same size share the cache); device + compute_type included in the key.</p>
+<p><em>Factory registration (4 tests):</em> <code>get_engine(&quot;faster_whisper&quot;)</code> returns instance; kwargs forward; bogus name → ValueError; ENGINES dict has the entry.</p>
+<p><em>Real round-trip (2 tests, skip when unavailable):</em></p>
+<ul><li>Transcribe iter-117&#x27;s <code>clean.wav</code> fixture → assert &quot;weather&quot; or &quot;today&quot; appears in the transcript (loose match, doesn&#x27;t require exact text — model output varies).</li><li>Invalid model name → returns <code>(None, elapsed)</code>, never raises (matches mic_chat.py error-handling expectations).</li></ul>
+<p>Verification:</p>
+<ul><li><code>python -m pytest tests/unit/test_faster_whisper_engine.py -v</code> → <strong>26 passed in 2.1s</strong> (incl. real model load + transcription).</li><li>Full unit + integration: <strong>1394 passed, 1 skipped</strong> (1368 prior + 26 new).</li><li>Perf snapshot: <strong>23 passed</strong>.</li></ul>
+<p>Notes:</p>
+<ul><li><strong>The swap point promised by iter-108 is now real.</strong> Every iteration since iter-108 has carried &quot;ready to land — <code>stt_factory</code> is the swap point&quot; as a forward note. Eight iterations later, the swap has a real backend.</li><li><strong>iter-117 + iter-118 form a coherent unit.</strong> iter-117 proved faster-whisper works with the WER pipeline as a test dependency; iter-118 promotes it to a production engine. A future iteration can add an integration test that drives <code>mic_chat.py:run_chat</code> with the FasterWhisperEngine + a virtual mic, end-to-end on x86_64 Linux.</li><li><strong>Model cache invariant.</strong> <code>_resolve_model_repo</code> is the shared key — two callers with different <code>model_repo</code> strings that resolve to the same size share the cache. Tested explicitly so a future regression that bypasses the resolver (e.g., direct dict lookup with raw repo) gets caught.</li><li><strong>The <code>config.local.yaml</code> wiring is deferred</strong> because adding config knobs without an end-to-end use case is a smell. Once a real Linux user wants to run mic_chat, the chat-config schema gets extended with <code>stt_engine</code> / <code>stt_model</code> / <code>stt_device</code> / <code>stt_compute</code> entries. Until then, programmatic construction (<code>FasterWhisperEngine(...)</code>) is available.</li><li><strong>Pattern for cross-platform engines:</strong> 1. Implement the abstract class. 2. Lazy-import platform deps inside <code>_load()</code>. 3. Class-level cache for model reuse. 4. Repo-string translation if other engines use a different namespace convention. 5. Register in the factory. 6. Tests across all three concerns: pure functions, contract, real round-trip with skip.</li><li>Next directions: <code>parse_stt_config</code> helper (matches iter-018&#x27;s <code>parse_chat_config</code> pattern). <code>FasterWhisperEngine</code> + virtual mic + the iter-117 <code>clean.wav</code> fixture playing through the speaker. &quot;noisy&quot;/&quot;catastrophic&quot; bands against real audio. instance).<ul><li>Wire <code>chat_cfg.stt_engine</code> / <code>stt_model</code> keys + a</li><li>End-to-end test: full <code>mic_chat.py:run_chat</code> driven by</li><li>Add a noisy-audio fixture to exercise the iter-106</li><li>barge_in_phase consistency check (third diversity</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-117.html">← iter-117</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>
