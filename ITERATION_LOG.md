@@ -9582,3 +9582,163 @@ Notes:
     the iter-106 noisy/catastrophic bands against real audio.
   - barge_in_phase consistency check (third diversity-check
     instance).
+
+## iter-120 — Barge-phase consistency check
+
+**Goal:** Third instance of the diversity-check pattern after
+iter-114 (filler diversity) and iter-115 (naturalness).
+Validates that iter-116's `_longest_consecutive_run` extraction
+was justified — the helper is now used by three distinct
+emit-line callers, all sharing the same single-pass scan
+without re-implementing.
+
+**The signal:** `barge_in_phase` (iter-047) records WHEN the
+user barged in:
+- `"llm_stream"` — barge happened BEFORE bot speech started.
+  Means the user is impatient with LLM TTFB or the bot is slow.
+- `"playback"` — barge happened DURING bot speech. Means the
+  bot speaks too long or the user is interrupt-happy.
+
+A single-turn barge is fine. Four consecutive barges in the
+same phase is a UX problem worth surfacing.
+
+**Change:** New `_emit_barge_phase_consistency_line` in
+`_chat_metrics.py`. Same shape as iter-114/iter-115:
+
+```python
+def _emit_barge_phase_consistency_line(
+    emit, phases: list[str], threshold: int = 4,
+) -> None:
+    non_empty = [p for p in phases if p]
+    if not non_empty:
+        return
+    longest_run, longest_phase = _longest_consecutive_run(non_empty)
+    if longest_run < threshold:
+        return
+    if longest_phase == "llm_stream":
+        suggestion = "user impatient with LLM TTFB, or bot slow to start"
+    elif longest_phase == "playback":
+        suggestion = "user habit or bot speaks too long"
+    else:
+        suggestion = "consistent barge phase — investigate"
+    emit(...)
+```
+
+**Three design choices recorded:**
+
+1. **Both phases warrant warnings** (unlike iter-115 which
+   excluded "natural"). Each barge phase carries a different
+   UX signal — neither is "good." `if longest_phase ==
+   "natural": return` would be the wrong rule here.
+
+2. **Threshold = 4** (lower than iter-115's 5). Barge events
+   are rarer + more semantically loaded than naturalness
+   buckets. 4 consecutive same-phase barges is rare enough in
+   normal use that the warning's signal-to-noise stays high.
+
+3. **Per-phase suggestion text** — iter-115's `rushed` /
+   `slow` recommendation pattern carries over. The two phases
+   suggest opposite remediation (faster TTFB vs shorter bot
+   speech), so the suggestion isn't a one-size-fits-all
+   message.
+
+**Wired into `print_session_summary`** right after iter-115's
+naturalness check:
+
+```python
+_emit_barge_phase_consistency_line(
+    _emit,
+    [m.barge_in_phase for m in metrics_list],
+)
+```
+
+**Tests** (`tests/unit/test_emit_barge_phase_consistency_line.py`,
+18 tests):
+
+*Empty / no-barge suppression (2 tests):* empty list, all-empty-
+strings.
+
+*Below threshold (2 tests):* 3-in-a-row default, alternating
+phases.
+
+*Both phases fire (3 tests):* 4 playback → "speaks too long"
+suggestion; 5 llm_stream → "TTFB" suggestion; both phases not
+excluded (sanity test).
+
+*Empty filtering (3 tests):* empties between barges don't break
+runs; leading + trailing empties; a phase change DOES break
+the run.
+
+*Custom threshold (2 tests):* threshold=3 catches; threshold=10
+suppresses.
+
+*Longest-of-multiple (2 tests):* longer run wins; run at end
+detected.
+
+*Output formatting (3 tests):* leading 4-space indent;
+iter-047 attribution; unknown-phase defensive fallback.
+
+*Pattern parity (1 test):* 1000-element list works (sanity
+that the iter-116 helper handles big inputs).
+
+Verification:
+- `python -m pytest tests/unit/test_emit_barge_phase_consistency_line.py
+  -q` → **18 passed in 30ms**.
+- Regression sentinel (199 prior session-summary +
+  diversity-check + run-finder tests): **199 passed**
+  byte-for-byte.
+- Full unit + integration: **1440 passed, 1 skipped** (1422
+  prior + 18 new).
+- Perf snapshot: **23 passed**.
+
+Notes:
+- **iter-116 helper extraction validated by use.** Three
+  callers now consume `_longest_consecutive_run`:
+  - `_emit_filler_diversity_line` (iter-114, threshold 3)
+  - `_emit_naturalness_consistency_line` (iter-115, threshold 5)
+  - `_emit_barge_phase_consistency_line` (iter-120, threshold 4)
+
+  Each uses the same primitive, then applies its own filtering
+  and threshold + suggestion logic. The helper-extraction
+  pattern is doing exactly what extraction is supposed to do:
+  **the loop body lives in one place; the policy decisions
+  live in their own helpers.**
+
+- **The diversity-check shape is now a documented family.**
+  All three helpers share:
+  - Filter empties before scanning (zeros, empty strings)
+  - Use `_longest_consecutive_run`
+  - Apply per-instance threshold (3/5/4)
+  - Apply per-instance excluded-value rule (zeros / "natural" /
+    none)
+  - Emit suggestion based on the value type
+  - Name the responsible iteration in the warning text
+
+  A future fourth instance (e.g., consecutive `_too_short`
+  utterances flagging a noisy mic) lands by copying the
+  template.
+
+- **Pattern: per-instance suggestion mapping.** When an emit
+  helper has multiple meaningful values (rushed/slow,
+  llm_stream/playback), the suggestion text per value lives
+  inside the helper. Don't externalize it (would require
+  passing a dict from the caller — overkill for two values).
+  Don't make it a one-size-fits-all message (would lose the
+  signal). Per-value branches in the helper are the right
+  shape.
+
+- **mic_chat.py size unchanged.** This iteration only touches
+  `_chat_metrics.py` + a new test file. The session-summary
+  layer continues to grow but `run_chat` itself stays at ~100
+  lines.
+
+- Next directions:
+  - End-to-end test driving `mic_chat.py:run_chat` with
+    `FasterWhisperEngine` + virtual mic + iter-117's
+    `clean.wav`. Closes the iter-118+iter-119 cross-platform
+    STT story at the integration level.
+  - Add a noisy-audio fixture (synthesized + bgm) to exercise
+    iter-106's noisy/catastrophic bands against real audio.
+  - Sentence-length-bucket consistency check (fourth instance
+    of the diversity pattern — would justify promoting the
+    template into a documented protocol or factory function).

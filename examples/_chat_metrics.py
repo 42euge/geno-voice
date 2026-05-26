@@ -1546,6 +1546,68 @@ def _emit_naturalness_consistency_line(
     )
 
 
+def _emit_barge_phase_consistency_line(
+    emit, phases: list[str], threshold: int = 4,
+) -> None:
+    """iter-120: detect consecutive runs of the same barge-in
+    phase. Third instance of the diversity-check pattern after
+    iter-114 (filler) and iter-115 (naturalness) — uses the
+    shared ``_longest_consecutive_run`` helper from iter-116.
+
+    Two phases are tracked (iter-047):
+      - "llm_stream" — user barged BEFORE bot speech started.
+        High recurrence suggests the user is impatient with LLM
+        TTFB, or the bot is slow to start.
+      - "playback" — user barged DURING bot speech. High
+        recurrence suggests the bot speaks too long, or the user
+        is interrupt-happy by habit.
+
+    Both phases are flagged on consecutive runs (unlike
+    iter-115's naturalness, where "natural" was the desired state
+    and excluded). Threshold = 4 (lower than iter-115's 5)
+    because barge events are already rarer + more semantically
+    loaded than naturalness buckets.
+
+    Suppression rules:
+      - Empty strings (no barge that turn) are filtered before
+        the run scan, mirroring iter-114/iter-115.
+      - When the longest run is below threshold, no warning fires.
+      - When no turn ever barged, the line stays silent — quiet
+        sessions don't need it.
+
+    Output mirrors iter-114/iter-115's "name the responsible
+    iteration" convention so operators can find the fix path:
+
+        Barge phase: 5 consecutive 'playback' barges
+                     — user habit or bot speaks too long (iter-047)
+    """
+    non_empty = [p for p in phases if p]
+    if not non_empty:
+        return
+
+    longest_run, longest_phase = _longest_consecutive_run(non_empty)
+    if longest_run < threshold:
+        return
+
+    if longest_phase == "llm_stream":
+        suggestion = (
+            "user impatient with LLM TTFB, or bot slow to start"
+        )
+    elif longest_phase == "playback":
+        suggestion = "user habit or bot speaks too long"
+    else:
+        # Defensive: an unrecognized phase string still emits a
+        # generic warning instead of silently dropping the
+        # signal. Future iterations may add more phases.
+        suggestion = "consistent barge phase — investigate"
+
+    emit(
+        f"    Barge phase:      {longest_run} consecutive "
+        f"{longest_phase!r} barges — {suggestion} "
+        f"(iter-047 phase)"
+    )
+
+
 def _emit_bargeable_line(emit, bargeable_values: list[float]) -> None:
     """iter-104: extracted from print_session_summary's iter-074
     bargeable line. Reports the WORST bargeable fraction across
@@ -2077,6 +2139,13 @@ def print_session_summary(
     _emit_naturalness_consistency_line(
         _emit,
         [m.naturalness_bucket for m in metrics_list],
+    )
+    # iter-120: barge-phase consistency check. Only fires when
+    # 4+ consecutive turns barged in the same phase
+    # (llm_stream / playback) — surfaces a UX issue.
+    _emit_barge_phase_consistency_line(
+        _emit,
+        [m.barge_in_phase for m in metrics_list],
     )
     # iter-090: barge block extracted to _emit_barge_block helper.
     # ~76 lines of co-emitted lines (count, interruption rate,
