@@ -7135,3 +7135,95 @@ Notes:
   - WER fixture (1.6) heavyweight iteration.
   - `_push_after_flush` helper to dedupe the three thread+sleep
     sites (iter-042, iter-100, iter-102).
+
+## iter-103 — Extract _emit_recording_block helper
+
+**Goal:** 8th block helper after TTFS, Barge, Filler, Errors,
+WPM, Sentence, History. Returns to the refactor pattern after 4
+straight perf-scenario iterations (iter-098–102). Pulls the
+contiguous mic-stale + VAD-false-trigger pair out of
+`print_session_summary` into a `_emit_recording_block(emit,
+stats: RecordingStats)` helper.
+
+**Why this scope and not "all 4 recording-related blocks":**
+The session-summary has 4 recording-pipeline-related lines —
+primed audio (iter-057), mic stale (iter-037), VAD false-trig
+(iter-048), bargeable (iter-074). They are NOT contiguous in
+`print_session_summary` — the errors block (iter-097) sits
+between primed audio and stale, and bargeable lives ~50 lines
+later. Extracting all four would require either (a) moving them
+to be contiguous, which changes output line order and breaks the
+regression sentinel, or (b) calling the helper twice with
+different args, which obscures intent.
+
+This iteration takes the cleanest contiguous slice — stale +
+false_trig — into one helper. Primed audio and bargeable can
+each get their own helper later if a unifying rationale emerges.
+
+**Change:**
+
+```python
+@dataclass
+class RecordingStats:
+    stale_total: int = 0
+    false_triggers: int = 0
+    n: int = 0   # successful-turn denominator for the FP rate
+
+def _emit_recording_block(emit, stats: RecordingStats) -> None:
+    if stats.stale_total: ...    # iter-037
+    if stats.false_triggers > 0: # iter-048
+        attempts = stats.false_triggers + stats.n
+        ...
+```
+
+The 17-line inline block in `print_session_summary` shrinks to a
+3-line helper call. Rendering is byte-for-byte identical.
+
+**Tests:** 8 direct tests in `tests/unit/test_emit_recording_block.py`
+covering the 2x2 matrix (clean, stale-only, false-trig-only,
+both), plus formatting edge cases (16kHz divisor, integer pct
+rounding, leading 4-space indent, n=0 + 1 trigger). Sub-millisecond
+total runtime — same pattern as iter-089.
+
+Verification:
+- Direct tests: `python -m pytest tests/unit/test_emit_recording_block.py
+  -q` → **8 passed in 20ms**.
+- Regression sentinel (113 session-summary tests, byte-for-byte
+  output validation): `python -m pytest tests/unit/
+  test_emit_*.py tests/unit/test_session_*.py -q` → **113
+  passed in 0.16s**.
+- Full unit + integration: `tests/ --ignore=tests/performance
+  --ignore=tests/test_session.py --ignore=tests/e2e -q` →
+  **1156 passed, 1 skipped** (1148 prior + 8 new).
+- Perf snapshot (regression check): `python -m pytest tests/
+  performance/ -q` → **21 passed**.
+
+Notes:
+- **Eight block helpers extracted now.** Cumulative shrink to
+  `print_session_summary`: 17 lines saved this iteration on top
+  of the ~310 from iter-089 through iter-097. Total now ~327
+  lines reduced from the original ~1500.
+- **Per-helper test-count is converging.** This iteration's 8
+  direct tests is similar to iter-097 (10), iter-095 (9),
+  iter-094 (12). The 2x2 + edge-case shape is the natural unit
+  for these emit helpers.
+- **The non-contiguity problem.** This is the first time the
+  refactor pattern has hit a "the related lines aren't adjacent"
+  obstacle. Future helpers (primed-audio, bargeable, plus the
+  remaining 5-10 single-line emits) face the same constraint.
+  The accepted shape: extract the contiguous slice; leave
+  isolated lines inline; revisit if grouping becomes obvious
+  later. iter-097's "semantic-grouping" gain was a happy
+  coincidence (iter-077 + iter-078 happened to be adjacent).
+- Next directions:
+  - `_emit_primed_audio_line` (iter-057) — single-line helper.
+    Marginal value, but consistent with the "every named iter
+    gets a helper" pattern.
+  - `_emit_bargeable_line` (iter-074) — same shape.
+  - Consider grouping primed_audio + bargeable + mic_stale +
+    false_trig into a `_emit_pipeline_health_block` if their
+    print_session_summary positions can be reordered (would
+    change output but might be acceptable).
+  - Per-token-delay grid for context cap (still pending from
+    iter-102).
+  - WER fixture (1.6) heavyweight iteration.

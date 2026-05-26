@@ -1288,6 +1288,59 @@ def _emit_history_block(emit, stats: HistoryStats) -> None:
 
 
 @dataclass
+class RecordingStats:
+    """iter-103: bundle the contiguous mic-recording health
+    signals into a single Stats object.
+
+    iter-037 (mic stale): aggregate count of stale frames flushed
+      across all turns. High count → constant echo or input
+      driver hiccups.
+    iter-048 (VAD false-trigger rate): turns where the recorder
+      fired but no transcript came back, divided by total
+      attempts (false_triggers + n).
+    """
+
+    stale_total: int = 0
+    false_triggers: int = 0
+    n: int = 0
+
+
+def _emit_recording_block(emit, stats: RecordingStats) -> None:
+    """iter-103: extracted from print_session_summary's recording
+    block (iter-037 mic stale + iter-048 VAD false-trigger).
+
+    Renders:
+      - "Mic stale: N frames (X.Xs) — check echo cancellation"
+        (iter-037) when any stale frames were flushed.
+      - "VAD false-trig: F/A (P%) — tune silence_threshold or
+        min_speech_duration" (iter-048) when ≥1 false trigger
+        fired.
+
+    Both lines use the leading 4-space indent (no tree pipe), so
+    test assertions should match on substrings, not exact line
+    equality. Behavior-preserving: byte-for-byte identical to the
+    inline version that lived in print_session_summary.
+    """
+    if stats.stale_total:
+        # iter-037: surface aggregate stale-frame total so a "session
+        # had constant echo" pattern is visible at the end of the run.
+        stale_seconds_total = stats.stale_total / 16000
+        emit(
+            f"    Mic stale:        {stats.stale_total} frames "
+            f"({stale_seconds_total:.1f}s) — check echo cancellation"
+        )
+    # iter-048: VAD false-trigger rate. Only emit when at least one
+    # false trigger happened — clean sessions don't need the line.
+    if stats.false_triggers > 0:
+        attempts = stats.false_triggers + stats.n
+        pct = (stats.false_triggers / attempts) * 100
+        emit(
+            f"    VAD false-trig:   {stats.false_triggers}/{attempts} "
+            f"({pct:.0f}%) — tune silence_threshold or min_speech_duration"
+        )
+
+
+@dataclass
 class SessionMeta:
     """iter-086: session-level signals collected by the driver
     (mic_chat) and passed into ``print_session_summary`` as a
@@ -1835,23 +1888,16 @@ def print_session_summary(
             silent_turns=silent_turns,
         ),
     )
-    if stale_total:
-        # iter-037: surface aggregate stale-frame total so a "session
-        # had constant echo" pattern is visible at the end of the run.
-        stale_seconds_total = stale_total / 16000
-        _emit(
-            f"    Mic stale:        {stale_total} frames "
-            f"({stale_seconds_total:.1f}s) — check echo cancellation"
-        )
-    # iter-048: VAD false-trigger rate. Only emit when at least one
-    # false trigger happened — clean sessions don't need the line.
-    if false_triggers > 0:
-        attempts = false_triggers + n
-        pct = (false_triggers / attempts) * 100
-        _emit(
-            f"    VAD false-trig:   {false_triggers}/{attempts} "
-            f"({pct:.0f}%) — tune silence_threshold or min_speech_duration"
-        )
+    # iter-103: extracted to _emit_recording_block. Stats
+    # bundle iter-037 stale_total + iter-048 false_triggers.
+    _emit_recording_block(
+        _emit,
+        RecordingStats(
+            stale_total=stale_total,
+            false_triggers=false_triggers,
+            n=n,
+        ),
+    )
     if overlap_ratios:
         # iter-043: median streaming overlap across measurable turns.
         # >50% means the worker generally got audio out before the
