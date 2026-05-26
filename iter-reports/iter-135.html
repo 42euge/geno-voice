@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-135 — `--diff` with `--format json/csv`</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-134.html">← iter-134</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-135 — `--diff` with `--format json/csv`</h1>
+<div class="meta"></div>
+</header><p><strong>Goal:</strong> iter-134 always rendered the diff as text. CI pipelines that want to gate PRs on regression detection need machine-readable output. iter-135 adds JSON + CSV diff renderers, dispatched via the existing <code>--format</code> flag when <code>--diff</code> is set.</p>
+<p><strong>Three additions:</strong></p>
+<p>1. <strong><code>format_diff_json(diff, *, indent=2) -&gt; str</code></strong> — full structured dump with top-level aggregates:</p>
+<p>{ &quot;current_passing&quot;: 5, &quot;current_total&quot;: 5, &quot;baseline_passing&quot;: 4, &quot;baseline_total&quot;: 5, &quot;passing_delta&quot;: 1, &quot;regression_count&quot;: 0, &quot;improvement_count&quot;: 1, &quot;new_count&quot;: 0, &quot;removed_count&quot;: 0, &quot;fixture_diffs&quot;: [ {&quot;name&quot;: &quot;noisy_audio&quot;, &quot;current_wer&quot;: 0.20, &quot;baseline_wer&quot;: 0.30, &quot;wer_delta&quot;: -0.10, &quot;current_passed&quot;: true, &quot;baseline_passed&quot;: false, &quot;status_change&quot;: &quot;improved&quot;}, ... ] }</p>
+<p><code>passing_delta</code> is <code>current_passing - baseline_passing</code> — positive means improved overall. <code>None</code> values for new/removed fixtures serialize as JSON <code>null</code>.</p>
+<p>2. <strong><code>format_diff_csv(diff) -&gt; str</code></strong> — header + one row per fixture diff:</p>
+<p>name,status_change,current_wer,baseline_wer,wer_delta,current_passed,baseline_passed clean_audio,unchanged,0.2000,0.2000,0.0000,True,True noisy_audio,improved,0.2000,0.3000,-0.1000,True,False multispeaker_audio,regressed,1.2000,0.8000,0.4000,False,True new_audio,new,0.1500,,,True, legacy_audio,removed,,0.2000,,,True</p>
+<p>None values render as empty strings (RFC-4180 idiom for missing). Numeric fields use 4-decimal precision matching the summary CSV.</p>
+<p>3. <strong>CLI dispatch updated</strong>: when <code>--diff</code> is set, <code>--format</code> chooses the diff renderer (<code>text</code> default, <code>json</code>, <code>csv</code>).</p>
+<p><strong>CI integration use cases:</strong></p>
+<pre class="code-block"><code># Save baseline before changes
+$ python scripts/run_stt_benchmark.py --format json &gt; baseline.json
+
+# In PR check: fail if any regression
+$ python scripts/run_stt_benchmark.py --diff baseline.json --format json \
+    | jq &#x27;.regression_count &gt; 0&#x27; | grep -q true &amp;&amp; exit 1
+
+# Or: track WER trends in a spreadsheet
+$ python scripts/run_stt_benchmark.py --diff baseline.json --format csv \
+    &gt; diff.csv</code></pre>
+<p><strong>Tests</strong> (13 new, 57 total):</p>
+<p><em>format_diff_json (6 tests):</em> top-level aggregates correct; per-fixture records include all FixtureDiff fields; None values render as JSON null; unchanged session has zero counts; indent kwarg controls pretty-printing; mixed session with all 5 status_change categories produces valid JSON.</p>
+<p><em>format_diff_csv (7 tests):</em> header row present; N+1 lines for N diffs; None columns render as empty strings; unchanged session shows status_change=unchanged; empty diff is just header; round-trips through csv.DictReader; negative deltas preserve sign.</p>
+<p>End-to-end smoke verified against the real corpus:</p>
+<ul><li><code>--diff baseline.json --format json</code> → valid JSON with all expected fields.</li><li><code>--diff baseline.json --format csv</code> → header + 5 unchanged data rows.</li><li>Identical-runs diff: passing_delta=0, regression_count=0.</li></ul>
+<p>Verification:</p>
+<ul><li><code>python -m pytest tests/unit/test_run_stt_benchmark.py -q</code> → <strong>57 passed in 60ms</strong> (44 prior + 13 new).</li><li>Full unit + integration: <strong>1595 passed, 1 skipped</strong> (1582 prior + 13 new).</li><li>Perf snapshot: <strong>23 passed</strong>.</li></ul>
+<p>Notes:</p>
+<ul><li><strong>The benchmark CLI is now a complete eval pipeline.</strong> Every step has machine-readable output:<ul><li><code>run_benchmark</code> (iter-132) — text default</li><li><code>--format json/csv</code> summary (iter-133)</li><li><code>--diff baseline.json</code> text (iter-134)</li><li><code>--diff --format json/csv</code> (iter-135)</li></ul></li></ul>
+<p>CI pipelines, dashboards, comparison scripts, and spreadsheet imports all work without screen-scraping.</p>
+<ul><li><strong><code>passing_delta</code> is the headline number</strong> for CI gates. A one-line check:</li></ul>
+<p>jq &#x27;.passing_delta &lt; 0&#x27; diff.json | grep -q true &amp;&amp; exit 1</p>
+<p>fires when fewer fixtures pass than the baseline. This is more permissive than <code>regression_count &gt; 0</code> (allows fixture-level reshuffling within the same passing total) — pick based on policy.</p>
+<ul><li><strong>Empty-string vs null choice:</strong> JSON uses <code>null</code>, CSV uses empty string. Both are idiomatic for &quot;missing&quot; in their respective formats. JSON parsers handle null cleanly; CSV parsers (<code>csv.DictReader</code>) return empty strings, which spreadsheet tools display as blank cells.</li></ul>
+<ul><li><strong>Pure-function discipline scales.</strong> <code>format_diff_*</code> functions take a <code>BenchmarkDiff</code> — they don&#x27;t read the corpus, don&#x27;t call the engine, don&#x27;t touch the filesystem. The CLI&#x27;s only responsibility is loading the baseline JSON and printing the formatted output. Future formats (HTML, Markdown, etc.) land by adding one function — no changes to <code>compute_diff</code> or <code>run_benchmark</code>.</li></ul>
+<ul><li><strong>The summary + diff symmetry is now complete.</strong> Each benchmark layer has three output formats:</li></ul>
+<table class="iter-table"><thead><tr><th>Layer</th><th>text</th><th>json</th><th>csv</th></tr></thead><tbody><tr><td>summary</td><td>✅</td><td>✅</td><td>✅</td></tr><tr><td>diff</td><td>✅</td><td>✅</td><td>✅</td></tr></tbody></table>
+<p>Five output paths total. The dispatch in <code>main()</code> is small — one <code>if/elif</code> ladder for each — but the user-facing surface is wide enough to cover all reasonable evaluation workflows.</p>
+<ul><li>Next directions: STT engine&quot; — covers iter-132/133/134/135 as a unit). the diff workflow against a saved baseline. gate PRs with <code>passing_delta</code> from the JSON diff output.<ul><li>README pointer to the benchmark CLI (&quot;Evaluating a new</li><li>Architecture: A/B <code>aggressive_first_sentence: true</code> using</li><li>Pre-commit hook or CI workflow example showing how to</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-134.html">← iter-134</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>
