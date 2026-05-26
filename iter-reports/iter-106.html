@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-106 — WER fixture corpus + integration test</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-105.html">← iter-105</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-106 — WER fixture corpus + integration test</h1>
+<div class="meta"></div>
+</header><p><strong>Goal:</strong> Populate iter-105&#x27;s infrastructure with a deterministic corpus that exercises the full WER pipeline end-to-end. iter-105 intentionally split the metric work; this iteration completes the &quot;data-side&quot; half by providing the reference/hypothesis pairs and the integration test that drives them through compute_wer → TurnMetrics → print_session_summary.</p>
+<p><strong>Why text-only fixtures (no audio yet):</strong> mlx-whisper is Mac-only, and we work on x86_64 Linux. A real audio corpus would either need a CPU-only STT (faster-whisper, whisper.cpp wrapper) that&#x27;s not yet wired up, or it would have to skip on this platform. Text fixtures sidestep that — they exercise the full plumbing (WER computation + TurnMetrics population + summary aggregation + wer_measured filter) and stay deterministic across CI hosts. When a CPU-only STT lands, the integration runner can swap simulated hypotheses for real STT output and the same <code>expected_wer_min/max</code> bands still apply.</p>
+<p><strong>Corpus</strong> (<code>tests/fixtures/wer/corpus.json</code>, 5 fixtures):</p>
+<table class="iter-table"><thead><tr><th>Name</th><th>Pattern</th><th>Expected WER</th></tr></thead><tbody><tr><td>clean</td><td>Identical reference &amp; hypothesis</td><td>0.0</td></tr><tr><td>substitution</td><td>Single homophone error</td><td>0.15-0.25</td></tr><tr><td>dropped_filler</td><td>STT drops leading &quot;um&quot;</td><td>0.10-0.20</td></tr><tr><td>noisy</td><td>Multiple errors, declining audio</td><td>0.25-0.40</td></tr><tr><td>catastrophic</td><td>Every word wrong (STT failed entirely)</td><td>0.95-1.05</td></tr></tbody></table>
+<p>The bands are tight enough to catch a regression in compute_wer (say, an off-by-one in the DP table) but loose enough to survive the natural rounding of (S+D+I)/N — adding/removing a single fixture word doesn&#x27;t blow the band.</p>
+<p><strong>Integration test</strong> (<code>tests/integration/test_wer_corpus.py</code>, 9 tests):</p>
+<ul><li><strong>Corpus structural check</strong> — size + names match design.</li><li><strong>Per-fixture WER bands</strong> — parametrized over all 5 fixtures; each computed WER must fall inside its <code>[min, max]</code> window.</li><li><strong>End-to-end summary emission</strong> — drive <code>print_session_summary</code> with all 5 fixtures wrapped as TurnMetrics; assert the WER line emits with the expected median + max + turn count.</li><li><strong>Suppression invariant</strong> — drive a session with `wer_measured =False` on every turn; assert the WER line does NOT emit. This is the regression sentinel for the <code>wer_measured</code> filter introduced in iter-105 — without it, <code>0.0 = &quot;perfect&quot;</code> would collide with <code>0.0 = &quot;not measured&quot;</code>.</li><li><strong>Mixed-measurement session</strong> — some turns measured, others not; assert only measured turns count in the aggregate (2 measured + 2 unmeasured → &quot;(2 turns measured)&quot;).</li></ul>
+<pre class="code-block"><code>def _build_turn_with_wer(reference: str, hypothesis: str) -&gt; TurnMetrics:
+    &quot;&quot;&quot;Real prod path is:
+        text = stt_engine.transcribe(audio_bytes)
+        m.wer = compute_wer(reference, text)
+        m.wer_measured = True
+    We simulate without the audio + STT step.&quot;&quot;&quot;
+    m = TurnMetrics(transcript=hypothesis)
+    m.wer = compute_wer(reference, hypothesis)
+    m.wer_measured = True
+    ...</code></pre>
+<p>The <code>_build_turn_with_wer</code> helper documents the production code path so a future iter that swaps in real STT can copy-paste the shape and just replace one line.</p>
+<p>Verification:</p>
+<ul><li><code>python -m pytest tests/integration/test_wer_corpus.py -q</code> → <strong>9 passed in 20ms</strong>.</li><li>Full unit + integration: <strong>1211 passed, 1 skipped</strong> (1202 prior + 9 new).</li><li>Perf snapshot: <strong>21 passed</strong>.</li></ul>
+<p>Notes:</p>
+<ul><li><strong>The 46-metric taxonomy is now complete.</strong> Both the infrastructure (iter-105) and a populating corpus (iter-106) exist. Real audio fixtures are a &quot;polish&quot; iteration — the metric is functional today, just on simulated hypotheses.</li><li><strong>The <code>wer_measured</code> regression sentinel is now real.</strong> Two tests (<code>test_session_summary_omits_wer_line_when_no_turn_measured</code> and <code>test_partial_measurement_session</code>) directly exercise the flag&#x27;s purpose. Future TurnMetrics fields with the same &quot;optional measurement&quot; shape (e.g., reference_audio_present, ground_truth_intent_match) can copy this pattern.</li><li><strong>Pattern: corpus-as-JSON.</strong> Single-file JSON with a <code>_comment</code> array beats per-fixture .txt files for this size of corpus (5 entries). Easy to extend, version control diffs are readable, no filename-collision concerns. If the corpus grows past ~30 fixtures the per-file approach starts winning, but we&#x27;re well below that.</li><li><strong>Future iter for real audio:</strong> is already in JSON). binding). Skip the integration test if the engine can&#x27;t load (<code>pytest.skip(reason=...)</code>). <code>stt.transcribe(audio_path)</code> instead of the hand-curated string. The expected_wer_min/max bands should still hold for production-grade STT on clean audio (the &quot;clean&quot; / &quot;substitution&quot; / &quot;dropped_filler&quot; entries); the &quot;noisy&quot; and &quot;catastrophic&quot; entries would need separate audio recordings of degraded conditions.<ul><li>Add <code>audio_*.wav</code> files alongside <code>corpus.json</code> (ref text</li><li>Wire a CPU-only STT (faster-whisper, whisper.cpp Python</li><li>Each fixture&#x27;s hypothesis becomes</li></ul></li><li><strong><code>compute_wer</code> is now battle-tested.</strong> 23 unit tests in iter-105 + 5 fixture-driven tests + the cross-test where the integration suite recomputes WER from fixtures and matches the session-summary output. Three independent paths confirm the same results.</li><li>Next directions: <code>dropped_filler</code> (the three bands a real STT can hit). Add <code>requirements-dev.txt</code> entry for faster-whisper or whisper.cpp wrapper. iter-102). config-loading / startup-sequence into a tested module (currently it&#x27;s the largest unrefactored function).<ul><li>Real audio fixtures for <code>clean</code> + <code>substitution</code> +</li><li>Per-token-delay grid for context cap (still pending from</li><li><code>_push_after_flush</code> helper to dedupe iter-042/iter-102.</li><li>Pivot to mic_chat.py refactor — extract <code>run_chat</code>&#x27;s</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-105.html">← iter-105</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>
