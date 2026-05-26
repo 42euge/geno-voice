@@ -8526,3 +8526,145 @@ Notes:
     a code change targeting one of the surfaced costs (e.g.,
     sentence-split coverage, first-synth overlap) has clear
     feedback loop.
+
+## iter-113 — Cross-turn filler variety via recent-IDs FIFO
+
+**Goal:** First architecture-pivot iteration after the
+refactor + perf-data milestones. Targets a real UX issue:
+filler-word repetition across turns.
+
+`played_filler_ids` (iter-087) tracks fillers within a single
+turn so the picker doesn't pick "umm umm" back-to-back. But each
+turn creates a fresh SentenceWorker with an empty set, so across
+turns the same filler can be picked every time. With 3 fillers
+configured and an unlucky `random.choice`, the user can hear the
+exact same "umm" five turns running. Visible repetition, easy
+to fix.
+
+**Change:** Add a cross-turn FIFO that lives at the ChatLoop
+level and threads down to each SentenceWorker.
+
+In `_chat_loop.py:ChatLoop.__init__`:
+
+```python
+from collections import deque as _deque
+n_fillers = len(self._fillers)
+self._recent_filler_ids = (
+    _deque(maxlen=max(1, n_fillers - 1))
+    if n_fillers > 0 else None
+)
+```
+
+`maxlen = n_fillers - 1` is the right size: with 3 fillers, the
+last 2 played are blocked, leaving 1 fresh option always
+available. The picker is forced to rotate. With 1 filler,
+`maxlen=1` means the picker's preferred set is sometimes empty
+— the fallback "all-recent → use full available" branch ensures
+the filler still plays.
+
+In `_chat_pipeline.py:SentenceWorker.__init__`:
+
+```python
+recent_filler_ids: Optional[Any] = None,  # added kwarg
+self._recent_filler_ids = recent_filler_ids
+```
+
+Picker integration (the only behavior change):
+
+```python
+available = [c for c in self._fillers if id(c) not in played_filler_ids]
+# iter-113: prefer clips NOT in the cross-turn FIFO.
+if self._recent_filler_ids:
+    fresh = [c for c in available if id(c) not in self._recent_filler_ids]
+    if fresh:
+        available = fresh
+clip = self._filler_picker(available)
+```
+
+The fallback ("everything's recent → use full available") matters
+because when n_fillers ≤ maxlen, the FIFO can fill up to the
+point where every clip is recent. Refusing to play a filler in
+that case would defeat the iter-011 purpose; the better failure
+mode is "play one even if it repeats."
+
+After successful play, the worker appends to the FIFO:
+
+```python
+if self._recent_filler_ids is not None:
+    if hasattr(self._recent_filler_ids, "append"):
+        self._recent_filler_ids.append(id(clip))
+    else:
+        self._recent_filler_ids.add(id(clip))
+```
+
+Duck-typed append vs add so future callers can pass a `set`
+(unbounded, fine for tests) or a `list`. Production passes a
+`deque(maxlen=N)`.
+
+**Tests** (`tests/unit/test_cross_turn_fillers.py`, 12 tests):
+
+- Constructor wiring: default `recent_filler_ids=None`; passed
+  kwarg stored as same reference (so mutations propagate).
+- Filter behavior: prefer non-recent when fresh available;
+  fall back to full when all recent; empty FIFO behaves like
+  no FIFO.
+- ChatLoop integration: deque sized n_fillers-1 (with min 1);
+  None when no fillers; same-deque-reference passed to
+  SentenceWorker; cross-turn append behavior (add 3 ids,
+  oldest evicted).
+- Append shape compat: works with deque (.append), list
+  (.append), set (.add).
+
+Verification:
+- `python -m pytest tests/unit/test_cross_turn_fillers.py -q`
+  → **12 passed in 60ms**.
+- Filler regression sentinel (iter-061/087/091/093/096/099):
+  `pytest tests/unit/ -k 'filler or Filler' -q` → **93 passed
+  in 12s**. No regressions in any prior filler test.
+- Full unit + integration: **1309 passed, 1 skipped** (1297
+  prior + 12 new).
+- Perf snapshot: **23 passed**.
+
+Notes:
+- **The fallback shape matters more than the filter.** Most
+  multi-turn sessions never hit the all-recent fallback —
+  with 3 fillers and maxlen=2, the fresh set always has 1
+  candidate. The fallback exists for the edge case (1 filler,
+  long session) where it WOULD fire, so the test
+  `test_picker_falls_back_to_full_when_all_recent` is the
+  regression sentinel for that path.
+- **Append-vs-add duck typing is a small smell but justified.**
+  The cleaner alternative would be a thin `_FillerHistory`
+  protocol class with a single method. Wasn't worth the
+  abstraction for two backends — a future iter could promote
+  if a third storage shape lands (e.g., a max-frequency map
+  rather than a FIFO).
+- **No new metric for this iteration.** The TurnMetrics
+  `last_filler_id` field (iter-081) is already enough for
+  session-summary diversity reporting (median/mode of distinct
+  fillers across turns). A future session-summary check could
+  warn when `last_filler_id` is the SAME value across N+
+  consecutive turns, which would now be rare due to iter-113.
+- **No perf scenario for this iteration.** The cross-turn
+  variety effect is only observable across many turns and is
+  inherently random (filler picker is `random.choice` in
+  production). A perf scenario testing variety would need a
+  large N + fixed seed, and the result would be a categorical
+  "yes, fillers vary" not a continuous metric.
+- **The pattern: cross-turn state at ChatLoop, threaded to
+  SentenceWorker per turn.** This is the second cross-turn
+  state field on ChatLoop after iter-082's `_last_first_audio_at`.
+  A third would justify a `ChatLoopState` dataclass; the two
+  current fields are clear enough as instance attributes.
+- Next directions:
+  - Real audio fixtures + CPU-only STT (still pending from
+    iter-106). Five iterations now overdue.
+  - Eval/replay tool using SessionState (iter-110). Could
+    measure filler variety empirically across recorded
+    sessions.
+  - Session-summary check: warn when the same `last_filler_id`
+    appears in N+ consecutive turns. Becomes a defensive
+    sentinel that iter-113 didn't break.
+  - Architecture: investigate whether the bargeable_fraction
+    metric (iter-074) has room to improve via earlier watcher
+    start.

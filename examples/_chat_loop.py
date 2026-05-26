@@ -165,6 +165,21 @@ class ChatLoop:
 
         self._fillers = list(fillers) if fillers else []
         self._idle_threshold = idle_threshold
+        # iter-113: cross-turn filler variety. Bounded FIFO of recently-
+        # played filler IDs, threaded down to the per-turn SentenceWorker
+        # so the picker can prefer fillers NOT recently used. maxlen
+        # is set to len(fillers) - 1 (or 1 minimum) — keeps "the last
+        # one" out of the picker's preferred set, but allows everything
+        # to cycle when there are 2+ fillers. With only one filler
+        # configured, the FIFO is irrelevant (picker has nothing to
+        # vary).
+        from collections import deque as _deque
+        n_fillers = len(self._fillers)
+        self._recent_filler_ids = (
+            _deque(maxlen=max(1, n_fillers - 1))
+            if n_fillers > 0
+            else None
+        )
         # iter-088: aggressive first-sentence splitter config.
         self._aggressive_first_sentence = aggressive_first_sentence
         # iter-093: auto-aggressive-on-stall threshold (seconds).
@@ -315,6 +330,9 @@ class ChatLoop:
             fillers=self._fillers,
             idle_threshold=self._idle_threshold if self._fillers else 0.0,
             clock=self._clock,
+            # iter-113: pass the loop-level FIFO so the picker can
+            # avoid clips played in recent turns.
+            recent_filler_ids=self._recent_filler_ids,
         )
         worker.start()
 

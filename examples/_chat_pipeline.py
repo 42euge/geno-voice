@@ -36,7 +36,7 @@ import sys
 import threading
 import time
 from queue import Empty, Queue
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import numpy as np
 
@@ -135,6 +135,7 @@ class SentenceWorker:
         fillers: Optional[list] = None,
         idle_threshold: float = 0.0,
         filler_picker: Optional[Callable[[list], object]] = None,
+        recent_filler_ids: Optional[Any] = None,
     ):
         self._speaker_factory = speaker_factory
         self._synth_fn = synth_fn
@@ -163,6 +164,13 @@ class SentenceWorker:
             import random as _r
             filler_picker = _r.choice
         self._filler_picker = filler_picker
+        # iter-113: cross-turn filler variety. The caller (ChatLoop)
+        # passes a bounded FIFO of recently-played filler IDs that
+        # persists across turns. The picker prefers fillers NOT in
+        # this set; falls back to the full available list when
+        # everything's recent. Default None = empty (no cross-turn
+        # tracking, equivalent to pre-iter-113 behavior).
+        self._recent_filler_ids = recent_filler_ids
 
         self._queue: Queue = Queue()
         self._thread: Optional[threading.Thread] = None
@@ -482,6 +490,18 @@ class SentenceWorker:
                             # Defensive: filler_can_fire said yes but
                             # filtering left nothing. Skip this round.
                             continue
+                        # iter-113: cross-turn variety. Prefer clips
+                        # NOT in the recent-IDs FIFO. Fall back to
+                        # the full available list when every
+                        # remaining clip was used recently — better
+                        # to repeat than to drop the filler entirely.
+                        if self._recent_filler_ids:
+                            fresh = [
+                                c for c in available
+                                if id(c) not in self._recent_filler_ids
+                            ]
+                            if fresh:
+                                available = fresh
                         clip = self._filler_picker(available)
                         audio_np, tokens = clip
                         played = self._play_clip(
@@ -503,6 +523,19 @@ class SentenceWorker:
                             # from print_session_summary aggregating
                             # across turns.
                             self.last_filler_id = id(clip)
+                            # iter-113: append to the cross-turn FIFO
+                            # so the NEXT turn's picker prefers
+                            # something different. Append-only; the
+                            # caller's bounded deque handles eviction.
+                            if self._recent_filler_ids is not None:
+                                # Duck-type: deque has .append, set has
+                                # .add, list has .append. Try .append
+                                # first (most common shape), fall back
+                                # to .add for set callers.
+                                if hasattr(self._recent_filler_ids, "append"):
+                                    self._recent_filler_ids.append(id(clip))
+                                else:
+                                    self._recent_filler_ids.add(id(clip))
                     continue
 
                 if item is _SENTINEL:
