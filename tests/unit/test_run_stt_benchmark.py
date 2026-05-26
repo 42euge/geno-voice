@@ -302,3 +302,221 @@ def test_default_log_is_print(capsys):
     captured = capsys.readouterr()
     assert "a" in captured.out
     assert "1/1 fixtures passed" in captured.out
+
+
+# ---- iter-133: verbose=False suppresses output -------------------
+
+
+def test_verbose_false_suppresses_per_row_output():
+    """When verbose=False, the log callable receives no per-row
+    or summary calls. Used by JSON/CSV CLI paths to avoid
+    interleaved text + format output."""
+    log, lines = _capture()
+    fixtures = [_fix("a", "x", "x", 0.0, 0.0)]
+    module.run_benchmark(
+        _fixed_transcribe("x"),
+        fixtures, Path("/tmp"),
+        log=log, clock=_fake_clock(), verbose=False,
+    )
+    assert lines == []
+
+
+def test_verbose_false_still_returns_summary():
+    """Suppressing output doesn't suppress the return value —
+    the caller still gets a populated BenchmarkSummary."""
+    log, _ = _capture()
+    fixtures = [_fix("a", "x", "x", 0.0, 0.0)]
+    summary = module.run_benchmark(
+        _fixed_transcribe("x"),
+        fixtures, Path("/tmp"),
+        log=log, clock=_fake_clock(), verbose=False,
+    )
+    assert summary.total == 1
+    assert summary.passing == 1
+
+
+def test_verbose_default_is_true():
+    """Backward compat: omitting verbose preserves iter-132
+    behavior (per-row + summary text emitted)."""
+    log, lines = _capture()
+    fixtures = [_fix("a", "x", "x", 0.0, 0.0)]
+    module.run_benchmark(
+        _fixed_transcribe("x"),
+        fixtures, Path("/tmp"),
+        log=log, clock=_fake_clock(),
+    )
+    assert len(lines) >= 2  # at least one row + summary
+
+
+# ---- iter-133: format_summary_json -------------------------------
+
+
+def _build_summary(*entries):
+    """entries: (name, passed, wer, exp_min, exp_max, elapsed,
+    ref, hyp). Returns a BenchmarkSummary with matching
+    FixtureResults."""
+    summary = module.BenchmarkSummary()
+    for name, passed, wer, lo, hi, elapsed, ref, hyp in entries:
+        summary.results.append(module.FixtureResult(
+            name=name, reference=ref, hypothesis=hyp,
+            wer=wer, expected_min=lo, expected_max=hi,
+            elapsed_seconds=elapsed, passed=passed,
+        ))
+    return summary
+
+
+def test_json_format_includes_aggregate_fields():
+    """The JSON dump includes passing/failing/total/total_elapsed
+    at the top level — aggregates that operators want without
+    iterating the results."""
+    import json as _json
+    summary = _build_summary(
+        ("a", True,  0.0, 0.0, 0.5, 0.1, "x", "x"),
+        ("b", False, 0.9, 0.0, 0.5, 0.2, "y", "z"),
+    )
+    out = module.format_summary_json(summary)
+    parsed = _json.loads(out)
+    assert parsed["passing"] == 1
+    assert parsed["failing"] == 1
+    assert parsed["total"] == 2
+    # Float compare with tolerance for accumulated FP error.
+    assert abs(parsed["total_elapsed_seconds"] - 0.3) < 1e-9
+
+
+def test_json_format_includes_per_fixture_records():
+    """Each result entry has every FixtureResult field."""
+    import json as _json
+    summary = _build_summary(
+        ("clean", True, 0.20, 0.0, 0.4, 0.85, "the ref", "the hyp"),
+    )
+    parsed = _json.loads(module.format_summary_json(summary))
+    record = parsed["results"][0]
+    assert record["name"] == "clean"
+    assert record["reference"] == "the ref"
+    assert record["hypothesis"] == "the hyp"
+    assert record["wer"] == 0.2
+    assert record["expected_min"] == 0.0
+    assert record["expected_max"] == 0.4
+    assert record["elapsed_seconds"] == 0.85
+    assert record["passed"] is True
+
+
+def test_json_format_handles_empty_summary():
+    """Zero fixtures → valid JSON with empty results array."""
+    import json as _json
+    summary = module.BenchmarkSummary()
+    out = module.format_summary_json(summary)
+    parsed = _json.loads(out)
+    assert parsed["total"] == 0
+    assert parsed["passing"] == 0
+    assert parsed["failing"] == 0
+    assert parsed["results"] == []
+
+
+def test_json_format_indent_kwarg_controls_pretty_printing():
+    """Default indent=2 produces multi-line output. indent=None
+    gives compact one-line."""
+    summary = _build_summary(
+        ("a", True, 0.0, 0.0, 0.0, 0.1, "x", "x"),
+    )
+    pretty = module.format_summary_json(summary, indent=2)
+    compact = module.format_summary_json(summary, indent=None)
+    assert "\n" in pretty
+    assert "\n" not in compact
+
+
+def test_json_format_is_valid_json():
+    """No matter what's in the data, output parses cleanly.
+    Defends against unescaped quotes / control chars in
+    transcripts."""
+    import json as _json
+    summary = _build_summary(
+        ("weird", True, 0.0, 0.0, 0.5, 0.1,
+         'he said "hello"', "tab\there"),
+    )
+    out = module.format_summary_json(summary)
+    parsed = _json.loads(out)
+    assert parsed["results"][0]["reference"] == 'he said "hello"'
+    assert parsed["results"][0]["hypothesis"] == "tab\there"
+
+
+# ---- iter-133: format_summary_csv ------------------------------
+
+
+def test_csv_format_starts_with_header_row():
+    """First row is the column names. Operators can read into
+    pandas without skiprows."""
+    summary = _build_summary(
+        ("a", True, 0.0, 0.0, 0.5, 0.1, "x", "x"),
+    )
+    out = module.format_summary_csv(summary)
+    first_line = out.splitlines()[0]
+    for col in [
+        "name", "passed", "wer",
+        "expected_min", "expected_max",
+        "elapsed_seconds", "reference", "hypothesis",
+    ]:
+        assert col in first_line
+
+
+def test_csv_format_one_data_row_per_fixture():
+    """N fixtures → N+1 lines (header + N data rows)."""
+    summary = _build_summary(
+        ("a", True, 0.0, 0.0, 0.5, 0.1, "x", "x"),
+        ("b", False, 0.9, 0.0, 0.5, 0.2, "y", "z"),
+        ("c", True, 0.1, 0.0, 0.5, 0.3, "p", "q"),
+    )
+    out = module.format_summary_csv(summary)
+    lines = [ln for ln in out.splitlines() if ln]
+    assert len(lines) == 4  # header + 3
+
+
+def test_csv_format_quotes_strings_with_commas():
+    """RFC-4180 compliance: a transcript with a comma must be
+    quoted so spreadsheet imports parse correctly."""
+    summary = _build_summary(
+        ("a", True, 0.0, 0.0, 0.5, 0.1,
+         "hello, world", "okay, then"),
+    )
+    out = module.format_summary_csv(summary)
+    assert '"hello, world"' in out
+    assert '"okay, then"' in out
+
+
+def test_csv_format_handles_empty_summary():
+    """Zero fixtures → just the header row."""
+    summary = module.BenchmarkSummary()
+    out = module.format_summary_csv(summary)
+    lines = [ln for ln in out.splitlines() if ln]
+    assert len(lines) == 1  # header only
+
+
+def test_csv_format_round_trips_through_csv_module():
+    """The output is parseable by csv.DictReader. Catches
+    obvious CSV-formatting bugs (unquoted quotes, missing
+    fields, etc.)."""
+    import csv as _csv
+    import io as _io
+    summary = _build_summary(
+        ("clean", True, 0.20, 0.0, 0.4, 0.85, "ref", "hyp"),
+    )
+    out = module.format_summary_csv(summary)
+    reader = _csv.DictReader(_io.StringIO(out))
+    rows = list(reader)
+    assert len(rows) == 1
+    assert rows[0]["name"] == "clean"
+    assert rows[0]["passed"] == "True"
+    assert rows[0]["reference"] == "ref"
+    assert rows[0]["hypothesis"] == "hyp"
+
+
+def test_csv_format_fixed_decimal_precision():
+    """Numeric fields are formatted to 4 decimals — consistent
+    across rows, no scientific notation surprise."""
+    summary = _build_summary(
+        ("a", True, 0.123456789, 0.0, 0.5, 0.987654321, "x", "x"),
+    )
+    out = module.format_summary_csv(summary)
+    # WER 0.123456789 → "0.1235" (rounded to 4 decimals).
+    assert "0.1235" in out
+    assert "0.9877" in out

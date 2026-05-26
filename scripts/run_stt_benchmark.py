@@ -88,6 +88,7 @@ def run_benchmark(
     *,
     log: Callable[[str], None] = print,
     clock: Callable[[], float] = time.monotonic,
+    verbose: bool = True,
 ) -> BenchmarkSummary:
     """Run a benchmark over the given fixtures.
 
@@ -100,16 +101,21 @@ def run_benchmark(
         fixture_dir: directory containing the audio files
             referenced by ``audio_path``.
         log: emit callable for the per-row report. Default
-            ``print``.
+            ``print``. Ignored when ``verbose=False``.
         clock: monotonic-time source for per-fixture elapsed.
             Default ``time.monotonic``.
+        verbose: emit per-row + summary text via ``log``. When
+            False, run silently — used by the JSON/CSV output
+            paths in iter-133 which format the summary
+            post-run instead. Default True (preserves iter-132
+            behavior).
 
     Returns:
         A ``BenchmarkSummary`` with one ``FixtureResult`` per
         fixture entry. Caller decides exit status (0 if all
         pass, 1 otherwise).
 
-    Format of the per-row log line:
+    Format of the per-row log line (verbose=True):
 
         clean_audio          PASS  WER 0.20  band [0.00, 0.40]  elapsed 0.85s
 
@@ -138,19 +144,105 @@ def run_benchmark(
             passed=passed,
         )
         summary.results.append(result)
-        status = "PASS" if passed else "FAIL"
-        log(
-            f"{f['name']:25s} {status:4s}  "
-            f"WER {wer:.2f}  "
-            f"band [{f['expected_wer_min']:.2f}, {f['expected_wer_max']:.2f}]  "
-            f"elapsed {elapsed:.2f}s"
-        )
+        if verbose:
+            status = "PASS" if passed else "FAIL"
+            log(
+                f"{f['name']:25s} {status:4s}  "
+                f"WER {wer:.2f}  "
+                f"band [{f['expected_wer_min']:.2f}, {f['expected_wer_max']:.2f}]  "
+                f"elapsed {elapsed:.2f}s"
+            )
 
-    log(
-        f"\n{summary.passing}/{summary.total} fixtures passed "
-        f"in {summary.total_elapsed:.1f}s"
-    )
+    if verbose:
+        log(
+            f"\n{summary.passing}/{summary.total} fixtures passed "
+            f"in {summary.total_elapsed:.1f}s"
+        )
     return summary
+
+
+def format_summary_json(summary: BenchmarkSummary, *, indent: int = 2) -> str:
+    """iter-133: serialize a ``BenchmarkSummary`` as JSON.
+
+    Output shape:
+
+    .. code-block:: json
+
+        {
+          "passing": 5,
+          "failing": 0,
+          "total": 5,
+          "total_elapsed_seconds": 4.32,
+          "results": [
+            {
+              "name": "clean_audio",
+              "reference": "...",
+              "hypothesis": "...",
+              "wer": 0.20,
+              "expected_min": 0.0,
+              "expected_max": 0.4,
+              "elapsed_seconds": 1.93,
+              "passed": true
+            },
+            ...
+          ]
+        }
+
+    ``indent=2`` for human-readable output; pass ``indent=None``
+    for compact one-line JSON suitable for piping.
+    """
+    payload = {
+        "passing": summary.passing,
+        "failing": summary.failing,
+        "total": summary.total,
+        "total_elapsed_seconds": summary.total_elapsed,
+        "results": [
+            {
+                "name": r.name,
+                "reference": r.reference,
+                "hypothesis": r.hypothesis,
+                "wer": r.wer,
+                "expected_min": r.expected_min,
+                "expected_max": r.expected_max,
+                "elapsed_seconds": r.elapsed_seconds,
+                "passed": r.passed,
+            }
+            for r in summary.results
+        ],
+    }
+    return json.dumps(payload, indent=indent)
+
+
+def format_summary_csv(summary: BenchmarkSummary) -> str:
+    """iter-133: serialize a ``BenchmarkSummary`` as CSV.
+
+    Header row + one data row per fixture. No summary aggregate
+    in the CSV — operators can compute it from the rows. Fields:
+
+        name,passed,wer,expected_min,expected_max,elapsed_seconds,reference,hypothesis
+
+    Strings are quoted and any embedded quotes are doubled
+    (RFC 4180). Suitable for ``pandas.read_csv`` or spreadsheet
+    import.
+    """
+    import csv as _csv
+    import io as _io
+
+    out = _io.StringIO()
+    writer = _csv.writer(out, quoting=_csv.QUOTE_MINIMAL)
+    writer.writerow([
+        "name", "passed", "wer",
+        "expected_min", "expected_max",
+        "elapsed_seconds", "reference", "hypothesis",
+    ])
+    for r in summary.results:
+        writer.writerow([
+            r.name, r.passed, f"{r.wer:.4f}",
+            f"{r.expected_min:.4f}", f"{r.expected_max:.4f}",
+            f"{r.elapsed_seconds:.4f}",
+            r.reference, r.hypothesis,
+        ])
+    return out.getvalue()
 
 
 def _build_transcribe_from_engine_args(
@@ -233,6 +325,13 @@ def main() -> int:
         "--compute", default="int8",
         help="Compute type (faster_whisper only). Default: int8.",
     )
+    parser.add_argument(
+        "--format", default="text",
+        choices=["text", "json", "csv"],
+        help="Output format. text (default) — human-readable per-row. "
+             "json — full result dump suitable for piping. "
+             "csv — header + one row per fixture for spreadsheets.",
+    )
     args = parser.parse_args()
 
     with CORPUS_PATH.open() as f:
@@ -253,9 +352,25 @@ def main() -> int:
         print(f"engine construction failed: {e}", file=sys.stderr)
         return 2
 
-    summary = run_benchmark(
-        transcribe, fixtures, CORPUS_PATH.parent,
-    )
+    # iter-133: --format controls output. For text (default),
+    # run_benchmark emits per-row + summary inline. For json/csv,
+    # silence run_benchmark and dump the formatted output after.
+    if args.format == "text":
+        summary = run_benchmark(
+            transcribe, fixtures, CORPUS_PATH.parent,
+        )
+    else:
+        summary = run_benchmark(
+            transcribe, fixtures, CORPUS_PATH.parent,
+            verbose=False,
+        )
+        if args.format == "json":
+            print(format_summary_json(summary))
+        elif args.format == "csv":
+            # CSV ends in a newline already; print(..., end="")
+            # to avoid a blank trailing line.
+            print(format_summary_csv(summary), end="")
+
     return 0 if summary.failing == 0 else 1
 
 

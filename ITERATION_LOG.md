@@ -11279,3 +11279,130 @@ Notes:
   - Extract the `(name, status, WER, band, elapsed)` per-row
     format into a CSV / JSON output mode if a future iter
     needs machine-readable benchmark results.
+
+## iter-133 — CSV/JSON output for STT benchmark CLI
+
+**Goal:** Operators scripting comparison runs (engine A vs B,
+or model size grid-search) need machine-readable output. iter-133
+adds JSON + CSV output modes to iter-132's benchmark CLI.
+
+    python scripts/run_stt_benchmark.py --engine faster_whisper --format json
+    python scripts/run_stt_benchmark.py --engine faster_whisper --format csv
+
+**Three additions:**
+
+1. **`verbose: bool = True` kwarg on `run_benchmark`.** Default
+   preserves iter-132 behavior (per-row + summary text emitted
+   via `log`). When False, the function runs silently and
+   returns the summary — caller formats. Used by JSON/CSV CLI
+   paths to avoid interleaved text + format output.
+
+2. **`format_summary_json(summary, *, indent=2) -> str`** — full
+   structured dump:
+
+   ```json
+   {
+     "passing": 5, "failing": 0, "total": 5,
+     "total_elapsed_seconds": 1.32,
+     "results": [
+       {"name": "clean_audio", "reference": "...",
+        "hypothesis": "...", "wer": 0.2,
+        "expected_min": 0.0, "expected_max": 0.4,
+        "elapsed_seconds": 0.29, "passed": true},
+       ...
+     ]
+   }
+   ```
+
+   Top-level aggregates (`passing`/`failing`/`total`/
+   `total_elapsed_seconds`) so operators don't need to iterate
+   results for the headline numbers.
+
+3. **`format_summary_csv(summary) -> str`** — header row + one
+   data row per fixture:
+
+       name,passed,wer,expected_min,expected_max,elapsed_seconds,reference,hypothesis
+       clean_audio,True,0.2000,0.0000,0.4000,0.2736,what is the weather today,What is the winner today?
+       ...
+
+   RFC-4180 quoting (commas/quotes in transcripts are escaped
+   correctly). 4-decimal precision on numeric fields. Round-
+   trips through `csv.DictReader`.
+
+4. **`--format` CLI arg** with choices `text` (default) /
+   `json` / `csv`. Backwards compatible: omitting the flag
+   produces iter-132's original output.
+
+**Tests** (28 total, 14 new beyond iter-132):
+
+*verbose flag (3 tests):* False suppresses output; False still
+returns summary; True is the default (backward compat).
+
+*format_summary_json (5 tests):* aggregates at top level;
+per-result records have all FixtureResult fields; empty summary
+produces valid JSON; `indent=None` gives compact one-line;
+weird strings (quotes, tabs) round-trip correctly.
+
+*format_summary_csv (6 tests):* starts with header; N+1 lines
+for N fixtures; commas in strings are quoted (RFC-4180); empty
+summary is just header; round-trips through `csv.DictReader`;
+fixed 4-decimal precision.
+
+Verification:
+- `python -m pytest tests/unit/test_run_stt_benchmark.py -q` →
+  **28 passed in 40ms** (14 original + 14 new).
+- Full unit + integration: **1566 passed, 1 skipped** (1552
+  prior + 14 new).
+- Perf snapshot: **23 passed**.
+- End-to-end CLI smoke: `--format text/json/csv` all work
+  against the real corpus.
+
+Notes:
+- **Format functions take a `BenchmarkSummary`, not a
+  fixtures list.** This means a future caller can run multiple
+  benchmarks (different engines), collect summaries, and
+  format them all the same way — without the format function
+  knowing about the engine layer. Pure-function discipline:
+  fewer dependencies, more reuse.
+- **The `verbose=False` toggle is a small contract break.** It
+  changes `run_benchmark`'s side-effects depending on a kwarg.
+  Alternative: split into `run_benchmark` (silent, returns
+  summary) + `report_benchmark(summary, log)` (formats text).
+  Decided against because the existing `verbose=True` matches
+  the tested-and-working iter-132 contract; introducing a
+  separate report function would require updating iter-132's
+  passing tests.
+- **Why `indent=2` default for JSON.** Operators piping the
+  output to a viewer or jq want it readable. Compact one-line
+  is opt-in via `indent=None` for those who want to grep the
+  output through additional pipes.
+- **Why 4-decimal precision in CSV.** WER values typically have
+  3-4 meaningful digits; 4 is enough for accurate display
+  without scientific notation creeping in. Elapsed seconds
+  also benefit from the same precision since per-fixture times
+  are typically 0.1-2 seconds.
+- **RFC-4180 quoting matters.** Without it, a transcript
+  containing a comma (which happens — multispeaker_audio's
+  hypothesis is "What is my window taking out?" but a future
+  fixture might be "Hello, world.") would corrupt the CSV.
+  The Python csv module handles this automatically with
+  `quoting=QUOTE_MINIMAL`.
+- **The CLI now serves three audiences:**
+  - Interactive operators: `text` mode (iter-132).
+  - Scripted comparisons: `json` mode (e.g., diff two engines'
+    output).
+  - Spreadsheet/database imports: `csv` mode (e.g., track
+    benchmark trends in pandas).
+- **No new pattern introduced.** This iter is a
+  straightforward feature addition on iter-132's
+  infrastructure. The pure-function-vs-CLI separation pattern
+  (used in iter-132 + the report generator) carries through
+  cleanly.
+- Next directions:
+  - README pointer to the benchmark CLI ("Evaluating a new
+    STT engine" — closes the documentation loop).
+  - Architecture: A/B `aggressive_first_sentence: true` as
+    default with the corpus.
+  - `--diff <baseline.json>` mode that compares the current
+    run against a baseline JSON — useful for "did my engine
+    change improve or regress?"
