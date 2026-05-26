@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-105 — WER computation primitive + session-summary wiring</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-104.html">← iter-104</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-105 — WER computation primitive + session-summary wiring</h1>
+<div class="meta"></div>
+</header><p><strong>Goal:</strong> Close the metric-taxonomy infrastructure gap for 1.6 (WER) — listed as &quot;needs ground truth corpus&quot; in 6+ prior iteration logs. Build the metric primitive + plumbing now so a future audio-fixture iteration only has to wire reference transcripts in, not invent the metric from scratch.</p>
+<p><strong>Split scope so this iteration finishes in one sitting:</strong></p>
+<ul><li>✅ WER computation primitive (<code>examples/_chat_wer.py</code>, pure string operation, no audio).</li><li>✅ TurnMetrics fields (<code>wer</code>, <code>wer_measured</code>).</li><li>✅ Session-summary helper (<code>_emit_wer_line</code>).</li><li>✅ Tests on all of the above (23 + 9 + indirect via session summary).</li><li>⏭ Audio-fixture corpus + reference transcripts (deferred — needs a different STT-mocking strategy on x86_64 since mlx-whisper is Mac-only).</li></ul>
+<p><strong>WER primitive (<code>examples/_chat_wer.py</code>):</strong></p>
+<p>Standard formula: WER = (S + D + I) / N. Word-level Levenshtein DP, no external deps (jiwer/python-Levenshtein NOT pulled in to keep the install footprint flat). Light normalization: lowercase + strip punctuation, but apostrophes preserved so &quot;don&#x27;t&quot; stays as one word (splitting it inflates N and over-penalizes contractions).</p>
+<pre class="code-block"><code>def compute_wer(reference: str, hypothesis: str) -&gt; float:
+    ref = _tokenize(reference)
+    hyp = _tokenize(hypothesis)
+    n = len(ref)
+    if n == 0:
+        return float(len(hyp))   # all insertions
+    if not hyp:
+        return 1.0               # all deletions
+    # Classic word-level Levenshtein DP, O(R*H) time/space.
+    ...
+    return dp[n][len(hyp)] / n</code></pre>
+<p><strong>TurnMetrics extension:</strong> Two new fields, both safely zero by default so they don&#x27;t disturb the regression sentinel:</p>
+<pre class="code-block"><code>wer: float = 0.0          # Word Error Rate; 0.0 = perfect or
+                          # not-measured (use wer_measured to
+                          # distinguish).
+wer_measured: bool = False  # True only when a reference was
+                            # supplied this turn.</code></pre>
+<p>The <code>wer_measured</code> flag is critical — without it, &quot;0.0 = perfect&quot; and &quot;0.0 = not measured&quot; would be indistinguishable, and the session-summary would either always emit a misleading &quot;0.00 WER&quot; line or never emit at all. With the flag, the helper filters on the truth that a reference existed, then computes median/max over the actual measurements.</p>
+<p><strong>Session-summary wiring:</strong></p>
+<pre class="code-block"><code>def _emit_wer_line(emit, wer_values: list[float]) -&gt; None:
+    if not wer_values:
+        return
+    med = statistics.median(wer_values)
+    worst = max(wer_values)
+    emit(f&quot;    WER:              {med:.2f} median, {worst:.2f} max &quot;
+         f&quot;({len(wer_values)} turns measured)&quot;)</code></pre>
+<p>Emitted right after <code>_emit_bargeable_line</code> so the recording- related signals (mic_stale, false_trig, primed audio, bargeable, WER) stay grouped — even though they&#x27;re each their own helper.</p>
+<p>Production-grade calibration anchors recorded inline in the helper docstring so the operator sees the meaning of the number:</p>
+<pre class="code-block"><code>&lt; 0.10 — production-grade STT
+0.10-0.20 — acceptable for clean audio
+0.20-0.40 — degraded; tune mic / silence_threshold
+&gt; 0.40 — STT is failing — check input quality</code></pre>
+<p><strong>Tests:</strong></p>
+<p><code>tests/unit/test_chat_wer.py</code> — 23 tests covering:</p>
+<ul><li>Tokenization (basic, apostrophes, whitespace, empty, punctuation-only).</li><li>Perfect transcription (identical, case-insensitive, with punctuation).</li><li>Each error type in isolation (substitution, deletion, insertion).</li><li>Multi-edit scenarios (completely-wrong, two-sub, sub+del).</li><li>Empty-input edge cases (both empty, empty hyp, empty ref).</li><li>Return type invariant (always float).</li><li>Realistic STT scenarios (clean, one-misheard, dropped filler).</li><li>Argument-order asymmetry (compute_wer(a,b) ≠ compute_wer(b,a) because N depends on which is the reference).</li></ul>
+<p><code>tests/unit/test_emit_wer_line.py</code> — 9 tests covering:</p>
+<ul><li>Empty list suppression (no measurements → no line).</li><li>Single-turn perfect / single-turn imperfect.</li><li>Multi-turn median + max.</li><li>Even-length median (uses statistics.median&#x27;s mean-of-middle convention).</li><li>2-decimal formatting + values &gt;1.0 (insertion-heavy).</li><li>4-space leading indent (matches family convention).</li><li>Turn-count suffix integrity.</li></ul>
+<p>Verification:</p>
+<ul><li>`python -m pytest tests/unit/test_chat_wer.py tests/unit/test_emit_wer_line.py -q` → <strong>32 passed in 40ms</strong>.</li><li>Regression sentinel: 144 session-summary tests pass (was 121 — +9 from the new wer-line family + 14 from iter-104 already on main).</li><li>Full unit + integration: `tests/ --ignore=tests/performance --ignore=tests/test_session.py --ignore=tests/e2e -q` → <strong>1202 passed, 1 skipped</strong> (1170 prior + 23 wer + 9 emit).</li><li>Perf snapshot: <code>tests/performance/ -q</code> → <strong>21 passed</strong>.</li></ul>
+<p>Notes:</p>
+<ul><li><strong>The 46-metric taxonomy is now infrastructurally complete.</strong> Every metric in the &quot;Standard&quot; + &quot;Novel/speculative&quot; buckets has a TurnMetrics field, a session-summary line, and tests. The only thing 1.6 still lacks is <strong>populated data</strong> — a corpus of audio fixtures + reference transcripts. That&#x27;s a different problem (audio infra, not code), and it&#x27;s appropriately split into its own iteration.</li><li><strong>Audio-fixture corpus design (recorded for the future iter):</strong> common patterns — declarative, question, with filler, contraction-heavy, noisy. punctuation (matches <code>_tokenize</code> normalization). <code>reference_*.txt</code> pairs. through a stub STT (or a CPU-only Whisper if available) and asserts WER stays below a threshold (e.g., 0.20 for clean audio, 0.40 for noisy). Use <code>pytest.skip(reason=...)</code> if no STT engine is loadable on the platform. eval, the corpus iteration should produce reference transcripts using a CPU-only STT (whisper.cpp or faster-whisper), or use a mocked-but-realistic STT that introduces controlled errors (e.g., 1-substitution per 10 words). The latter validates the WER pipeline without requiring real STT — good enough for CI.<ul><li>Recordings: 5-10 short utterances (1-3s each) covering</li><li>Reference transcripts: hand-curated, lowercase, no</li><li>Storage: <code>tests/fixtures/wer/</code> with <code>audio_*.wav</code> +</li><li>Driver: <code>tests/integration/test_wer.py</code> runs each fixture</li><li><strong>The mlx-whisper x86_64 problem:</strong> for cross-platform</li></ul></li><li><strong><code>compute_wer</code> design choices recorded:</strong> chose preserve because contractions are common in speech. libraries return inf; we chose finite so callers can do median/mean math without special cases. but other STTs vary; lowercasing both sides keeps the metric robust. when a real caller needs it.<ul><li>Apostrophes preserved (vs split). Convention varies; we</li><li>Empty reference returns float(len(hyp)) (vs inf). Some</li><li>Case-insensitive. Whisper outputs lowercase by default,</li><li>No optional kwargs (e.g., <code>case_sensitive</code>). YAGNI — add</li></ul></li><li><strong>Final TurnMetrics size:</strong> ~62 fields. The <code>wer_measured</code> bool is the first &quot;is this measurement valid?&quot; flag — sets a precedent for future &quot;optional measurement&quot; fields. If more land, they could share a <code>MeasurementFlags</code> bitfield to keep the dataclass shape from sprawling.</li><li>Next directions: the heavyweight piece. Could mock STT for CI portability. default-on once the operator-cost on natural turns is quantified (would need a &quot;long preamble vs short response&quot; pair). iter-102).<ul><li><strong>WER audio-fixture corpus</strong> — design above; the corpus is</li><li>Apply iter-088&#x27;s aggressive splitter as a <code>chat.aggressive_first_sentence</code></li><li>Per-token-delay grid for context cap (still pending from</li><li><code>_push_after_flush</code> helper to dedupe iter-042/iter-102.</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-104.html">← iter-104</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>
