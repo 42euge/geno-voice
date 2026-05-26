@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-104 — Extract single-line recording helpers</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-103.html">← iter-103</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-104 — Extract single-line recording helpers</h1>
+<div class="meta"></div>
+</header><p><strong>Goal:</strong> 9th and 10th block helpers — <code>_emit_primed_audio_line</code> (iter-057) and <code>_emit_bargeable_line</code> (iter-074). Both are single-line emits scattered (non-contiguous) across <code>print_session_summary</code>. Bundling them in one iteration matches iter-103&#x27;s documented &quot;non-contiguity&quot; pattern: extract isolated lines as their own helpers rather than reordering output.</p>
+<p><strong>Why bundle them in one iteration:</strong> Each is a 6-line inline block. Two in one PR matches the &quot;iter-097 semantic-grouping&quot; shape — keeps the iteration log entry useful (one rationale, one verification step) and keeps the per-iteration overhead low for small extractions.</p>
+<p><strong>Change:</strong></p>
+<pre class="code-block"><code>def _emit_primed_audio_line(emit, primed_seconds_total: float) -&gt; None:
+    &quot;&quot;&quot;iter-057 single line.&quot;&quot;&quot;
+    if primed_seconds_total &gt; 0:
+        emit(f&quot;    Primed audio:     {primed_seconds_total:.1f}s ...&quot;)
+
+def _emit_bargeable_line(emit, bargeable_values: list[float]) -&gt; None:
+    &quot;&quot;&quot;iter-074 single line.&quot;&quot;&quot;
+    if bargeable_values and min(bargeable_values) &lt; 0.99:
+        worst = min(bargeable_values) * 100
+        below_count = sum(1 for v in bargeable_values if v &lt; 0.99)
+        emit(f&quot;    Bargeable:        {worst:.0f}% worst ...&quot;)</code></pre>
+<p>Both helpers take a free-function shape (no <code>*Stats</code> dataclass) because each takes a single primitive — overkill to wrap in a dataclass for one int/float/list. The <code>*Stats</code> pattern earned its weight in iter-097 + iter-103 where 2-3 fields needed bundling; here the simpler signature wins.</p>
+<p><strong>Tests:</strong></p>
+<ul><li><code>tests/unit/test_emit_primed_audio_line.py</code>: 6 tests covering zero suppression, defensive negative, positive emission, .1f formatting, large values, indent.</li><li><code>tests/unit/test_emit_bargeable_line.py</code>: 8 tests covering empty/all-above suppression, one-turn-below, multi-turn-below, .0f rounding, threshold boundary (exactly 0.99 vs 0.989), indent.</li></ul>
+<p>Verification:</p>
+<ul><li>Direct tests: <strong>14 passed in 30ms</strong>.</li><li>Regression sentinel: `python -m pytest tests/unit/test_emit_*.py tests/unit/test_session_*.py -q` → <strong>121 passed</strong> (was 113; new 8 are the iter-104 helpers).</li><li>Full unit + integration: `tests/ --ignore=tests/performance --ignore=tests/test_session.py --ignore=tests/e2e -q` → <strong>1170 passed, 1 skipped</strong> (1156 prior + 14 new).</li><li>Perf snapshot: <code>tests/performance/ -q</code> → <strong>21 passed</strong>.</li></ul>
+<p>Notes:</p>
+<ul><li><strong>Ten block helpers extracted now.</strong> The session-summary emit-line shape is fully covered: Filler, Errors, WPM, Sentence, History, Recording).<ul><li>7 <code>*Block</code> helpers + <code>*Stats</code> dataclasses (TTFS, Barge,</li><li>2 single-line free-function helpers (Primed Audio, Bargeable).</li></ul></li></ul>
+<p>What&#x27;s left inline in <code>print_session_summary</code> is mostly the <em>aggregation</em> code that builds the inputs (median/max computations, list comprehensions over metrics_list). That&#x27;s data-flow logic, not formatting — not a candidate for extraction in the same shape.</p>
+<ul><li><strong>Free-function vs <code>*Stats</code>-shaped: clear rule of thumb.</strong> ≥2 inputs → dataclass (lets future signal additions extend the dataclass without churning the helper signature). Exactly 1 input → free function. iter-104 codifies this.</li><li><strong>Cumulative refactor savings.</strong> Per-iter line counts: Total <strong>~339 lines</strong> reduced from the original ~1500.<ul><li>iter-089 (TTFS): -65</li><li>iter-090 (Barge): -28</li><li>iter-091 (Filler): -45</li><li>iter-092 (Errors): -32</li><li>iter-094 (WPM): -52</li><li>iter-095 (Sentence): -39</li><li>iter-097 (History): -49</li><li>iter-103 (Recording): -17</li><li>iter-104 (PrimedAudio + Bargeable): -12</li></ul></li><li>The remaining inline code in <code>print_session_summary</code> is now ~1160 lines, almost all aggregation/computation. The formatting layer is ~80% extracted.</li><li>Next directions: in the 46-metric taxonomy that&#x27;s still incomplete. iter-102) — applies iter-101&#x27;s grid pattern to session helper. thread+sleep pattern (only 2 sites; might wait for a 3rd). diminishing returns; consider extracting the aggregation layer if a clean grouping emerges, or pivot to other refactor targets (mic_chat.py main loop, llm_stream error handling).<ul><li>WER fixture (1.6) heavyweight iteration — the last metric</li><li>Per-token-delay grid for context cap (still pending from</li><li><code>_push_after_flush</code> helper to dedupe iter-042 + iter-102</li><li>Move on from <code>print_session_summary</code> extractions —</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-103.html">← iter-103</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>
