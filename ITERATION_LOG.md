@@ -11406,3 +11406,129 @@ Notes:
   - `--diff <baseline.json>` mode that compares the current
     run against a baseline JSON — useful for "did my engine
     change improve or regress?"
+
+## iter-134 — --diff baseline mode for benchmark CLI
+
+**Goal:** Operators iterating on an STT engine want a "did my
+change improve or regress?" workflow. iter-134 adds
+`--diff baseline.json`: load a saved JSON output from before a
+change, run the benchmark again, see per-fixture deltas + status
+flips highlighted.
+
+    # Save a baseline before changes
+    python scripts/run_stt_benchmark.py --engine faster_whisper \
+        --format json > baseline.json
+
+    # ...make engine changes...
+
+    # Compare against baseline
+    python scripts/run_stt_benchmark.py --engine faster_whisper \
+        --diff baseline.json
+
+**Output:**
+
+    clean_audio               PASS   WER 0.20 -> 0.20  Δ +0.000
+    noisy_audio               PASS   WER 0.20 -> 0.25  Δ +0.050
+    multispeaker_audio        FAIL   WER 0.80 -> 1.20  Δ +0.400 (regressed)
+
+    4/5 → 5/5 fixtures passing (+1)
+    Improvements: noisy_audio
+    Regressions: multispeaker_audio
+
+**Three additions:**
+
+1. **`FixtureDiff` dataclass** — per-fixture diff with
+   `current_wer`, `baseline_wer`, `current_passed`,
+   `baseline_passed` (each can be `None` for new/removed
+   fixtures). Computed properties: `wer_delta` and
+   `status_change` (one of "unchanged" / "regressed" /
+   "improved" / "new" / "removed").
+
+2. **`BenchmarkDiff` aggregate dataclass** with derived
+   properties: `regressions`, `improvements`, `new_fixtures`,
+   `removed_fixtures` — each a filtered list of `FixtureDiff`s.
+   Plus `current_passing/total` and `baseline_passing/total`
+   for the headline summary line.
+
+3. **`compute_diff(summary, baseline_dict)`** matches fixtures
+   by name, builds `FixtureDiff` entries, handles new/removed
+   cases. **`format_diff_text(diff)`** renders the result —
+   per-row WER comparison, status markers, summary line, and
+   explicit "Improvements:"/"Regressions:"/"New:"/"Removed:"
+   sections when relevant.
+
+4. **`--diff <path>` CLI flag** — loads the baseline, runs the
+   benchmark silently (`verbose=False`), feeds both into the
+   diff path. Overrides `--format` (always text). Exit codes:
+   3 if baseline file missing or unparseable.
+
+**Tests** (16 new, 44 total):
+
+*compute_diff (8 tests):* unchanged / regression / improvement /
+new fixture / removed fixture / wer_delta correct /
+wer_delta None for new+removed / aggregate counts match.
+
+*format_diff_text (8 tests):* per-fixture rows show
+"baseline -> current" / regression marker / improvement marker /
+summary line "X/Y → A/B (+N)" / Regressions list / New +
+Removed lists / unchanged session has no Improvements/
+Regressions sections / negative deltas render with sign.
+
+End-to-end smoke verified:
+- Identical runs: all Δ +0.000, summary "5/5 → 5/5 (+0)".
+- Missing baseline file → "baseline JSON not found" + exit 3.
+- Unparseable baseline → "baseline JSON parse error" + exit 3.
+
+Verification:
+- `python -m pytest tests/unit/test_run_stt_benchmark.py -q` →
+  **44 passed in 50ms** (28 prior + 16 new).
+- Full unit + integration: **1582 passed, 1 skipped** (1566
+  prior + 16 new).
+- Perf snapshot: **23 passed**.
+
+Notes:
+- **The diff workflow is the canonical "engine change
+  evaluation" loop.** Steps:
+  1. Run benchmark, save JSON: `--format json > baseline.json`.
+  2. Make engine change (faster-whisper version bump, model
+     size change, custom STTEngine implementation).
+  3. Run with `--diff baseline.json`.
+  4. Read regressions/improvements at a glance.
+
+  This converts "is the engine still good?" from a manual
+  per-fixture comparison into a one-command answer.
+- **`status_change` is the most actionable column.** Operators
+  scanning the output focus on rows with markers (regressed /
+  improved / new / removed) — those rows changed something
+  worth noting. Unchanged rows blend into the noise. Future
+  enhancement could color-code status_change for terminals
+  that support it.
+- **Pure-function discipline carries through.** `compute_diff`
+  takes a summary + a parsed dict; `format_diff_text` takes a
+  diff object. Neither touches the filesystem. The CLI does
+  the JSON loading and the print. Easy to test, easy to reuse:
+  a future `--diff <baseline.csv>` could land by adding a
+  parser, no changes to compute_diff.
+- **Why `wer_delta` is signed.** The natural reading of "Δ
+  +0.05" is "got worse by 0.05" — operators reading the diff
+  see the sign and immediately know which direction the metric
+  moved. Negative deltas are improvements; positive are
+  regressions (in WER terms). Matching this with the
+  `status_change` marker on status flips gives operators two
+  signals: per-fixture WER change AND threshold crossings.
+- **The benchmark CLI is now a complete eval workflow:**
+  - Run (iter-132)
+  - Save in machine-readable formats (iter-133)
+  - Diff against a baseline (iter-134)
+
+  Together: a CI pipeline can run benchmark → save JSON →
+  diff against the previous build's JSON → fail PR if any
+  fixture regresses. That's a real engineering primitive,
+  not just a debugging tool.
+- Next directions:
+  - README pointer to the benchmark CLI ("Evaluating a new
+    STT engine" — covers iter-132/133/134 together).
+  - `--diff` could optionally support `--format json/csv`
+    for machine-readable diff output (CI pipelines).
+  - Architecture: A/B `aggressive_first_sentence: true`
+    using the diff workflow against a saved baseline.

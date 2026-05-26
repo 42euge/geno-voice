@@ -520,3 +520,239 @@ def test_csv_format_fixed_decimal_precision():
     # WER 0.123456789 → "0.1235" (rounded to 4 decimals).
     assert "0.1235" in out
     assert "0.9877" in out
+
+
+# ---- iter-134: compute_diff ------------------------------------
+
+
+def _baseline_payload(*entries):
+    """Build a baseline JSON payload (parsed-dict shape).
+    entries: (name, passed, wer)."""
+    results = []
+    passing = 0
+    for name, passed, wer in entries:
+        results.append({
+            "name": name, "passed": passed, "wer": wer,
+            "reference": "", "hypothesis": "",
+            "expected_min": 0.0, "expected_max": 1.0,
+            "elapsed_seconds": 0.0,
+        })
+        if passed:
+            passing += 1
+    return {
+        "passing": passing,
+        "failing": len(entries) - passing,
+        "total": len(entries),
+        "total_elapsed_seconds": 0.0,
+        "results": results,
+    }
+
+
+def test_diff_unchanged_session():
+    """Same fixtures, same WER, same status → all unchanged."""
+    current = _build_summary(
+        ("a", True, 0.20, 0.0, 0.5, 0.1, "ref", "hyp"),
+        ("b", True, 0.10, 0.0, 0.5, 0.1, "ref", "hyp"),
+    )
+    baseline = _baseline_payload(
+        ("a", True, 0.20),
+        ("b", True, 0.10),
+    )
+    diff = module.compute_diff(current, baseline)
+    assert len(diff.fixture_diffs) == 2
+    assert all(d.status_change == "unchanged" for d in diff.fixture_diffs)
+    assert diff.regressions == []
+    assert diff.improvements == []
+
+
+def test_diff_regression_detected():
+    """A fixture that was PASS in baseline and FAIL in current
+    is flagged as 'regressed'."""
+    current = _build_summary(
+        ("noisy", False, 0.60, 0.0, 0.5, 0.1, "ref", "hyp"),
+    )
+    baseline = _baseline_payload(("noisy", True, 0.30))
+    diff = module.compute_diff(current, baseline)
+    assert len(diff.regressions) == 1
+    assert diff.regressions[0].name == "noisy"
+    assert diff.improvements == []
+
+
+def test_diff_improvement_detected():
+    """FAIL → PASS counts as 'improved'."""
+    current = _build_summary(
+        ("fixed", True, 0.10, 0.0, 0.5, 0.1, "ref", "hyp"),
+    )
+    baseline = _baseline_payload(("fixed", False, 0.80))
+    diff = module.compute_diff(current, baseline)
+    assert len(diff.improvements) == 1
+    assert diff.improvements[0].name == "fixed"
+    assert diff.regressions == []
+
+
+def test_diff_new_fixture_in_current():
+    """Fixture in current but not baseline → 'new'."""
+    current = _build_summary(
+        ("a", True, 0.10, 0.0, 0.5, 0.1, "ref", "hyp"),
+        ("new_one", True, 0.20, 0.0, 0.5, 0.1, "ref", "hyp"),
+    )
+    baseline = _baseline_payload(("a", True, 0.10))
+    diff = module.compute_diff(current, baseline)
+    assert len(diff.new_fixtures) == 1
+    assert diff.new_fixtures[0].name == "new_one"
+
+
+def test_diff_removed_fixture():
+    """Fixture in baseline but not current → 'removed'."""
+    current = _build_summary(
+        ("a", True, 0.10, 0.0, 0.5, 0.1, "ref", "hyp"),
+    )
+    baseline = _baseline_payload(
+        ("a", True, 0.10),
+        ("legacy", True, 0.30),
+    )
+    diff = module.compute_diff(current, baseline)
+    assert len(diff.removed_fixtures) == 1
+    assert diff.removed_fixtures[0].name == "legacy"
+    assert diff.removed_fixtures[0].current_wer is None
+    assert diff.removed_fixtures[0].baseline_wer == 0.30
+
+
+def test_diff_wer_delta():
+    """The wer_delta property is current minus baseline."""
+    current = _build_summary(
+        ("a", True, 0.30, 0.0, 0.5, 0.1, "ref", "hyp"),
+    )
+    baseline = _baseline_payload(("a", True, 0.20))
+    diff = module.compute_diff(current, baseline)
+    fd = diff.fixture_diffs[0]
+    assert abs(fd.wer_delta - 0.10) < 1e-9
+
+
+def test_diff_wer_delta_none_for_new_or_removed():
+    """When one side is missing, wer_delta is None."""
+    current = _build_summary(
+        ("only_in_current", True, 0.10, 0.0, 0.5, 0.1, "r", "h"),
+    )
+    baseline = _baseline_payload(("only_in_baseline", True, 0.20))
+    diff = module.compute_diff(current, baseline)
+    for fd in diff.fixture_diffs:
+        assert fd.wer_delta is None
+
+
+def test_diff_aggregates_match_summary_counts():
+    """current_passing/total + baseline_passing/total reflect
+    the source data accurately."""
+    current = _build_summary(
+        ("a", True,  0.0, 0.0, 0.5, 0.1, "r", "h"),
+        ("b", True,  0.0, 0.0, 0.5, 0.1, "r", "h"),
+        ("c", False, 0.9, 0.0, 0.5, 0.1, "r", "h"),
+    )
+    baseline = _baseline_payload(
+        ("a", True, 0.0),
+        ("b", False, 0.9),
+        ("c", False, 0.9),
+    )
+    diff = module.compute_diff(current, baseline)
+    assert diff.current_passing == 2
+    assert diff.current_total == 3
+    assert diff.baseline_passing == 1
+    assert diff.baseline_total == 3
+
+
+# ---- iter-134: format_diff_text ------------------------------
+
+
+def test_format_diff_text_includes_per_fixture_rows():
+    current = _build_summary(
+        ("a", True, 0.20, 0.0, 0.5, 0.1, "ref", "hyp"),
+    )
+    baseline = _baseline_payload(("a", True, 0.10))
+    out = module.format_diff_text(module.compute_diff(current, baseline))
+    assert "a" in out
+    assert "0.10 -> 0.20" in out
+    assert "PASS" in out
+
+
+def test_format_diff_text_marks_regression():
+    current = _build_summary(
+        ("noisy", False, 0.60, 0.0, 0.5, 0.1, "ref", "hyp"),
+    )
+    baseline = _baseline_payload(("noisy", True, 0.30))
+    out = module.format_diff_text(module.compute_diff(current, baseline))
+    assert "regressed" in out
+
+
+def test_format_diff_text_marks_improvement():
+    current = _build_summary(
+        ("fixed", True, 0.10, 0.0, 0.5, 0.1, "ref", "hyp"),
+    )
+    baseline = _baseline_payload(("fixed", False, 0.80))
+    out = module.format_diff_text(module.compute_diff(current, baseline))
+    assert "improved" in out
+
+
+def test_format_diff_text_summary_line():
+    current = _build_summary(
+        ("a", True,  0.0, 0.0, 0.5, 0.1, "r", "h"),
+        ("b", True,  0.0, 0.0, 0.5, 0.1, "r", "h"),
+        ("c", False, 0.9, 0.0, 0.5, 0.1, "r", "h"),
+    )
+    baseline = _baseline_payload(
+        ("a", True, 0.0),
+        ("b", False, 0.9),
+        ("c", False, 0.9),
+    )
+    out = module.format_diff_text(module.compute_diff(current, baseline))
+    assert "1/3 → 2/3" in out
+    assert "(+1)" in out
+
+
+def test_format_diff_text_lists_regressions_explicitly():
+    current = _build_summary(
+        ("a", True,  0.0, 0.0, 0.5, 0.1, "r", "h"),
+        ("b", False, 0.9, 0.0, 0.5, 0.1, "r", "h"),
+        ("c", False, 0.9, 0.0, 0.5, 0.1, "r", "h"),
+    )
+    baseline = _baseline_payload(
+        ("a", True, 0.0),
+        ("b", True, 0.0),
+        ("c", True, 0.0),
+    )
+    out = module.format_diff_text(module.compute_diff(current, baseline))
+    assert "Regressions: b, c" in out
+
+
+def test_format_diff_text_lists_new_and_removed():
+    current = _build_summary(
+        ("kept",     True, 0.0, 0.0, 0.5, 0.1, "r", "h"),
+        ("new_one",  True, 0.0, 0.0, 0.5, 0.1, "r", "h"),
+    )
+    baseline = _baseline_payload(
+        ("kept", True, 0.0),
+        ("legacy", True, 0.0),
+    )
+    out = module.format_diff_text(module.compute_diff(current, baseline))
+    assert "New fixtures: new_one" in out
+    assert "Removed fixtures: legacy" in out
+
+
+def test_format_diff_text_handles_unchanged_session():
+    current = _build_summary(
+        ("a", True, 0.10, 0.0, 0.5, 0.1, "r", "h"),
+    )
+    baseline = _baseline_payload(("a", True, 0.10))
+    out = module.format_diff_text(module.compute_diff(current, baseline))
+    assert "Improvements:" not in out
+    assert "Regressions:" not in out
+    assert "1/1 → 1/1" in out
+    assert "(+0)" in out
+
+
+def test_format_diff_text_negative_delta_renders_correctly():
+    current = _build_summary(
+        ("a", True, 0.10, 0.0, 0.5, 0.1, "r", "h"),
+    )
+    baseline = _baseline_payload(("a", True, 0.30))
+    out = module.format_diff_text(module.compute_diff(current, baseline))
+    assert "-0.200" in out

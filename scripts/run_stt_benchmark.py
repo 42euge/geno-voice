@@ -245,6 +245,222 @@ def format_summary_csv(summary: BenchmarkSummary) -> str:
     return out.getvalue()
 
 
+# iter-134: diff mode. Operators run the benchmark, save the JSON,
+# make a change, re-run with --diff <saved.json> to see what
+# changed. Fixture-level deltas + status flips highlight
+# regressions and improvements without forcing a manual diff.
+
+
+@dataclass
+class FixtureDiff:
+    """One fixture's diff between current and baseline runs.
+
+    A diff entry covers four cases:
+    - matched (both runs have the fixture): WER + status flip
+      computed normally
+    - new (current only): baseline_* fields are None
+    - removed (baseline only): current_* fields are None
+    - both missing: not represented (would be a no-op entry)
+    """
+
+    name: str
+    current_wer: float | None
+    baseline_wer: float | None
+    current_passed: bool | None
+    baseline_passed: bool | None
+
+    @property
+    def wer_delta(self) -> float | None:
+        """Current minus baseline. None when either side is None."""
+        if self.current_wer is None or self.baseline_wer is None:
+            return None
+        return self.current_wer - self.baseline_wer
+
+    @property
+    def status_change(self) -> str:
+        """Categorize the change for display:
+        - "new"        : current only
+        - "removed"    : baseline only
+        - "regressed"  : was PASS, now FAIL
+        - "improved"   : was FAIL, now PASS
+        - "unchanged"  : both have same passed status
+        """
+        if self.baseline_passed is None and self.current_passed is not None:
+            return "new"
+        if self.current_passed is None and self.baseline_passed is not None:
+            return "removed"
+        if self.baseline_passed and not self.current_passed:
+            return "regressed"
+        if not self.baseline_passed and self.current_passed:
+            return "improved"
+        return "unchanged"
+
+
+@dataclass
+class BenchmarkDiff:
+    """Aggregate diff between a current benchmark run and a
+    baseline."""
+
+    fixture_diffs: list[FixtureDiff] = field(default_factory=list)
+    current_passing: int = 0
+    current_total: int = 0
+    baseline_passing: int = 0
+    baseline_total: int = 0
+
+    @property
+    def regressions(self) -> list[FixtureDiff]:
+        return [d for d in self.fixture_diffs if d.status_change == "regressed"]
+
+    @property
+    def improvements(self) -> list[FixtureDiff]:
+        return [d for d in self.fixture_diffs if d.status_change == "improved"]
+
+    @property
+    def new_fixtures(self) -> list[FixtureDiff]:
+        return [d for d in self.fixture_diffs if d.status_change == "new"]
+
+    @property
+    def removed_fixtures(self) -> list[FixtureDiff]:
+        return [d for d in self.fixture_diffs if d.status_change == "removed"]
+
+
+def compute_diff(
+    current: BenchmarkSummary, baseline: dict,
+) -> BenchmarkDiff:
+    """Compute a diff between a current ``BenchmarkSummary`` and
+    a parsed baseline JSON (as returned by ``json.load`` on
+    ``format_summary_json`` output).
+
+    Output ordering:
+    - All fixtures present in BOTH runs come first, in the order
+      they appear in `current.results`.
+    - "new" fixtures (current only) follow.
+    - "removed" fixtures (baseline only) come last.
+
+    This ordering puts the most actionable rows (matching
+    fixtures) first, while still surfacing corpus changes.
+    """
+    diff = BenchmarkDiff()
+    diff.current_passing = current.passing
+    diff.current_total = current.total
+    diff.baseline_passing = baseline.get("passing", 0)
+    diff.baseline_total = baseline.get("total", 0)
+
+    baseline_by_name = {
+        r["name"]: r for r in baseline.get("results", [])
+    }
+
+    seen_names: set[str] = set()
+    for r in current.results:
+        b = baseline_by_name.get(r.name)
+        if b is None:
+            diff.fixture_diffs.append(FixtureDiff(
+                name=r.name,
+                current_wer=r.wer,
+                baseline_wer=None,
+                current_passed=r.passed,
+                baseline_passed=None,
+            ))
+        else:
+            diff.fixture_diffs.append(FixtureDiff(
+                name=r.name,
+                current_wer=r.wer,
+                baseline_wer=b.get("wer"),
+                current_passed=r.passed,
+                baseline_passed=b.get("passed"),
+            ))
+        seen_names.add(r.name)
+
+    # Removed fixtures: in baseline but not current.
+    for r in baseline.get("results", []):
+        if r["name"] not in seen_names:
+            diff.fixture_diffs.append(FixtureDiff(
+                name=r["name"],
+                current_wer=None,
+                baseline_wer=r.get("wer"),
+                current_passed=None,
+                baseline_passed=r.get("passed"),
+            ))
+
+    return diff
+
+
+def format_diff_text(diff: BenchmarkDiff) -> str:
+    """Render a ``BenchmarkDiff`` as human-readable text.
+
+    Per-fixture rows show:
+
+        clean_audio          PASS  WER 0.20 -> 0.20  Δ +0.000
+        noisy_audio          PASS  WER 0.20 -> 0.25  Δ +0.050
+        multispeaker_audio   FAIL  WER 0.80 -> 1.20  Δ +0.400 (regressed)
+
+    Trailing summary:
+
+        4/5 → 5/5 fixtures passing (+1)
+        Improvements: noisy_audio
+        Regressions: multispeaker_audio
+        New fixtures: extra_audio
+        Removed fixtures: legacy_audio
+    """
+    lines: list[str] = []
+    for d in diff.fixture_diffs:
+        status_change = d.status_change
+        if d.current_passed is None:
+            status = "REMOV"
+            cur_wer_s = "—"
+        elif d.current_passed:
+            status = "PASS"
+            cur_wer_s = f"{d.current_wer:.2f}"
+        else:
+            status = "FAIL"
+            cur_wer_s = f"{d.current_wer:.2f}"
+
+        if d.baseline_wer is None:
+            base_wer_s = "—"
+        else:
+            base_wer_s = f"{d.baseline_wer:.2f}"
+
+        if d.wer_delta is None:
+            delta_s = "    "
+        else:
+            sign = "+" if d.wer_delta >= 0 else ""
+            delta_s = f"Δ {sign}{d.wer_delta:.3f}"
+
+        marker = ""
+        if status_change in ("regressed", "improved", "new", "removed"):
+            marker = f" ({status_change})"
+
+        lines.append(
+            f"{d.name:25s} {status:5s}  "
+            f"WER {base_wer_s} -> {cur_wer_s}  "
+            f"{delta_s}{marker}"
+        )
+
+    lines.append("")
+    delta = diff.current_passing - diff.baseline_passing
+    sign = "+" if delta >= 0 else ""
+    lines.append(
+        f"{diff.baseline_passing}/{diff.baseline_total} → "
+        f"{diff.current_passing}/{diff.current_total} fixtures passing "
+        f"({sign}{delta})"
+    )
+
+    if diff.improvements:
+        names = ", ".join(d.name for d in diff.improvements)
+        lines.append(f"Improvements: {names}")
+    if diff.regressions:
+        names = ", ".join(d.name for d in diff.regressions)
+        lines.append(f"Regressions: {names}")
+    if diff.new_fixtures:
+        names = ", ".join(d.name for d in diff.new_fixtures)
+        lines.append(f"New fixtures: {names}")
+    if diff.removed_fixtures:
+        names = ", ".join(d.name for d in diff.removed_fixtures)
+        lines.append(f"Removed fixtures: {names}")
+
+    return "\n".join(lines)
+
+
 def _build_transcribe_from_engine_args(
     engine: str, model: str, device: str, compute: str,
     *, beam_size: int = 1, temperature: float = 0.0,
@@ -332,6 +548,13 @@ def main() -> int:
              "json — full result dump suitable for piping. "
              "csv — header + one row per fixture for spreadsheets.",
     )
+    parser.add_argument(
+        "--diff", default="",
+        help="Path to a baseline JSON file (from a previous "
+             "--format json run). When set, output shows a diff "
+             "highlighting per-fixture WER changes + status flips. "
+             "Overrides --format (always text-formatted).",
+    )
     args = parser.parse_args()
 
     with CORPUS_PATH.open() as f:
@@ -352,10 +575,39 @@ def main() -> int:
         print(f"engine construction failed: {e}", file=sys.stderr)
         return 2
 
+    # iter-134: --diff loads a baseline JSON before running and
+    # formats the result as a diff. Overrides --format (text-only).
+    baseline = None
+    if args.diff:
+        try:
+            with open(args.diff) as bf:
+                baseline = json.load(bf)
+        except FileNotFoundError:
+            print(
+                f"baseline JSON not found: {args.diff}",
+                file=sys.stderr,
+            )
+            return 3
+        except json.JSONDecodeError as e:
+            print(
+                f"baseline JSON parse error in {args.diff}: {e}",
+                file=sys.stderr,
+            )
+            return 3
+
     # iter-133: --format controls output. For text (default),
     # run_benchmark emits per-row + summary inline. For json/csv,
     # silence run_benchmark and dump the formatted output after.
-    if args.format == "text":
+    # iter-134: when --diff is active, run silently and emit the
+    # diff text instead.
+    if baseline is not None:
+        summary = run_benchmark(
+            transcribe, fixtures, CORPUS_PATH.parent,
+            verbose=False,
+        )
+        diff = compute_diff(summary, baseline)
+        print(format_diff_text(diff))
+    elif args.format == "text":
         summary = run_benchmark(
             transcribe, fixtures, CORPUS_PATH.parent,
         )
