@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-102 — A/B perf scenarios for max_user_assistant context cap</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-101.html">← iter-101</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-102 — A/B perf scenarios for max_user_assistant context cap</h1>
+<div class="meta"></div>
+</header><p><strong>Goal:</strong> Fourth pair-scenario after iter-098, iter-099, iter-100. Validates iter-077 (context_tokens) + iter-078 (trim_events) empirically by running an 8-turn session twice — once at the default cap of 20 (never trims), once at a tight cap of 5 (trims after turn 3). Completes the user-facing-opt-in coverage suite (splitter, filler threshold, auto-aggressive, context cap).</p>
+<p><strong>New plumbing — <code>_run_session_scenario</code>.</strong> The first multi-turn perf helper; existing scenarios are all single-turn. The cap is a session-level concept — it only matters AFTER history accumulates — so a one-shot scenario can&#x27;t see it. Records the LAST turn&#x27;s metrics into a single <code>ScenarioResult</code> row + returns <code>trim_events</code> count for assertions.</p>
+<pre class="code-block"><code>res, trim_events = _run_session_scenario(
+    &quot;context_cap_default&quot;,
+    n_turns=8, max_user_assistant=20,
+)</code></pre>
+<p><strong>Subtle gotcha — <code>flush_pending_audio</code> and pre-loaded mics.</strong> First attempt pre-loaded all 8 utterances at once. Worked for turn 1, then turn 2&#x27;s flush drained the entire remaining buffer and the recorder waited forever for a tone burst. Fixed with the same delayed-push pattern as iter-042&#x27;s barge-in scenario: a feeder thread that pushes utterance N+1 only AFTER turn N&#x27;s flush has completed (50ms semaphore-gated delay).</p>
+<pre class="code-block"><code>pending = _th.Semaphore(0)
+def _feeder():
+    for _ in range(n_turns - 1):
+        pending.acquire()       # block until turn N starts
+        time.sleep(0.05)        # land after flush
+        _utterance(speech_seconds, mic)</code></pre>
+<p>Inside the turn loop, <code>pending.release()</code> runs at the start of each turn after the first.</p>
+<p><strong>Empirical A/B</strong> (this run, 8-turn session, x86_64 Linux stub):</p>
+<table class="iter-table"><thead><tr><th>Metric</th><th>cap=20 (default)</th><th>cap=5 (tight)</th><th>Δ</th></tr></thead><tbody><tr><td>context_tokens (turn 8)</td><td>53</td><td>24</td><td>-55%</td></tr><tr><td>TTFS (turn 8)</td><td>800.3 ms</td><td>800.3 ms</td><td>0</td></tr><tr><td>trim_events (8 turns)</td><td>0</td><td>4+</td><td>—</td></tr></tbody></table>
+<p>The 55% drop in billed tokens is the headline number. TTFS is identical because the stub LLM has zero per-token cost — in production, LLM TTFB scales with input context, so the cap delivers TTFS savings on top of cost savings. iter-101&#x27;s per-token-delay grid pattern could be applied here too: parameterize per-token-delay across the cap A/B to surface the real-LLM TTFS benefit.</p>
+<p>Verification: <code>python -m pytest tests/performance/ -q</code> → <strong>21 passed in 13.9s</strong> (was 19, +2 new). Full unit + integration suite: <code>tests/ --ignore=tests/performance --ignore=tests/ test_session.py --ignore=tests/e2e -q</code> → <strong>1148 passed, 1 skipped</strong> (identical to main).</p>
+<p>Notes:</p>
+<ul><li><strong>Pattern: session-shaped pair-scenarios.</strong> The 4th pair, but the FIRST that needs cross-turn state. The new helper <code>_run_session_scenario</code> is the natural place to put any future multi-turn metric (cumulative <code>llm_errors</code>, session-long <code>false_triggers</code>, <code>last_filler_id</code> rotation, etc.). Current shape is &quot;drive N turns, record last-turn metrics + session counter&quot; — plenty of room to extend.</li><li><strong>The flush-vs-pre-load gotcha is a recurring trap.</strong> Three scenarios now (iter-042 barge-in, iter-100 stall, iter-102 session) hit &quot;audio is in the buffer too early.&quot; All three use the same fix: thread + 50ms delay. Worth distilling into a <code>_push_after_flush(mic, audio, delay=0.05)</code> helper if a fourth instance lands.</li><li><strong>The pair-scenario family is now 4 strong</strong> with shared shape but diverging mechanisms. The pattern handles:<ul><li>iter-098: behavior flag, single-turn (splitter)</li><li>iter-099: timing threshold, single-turn (filler)</li><li>iter-100: timing threshold, single-turn with stall (auto-flip)</li><li>iter-101: per-token-delay grid, single-turn extension</li><li>iter-102: session counter, multi-turn (context cap)</li></ul></li></ul>
+<p>Each iteration adds one new dimension. Next dimensions available: cumulative metric (e.g., <code>last_filler_id</code> rotation across turns), preempted_words on barge across N turns.</p>
+<ul><li>Next directions: TTFS scaling at different TPS). sites (iter-042, iter-100, iter-102).<ul><li>Per-token-delay grid for context cap (would surface real-LLM</li><li>Extract <code>_emit_recording_block</code> (still pending from iter-097).</li><li>WER fixture (1.6) heavyweight iteration.</li><li><code>_push_after_flush</code> helper to dedupe the three thread+sleep</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-101.html">← iter-101</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>
