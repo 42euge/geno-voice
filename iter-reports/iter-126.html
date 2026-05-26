@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-126 — Fix iter-115 limitation: filter &quot;natural&quot; before run scan</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-125.html">← iter-125</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-126 — Fix iter-115 limitation: filter &quot;natural&quot; before run scan</h1>
+<div class="meta"></div>
+</header><p><strong>Goal:</strong> iter-115 documented a known limitation in <code>_emit_naturalness_consistency_line</code>:</p>
+<blockquote>When a &quot;natural&quot; run is longer than a threshold-crossing &quot;rushed&quot;/&quot;slow&quot; run, the helper reports the natural run as the longest, suppresses it (because natural is the desired state), and fires nothing — losing the rushed/slow signal.</blockquote>
+<p>iter-126 fixes this by <strong>filtering &quot;natural&quot; out before the scan</strong>, mirroring iter-114&#x27;s zero-filter precedent for fillers:</p>
+<blockquote>User perception: &quot;5 rushed turns in a row&quot; regardless of intervening natural turns.</blockquote>
+<p><strong>Code change</strong> (3 lines added, 4 lines removed):</p>
+<pre class="code-block"><code># Before:
+non_empty = [b for b in buckets if b]
+longest_run, longest_bucket = _longest_consecutive_run(non_empty)
+if longest_run &lt; threshold:
+    return
+if longest_bucket == &quot;natural&quot;:
+    return  # iter-115&#x27;s backstop suppression</code></pre>
+<pre class="code-block"><code># After:
+filtered = [b for b in buckets if b and b != &quot;natural&quot;]
+if not filtered:
+    return
+longest_run, longest_bucket = _longest_consecutive_run(filtered)
+if longest_run &lt; threshold:
+    return
+# No &quot;natural&quot; backstop — filtered out. Dead code removed.</code></pre>
+<p>The filter approach is consistent with iter-114&#x27;s zero-filter and iter-120&#x27;s empty-string filter — all three diversity-check helpers now pre-filter &quot;uninteresting&quot; values before scanning. The <code>_longest_consecutive_run</code> primitive (iter-116) stays unchanged.</p>
+<p><strong>Three behavior-change cases:</strong></p>
+<table class="iter-table"><thead><tr><th>Input</th><th>Pre-iter-126</th><th>Post-iter-126</th></tr></thead><tbody><tr><td>7 natural + 5 rushed</td><td>silent</td><td>fires (5)</td></tr><tr><td>6 natural + 1 rushed + 1 nat + 1 r</td><td>silent</td><td>silent (run=2)</td></tr><tr><td>rushed×7, natural between each</td><td>silent</td><td>fires (7)</td></tr></tbody></table>
+<p>The first row is the headline fix. The second is unchanged (still under threshold post-filter). The third is a new recovery — pre-iter-126, the filter would have caught only isolated runs of 1.</p>
+<p><strong>Tests</strong> (21 total, was 18):</p>
+<p>The existing tests fall into three buckets:</p>
+<ul><li><strong>Unchanged behavior (16 tests)</strong>: empty/below-threshold/ natural-only suppression, both phases firing on pure runs, custom thresholds, formatting, defensive fallbacks. All still pass byte-for-byte.</li></ul>
+<ul><li><strong>Updated behavior</strong> (1 test, renamed): <code>test_natural_run_longer_than_rushed_run_fires_after_iter_126</code> was <code>test_natural_run_longer_than_rushed_run</code> — flipped from documenting the limitation (<code>assert lines == []</code>) to asserting the corrected behavior (<code>assert &quot;5 consecutive&quot; in lines[0]</code>). Comment block explaining the iter-126 change replaces the &quot;known limitation&quot; note.</li></ul>
+<ul><li><strong>Updated rationale</strong> (1 test, same outcome): <code>test_long_natural_run_does_not_fire_even_with_brief_outliers</code> still asserts <code>lines == []</code>, but the rationale changes: pre-iter-126 it was &quot;longest run is 6 of natural, suppressed&quot;; post-iter-126 it&#x27;s &quot;filtered list has run of 2, below threshold.&quot; Same outcome; updated docstring.</li></ul>
+<ul><li><strong>New tests (3 total)</strong>: [r,n,r,n,r,n,r,r,n] → filtered = [r]*5 → fires. no natural to filter → unchanged. [n*3, r*3, n, s*6] → filtered run-finder picks slow (6 &gt; 3).<ul><li><code>test_iter_126_natural_filter_preserves_run_in_split_pattern</code>:</li><li><code>test_iter_126_filter_does_not_affect_pure_rushed_runs</code>:</li><li><code>test_iter_126_mixed_rushed_and_slow_picks_longest</code>:</li></ul></li></ul>
+<p>Verification:</p>
+<ul><li>`python -m pytest tests/unit/test_emit_naturalness_consistency_line.py -v` → <strong>21 passed in 40ms</strong> (18 prior + 3 new; 1 renamed, 1 docstring updated).</li><li>`python -m pytest tests/unit/test_emit_*.py tests/unit/test_session_*.py tests/unit/test_longest_consecutive_run.py -q` → all related tests pass.</li><li>Full unit + integration: <strong>1487 passed, 1 skipped</strong> (1484 prior + 3 new).</li><li>Perf snapshot: <strong>23 passed</strong>.</li></ul>
+<p>Notes:</p>
+<ul><li><strong>iter-115 was correct to flag this as a limitation.</strong> A pure documenting test (&quot;here&#x27;s what doesn&#x27;t work&quot;) instead of trying-to-work-around-it is the right call when the fix is uncertain or non-trivial. iter-126 is the natural follow- up: now we know the right shape, the fix is one line.</li><li>**The filter-before-scan pattern is now consistent across all three diversity helpers**: before scan.<ul><li>iter-114 (filler): filter zeros before scan.</li><li>iter-115/iter-126 (naturalness): filter empties + &quot;natural&quot;</li><li>iter-120 (barge): filter empties before scan.</li></ul></li></ul>
+<p>None of them apply post-scan exclusion. The shared <code>_longest_consecutive_run</code> (iter-116) doesn&#x27;t filter — that&#x27;s per-instance policy. iter-126 brings naturalness in line.</p>
+<ul><li><strong>Removed dead code.</strong> Pre-iter-126 had `if longest_bucket == &quot;natural&quot;: return` as a backstop after the scan — now unreachable since &quot;natural&quot; is filtered out. Removed rather than left as &quot;defense in depth&quot;: dead code obscures what the function actually does, and the new filter is the single source of truth.</li><li><strong>No new metric, no new infrastructure.</strong> This iter is a pure bug fix — fewer lines than were added, behavior improvement, three new test cases that exercise edge cases the previous tests didn&#x27;t cover.</li><li>Next directions: pipeline; harder to generate deterministically). default, with the now-existing real-audio fixtures as the prosody A/B reference. diversity instance — useful but not urgent given the pattern has 3 stable instances.<ul><li>Multi-speaker overlap fixture (stress test for the WER</li><li>Architecture: A/B <code>aggressive_first_sentence: true</code> as</li><li>Sentence-length-bucket consistency check would be the 4th</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-125.html">← iter-125</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>
