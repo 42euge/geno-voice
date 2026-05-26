@@ -7326,3 +7326,181 @@ Notes:
     layer if a clean grouping emerges, or pivot to other
     refactor targets (mic_chat.py main loop, llm_stream
     error handling).
+
+## iter-105 — WER computation primitive + session-summary wiring
+
+**Goal:** Close the metric-taxonomy infrastructure gap for 1.6
+(WER) — listed as "needs ground truth corpus" in 6+ prior
+iteration logs. Build the metric primitive + plumbing now so a
+future audio-fixture iteration only has to wire reference
+transcripts in, not invent the metric from scratch.
+
+**Split scope so this iteration finishes in one sitting:**
+- ✅ WER computation primitive (`examples/_chat_wer.py`,
+  pure string operation, no audio).
+- ✅ TurnMetrics fields (`wer`, `wer_measured`).
+- ✅ Session-summary helper (`_emit_wer_line`).
+- ✅ Tests on all of the above (23 + 9 + indirect via session
+  summary).
+- ⏭ Audio-fixture corpus + reference transcripts (deferred —
+  needs a different STT-mocking strategy on x86_64 since
+  mlx-whisper is Mac-only).
+
+**WER primitive (`examples/_chat_wer.py`):**
+
+Standard formula: WER = (S + D + I) / N. Word-level Levenshtein
+DP, no external deps (jiwer/python-Levenshtein NOT pulled in to
+keep the install footprint flat). Light normalization:
+lowercase + strip punctuation, but apostrophes preserved so
+"don't" stays as one word (splitting it inflates N and
+over-penalizes contractions).
+
+```python
+def compute_wer(reference: str, hypothesis: str) -> float:
+    ref = _tokenize(reference)
+    hyp = _tokenize(hypothesis)
+    n = len(ref)
+    if n == 0:
+        return float(len(hyp))   # all insertions
+    if not hyp:
+        return 1.0               # all deletions
+    # Classic word-level Levenshtein DP, O(R*H) time/space.
+    ...
+    return dp[n][len(hyp)] / n
+```
+
+**TurnMetrics extension:** Two new fields, both safely zero by
+default so they don't disturb the regression sentinel:
+
+```python
+wer: float = 0.0          # Word Error Rate; 0.0 = perfect or
+                          # not-measured (use wer_measured to
+                          # distinguish).
+wer_measured: bool = False  # True only when a reference was
+                            # supplied this turn.
+```
+
+The `wer_measured` flag is critical — without it, "0.0 = perfect"
+and "0.0 = not measured" would be indistinguishable, and the
+session-summary would either always emit a misleading "0.00 WER"
+line or never emit at all. With the flag, the helper filters on
+the truth that a reference existed, then computes median/max
+over the actual measurements.
+
+**Session-summary wiring:**
+
+```python
+def _emit_wer_line(emit, wer_values: list[float]) -> None:
+    if not wer_values:
+        return
+    med = statistics.median(wer_values)
+    worst = max(wer_values)
+    emit(f"    WER:              {med:.2f} median, {worst:.2f} max "
+         f"({len(wer_values)} turns measured)")
+```
+
+Emitted right after `_emit_bargeable_line` so the recording-
+related signals (mic_stale, false_trig, primed audio, bargeable,
+WER) stay grouped — even though they're each their own helper.
+
+Production-grade calibration anchors recorded inline in the
+helper docstring so the operator sees the meaning of the number:
+
+```
+< 0.10 — production-grade STT
+0.10-0.20 — acceptable for clean audio
+0.20-0.40 — degraded; tune mic / silence_threshold
+> 0.40 — STT is failing — check input quality
+```
+
+**Tests:**
+
+`tests/unit/test_chat_wer.py` — 23 tests covering:
+- Tokenization (basic, apostrophes, whitespace, empty,
+  punctuation-only).
+- Perfect transcription (identical, case-insensitive, with
+  punctuation).
+- Each error type in isolation (substitution, deletion,
+  insertion).
+- Multi-edit scenarios (completely-wrong, two-sub, sub+del).
+- Empty-input edge cases (both empty, empty hyp, empty ref).
+- Return type invariant (always float).
+- Realistic STT scenarios (clean, one-misheard, dropped filler).
+- Argument-order asymmetry (compute_wer(a,b) ≠ compute_wer(b,a)
+  because N depends on which is the reference).
+
+`tests/unit/test_emit_wer_line.py` — 9 tests covering:
+- Empty list suppression (no measurements → no line).
+- Single-turn perfect / single-turn imperfect.
+- Multi-turn median + max.
+- Even-length median (uses statistics.median's mean-of-middle
+  convention).
+- 2-decimal formatting + values >1.0 (insertion-heavy).
+- 4-space leading indent (matches family convention).
+- Turn-count suffix integrity.
+
+Verification:
+- `python -m pytest tests/unit/test_chat_wer.py
+  tests/unit/test_emit_wer_line.py -q` → **32 passed in 40ms**.
+- Regression sentinel: 144 session-summary tests pass (was 121
+  — +9 from the new wer-line family + 14 from iter-104 already
+  on main).
+- Full unit + integration: `tests/ --ignore=tests/performance
+  --ignore=tests/test_session.py --ignore=tests/e2e -q` →
+  **1202 passed, 1 skipped** (1170 prior + 23 wer + 9 emit).
+- Perf snapshot: `tests/performance/ -q` → **21 passed**.
+
+Notes:
+- **The 46-metric taxonomy is now infrastructurally complete.**
+  Every metric in the "Standard" + "Novel/speculative" buckets
+  has a TurnMetrics field, a session-summary line, and tests.
+  The only thing 1.6 still lacks is **populated data** — a
+  corpus of audio fixtures + reference transcripts. That's a
+  different problem (audio infra, not code), and it's
+  appropriately split into its own iteration.
+- **Audio-fixture corpus design (recorded for the future iter):**
+  - Recordings: 5-10 short utterances (1-3s each) covering
+    common patterns — declarative, question, with filler,
+    contraction-heavy, noisy.
+  - Reference transcripts: hand-curated, lowercase, no
+    punctuation (matches `_tokenize` normalization).
+  - Storage: `tests/fixtures/wer/` with `audio_*.wav` +
+    `reference_*.txt` pairs.
+  - Driver: `tests/integration/test_wer.py` runs each fixture
+    through a stub STT (or a CPU-only Whisper if available) and
+    asserts WER stays below a threshold (e.g., 0.20 for clean
+    audio, 0.40 for noisy). Use `pytest.skip(reason=...)` if
+    no STT engine is loadable on the platform.
+  - **The mlx-whisper x86_64 problem:** for cross-platform
+    eval, the corpus iteration should produce reference
+    transcripts using a CPU-only STT (whisper.cpp or
+    faster-whisper), or use a mocked-but-realistic STT that
+    introduces controlled errors (e.g., 1-substitution per 10
+    words). The latter validates the WER pipeline without
+    requiring real STT — good enough for CI.
+- **`compute_wer` design choices recorded:**
+  - Apostrophes preserved (vs split). Convention varies; we
+    chose preserve because contractions are common in speech.
+  - Empty reference returns float(len(hyp)) (vs inf). Some
+    libraries return inf; we chose finite so callers can do
+    median/mean math without special cases.
+  - Case-insensitive. Whisper outputs lowercase by default,
+    but other STTs vary; lowercasing both sides keeps the
+    metric robust.
+  - No optional kwargs (e.g., `case_sensitive`). YAGNI — add
+    when a real caller needs it.
+- **Final TurnMetrics size:** ~62 fields. The `wer_measured`
+  bool is the first "is this measurement valid?" flag — sets
+  a precedent for future "optional measurement" fields. If
+  more land, they could share a `MeasurementFlags` bitfield
+  to keep the dataclass shape from sprawling.
+- Next directions:
+  - **WER audio-fixture corpus** — design above; the corpus is
+    the heavyweight piece. Could mock STT for CI portability.
+  - Apply iter-088's aggressive splitter as a `chat.aggressive_first_sentence`
+    default-on once the operator-cost on natural turns is
+    quantified (would need a "long preamble vs short response"
+    pair).
+  - Per-token-delay grid for context cap (still pending from
+    iter-102).
+  - `_push_after_flush` helper to dedupe iter-042/iter-102.

@@ -153,6 +153,21 @@ class TurnMetrics:
     # "" when no audio played this turn. Metric 3.1 in the
     # perf-metrics taxonomy ("Novel/speculative").
     naturalness_bucket: str = ""
+    # iter-105: Word Error Rate against an optional reference
+    # transcript, computed via examples._chat_wer.compute_wer.
+    # 0.0 means "not measured" — the field defaults silent
+    # because most turns don't have a ground-truth reference.
+    # When >= 0 AND a reference is supplied at the call site,
+    # this carries the per-turn WER for the session-summary
+    # aggregator (median + max). Audio-fixture corpus is a
+    # follow-up iteration; this field exists so future eval runs
+    # can populate it without changing the dataclass shape.
+    wer: float = 0.0
+    # iter-105: True when wer is meaningful (a reference was
+    # supplied this turn). Distinguishes "0.0 = perfect" from
+    # "0.0 = not measured" — the session-summary helper filters
+    # on this flag, not on wer == 0.0.
+    wer_measured: bool = False
     # iter-056: True when the user barged in within 200ms of bot
     # first audio. Implies the bot pre-empted the user — the user
     # was already mid-utterance when bot speech started, suggesting
@@ -1358,6 +1373,34 @@ def _emit_primed_audio_line(emit, primed_seconds_total: float) -> None:
         )
 
 
+def _emit_wer_line(emit, wer_values: list[float]) -> None:
+    """iter-105: report median + max WER across turns where a
+    reference transcript was supplied. Suppressed when no turn
+    measured WER (the default — most sessions don't have
+    ground-truth references).
+
+    Format mirrors `_emit_history_block`'s context-tokens line:
+    "WER: M.MM median, X.XX max (N turns measured)".
+
+    Production interpretation guide (recorded inline so the
+    operator sees a calibration anchor):
+      < 0.10 — production-grade STT
+      0.10-0.20 — acceptable for clean audio
+      0.20-0.40 — degraded; tune mic / silence_threshold
+      > 0.40 — STT is failing — check input quality
+    """
+    if not wer_values:
+        return
+    import statistics
+    med = statistics.median(wer_values)
+    worst = max(wer_values)
+    emit(
+        f"    WER:              "
+        f"{med:.2f} median, {worst:.2f} max "
+        f"({len(wer_values)} turns measured)"
+    )
+
+
 def _emit_bargeable_line(emit, bargeable_values: list[float]) -> None:
     """iter-104: extracted from print_session_summary's iter-074
     bargeable line. Reports the WORST bargeable fraction across
@@ -1978,6 +2021,12 @@ def print_session_summary(
     # impossible to miss.
     # iter-104: extracted to _emit_bargeable_line helper.
     _emit_bargeable_line(_emit, bargeable_values)
+    # iter-105: WER line — only emits when at least one turn
+    # carried a measured WER (i.e., a reference transcript was
+    # supplied at the call site). Most sessions have no
+    # references → silent.
+    wer_values = [m.wer for m in metrics_list if m.wer_measured]
+    _emit_wer_line(_emit, wer_values)
     # iter-095: sentence block extracted to _emit_sentence_block.
     longest = max(
         (m.max_sentence_chars for m in metrics_list
