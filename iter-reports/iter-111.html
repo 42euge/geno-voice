@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-111 — Feature savings table on performance.html</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-110.html">← iter-110</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-111 — Feature savings table on performance.html</h1>
+<div class="meta"></div>
+</header><p><strong>Goal:</strong> Pivot from refactoring (iter-107–110 completed the <code>run_chat</code> decomposition) to making the perf data more actionable. Five iterations (iter-098/099/100/101/102) added pair-scenarios that empirically validate user-facing opt-ins, but the only place the deltas were summarized was in the iteration log entries themselves. This iteration surfaces them as a curated table at the top of <code>performance.html</code> so an operator looking at the live perf page sees the empirical value of each opt-in immediately.</p>
+<p><strong>Change:</strong> Three new pieces in <code>scripts/generate_iteration_reports.py</code>:</p>
+<p>1. <strong><code>FEATURE_SAVINGS_TABLE</code></strong> — curated list of pair entries. Each entry binds a <code>feature</code> label to a <code>control_scenario</code> name + <code>treatment_scenario</code> name in <code>perf-results.json</code>, plus a <code>primary_metric</code> (the headline number — usually <code>ttfs_ms</code>), a <code>secondary_metric</code> (the behavior marker that proves the mechanism fired — usually <code>mean_sentence_chars</code> or <code>last_filler_id</code> or <code>context_tokens</code>), and a one-line takeaway.</p>
+<p>2. <strong><code>_format_pair_value</code> / <code>_format_pair_delta</code></strong> — pure formatters. Per-metric formatting rules (ms with 1 decimal, tokens as int, last_filler_id as state-change description). Tested in isolation.</p>
+<p>3. <strong><code>_render_feature_savings_section(scenarios)</code></strong> — composes the HTML. Lookups by name; pairs missing either control or treatment are silently skipped so old perf JSONs (pre-iter-098) render without an empty table.</p>
+<p><strong>Six curated entries</strong> corresponding to the iter-098–102 pair-scenarios:</p>
+<table class="iter-table"><thead><tr><th>Feature</th><th>Control</th><th>Treatment</th><th>Primary</th><th>Secondary</th></tr></thead><tbody><tr><td>Aggressive splitter (iter-088)</td><td><code>long_preamble_aggressive_off</code></td><td><code>long_preamble_aggressive_on</code></td><td>TTFS</td><td>mean_chars</td></tr><tr><td>Filler idle_threshold (iter-051)</td><td><code>filler_threshold_default</code></td><td><code>filler_threshold_aggressive</code></td><td>TTFS</td><td>filler fired?</td></tr><tr><td>Auto-aggressive @ 10ms (iter-093)</td><td><code>auto_aggressive_off</code></td><td><code>auto_aggressive_on</code></td><td>TTFS</td><td>mean_chars</td></tr><tr><td>Auto-aggressive @ 50ms (iter-093)</td><td><code>auto_aggressive_off_50ms</code></td><td><code>auto_aggressive_on_50ms</code></td><td>TTFS</td><td>mean_chars</td></tr><tr><td>Auto-aggressive @ 100ms (iter-093)</td><td><code>auto_aggressive_off_100ms</code></td><td><code>auto_aggressive_on_100ms</code></td><td>TTFS</td><td>mean_chars</td></tr><tr><td>Context cap (iter-024)</td><td><code>context_cap_default</code></td><td><code>context_cap_tight</code></td><td>context_tokens</td><td>TTFS</td></tr></tbody></table>
+<p>When a future iteration adds a new pair-scenario family, the log writer appends one entry to <code>FEATURE_SAVINGS_TABLE</code>. The rendering does the rest.</p>
+<p><strong>Tests</strong> (<code>tests/unit/test_feature_savings.py</code>, 28 tests):</p>
+<p><em><code>_format_pair_value</code> (6 tests):</em> ms / int / float / None / unknown-metric formatting.</p>
+<p><em><code>_format_pair_delta</code> (8 tests):</em> ms positive + negative + sub-decimal; context_tokens with + without zero-control; last_filler_id state-change description (both directions); None handling.</p>
+<p><em>Table structure invariants (3 tests):</em> ≥6 entries; every entry has the required keys; no duplicate treatment names (would render two rows for the same data).</p>
+<p><em><code>_render_feature_savings_section</code> (8 tests):</em> empty when no pairs match; renders when one pair complete; skips half-present pairs (missing treatment OR missing control); context_cap pair uses token metric formatting; filler pair surfaces fire/no-fire state-change; full snapshot renders all 6 rows; uses perf-table CSS class; HTML-escapes feature names + takeaways (defensive).</p>
+<p><em>Integration with <code>render_performance_page</code> (2 tests):</em> page includes section when pair scenarios are present; section is absent when no pairs in snapshot (graceful degradation for old JSONs).</p>
+<p>Verification:</p>
+<ul><li><code>python -m pytest tests/unit/test_feature_savings.py -q</code> → <strong>28 passed in 30ms</strong>.</li><li>Full unit + integration: <strong>1289 passed, 1 skipped</strong> (1261 prior + 28 new).</li><li>Perf snapshot: <strong>21 passed</strong>.</li><li>Report regen: confirmed <code>performance.html</code> contains the new section with all 6 rows populated from the latest snapshot.</li></ul>
+<p>Notes:</p>
+<ul><li><strong>Curated &gt; auto-detected.</strong> I considered automatic pair-detection by scenario-name pattern (e.g., split on <code>_off</code>/<code>_on</code> suffixes), but the names vary too much — iter-099 uses <code>default</code>/<code>aggressive</code>, iter-102 uses <code>default</code>/<code>tight</code>, iter-101 uses <code>_off_50ms</code>/<code>_on_50ms</code> (off/on AND a delay tag). A curated list is unambiguous, surfaces the operator- meaningful labels (e.g., &quot;Aggressive first-sentence splitter&quot; vs the cryptic <code>long_preamble_*</code>), and keeps the takeaways inline. Cost: one new entry per pair-iteration.</li><li><strong>HTML escaping discipline.</strong> The <code>test_section_escapes_html_in_takeaway</code> test seeds a malicious entry to confirm <code>html.escape()</code> is applied. This is the sentinel for &quot;future curated entries don&#x27;t break the page&quot; — it&#x27;s not paranoia, it&#x27;s the regression test for the one type of change someone would actually make to this list.</li><li><strong>The &quot;graceful degradation for old JSONs&quot; property.</strong> The iter-reports/ folder retains every per-iter perf snapshot (perf-iter-NNN.json). When the report generator regenerates iter-{036–097}.html using their respective snapshots, the feature-savings section is empty for those iterations (because their snapshots predate the pair-scenarios). The page just shows the legacy bar charts as before. No flag to set, no version-pinning — the feature is forward-only.</li><li><strong>The pair-scenario pattern is now closed-loop.</strong> iter-098 added the first pair, iter-099/100/101/102 extended it. iter-111 surfaces the result data in a way an operator can read at a glance. A new pair iter is now a one-line addition to FEATURE_SAVINGS_TABLE — the friction is at its lowest.</li><li>Next directions: iter-106). Three iterations now overdue. iter-102). Would scale the iter-102 row in the savings table from one entry to a 3-entry grid (matching iter-101&#x27;s auto-aggressive grid shape). re-run a past conversation without booting the real mic — the dataclass surface makes this much easier than before.<ul><li>Real audio fixtures + CPU-only STT (still pending from</li><li>Per-token-delay grid for context cap (still pending from</li><li>Eval/replay tool that uses SessionState (iter-110) to</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-110.html">← iter-110</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>
