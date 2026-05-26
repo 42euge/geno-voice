@@ -7913,3 +7913,161 @@ Notes:
   - Extract the main turn loop with KeyboardInterrupt handler
     into a `run_session` function — would complete the
     `run_chat` decomposition.
+
+## iter-109 — Extract pyaudio closures into _chat_audio_io module
+
+**Goal:** Third mic_chat.py extraction in three iterations.
+Pulls the speaker_factory + synth + play closures (~22 lines
+including the ChatLoop wiring) out of `run_chat` into a tested
+module. **Promotes the extraction shape to documented guidance
+in GENO.md** — three instances is the threshold where pattern
+becomes convention.
+
+**Original block:**
+
+```python
+def _speaker_factory():
+    return pa.open(format=pyaudio.paInt16, channels=1, rate=TTS_RATE,
+                   output=True, frames_per_buffer=1024)
+
+def _synth(sentence: str):
+    return synthesize_with_alignment(tts_engine, sentence, voice, speed)
+
+def _play(speaker, audio_np, tokens, *, is_first_sentence=False,
+          cancel_event=None, lag_out=None):
+    return _play_aligned_core(speaker, audio_np, tokens,
+        is_first_sentence=is_first_sentence, rate=TTS_RATE,
+        cancel_event=cancel_event, lag_out=lag_out)
+
+# ...later in ChatLoop(...):
+chat_loop = ChatLoop(
+    speaker_factory=_speaker_factory,
+    synth_fn=_synth,
+    play_fn=_play,
+    ...
+)
+```
+
+The closures had grown subtle — `lag_out` (iter-071), the
+`is_first_sentence` flag (iter-006), the rate threading. All
+production-only behavior, all entangled with pyaudio + kokoro
+imports.
+
+**Change:** New module `examples/_chat_audio_io.py` exposing:
+
+```python
+@dataclass
+class AudioIO:
+    speaker_factory: Callable[[], Any]
+    synth_fn: Callable[[str], tuple[Any, Any]]
+    play_fn: Callable[..., float]
+
+def build_audio_io(
+    pa, tts_engine, voice, speed, *,
+    pyaudio_module=None, speaker_chunk=1024, rate=TTS_RATE,
+) -> AudioIO:
+```
+
+**One new pattern element added in this iteration: lazy import
+inside the closure.** Earlier iterations (107 + 108) didn't deal
+with pyaudio because their work was string-shaped. Here, the
+`speaker_factory` closure is the only spot that touches
+`pyaudio.paInt16`, so the import lives inside that closure:
+
+```python
+def speaker_factory():
+    nonlocal pyaudio_module
+    if pyaudio_module is None:
+        import pyaudio as pyaudio_module
+    return pa.open(format=pyaudio_module.paInt16, ...)
+```
+
+This makes `build_audio_io` itself importable on x86_64 Linux
+(pyaudio not installed) — the import only fires when the closure
+is CALLED. Tests inject `pyaudio_module=_PyAudioModule()` to
+avoid the runtime import entirely.
+
+**Caller (mic_chat.py) shrinks from 23 lines to 3:**
+
+```python
+from examples._chat_audio_io import build_audio_io
+audio_io = build_audio_io(pa, tts_engine, voice, speed)
+# then ChatLoop(speaker_factory=audio_io.speaker_factory,
+#               synth_fn=audio_io.synth_fn,
+#               play_fn=audio_io.play_fn, ...)
+```
+
+**Tests** (`tests/unit/test_chat_audio_io.py`, 12 tests):
+
+- Return type: AudioIO dataclass with three callable fields.
+- speaker_factory: kwargs match original (paInt16, channels=1,
+  output=True, frames_per_buffer=1024); returns pa.open's value;
+  callable multiple times; speaker_chunk + rate kwargs override
+  defaults.
+- synth_fn: delegates to synthesize_with_alignment with
+  (engine, sentence, voice, speed); speed kwarg is threaded
+  through.
+- play_fn: delegates to _play_aligned_core; is_first_sentence /
+  cancel_event / lag_out forwarded intact (iter-071 reveal-lag
+  contract preserved); rate kwarg captured in closure.
+- Lazy import: build_audio_io constructs without pyaudio
+  installed (the import fires inside speaker_factory only).
+
+Verification:
+- `python -m pytest tests/unit/test_chat_audio_io.py -q` →
+  **12 passed in 50ms**.
+- Full unit + integration: **1247 passed, 1 skipped** (1235
+  prior + 12 new).
+- Perf snapshot: **21 passed**.
+
+**Pattern promoted to GENO.md.** A new "mic_chat.py extraction
+pattern" section codifies the five rules earned across iter-107,
+iter-108, iter-109:
+
+1. Inject callable dependencies, not engines.
+2. Inject `log` (callable, default `print`). Skip when the
+   extracted code is silent.
+3. ANSI styling stays at the caller.
+4. Return a dataclass, not a tuple.
+5. Lazy-import platform deps inside the closures, not at
+   module scope.
+
+The first three were implicit in iter-107 + iter-108. Rule 4 was
+explicit but unmotivated — now justified by 3 dataclass returns
+(`LoadedEngines`, `AudioIO`, plus the `RecordingStats` from
+iter-103). Rule 5 is new this iteration and makes platform
+abstraction concrete.
+
+Notes:
+- **mic_chat.py size after iter-109:** ~340 lines total /
+  ~100 in `run_chat` (down from ~365 / ~125 pre-iter-109).
+  Cumulative reduction in `run_chat`: 55 lines across three
+  iterations (107: 16 → 13; 108: 13 → 9; 109: 23 → 3).
+- **The `lazy import inside closure` trick is reusable.**
+  Future extractions that touch pyaudio, mlx-whisper, or any
+  Mac-only library should follow rule 5. The closure-as-import-
+  boundary pattern lets the module pass-through importable
+  even when the lib isn't available — important for CI parity
+  on x86_64.
+- **Last big block in `run_chat` is the main turn loop with
+  KeyboardInterrupt handler** (~30 lines). Extracting that
+  would complete the `run_chat` decomposition — it'd become
+  config-load + load_engines + prerender_fillers + build_audio_io
+  + run_session, with run_session owning the loop.
+- **`run_session` extraction would surface a non-trivial
+  question:** the loop owns `messages`, `all_metrics`,
+  `false_triggers`, `llm_errors`, `trim_events`, `primed_frames`,
+  `session_start`. That's a lot of mutable state. The
+  extraction would need to either (a) pass them as a single
+  `SessionState` dataclass, or (b) make `run_session` return a
+  `SessionState` to print_session_summary. (a) is the natural
+  fit given the dataclass-return rule.
+- Next directions:
+  - Extract main turn loop into `run_session` (closes the
+    decomposition). Largest single iter-pivot remaining in
+    mic_chat.py.
+  - Real audio fixtures + CPU-only STT (still pending from
+    iter-106). Ready to land — the `stt_factory` closure in
+    iter-108 is the swap point.
+  - Per-token-delay grid for context cap (still pending from
+    iter-102).

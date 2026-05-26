@@ -242,30 +242,13 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
     mic = pa.open(format=pyaudio.paInt16, channels=CHANNELS,
                   rate=RATE, input=True, frames_per_buffer=CHUNK)
 
-    # Wire up real dependencies for ChatLoop. The class itself is
-    # platform-agnostic and dep-injected (iter-015); these closures
-    # bind it to PyAudio + kokoro + the requests-backed LLM.
-    def _speaker_factory():
-        return pa.open(
-            format=pyaudio.paInt16, channels=1,
-            rate=TTS_RATE, output=True,
-            frames_per_buffer=1024,
-        )
+    # iter-109: speaker_factory + synth + play closures moved to
+    # examples/_chat_audio_io. ChatLoop is dep-injected (iter-015);
+    # build_audio_io produces the production wiring (pyaudio +
+    # synthesize_with_alignment + _play_aligned_core).
+    from examples._chat_audio_io import build_audio_io
 
-    def _synth(sentence: str):
-        return synthesize_with_alignment(tts_engine, sentence, voice, speed)
-
-    def _play(speaker, audio_np, tokens, *, is_first_sentence=False,
-              cancel_event=None, lag_out=None):
-        # iter-071: forward lag_out so SentenceWorker can collect
-        # per-token reveal-lag stats on the live mic_chat path.
-        return _play_aligned_core(
-            speaker, audio_np, tokens,
-            is_first_sentence=is_first_sentence,
-            rate=TTS_RATE,
-            cancel_event=cancel_event,
-            lag_out=lag_out,
-        )
+    audio_io = build_audio_io(pa, tts_engine, voice, speed)
 
     # iter-088: optional aggressive first-sentence splitter. Reduces
     # TTFS on long-preamble responses at the cost of some prosody.
@@ -282,7 +265,7 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
     )
     chat_loop = ChatLoop(
         mic=mic,
-        speaker_factory=_speaker_factory,
+        speaker_factory=audio_io.speaker_factory,
         rate=RATE,
         chunk=CHUNK,
         silence_threshold=vad_cfg["silence_threshold"],
@@ -291,8 +274,8 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
         stt_engine=stt_engine,
         llm_stream_fn=llm_stream,
         llm_config=llm_config,
-        synth_fn=_synth,
-        play_fn=_play,
+        synth_fn=audio_io.synth_fn,
+        play_fn=audio_io.play_fn,
         fillers=rendered_fillers,
         idle_threshold=filler_idle_threshold,
         aggressive_first_sentence=aggressive_first_sentence,
