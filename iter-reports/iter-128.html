@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-128 — Sentence-length-bucket consistency check</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-127.html">← iter-127</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-128 — Sentence-length-bucket consistency check</h1>
+<div class="meta"></div>
+</header><p><strong>Goal:</strong> Fourth instance of the diversity-check pattern after iter-114 (filler), iter-115/iter-126 (naturalness), iter-120 (barge-phase). First instance applied to a CONTINUOUS metric — buckets <code>mean_sentence_chars</code> (iter-095) into discrete categories before scanning. Validates that the pattern generalizes beyond string-valued signals.</p>
+<p><strong>The signal:</strong> <code>mean_sentence_chars</code> per-turn captures how verbose the bot was. Buckets:</p>
+<ul><li><code>very_short</code> (&lt; 15 chars): choppy. Caused by an over-aggressive splitter (iter-088 <code>AGGRESSIVE_MIN_CHARS</code> too low) or a one- word-answer LLM.</li><li><code>short</code> (15-30): brief, not problematic.</li><li><code>medium</code> (30-60): the desired state.</li><li><code>long</code> (&gt; 60): wall-of-text. LLM rambles, or splitter is too lax.</li></ul>
+<p>5+ consecutive turns in <code>very_short</code> or <code>long</code> warrants a warning. <code>medium</code> and <code>short</code> are the &quot;fine&quot; states — filtered before scanning, mirroring iter-126&#x27;s &quot;natural&quot; filter.</p>
+<p><strong>Change:</strong> Two new helpers in <code>_chat_metrics.py</code>:</p>
+<pre class="code-block"><code>def _sentence_length_bucket(mean_chars: float) -&gt; str:
+    if mean_chars &lt;= 0: return &quot;&quot;
+    if mean_chars &lt; 15: return &quot;very_short&quot;
+    if mean_chars &lt; 30: return &quot;short&quot;
+    if mean_chars &lt; 60: return &quot;medium&quot;
+    return &quot;long&quot;
+
+
+def _emit_sentence_length_consistency_line(
+    emit, mean_chars_list: list[float], threshold: int = 5,
+) -&gt; None:
+    interesting = {&quot;very_short&quot;, &quot;long&quot;}
+    filtered = [
+        b for b in (
+            _sentence_length_bucket(mc) for mc in mean_chars_list
+        )
+        if b in interesting
+    ]
+    ...</code></pre>
+<p>Wired into <code>print_session_summary</code> after iter-120&#x27;s barge-phase check.</p>
+<p><strong>Tests</strong> (24 in <code>test_emit_sentence_length_consistency_line.py</code>):</p>
+<ul><li>Bucket boundaries (7 tests): zero/negative → empty; very_short upper edge 14; short edges 15-29; medium edges 30-59; long ≥ 60; float handling.</li><li>Empty / no-sentences (2): empty list, all-zero list.</li><li>Medium/short exclusion (3): 10-turn medium silent; 10-turn short silent; alternating medium+long → only long counts.</li><li>At/above threshold (3): 5 very_short → fires with &quot;over-aggressive&quot; suggestion; 6 long → fires with &quot;too lax&quot;; below threshold silent.</li><li>Filter behavior (3): medium between very_short doesn&#x27;t break run; short between long doesn&#x27;t break run; phase change between flagged buckets DOES break run.</li><li>Custom threshold (2): smaller catches via threshold=3; larger suppresses default 5-run.</li><li>Longest-of-multiple (1): when both very_short and long pass threshold, longer wins.</li><li>Output formatting (2): leading 4-space indent; iter-095 attribution.</li><li>Pattern parity (1): 1000-element input handled.</li></ul>
+<p>Verification:</p>
+<ul><li>`python -m pytest tests/unit/test_emit_sentence_length_consistency_line.py -q` → <strong>24 passed in 30ms</strong>.</li><li>Regression sentinel (220 prior tests pass byte-for-byte).</li><li>Full unit + integration: <strong>1519 passed, 1 skipped</strong> (1495 prior + 24 new).</li><li>Perf snapshot: <strong>23 passed</strong>.</li></ul>
+<p>Notes:</p>
+<ul><li><strong>Pattern continues to scale.</strong> Four diversity-check instances now use iter-116&#x27;s <code>_longest_consecutive_run</code>: threshold 5<ul><li>iter-114 (filler diversity) — int values, threshold 3</li><li>iter-115/126 (naturalness) — string values, threshold 5</li><li>iter-120 (barge-phase) — string values, threshold 4</li><li>iter-128 (sentence length) — bucketed continuous values,</li></ul></li><li><strong>First continuous-metric application.</strong> Bucketing is the new step. The bucketing function is testable in isolation (7 boundary tests), then the run-finder consumes the buckets like any other categorical signal. Generalizes the pattern.</li><li><strong>Filter-before-scan rule applies.</strong> All four instances filter uninteresting values before the scan. The &quot;uninteresting&quot; set varies per-helper (zeros / empties / &quot;natural&quot; / &quot;medium&quot; + &quot;short&quot;) but the structural pattern is identical.</li><li>**The pattern could now be promoted to a documented protocol.** Five instances would justify it (4th makes it obvious; 5th locks it in). For now, GENO.md&#x27;s &quot;mic_chat.py extraction pattern&quot; is the only documented pattern; a &quot;diversity-check pattern&quot; section could catalog filter rules + threshold conventions + suggestion mapping for future instances.</li><li>Next directions: guidance (5th instance threshold reached). using the iter-127 5-fixture audio corpus. operators evaluating new STT engines.<ul><li>Promote the diversity-check pattern to documented</li><li>Architecture: A/B aggressive_first_sentence as default</li><li>Document the corpus as a &quot;standard test benchmark&quot; for</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-127.html">← iter-127</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>
