@@ -8969,3 +8969,169 @@ Notes:
     7-50% across scenarios) for headroom — much lower than
     the 1.0 ceiling, suggests the worker often waits for
     sentences rather than synthesizing concurrently.
+
+## iter-116 — Extract _longest_consecutive_run shared helper
+
+**Goal:** Consolidate the run-finding scan loop that iter-114
+(`_emit_filler_diversity_line`) and iter-115
+(`_emit_naturalness_consistency_line`) duplicated verbatim.
+~10 lines of identical single-pass scan logic in two places —
+small enough that extraction is borderline, but the duplication
+is concrete and a third instance is plausible (e.g.,
+barge_in_phase repetition, sentence-length-bucket runs).
+
+**Pre-iteration investigation that got pivoted:**
+First investigated `streaming_overlap_ratio` for architectural
+headroom. Survey of the perf snapshot showed:
+- 0% overlap on short single-sentence responses (no headroom —
+  nothing to overlap when response IS one sentence).
+- 7-22% on auto_aggressive_off scenarios (the 500ms stall
+  blocks the LLM, naturally limits overlap).
+- 38-57% on long_preamble scenarios (where iter-088's
+  aggressive splitter already provides the lever — turning it
+  on increases overlap by ~50%).
+- 70% on filler-firing scenarios (filler audio plays during
+  LLM streaming — natural overlap source).
+
+The metric is well-tuned and the existing
+`aggressive_first_sentence` flag is the architectural lever.
+No further architectural improvement available from this metric
+alone; it would require making aggressive_first_sentence the
+default which has prosody tradeoffs.
+
+Pivoted to the run-finder extraction.
+
+**Change:** New `_longest_consecutive_run(values: list) ->
+tuple[int, object]` function:
+
+```python
+def _longest_consecutive_run(values: list) -> tuple[int, object]:
+    if not values:
+        return (0, None)
+    longest_run, longest_value = 1, values[0]
+    cur_run, cur = 1, values[0]
+    for v in values[1:]:
+        if v == cur:
+            cur_run += 1
+            if cur_run > longest_run:
+                longest_run, longest_value = cur_run, cur
+        else:
+            cur, cur_run = v, 1
+    return (longest_run, longest_value)
+```
+
+Pure list-scanning primitive — no filtering. Callers pre-filter
+(zeros for iter-114, empty strings for iter-115). Returns a
+tuple so callers can tuple-unpack as `length, value`.
+
+Both callers shrink:
+
+iter-114 was:
+```python
+fired = [fid for fid in filler_ids if fid != 0]
+if not fired: return
+longest_run = 1; longest_id = fired[0]
+cur_run = 1; cur_id = fired[0]
+for fid in fired[1:]:
+    if fid == cur_id:
+        cur_run += 1
+        if cur_run > longest_run:
+            longest_run = cur_run
+            longest_id = cur_id
+    else:
+        cur_id = fid
+        cur_run = 1
+if longest_run < threshold: return
+emit(...)
+```
+
+Now:
+```python
+fired = [fid for fid in filler_ids if fid != 0]
+if not fired: return
+longest_run, longest_id = _longest_consecutive_run(fired)
+if longest_run < threshold: return
+emit(...)
+```
+
+iter-115 collapses similarly (~12 lines → 2 lines per call site).
+
+**Tests** (`tests/unit/test_longest_consecutive_run.py`,
+19 tests):
+
+*Empty / singleton (3 tests):* empty → (0, None); single int;
+single string.
+
+*Single run (2 tests):* all-same; two-in-a-row.
+
+*Multiple runs (5 tests):* one run in distinct sequence;
+alternating returns 1; runs at start, end; two equal-length
+runs (first wins); longer-later-run wins.
+
+*Type variety (4 tests):* string runs; mixed strings; zeros
+counted (no filter); None values.
+
+*Stress (1 test):* large list with central run.
+
+*Round-trip parity (3 tests):* shapes that iter-114 and
+iter-115 actually pass after their pre-filter; locked tuple
+return shape.
+
+**Key invariant tested: ties resolve to EARLIEST run.**
+`[1, 1, 1, 2, 2, 2]` returns `(3, 1)`, not `(3, 2)`. This
+matches the prior in-place implementations exactly — both
+iter-114 and iter-115 always reported the FIRST run encountered
+in case of a tie. Documenting the rule as a tested invariant
+prevents a future "it doesn't matter" refactor from accidentally
+flipping it.
+
+Verification:
+- `python -m pytest tests/unit/test_longest_consecutive_run.py
+  -q` → **19 passed in 30ms**.
+- Regression sentinel for both iter-114 + iter-115 callers:
+  `pytest tests/unit/test_emit_filler_diversity_line.py
+  tests/unit/test_emit_naturalness_consistency_line.py
+  tests/unit/test_session_summary.py -q` → **55 passed**
+  byte-for-byte unchanged.
+- Full unit + integration: **1364 passed, 1 skipped** (1345
+  prior + 19 new).
+- Perf snapshot: **23 passed**.
+
+Notes:
+- **Borderline extraction, justified by future-instances bias.**
+  Two instances of a 10-line scan is small. But:
+  1. The duplication was VERBATIM — no per-instance variation
+     in the loop body, suggesting it's purely shared logic.
+  2. The shape (return longest run + value) is general — fits
+     any "consecutive same value" check.
+  3. Tests now lock the tie-resolution rule explicitly, which
+     was implicit in the prior duplicated code.
+- **Pure primitive, no filtering.** Keeping the helper a
+  scan-only function rather than baking in zero-filtering
+  preserves composability. iter-114 filters zeros; iter-115
+  filters empty strings; a hypothetical iter-117 might filter
+  None. Each caller's filter rule is its own concern.
+- **Tuple return locks call-site shape.**
+  `length, value = _longest_consecutive_run(items)` reads
+  cleanly. Returning a dataclass would be over-engineered for
+  two fields.
+- **streaming_overlap_ratio investigation (recorded for
+  future):** the metric has structural ceilings most scenarios
+  hit. Real headroom only exists when:
+  - LLM stream is long enough to overlap with synth+playback
+  - First sentence emits before the stream finishes
+  Turning aggressive_first_sentence on is the only lever; and
+  it's a config opt-in with prosody tradeoffs. A future
+  iteration could grid-search a tighter splitter heuristic
+  (e.g., comma-end at >= 30 chars instead of >= 20) to find
+  a sweet spot, but this is real architecture work, not a
+  one-iteration job.
+- Next directions:
+  - Real audio fixtures + CPU-only STT (faster-whisper IS
+    installed on this system — verified). Eight iterations
+    overdue. Worth attempting now.
+  - barge_in_phase consistency check — would be the third
+    instance of the diversity-check pattern, validating both
+    iter-116's helper extraction and the diversity shape itself.
+  - Sentence-length-bucket consistency check — same shape on a
+    different signal.

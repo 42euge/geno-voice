@@ -1401,6 +1401,42 @@ def _emit_wer_line(emit, wer_values: list[float]) -> None:
     )
 
 
+def _longest_consecutive_run(values: list) -> tuple[int, object]:
+    """iter-116: find the longest consecutive-equal run in a list.
+
+    Shared by iter-114 (`_emit_filler_diversity_line`) and iter-115
+    (`_emit_naturalness_consistency_line`). Both helpers had the
+    same single-pass scan duplicated verbatim; this consolidates.
+
+    Returns ``(length, value)`` where ``length`` is the count of
+    consecutive equal items in the longest run and ``value`` is
+    that item. For empty input, returns ``(0, None)``. Ties on
+    length resolve to the EARLIER run (first encountered) —
+    matches both prior call-sites' behavior.
+
+    No filtering happens here — callers pre-filter (zeros for
+    iter-114, empty strings for iter-115). Keeps the helper a
+    pure list-scanning primitive.
+    """
+    if not values:
+        return (0, None)
+
+    longest_run = 1
+    longest_value = values[0]
+    cur_run = 1
+    cur = values[0]
+    for v in values[1:]:
+        if v == cur:
+            cur_run += 1
+            if cur_run > longest_run:
+                longest_run = cur_run
+                longest_value = cur
+        else:
+            cur = v
+            cur_run = 1
+    return (longest_run, longest_value)
+
+
 def _emit_filler_diversity_line(
     emit, filler_ids: list[int], threshold: int = 3,
 ) -> None:
@@ -1438,27 +1474,13 @@ def _emit_filler_diversity_line(
     until many turns later.
     """
     # Filter out zero (no-filler turns) but preserve the sequence
-    # of fillers AS PLAYED — runs are counted on this filtered
-    # list.
+    # of fillers AS PLAYED — runs are counted on this filtered list.
     fired = [fid for fid in filler_ids if fid != 0]
     if not fired:
         return
 
-    # Find the longest consecutive-same run in `fired`.
-    longest_run = 1
-    longest_id = fired[0]
-    cur_run = 1
-    cur_id = fired[0]
-    for fid in fired[1:]:
-        if fid == cur_id:
-            cur_run += 1
-            if cur_run > longest_run:
-                longest_run = cur_run
-                longest_id = cur_id
-        else:
-            cur_id = fid
-            cur_run = 1
-
+    # iter-116: shared run-finder.
+    longest_run, longest_id = _longest_consecutive_run(fired)
     if longest_run < threshold:
         return
 
@@ -1501,20 +1523,8 @@ def _emit_naturalness_consistency_line(
     if not non_empty:
         return
 
-    longest_run = 1
-    longest_bucket = non_empty[0]
-    cur_run = 1
-    cur = non_empty[0]
-    for b in non_empty[1:]:
-        if b == cur:
-            cur_run += 1
-            if cur_run > longest_run:
-                longest_run = cur_run
-                longest_bucket = cur
-        else:
-            cur = b
-            cur_run = 1
-
+    # iter-116: shared run-finder.
+    longest_run, longest_bucket = _longest_consecutive_run(non_empty)
     if longest_run < threshold:
         return
     if longest_bucket == "natural":
