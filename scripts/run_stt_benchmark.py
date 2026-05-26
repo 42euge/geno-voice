@@ -461,6 +461,113 @@ def format_diff_text(diff: BenchmarkDiff) -> str:
     return "\n".join(lines)
 
 
+def format_diff_json(diff: BenchmarkDiff, *, indent: int = 2) -> str:
+    """iter-135: serialize a ``BenchmarkDiff`` as JSON.
+
+    Output shape (parallel to ``format_summary_json`` for the
+    summary path):
+
+    .. code-block:: json
+
+        {
+          "current_passing": 5, "current_total": 5,
+          "baseline_passing": 4, "baseline_total": 5,
+          "passing_delta": 1,
+          "regression_count": 0,
+          "improvement_count": 1,
+          "new_count": 0,
+          "removed_count": 0,
+          "fixture_diffs": [
+            {
+              "name": "noisy_audio",
+              "current_wer": 0.20, "baseline_wer": 0.30,
+              "wer_delta": -0.10,
+              "current_passed": true, "baseline_passed": false,
+              "status_change": "improved"
+            },
+            ...
+          ]
+        }
+
+    Top-level aggregates surface the headline numbers without
+    the caller iterating fixture_diffs. ``passing_delta`` is
+    ``current_passing - baseline_passing`` — positive means the
+    benchmark improved overall.
+
+    None values (for new/removed fixtures) serialize as JSON
+    ``null``.
+    """
+    payload = {
+        "current_passing": diff.current_passing,
+        "current_total": diff.current_total,
+        "baseline_passing": diff.baseline_passing,
+        "baseline_total": diff.baseline_total,
+        "passing_delta": diff.current_passing - diff.baseline_passing,
+        "regression_count": len(diff.regressions),
+        "improvement_count": len(diff.improvements),
+        "new_count": len(diff.new_fixtures),
+        "removed_count": len(diff.removed_fixtures),
+        "fixture_diffs": [
+            {
+                "name": d.name,
+                "current_wer": d.current_wer,
+                "baseline_wer": d.baseline_wer,
+                "wer_delta": d.wer_delta,
+                "current_passed": d.current_passed,
+                "baseline_passed": d.baseline_passed,
+                "status_change": d.status_change,
+            }
+            for d in diff.fixture_diffs
+        ],
+    }
+    return json.dumps(payload, indent=indent)
+
+
+def format_diff_csv(diff: BenchmarkDiff) -> str:
+    """iter-135: serialize a ``BenchmarkDiff`` as CSV. Header
+    row + one row per fixture diff. Mirrors
+    ``format_summary_csv``'s shape but with diff-specific
+    columns:
+
+        name,status_change,current_wer,baseline_wer,wer_delta,
+        current_passed,baseline_passed
+
+    None values render as empty strings (RFC-4180 idiomatic for
+    "missing"). Numeric fields use 4 decimals — same precision
+    as the summary CSV.
+    """
+    import csv as _csv
+    import io as _io
+
+    out = _io.StringIO()
+    writer = _csv.writer(out, quoting=_csv.QUOTE_MINIMAL)
+    writer.writerow([
+        "name", "status_change",
+        "current_wer", "baseline_wer", "wer_delta",
+        "current_passed", "baseline_passed",
+    ])
+
+    def _fmt_optional(v):
+        """None → empty string. Float → 4-decimal. Bool/str →
+        verbatim."""
+        if v is None:
+            return ""
+        if isinstance(v, float):
+            return f"{v:.4f}"
+        return v
+
+    for d in diff.fixture_diffs:
+        writer.writerow([
+            d.name, d.status_change,
+            _fmt_optional(d.current_wer),
+            _fmt_optional(d.baseline_wer),
+            _fmt_optional(d.wer_delta),
+            _fmt_optional(d.current_passed),
+            _fmt_optional(d.baseline_passed),
+        ])
+    return out.getvalue()
+
+
 def _build_transcribe_from_engine_args(
     engine: str, model: str, device: str, compute: str,
     *, beam_size: int = 1, temperature: float = 0.0,
@@ -553,7 +660,8 @@ def main() -> int:
         help="Path to a baseline JSON file (from a previous "
              "--format json run). When set, output shows a diff "
              "highlighting per-fixture WER changes + status flips. "
-             "Overrides --format (always text-formatted).",
+             "iter-135: --format chooses how the diff is rendered "
+             "(text default, json, csv).",
     )
     args = parser.parse_args()
 
@@ -599,14 +707,20 @@ def main() -> int:
     # run_benchmark emits per-row + summary inline. For json/csv,
     # silence run_benchmark and dump the formatted output after.
     # iter-134: when --diff is active, run silently and emit the
-    # diff text instead.
+    # diff. iter-135: --format now dispatches the diff renderer
+    # (text/json/csv) the same way it dispatches the summary.
     if baseline is not None:
         summary = run_benchmark(
             transcribe, fixtures, CORPUS_PATH.parent,
             verbose=False,
         )
         diff = compute_diff(summary, baseline)
-        print(format_diff_text(diff))
+        if args.format == "json":
+            print(format_diff_json(diff))
+        elif args.format == "csv":
+            print(format_diff_csv(diff), end="")
+        else:
+            print(format_diff_text(diff))
     elif args.format == "text":
         summary = run_benchmark(
             transcribe, fixtures, CORPUS_PATH.parent,

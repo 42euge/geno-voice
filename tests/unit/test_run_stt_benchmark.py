@@ -756,3 +756,241 @@ def test_format_diff_text_negative_delta_renders_correctly():
     baseline = _baseline_payload(("a", True, 0.30))
     out = module.format_diff_text(module.compute_diff(current, baseline))
     assert "-0.200" in out
+
+
+# ---- iter-135: format_diff_json ------------------------------
+
+
+def test_diff_json_top_level_aggregates():
+    """The JSON dump exposes current_passing/total +
+    baseline_passing/total + passing_delta + counts at the top
+    level. CI scripts can read these directly without
+    iterating fixture_diffs."""
+    import json as _json
+    current = _build_summary(
+        ("a", True,  0.0, 0.0, 0.5, 0.1, "r", "h"),
+        ("b", True,  0.1, 0.0, 0.5, 0.1, "r", "h"),
+        ("c", False, 0.9, 0.0, 0.5, 0.1, "r", "h"),
+    )
+    baseline = _baseline_payload(
+        ("a", True, 0.0),
+        ("b", False, 0.6),
+        ("c", False, 0.9),
+    )
+    diff = module.compute_diff(current, baseline)
+    parsed = _json.loads(module.format_diff_json(diff))
+    assert parsed["current_passing"] == 2
+    assert parsed["current_total"] == 3
+    assert parsed["baseline_passing"] == 1
+    assert parsed["baseline_total"] == 3
+    assert parsed["passing_delta"] == 1
+    assert parsed["regression_count"] == 0
+    assert parsed["improvement_count"] == 1
+
+
+def test_diff_json_per_fixture_records():
+    """Every FixtureDiff field is in the per-record JSON."""
+    import json as _json
+    current = _build_summary(
+        ("noisy", False, 0.60, 0.0, 0.5, 0.1, "r", "h"),
+    )
+    baseline = _baseline_payload(("noisy", True, 0.30))
+    diff = module.compute_diff(current, baseline)
+    parsed = _json.loads(module.format_diff_json(diff))
+    record = parsed["fixture_diffs"][0]
+    assert record["name"] == "noisy"
+    assert record["current_wer"] == 0.60
+    assert record["baseline_wer"] == 0.30
+    assert abs(record["wer_delta"] - 0.30) < 1e-9
+    assert record["current_passed"] is False
+    assert record["baseline_passed"] is True
+    assert record["status_change"] == "regressed"
+
+
+def test_diff_json_renders_none_as_null():
+    """new/removed fixtures have None on one side; JSON serializes
+    these as null. Valid JSON; CI parsers should handle them
+    cleanly."""
+    import json as _json
+    current = _build_summary(
+        ("only_in_current", True, 0.10, 0.0, 0.5, 0.1, "r", "h"),
+    )
+    baseline = _baseline_payload(("only_in_baseline", True, 0.20))
+    diff = module.compute_diff(current, baseline)
+    parsed = _json.loads(module.format_diff_json(diff))
+    # Two records: one new, one removed.
+    by_name = {d["name"]: d for d in parsed["fixture_diffs"]}
+    new = by_name["only_in_current"]
+    removed = by_name["only_in_baseline"]
+    assert new["baseline_wer"] is None
+    assert new["baseline_passed"] is None
+    assert new["wer_delta"] is None
+    assert removed["current_wer"] is None
+    assert removed["current_passed"] is None
+    assert removed["wer_delta"] is None
+
+
+def test_diff_json_handles_unchanged_session():
+    """Identical runs → all unchanged; counts all zero."""
+    import json as _json
+    current = _build_summary(
+        ("a", True, 0.10, 0.0, 0.5, 0.1, "r", "h"),
+    )
+    baseline = _baseline_payload(("a", True, 0.10))
+    diff = module.compute_diff(current, baseline)
+    parsed = _json.loads(module.format_diff_json(diff))
+    assert parsed["regression_count"] == 0
+    assert parsed["improvement_count"] == 0
+    assert parsed["new_count"] == 0
+    assert parsed["removed_count"] == 0
+    assert parsed["passing_delta"] == 0
+
+
+def test_diff_json_indent_kwarg_controls_pretty():
+    """indent=None compact, default indent=2 multi-line."""
+    current = _build_summary(("a", True, 0.0, 0.0, 0.5, 0.1, "r", "h"))
+    baseline = _baseline_payload(("a", True, 0.0))
+    diff = module.compute_diff(current, baseline)
+    pretty = module.format_diff_json(diff, indent=2)
+    compact = module.format_diff_json(diff, indent=None)
+    assert "\n" in pretty
+    assert "\n" not in compact
+
+
+def test_diff_json_is_valid_json_with_all_status_changes():
+    """Mixed session with every status_change category produces
+    valid JSON. Defends against null serialization bugs."""
+    import json as _json
+    current = _build_summary(
+        ("unchanged", True, 0.10, 0.0, 0.5, 0.1, "r", "h"),
+        ("regressed", False, 0.70, 0.0, 0.5, 0.1, "r", "h"),
+        ("improved", True, 0.10, 0.0, 0.5, 0.1, "r", "h"),
+        ("new_one", True, 0.20, 0.0, 0.5, 0.1, "r", "h"),
+    )
+    baseline = _baseline_payload(
+        ("unchanged", True, 0.10),
+        ("regressed", True, 0.30),
+        ("improved", False, 0.70),
+        ("removed_one", True, 0.10),
+    )
+    diff = module.compute_diff(current, baseline)
+    out = module.format_diff_json(diff)
+    parsed = _json.loads(out)
+    assert len(parsed["fixture_diffs"]) == 5  # 4 current + 1 removed
+    statuses = {d["status_change"] for d in parsed["fixture_diffs"]}
+    assert statuses == {
+        "unchanged", "regressed", "improved", "new", "removed",
+    }
+
+
+# ---- iter-135: format_diff_csv -------------------------------
+
+
+def test_diff_csv_starts_with_header():
+    """First row is the column names."""
+    current = _build_summary(("a", True, 0.10, 0.0, 0.5, 0.1, "r", "h"))
+    baseline = _baseline_payload(("a", True, 0.10))
+    diff = module.compute_diff(current, baseline)
+    out = module.format_diff_csv(diff)
+    first_line = out.splitlines()[0]
+    for col in [
+        "name", "status_change",
+        "current_wer", "baseline_wer", "wer_delta",
+        "current_passed", "baseline_passed",
+    ]:
+        assert col in first_line
+
+
+def test_diff_csv_one_row_per_fixture_diff():
+    """N fixture_diffs → N+1 lines (header + N data rows)."""
+    current = _build_summary(
+        ("a", True, 0.10, 0.0, 0.5, 0.1, "r", "h"),
+        ("b", False, 0.90, 0.0, 0.5, 0.1, "r", "h"),
+    )
+    baseline = _baseline_payload(
+        ("a", True, 0.10),
+        ("b", True, 0.10),
+    )
+    diff = module.compute_diff(current, baseline)
+    out = module.format_diff_csv(diff)
+    lines = [ln for ln in out.splitlines() if ln]
+    assert len(lines) == 3  # header + 2
+
+
+def test_diff_csv_renders_none_as_empty_string():
+    """new/removed fixtures have None columns; CSV renders these
+    as empty strings (RFC-4180 idiom for missing values)."""
+    current = _build_summary(
+        ("only_current", True, 0.10, 0.0, 0.5, 0.1, "r", "h"),
+    )
+    baseline = _baseline_payload(("only_baseline", True, 0.20))
+    diff = module.compute_diff(current, baseline)
+    out = module.format_diff_csv(diff)
+    # CSV should have empty fields (",,") where None lives.
+    # Verify by parsing back.
+    import csv as _csv
+    import io as _io
+    rows = list(_csv.DictReader(_io.StringIO(out)))
+    by_name = {r["name"]: r for r in rows}
+    new = by_name["only_current"]
+    removed = by_name["only_baseline"]
+    assert new["baseline_wer"] == ""
+    assert new["baseline_passed"] == ""
+    assert new["wer_delta"] == ""
+    assert removed["current_wer"] == ""
+    assert removed["current_passed"] == ""
+
+
+def test_diff_csv_handles_unchanged_session():
+    """Identical runs render correctly — status_change=unchanged
+    in every row."""
+    current = _build_summary(
+        ("a", True, 0.10, 0.0, 0.5, 0.1, "r", "h"),
+    )
+    baseline = _baseline_payload(("a", True, 0.10))
+    diff = module.compute_diff(current, baseline)
+    out = module.format_diff_csv(diff)
+    import csv as _csv
+    import io as _io
+    rows = list(_csv.DictReader(_io.StringIO(out)))
+    assert rows[0]["status_change"] == "unchanged"
+
+
+def test_diff_csv_handles_empty_diff():
+    """Zero fixture_diffs → just the header row."""
+    diff = module.BenchmarkDiff()
+    out = module.format_diff_csv(diff)
+    lines = [ln for ln in out.splitlines() if ln]
+    assert len(lines) == 1
+
+
+def test_diff_csv_round_trips_through_csv_module():
+    """The output is parseable by csv.DictReader. Catches
+    quoting bugs."""
+    import csv as _csv
+    import io as _io
+    current = _build_summary(
+        ("noisy", False, 0.60, 0.0, 0.5, 0.1, "ref text", "hyp text"),
+    )
+    baseline = _baseline_payload(("noisy", True, 0.30))
+    diff = module.compute_diff(current, baseline)
+    out = module.format_diff_csv(diff)
+    rows = list(_csv.DictReader(_io.StringIO(out)))
+    assert len(rows) == 1
+    assert rows[0]["name"] == "noisy"
+    assert rows[0]["status_change"] == "regressed"
+    assert rows[0]["current_wer"] == "0.6000"
+    assert rows[0]["baseline_wer"] == "0.3000"
+    assert rows[0]["wer_delta"] == "0.3000"
+
+
+def test_diff_csv_negative_delta_includes_sign():
+    """When current < baseline, wer_delta is negative — CSV
+    must preserve the sign."""
+    current = _build_summary(
+        ("a", True, 0.10, 0.0, 0.5, 0.1, "r", "h"),
+    )
+    baseline = _baseline_payload(("a", True, 0.30))
+    diff = module.compute_diff(current, baseline)
+    out = module.format_diff_csv(diff)
+    assert "-0.2000" in out

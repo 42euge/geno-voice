@@ -11532,3 +11532,152 @@ Notes:
     for machine-readable diff output (CI pipelines).
   - Architecture: A/B `aggressive_first_sentence: true`
     using the diff workflow against a saved baseline.
+
+## iter-135 — `--diff` with `--format json/csv`
+
+**Goal:** iter-134 always rendered the diff as text. CI
+pipelines that want to gate PRs on regression detection need
+machine-readable output. iter-135 adds JSON + CSV diff
+renderers, dispatched via the existing `--format` flag when
+`--diff` is set.
+
+**Three additions:**
+
+1. **`format_diff_json(diff, *, indent=2) -> str`** — full
+   structured dump with top-level aggregates:
+
+       {
+         "current_passing": 5, "current_total": 5,
+         "baseline_passing": 4, "baseline_total": 5,
+         "passing_delta": 1,
+         "regression_count": 0,
+         "improvement_count": 1,
+         "new_count": 0,
+         "removed_count": 0,
+         "fixture_diffs": [
+           {"name": "noisy_audio",
+            "current_wer": 0.20, "baseline_wer": 0.30,
+            "wer_delta": -0.10,
+            "current_passed": true, "baseline_passed": false,
+            "status_change": "improved"},
+           ...
+         ]
+       }
+
+   `passing_delta` is `current_passing - baseline_passing` —
+   positive means improved overall. `None` values for
+   new/removed fixtures serialize as JSON `null`.
+
+2. **`format_diff_csv(diff) -> str`** — header + one row per
+   fixture diff:
+
+       name,status_change,current_wer,baseline_wer,wer_delta,current_passed,baseline_passed
+       clean_audio,unchanged,0.2000,0.2000,0.0000,True,True
+       noisy_audio,improved,0.2000,0.3000,-0.1000,True,False
+       multispeaker_audio,regressed,1.2000,0.8000,0.4000,False,True
+       new_audio,new,0.1500,,,True,
+       legacy_audio,removed,,0.2000,,,True
+
+   None values render as empty strings (RFC-4180 idiom for
+   missing). Numeric fields use 4-decimal precision matching
+   the summary CSV.
+
+3. **CLI dispatch updated**: when `--diff` is set, `--format`
+   chooses the diff renderer (`text` default, `json`, `csv`).
+
+**CI integration use cases:**
+
+```bash
+# Save baseline before changes
+$ python scripts/run_stt_benchmark.py --format json > baseline.json
+
+# In PR check: fail if any regression
+$ python scripts/run_stt_benchmark.py --diff baseline.json --format json \
+    | jq '.regression_count > 0' | grep -q true && exit 1
+
+# Or: track WER trends in a spreadsheet
+$ python scripts/run_stt_benchmark.py --diff baseline.json --format csv \
+    > diff.csv
+```
+
+**Tests** (13 new, 57 total):
+
+*format_diff_json (6 tests):* top-level aggregates correct;
+per-fixture records include all FixtureDiff fields; None
+values render as JSON null; unchanged session has zero counts;
+indent kwarg controls pretty-printing; mixed session with all
+5 status_change categories produces valid JSON.
+
+*format_diff_csv (7 tests):* header row present; N+1 lines for
+N diffs; None columns render as empty strings; unchanged session
+shows status_change=unchanged; empty diff is just header;
+round-trips through csv.DictReader; negative deltas preserve sign.
+
+End-to-end smoke verified against the real corpus:
+- `--diff baseline.json --format json` → valid JSON with all
+  expected fields.
+- `--diff baseline.json --format csv` → header + 5 unchanged
+  data rows.
+- Identical-runs diff: passing_delta=0, regression_count=0.
+
+Verification:
+- `python -m pytest tests/unit/test_run_stt_benchmark.py -q` →
+  **57 passed in 60ms** (44 prior + 13 new).
+- Full unit + integration: **1595 passed, 1 skipped** (1582
+  prior + 13 new).
+- Perf snapshot: **23 passed**.
+
+Notes:
+- **The benchmark CLI is now a complete eval pipeline.** Every
+  step has machine-readable output:
+  - `run_benchmark` (iter-132) — text default
+  - `--format json/csv` summary (iter-133)
+  - `--diff baseline.json` text (iter-134)
+  - `--diff --format json/csv` (iter-135)
+
+  CI pipelines, dashboards, comparison scripts, and spreadsheet
+  imports all work without screen-scraping.
+
+- **`passing_delta` is the headline number** for CI gates. A
+  one-line check:
+
+      jq '.passing_delta < 0' diff.json | grep -q true && exit 1
+
+  fires when fewer fixtures pass than the baseline. This is
+  more permissive than `regression_count > 0` (allows
+  fixture-level reshuffling within the same passing total) —
+  pick based on policy.
+
+- **Empty-string vs null choice:** JSON uses `null`, CSV uses
+  empty string. Both are idiomatic for "missing" in their
+  respective formats. JSON parsers handle null cleanly; CSV
+  parsers (`csv.DictReader`) return empty strings, which
+  spreadsheet tools display as blank cells.
+
+- **Pure-function discipline scales.** `format_diff_*` functions
+  take a `BenchmarkDiff` — they don't read the corpus, don't
+  call the engine, don't touch the filesystem. The CLI's only
+  responsibility is loading the baseline JSON and printing the
+  formatted output. Future formats (HTML, Markdown, etc.) land
+  by adding one function — no changes to `compute_diff` or
+  `run_benchmark`.
+
+- **The summary + diff symmetry is now complete.** Each
+  benchmark layer has three output formats:
+
+  | Layer    | text | json | csv |
+  |----------|:----:|:----:|:---:|
+  | summary  | ✅   | ✅   | ✅  |
+  | diff     | ✅   | ✅   | ✅  |
+
+  Five output paths total. The dispatch in `main()` is small —
+  one `if/elif` ladder for each — but the user-facing surface
+  is wide enough to cover all reasonable evaluation workflows.
+
+- Next directions:
+  - README pointer to the benchmark CLI ("Evaluating a new
+    STT engine" — covers iter-132/133/134/135 as a unit).
+  - Architecture: A/B `aggressive_first_sentence: true` using
+    the diff workflow against a saved baseline.
+  - Pre-commit hook or CI workflow example showing how to
+    gate PRs with `passing_delta` from the JSON diff output.
