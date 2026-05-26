@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-136 — README &quot;Evaluating a new STT engine&quot; section</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-135.html">← iter-135</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-136 — README &quot;Evaluating a new STT engine&quot; section</h1>
+<div class="meta"></div>
+</header><p><strong>Goal:</strong> The benchmark CLI evolved through iter-132 → 135 with no operator-facing documentation. The README still listed only the high-level project description. iter-136 adds an &quot;Evaluating a new STT engine&quot; section that walks an operator through the full eval workflow.</p>
+<p><strong>Three pieces:</strong></p>
+<p>1. <strong>README section added</strong> (~70 lines, between Installation and Project Structure):</p>
+<ul><ul><ul></ul></ul></ul>
+<p>Each subsection has copy-pasteable shell commands. Operators can run <code>python scripts/run_stt_benchmark.py --engine faster_whisper --model tiny</code> directly from the README and see real output.</p>
+<p>2. <strong>Drift-sentinel test</strong> (<code>tests/unit/test_readme_benchmark_docs.py</code>, 12 tests). Same shape as iter-129/iter-130&#x27;s GENO.md sentinels, applied to the README. Catches:</p>
+<ul><ul><ul></ul></ul></ul>
+<p>3. <strong>The format-choices test parses the script source as text instead of importing it</strong> because importing under a non- canonical name conflicts with <code>@dataclass</code> lookups (Python dataclass internals reach into <code>sys.modules[cls.__module__]</code>). Recorded for future doc-of-script tests: parse with regex, don&#x27;t import.</p>
+<p><strong>Drift-sentinel highlights</strong> (catch real failure modes):</p>
+<ul><li><code>test_readme_format_choices_match_argparse_choices</code>: extracts the argparse <code>choices=[...]</code> list from the script source and asserts each appears in the README. Adding a new format (HTML, Markdown) without doc update will fire this.</li></ul>
+<ul><li><code>test_readme_corpus_count_matches_actual</code>: parses <code>corpus.json:audio_fixtures</code>, counts the entries, requires the matching numeral (&quot;5 audio fixtures&quot;) in the README. Currently 5; if a 6th fixture lands the test fires.</li></ul>
+<ul><li><code>test_readme_code_blocks_use_real_script_invocation</code>: regex finds every <code>python scripts/&lt;path&gt;</code> invocation in the README and verifies it resolves to the actual script path. Catches typos like <code>python scripts/run_benchmark.py</code> (missing <code>_stt</code>) that would silently fail.</li></ul>
+<p>Verification:</p>
+<ul><li>`python -m pytest tests/unit/test_readme_benchmark_docs.py -q` → <strong>12 passed in 20ms</strong>.</li><li>Full unit + integration: <strong>1607 passed, 1 skipped</strong> (1595 prior + 12 new).</li><li>Perf snapshot: <strong>23 passed</strong>.</li></ul>
+<p>Notes:</p>
+<ul><li><strong>The README is now the canonical operator entry point.</strong> Pre-iter-136 a Linux operator hitting the repo had to read CHANGELOG-equivalents (ITERATION_LOG.md) to discover the benchmark CLI. iter-136 surfaces the workflow at the top-level README — discoverable in 30 seconds.</li></ul>
+<ul><li><strong>Drift sentinels for documentation are now standard.</strong> iter-129 covered diversity-pattern doc, iter-130 covered extraction-pattern doc, iter-136 covers README. Three documentation surfaces, all with code-vs-doc sync tests. The shape: source of truth (corpus.json count, argparse choices, real file paths) compared against README text.</li></ul>
+<ul><li>**The &quot;parse script source instead of importing it&quot; pattern is reusable.** When a doc test wants to verify CLI flags match argparse choices, importing the script can fire dataclass-lookup errors if loaded under non-canonical names. Regex-based parsing is the safer path. Recorded here for future doc tests of CLI scripts.</li></ul>
+<ul><li>**The benchmark eval pipeline is now feature-complete and documented.** Five iterations:<ul><li>iter-132: CLI + run_benchmark</li><li>iter-133: text → json/csv summary formats</li><li>iter-134: --diff with text rendering</li><li>iter-135: --diff with json/csv rendering</li><li>iter-136: README documentation + drift sentinel</li></ul></li></ul>
+<p>Every code path has tests, every output format has examples, every feature is discoverable from the top-level README. An operator dropping into the repo can evaluate a new STT engine without reading the iteration log.</p>
+<ul><li>Next directions: the now-documented diff workflow against a saved baseline. contributors at the diversity-check + extraction patterns (currently only discoverable from GENO.md).<ul><li>Architecture: A/B <code>aggressive_first_sentence: true</code> using</li><li>Pre-commit hook example showing <code>passing_delta</code> gating.</li><li>Document the GENO.md patterns in the README too — point</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-135.html">← iter-135</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>

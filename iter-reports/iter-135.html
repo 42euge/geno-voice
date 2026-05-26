@@ -168,7 +168,7 @@ table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-rad
 </head>
 <body>
 <div class="container">
-<nav><a href="index.html">← Index</a><a href="iter-134.html">← iter-134</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<nav><a href="index.html">← Index</a><a href="iter-134.html">← iter-134</a><a href="iter-136.html">iter-136 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
 <h1>iter-135 — `--diff` with `--format json/csv`</h1>
 <div class="meta"></div>
 </header><p><strong>Goal:</strong> iter-134 always rendered the diff as text. CI pipelines that want to gate PRs on regression detection need machine-readable output. iter-135 adds JSON + CSV diff renderers, dispatched via the existing <code>--format</code> flag when <code>--diff</code> is set.</p>
@@ -209,7 +209,7 @@ $ python scripts/run_stt_benchmark.py --diff baseline.json --format csv \
 <ul><li><strong>The summary + diff symmetry is now complete.</strong> Each benchmark layer has three output formats:</li></ul>
 <table class="iter-table"><thead><tr><th>Layer</th><th>text</th><th>json</th><th>csv</th></tr></thead><tbody><tr><td>summary</td><td>✅</td><td>✅</td><td>✅</td></tr><tr><td>diff</td><td>✅</td><td>✅</td><td>✅</td></tr></tbody></table>
 <p>Five output paths total. The dispatch in <code>main()</code> is small — one <code>if/elif</code> ladder for each — but the user-facing surface is wide enough to cover all reasonable evaluation workflows.</p>
-<ul><li>Next directions: STT engine&quot; — covers iter-132/133/134/135 as a unit). the diff workflow against a saved baseline. gate PRs with <code>passing_delta</code> from the JSON diff output.<ul><li>README pointer to the benchmark CLI (&quot;Evaluating a new</li><li>Architecture: A/B <code>aggressive_first_sentence: true</code> using</li><li>Pre-commit hook or CI workflow example showing how to</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-134.html">← iter-134</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+<ul><li>Next directions: STT engine&quot; — covers iter-132/133/134/135 as a unit). the diff workflow against a saved baseline. gate PRs with <code>passing_delta</code> from the JSON diff output.<ul><li>README pointer to the benchmark CLI (&quot;Evaluating a new</li><li>Architecture: A/B <code>aggressive_first_sentence: true</code> using</li><li>Pre-commit hook or CI workflow example showing how to</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-134.html">← iter-134</a><a href="iter-136.html">iter-136 →</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
 </div>
 </body>
 </html>
