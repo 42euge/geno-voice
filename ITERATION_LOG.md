@@ -11140,3 +11140,142 @@ Notes:
     benchmark" (still pending from iter-127).
   - If a third pattern lands in GENO.md, extract the shared
     sentinel scaffolding into a helper.
+
+## iter-132 — STT benchmark CLI + corpus documentation
+
+**Goal:** Operators evaluating a new `STTEngine` subclass need
+a one-command way to see how it stacks up against the iter-117
+through iter-127 audio fixture corpus. iter-132 adds the
+benchmark CLI:
+
+    python scripts/run_stt_benchmark.py --engine faster_whisper
+
+**Output:**
+
+    clean_audio               PASS  WER 0.20  band [0.00, 0.40]  elapsed 1.93s
+    quick_brown_fox_audio     PASS  WER 0.11  band [0.00, 0.30]  elapsed 0.27s
+    noisy_audio               PASS  WER 0.20  band [0.10, 0.50]  elapsed 0.71s
+    catastrophic_audio        PASS  WER 1.00  band [0.80, 1.30]  elapsed 0.69s
+    multispeaker_audio        PASS  WER 0.80  band [0.60, 1.10]  elapsed 0.71s
+
+    5/5 fixtures passed in 4.3s
+
+**Pre-iteration discovery: greedy decoding is mandatory for the
+benchmark.**
+First version routed through `FasterWhisperEngine.transcribe()`
+which uses default beam-search + temperature fallback. The
+multispeaker fixture failed reproducibly (WER 1.4-1.6) because
+the band [0.60, 1.10] was set assuming **greedy decoding**
+(iter-125's deterministic-decoding choice for the integration
+test).
+
+The fix recorded the same lesson iter-125 learned: deterministic
+decoding is required when asserting on output. The benchmark CLI
+takes the same approach as
+`tests/integration/test_wer_audio.py:_transcribe`:
+
+```python
+if engine == "faster_whisper":
+    # Bypass the engine wrapper, use greedy directly.
+    from faster_whisper import WhisperModel
+    m = WhisperModel(resolved, device=device, compute_type=compute)
+    def transcribe(audio_path):
+        segments, _ = m.transcribe(
+            audio_path, language="en",
+            beam_size=1, temperature=0,
+        )
+        return " ".join(s.text for s in segments).strip()
+```
+
+For non-`faster_whisper` engines (whisper / gemma4 / future
+custom), the CLI uses `stt.get_engine` + the standard transcribe
+contract. If those engines have non-deterministic output, that's
+their concern.
+
+**Three pieces:**
+
+1. **`scripts/run_stt_benchmark.py`** — CLI with three layers:
+   - `BenchmarkSummary` + `FixtureResult` dataclasses for the
+     return shape.
+   - `run_benchmark(transcribe, fixtures, fixture_dir, *, log,
+     clock)` — pure function. Caller passes any callable
+     `(audio_path) -> transcript`. Tests pass deterministic
+     stubs.
+   - `_build_transcribe_from_engine_args` (CLI-only): translates
+     argparse args into a transcribe closure. Bypasses the
+     engine wrapper for `faster_whisper` (greedy path); uses
+     `get_engine` for everything else.
+   - `main()` — argparse entry point; exits 0 if all fixtures
+     pass, 1 otherwise.
+
+2. **`tests/unit/test_run_stt_benchmark.py`** (14 tests):
+   - Single-fixture happy/below-band/above-band paths.
+   - Multi-fixture summary (mixed pass/fail; final summary line).
+   - Per-row format includes name + status + WER + band + elapsed.
+   - Empty corpus → empty summary with "0/0 fixtures passed"
+     line.
+   - Per-fixture elapsed positive; total_elapsed sums per-fixture.
+   - Hypothesis stored on FixtureResult for debugging.
+   - Transcribe receives full path (`fixture_dir/audio_path`),
+     not just basename.
+   - Default `log=print` flows to stdout via capsys.
+
+3. **End-to-end smoke test** (verified manually):
+   `python scripts/run_stt_benchmark.py --engine faster_whisper
+   --model tiny` → **5/5 PASS in ~1.3s**, deterministic across
+   runs.
+
+Verification:
+- `python -m pytest tests/unit/test_run_stt_benchmark.py -q` →
+  **14 passed in 30ms**.
+- Full unit + integration: **1552 passed, 1 skipped** (1538
+  prior + 14 new).
+- Perf snapshot: **23 passed**.
+- CLI run x3: **5/5 PASS deterministically**.
+
+Notes:
+- **Pure-function design pays off.** The 14 unit tests don't
+  touch faster-whisper at all — they exercise `run_benchmark`
+  with stub callables. This is the iter-108/iter-109 dependency-
+  injection pattern again: test the orchestration, leave the
+  engine boundary to integration tests.
+- **The CLI now serves as canonical reference for what the
+  corpus looks like in practice.** Future contributors who add
+  a fixture (say, `multispeaker_high_amp_16khz.wav`) just:
+  1. Generate the audio + add to corpus.json
+  2. Run the CLI; observe the WER
+  3. Set the band from the observed value ± reasonable margin
+- **Engine-specific bypass is a minor layering violation, but
+  justified.** Adding `**transcribe_kwargs` to
+  `STTEngine.transcribe` would make the contract leaky (each
+  engine has different decode params). Keeping the contract
+  clean and bypassing it in the benchmark for the engines we
+  know about is pragmatic — and the benchmark is the only
+  caller that needs decode control.
+- **The corpus is now an operator-facing benchmark.** Up to
+  iter-131 the fixtures were used only by the integration
+  test (skipped on hosts without faster-whisper). iter-132
+  surfaces them as a reusable evaluation tool. A `README.md`
+  pointer to the script would close the documentation loop —
+  saving for a future iteration.
+- **Future engine-eval flow:**
+  1. Implement custom STTEngine + register in `stt.ENGINES`.
+  2. Run `python scripts/run_stt_benchmark.py --engine
+     custom_engine`.
+  3. See per-fixture pass/fail in seconds.
+  4. If most fixtures fail, the engine isn't ready.
+  5. If only edge-case fixtures fail (multispeaker,
+     catastrophic), the engine has limitations to document.
+- **Pattern for future CLI scripts:** same shape as iter-132 —
+  pure function (testable) + thin CLI wrapper. The pattern is
+  now in two places: `scripts/generate_iteration_reports.py`
+  has a similar separation with `render_*` pure functions +
+  `main()` wrapper.
+- Next directions:
+  - Architecture: A/B `aggressive_first_sentence: true` as
+    default with the corpus.
+  - README pointer to the benchmark CLI ("Evaluating a new
+    STT engine") — closes the documentation loop.
+  - Extract the `(name, status, WER, band, elapsed)` per-row
+    format into a CSV / JSON output mode if a future iter
+    needs machine-readable benchmark results.
