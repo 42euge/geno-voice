@@ -10417,3 +10417,142 @@ Notes:
     default with real audio fixtures.
   - Multi-speaker overlap fixture for the "two speakers
     talking at once" stress-test.
+
+## iter-126 — Fix iter-115 limitation: filter "natural" before run scan
+
+**Goal:** iter-115 documented a known limitation in
+`_emit_naturalness_consistency_line`:
+
+> When a "natural" run is longer than a threshold-crossing
+> "rushed"/"slow" run, the helper reports the natural run as
+> the longest, suppresses it (because natural is the desired
+> state), and fires nothing — losing the rushed/slow signal.
+
+iter-126 fixes this by **filtering "natural" out before the
+scan**, mirroring iter-114's zero-filter precedent for fillers:
+
+> User perception: "5 rushed turns in a row" regardless of
+> intervening natural turns.
+
+**Code change** (3 lines added, 4 lines removed):
+
+```python
+# Before:
+non_empty = [b for b in buckets if b]
+longest_run, longest_bucket = _longest_consecutive_run(non_empty)
+if longest_run < threshold:
+    return
+if longest_bucket == "natural":
+    return  # iter-115's backstop suppression
+```
+
+```python
+# After:
+filtered = [b for b in buckets if b and b != "natural"]
+if not filtered:
+    return
+longest_run, longest_bucket = _longest_consecutive_run(filtered)
+if longest_run < threshold:
+    return
+# No "natural" backstop — filtered out. Dead code removed.
+```
+
+The filter approach is consistent with iter-114's zero-filter
+and iter-120's empty-string filter — all three diversity-check
+helpers now pre-filter "uninteresting" values before scanning.
+The `_longest_consecutive_run` primitive (iter-116) stays
+unchanged.
+
+**Three behavior-change cases:**
+
+| Input                              | Pre-iter-126 | Post-iter-126 |
+|------------------------------------|--------------|---------------|
+| 7 natural + 5 rushed               | silent       | fires (5)     |
+| 6 natural + 1 rushed + 1 nat + 1 r | silent       | silent (run=2)|
+| rushed×7, natural between each     | silent       | fires (7)     |
+
+The first row is the headline fix. The second is unchanged
+(still under threshold post-filter). The third is a new
+recovery — pre-iter-126, the filter would have caught only
+isolated runs of 1.
+
+**Tests** (21 total, was 18):
+
+The existing tests fall into three buckets:
+
+- **Unchanged behavior (16 tests)**: empty/below-threshold/
+  natural-only suppression, both phases firing on pure runs,
+  custom thresholds, formatting, defensive fallbacks. All
+  still pass byte-for-byte.
+
+- **Updated behavior** (1 test, renamed):
+  `test_natural_run_longer_than_rushed_run_fires_after_iter_126`
+  was `test_natural_run_longer_than_rushed_run` — flipped from
+  documenting the limitation (`assert lines == []`) to asserting
+  the corrected behavior (`assert "5 consecutive" in lines[0]`).
+  Comment block explaining the iter-126 change replaces the
+  "known limitation" note.
+
+- **Updated rationale** (1 test, same outcome):
+  `test_long_natural_run_does_not_fire_even_with_brief_outliers`
+  still asserts `lines == []`, but the rationale changes:
+  pre-iter-126 it was "longest run is 6 of natural, suppressed";
+  post-iter-126 it's "filtered list has run of 2, below
+  threshold." Same outcome; updated docstring.
+
+- **New tests (3 total)**:
+  - `test_iter_126_natural_filter_preserves_run_in_split_pattern`:
+    [r,n,r,n,r,n,r,r,n] → filtered = [r]*5 → fires.
+  - `test_iter_126_filter_does_not_affect_pure_rushed_runs`:
+    no natural to filter → unchanged.
+  - `test_iter_126_mixed_rushed_and_slow_picks_longest`:
+    [n*3, r*3, n, s*6] → filtered run-finder picks slow (6
+    > 3).
+
+Verification:
+- `python -m pytest tests/unit/test_emit_naturalness_consistency_line.py
+  -v` → **21 passed in 40ms** (18 prior + 3 new; 1 renamed,
+  1 docstring updated).
+- `python -m pytest tests/unit/test_emit_*.py
+  tests/unit/test_session_*.py
+  tests/unit/test_longest_consecutive_run.py -q` → all related
+  tests pass.
+- Full unit + integration: **1487 passed, 1 skipped** (1484
+  prior + 3 new).
+- Perf snapshot: **23 passed**.
+
+Notes:
+- **iter-115 was correct to flag this as a limitation.** A
+  pure documenting test ("here's what doesn't work") instead
+  of trying-to-work-around-it is the right call when the fix
+  is uncertain or non-trivial. iter-126 is the natural follow-
+  up: now we know the right shape, the fix is one line.
+- **The filter-before-scan pattern is now consistent across
+  all three diversity helpers**:
+  - iter-114 (filler): filter zeros before scan.
+  - iter-115/iter-126 (naturalness): filter empties + "natural"
+    before scan.
+  - iter-120 (barge): filter empties before scan.
+
+  None of them apply post-scan exclusion. The shared
+  `_longest_consecutive_run` (iter-116) doesn't filter — that's
+  per-instance policy. iter-126 brings naturalness in line.
+- **Removed dead code.** Pre-iter-126 had `if longest_bucket
+  == "natural": return` as a backstop after the scan — now
+  unreachable since "natural" is filtered out. Removed
+  rather than left as "defense in depth": dead code obscures
+  what the function actually does, and the new filter is the
+  single source of truth.
+- **No new metric, no new infrastructure.** This iter is a
+  pure bug fix — fewer lines than were added, behavior
+  improvement, three new test cases that exercise edge cases
+  the previous tests didn't cover.
+- Next directions:
+  - Multi-speaker overlap fixture (stress test for the WER
+    pipeline; harder to generate deterministically).
+  - Architecture: A/B `aggressive_first_sentence: true` as
+    default, with the now-existing real-audio fixtures as
+    the prosody A/B reference.
+  - Sentence-length-bucket consistency check would be the 4th
+    diversity instance — useful but not urgent given the
+    pattern has 3 stable instances.

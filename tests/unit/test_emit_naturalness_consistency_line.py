@@ -65,14 +65,15 @@ def test_natural_run_does_not_fire():
 
 
 def test_long_natural_run_does_not_fire_even_with_brief_outliers():
-    """natural-natural-natural-rushed-natural-... → longest run
-    is "natural" with ≥5, but natural is excluded."""
+    """natural-natural-natural-rushed-natural-rushed → after
+    iter-126 filters "natural" out, only [rushed, rushed] remains.
+    Longest run is 2, below default threshold of 5 → silent."""
     emit, lines = _capture()
     _emit_naturalness_consistency_line(
         emit,
         ["natural"] * 6 + ["rushed", "natural", "rushed"],
     )
-    # Longest run is 6 of "natural", but suppressed.
+    # Filtered: [rushed, rushed] → run of 2, below threshold.
     assert lines == []
 
 
@@ -223,23 +224,76 @@ def test_unknown_bucket_falls_back_to_generic_suggestion():
 # ---- Mixed natural + rushed sequences ---------------------------------
 
 
-def test_natural_run_longer_than_rushed_run():
-    """When natural's run is longer than the only flag-eligible
-    run, the function should still flag the rushed run if it
-    meets threshold. The current implementation reports ONLY the
-    longest run overall — so if natural wins, nothing fires.
-    Document this behavior explicitly."""
-    # 7 natural + 5 rushed. Longest is natural, which is excluded.
+def test_iter_126_natural_filter_preserves_run_in_split_pattern():
+    """iter-126 filter rule: removing "natural" makes
+    non-consecutive same-bucket turns appear consecutive in the
+    filtered list. Same precedent as iter-114's zero-filter for
+    fillers — user perception is "N rushed turns" regardless of
+    intervening natural turns.
+
+    [rushed, natural, rushed, natural, rushed, natural, rushed,
+     rushed, natural] → filtered = [rushed]*5 → fires.
+    """
+    emit, lines = _capture()
+    _emit_naturalness_consistency_line(
+        emit,
+        [
+            "rushed", "natural", "rushed", "natural",
+            "rushed", "natural", "rushed", "rushed", "natural",
+        ],
+    )
+    # Filtered: [rushed]*5 → run of 5, default threshold met.
+    assert len(lines) == 1
+    assert "5 consecutive" in lines[0]
+    assert "'rushed'" in lines[0]
+
+
+def test_iter_126_filter_does_not_affect_pure_rushed_runs():
+    """When there's no "natural" to filter, behavior is
+    unchanged — the filter is a no-op."""
+    emit, lines = _capture()
+    _emit_naturalness_consistency_line(
+        emit, ["rushed"] * 5,
+    )
+    assert "5 consecutive" in lines[0]
+
+
+def test_iter_126_mixed_rushed_and_slow_picks_longest():
+    """When the filtered list has runs of multiple non-natural
+    buckets, the LONGEST among them wins. Same tie-breaking as
+    pre-iter-126."""
+    emit, lines = _capture()
+    _emit_naturalness_consistency_line(
+        emit,
+        ["natural"] * 3 + ["rushed"] * 3 + ["natural"] + ["slow"] * 6,
+    )
+    # Filtered: [rushed]*3 + [slow]*6 → longest is slow (6).
+    assert "6 consecutive" in lines[0]
+    assert "'slow'" in lines[0]
+    assert "consider increasing speed" in lines[0]
+
+
+def test_natural_run_longer_than_rushed_run_fires_after_iter_126():
+    """iter-126 fix: when "natural" is the dominant bucket but a
+    threshold-crossing "rushed" or "slow" run exists, the helper
+    fires on the non-natural run.
+
+    Pre-iter-126, the helper reported only the LONGEST run
+    overall. With 7 natural + 5 rushed, "natural" was longer,
+    suppressed by the "is longest_bucket natural?" check, and
+    nothing fired. The rushed signal was lost.
+
+    Post-iter-126, "natural" is filtered out before the scan
+    (mirroring iter-114's zero-filter precedent), so the 5-run
+    of "rushed" surfaces directly.
+    """
     emit, lines = _capture()
     _emit_naturalness_consistency_line(
         emit,
         ["natural"] * 7 + ["rushed"] * 5,
     )
-    # Current implementation: reports the LONGEST run; if it's
-    # "natural", suppresses. The 5-run of "rushed" doesn't fire
-    # because "natural" came up first as longest.
-    assert lines == []
-    # Note: this is a known limitation. A more sophisticated
-    # implementation would scan each non-natural bucket
-    # independently. Recorded as a future iteration if it
-    # becomes a real signal.
+    # iter-126 fix: rushed run now surfaces.
+    assert len(lines) == 1
+    assert "5 consecutive" in lines[0]
+    assert "'rushed'" in lines[0]
+    assert "consider reducing speed" in lines[0]

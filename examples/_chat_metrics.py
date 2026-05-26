@@ -1513,22 +1513,35 @@ def _emit_naturalness_consistency_line(
     "natural" runs are NEVER flagged: the goal is to be in that
     bucket. The check fires only on rushed/slow.
 
+    iter-126: "natural" is filtered out BEFORE the run scan, not
+    just suppressed at the end. This fixes iter-115's documented
+    limitation: a long "natural" run that overshadows a shorter
+    "rushed" / "slow" run no longer hides the rushed/slow signal.
+    The user-perception rationale matches iter-114's zero-filter
+    rule: N rushed turns is N rushed turns regardless of intervening
+    "natural" turns. Filtering before the scan also makes the
+    helper consistent across iter-114/115/120 — all three filter
+    "uninteresting" values up front.
+
     Output mirrors iter-114's "name the responsible iteration"
     convention so operators can find the fix path:
 
         Naturalness: 6 consecutive 'rushed' turns
                      — consider reducing speed (iter-053 bucket)
     """
-    non_empty = [b for b in buckets if b]
-    if not non_empty:
+    # iter-126: filter empty AND "natural" up front. Both are
+    # "uninteresting" values that shouldn't break runs of the
+    # bucket types we care about.
+    filtered = [b for b in buckets if b and b != "natural"]
+    if not filtered:
         return
 
-    # iter-116: shared run-finder.
-    longest_run, longest_bucket = _longest_consecutive_run(non_empty)
+    longest_run, longest_bucket = _longest_consecutive_run(filtered)
     if longest_run < threshold:
         return
-    if longest_bucket == "natural":
-        return
+    # No need for an explicit `if longest_bucket == "natural": return`
+    # since "natural" was filtered out. Pre-iter-126 had this
+    # guard as a backstop; iter-126 makes it dead code, removed.
 
     if longest_bucket == "rushed":
         suggestion = "consider reducing speed"
