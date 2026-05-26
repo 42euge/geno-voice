@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iter-116 — Extract _longest_consecutive_run shared helper</title>
+<style>
+:root {
+  --bg: #0f1115;
+  --panel: #161922;
+  --text: #e1e4eb;
+  --muted: #8a92a3;
+  --accent: #7aa2f7;
+  --accent-2: #9ece6a;
+  --code-bg: #1d2030;
+  --border: #2a2f3e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.55;
+}
+.container { max-width: 880px; margin: 0 auto; padding: 24px 28px 64px; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px; }
+header h1 { margin: 0 0 4px; font-size: 24px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .meta code { background: none; color: var(--muted); padding: 0; }
+nav { margin-bottom: 16px; font-size: 13px; }
+nav a { color: var(--accent); text-decoration: none; margin-right: 12px; }
+nav a:hover { text-decoration: underline; }
+h2, h3, h4 { line-height: 1.2; margin-top: 28px; }
+h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 17px; }
+p, li { color: var(--text); }
+strong { color: #fff; }
+a { color: var(--accent); }
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+pre.code-block {
+  background: var(--code-bg);
+  padding: 14px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.88em;
+  border: 1px solid var(--border);
+}
+pre.code-block code { background: none; padding: 0; border-radius: 0; font-size: 1em; }
+ul { padding-left: 22px; }
+ul li { margin-bottom: 4px; }
+ul ul { margin-top: 4px; }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0;
+  padding: 4px 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0 4px 4px 0;
+}
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table.iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+table.iter-table th, table.iter-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+table.iter-table th { background: var(--panel); }
+.iter-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.iter-card a { color: var(--text); text-decoration: none; display: block; }
+.iter-card a:hover .title { color: var(--accent); }
+.iter-card .title { font-weight: 600; font-size: 15px; }
+.iter-card .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.iter-card .badge {
+  display: inline-block;
+  background: var(--code-bg);
+  color: var(--accent-2);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  margin-left: 8px;
+}
+/* iter-035: testing report — stat grid + SVG chart styles. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 16px 0 24px;
+}
+.stat {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+svg.chart {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 24px;
+}
+svg.chart .grid { stroke: var(--border); stroke-width: 0.5; }
+svg.chart .axis { fill: var(--muted); font-size: 11px; }
+svg.chart .chart-title { fill: var(--text); font-size: 13px; font-weight: 600; }
+svg.chart .chart-axis-label { fill: var(--muted); font-size: 11px; }
+.chart-empty {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* iter-036: horizontal bar chart + perf scenario table. */
+svg.chart.hbar { max-width: 720px; }
+svg.chart.hbar .axis-label { fill: var(--text); font-size: 12px; }
+svg.chart.hbar .value { fill: var(--muted); font-size: 11px; }
+svg.chart .legend { fill: var(--text); font-size: 11px; }
+table.perf-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0 24px;
+  font-size: 13px;
+}
+table.perf-table th, table.perf-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+table.perf-table th { background: var(--card-bg); color: var(--muted); }
+table.perf-table td.num { text-align: right; }
+table.perf-table code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+</style>
+</head>
+<body>
+<div class="container">
+<nav><a href="index.html">← Index</a><a href="iter-115.html">← iter-115</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav><header>
+<h1>iter-116 — Extract _longest_consecutive_run shared helper</h1>
+<div class="meta"></div>
+</header><p><strong>Goal:</strong> Consolidate the run-finding scan loop that iter-114 (<code>_emit_filler_diversity_line</code>) and iter-115 (<code>_emit_naturalness_consistency_line</code>) duplicated verbatim. ~10 lines of identical single-pass scan logic in two places — small enough that extraction is borderline, but the duplication is concrete and a third instance is plausible (e.g., barge_in_phase repetition, sentence-length-bucket runs).</p>
+<p><strong>Pre-iteration investigation that got pivoted:</strong> First investigated <code>streaming_overlap_ratio</code> for architectural headroom. Survey of the perf snapshot showed:</p>
+<ul><li>0% overlap on short single-sentence responses (no headroom — nothing to overlap when response IS one sentence).</li><li>7-22% on auto_aggressive_off scenarios (the 500ms stall blocks the LLM, naturally limits overlap).</li><li>38-57% on long_preamble scenarios (where iter-088&#x27;s aggressive splitter already provides the lever — turning it on increases overlap by ~50%).</li><li>70% on filler-firing scenarios (filler audio plays during LLM streaming — natural overlap source).</li></ul>
+<p>The metric is well-tuned and the existing <code>aggressive_first_sentence</code> flag is the architectural lever. No further architectural improvement available from this metric alone; it would require making aggressive_first_sentence the default which has prosody tradeoffs.</p>
+<p>Pivoted to the run-finder extraction.</p>
+<p><strong>Change:</strong> New <code>_longest_consecutive_run(values: list) -&gt; tuple[int, object]</code> function:</p>
+<pre class="code-block"><code>def _longest_consecutive_run(values: list) -&gt; tuple[int, object]:
+    if not values:
+        return (0, None)
+    longest_run, longest_value = 1, values[0]
+    cur_run, cur = 1, values[0]
+    for v in values[1:]:
+        if v == cur:
+            cur_run += 1
+            if cur_run &gt; longest_run:
+                longest_run, longest_value = cur_run, cur
+        else:
+            cur, cur_run = v, 1
+    return (longest_run, longest_value)</code></pre>
+<p>Pure list-scanning primitive — no filtering. Callers pre-filter (zeros for iter-114, empty strings for iter-115). Returns a tuple so callers can tuple-unpack as <code>length, value</code>.</p>
+<p>Both callers shrink:</p>
+<p>iter-114 was:</p>
+<pre class="code-block"><code>fired = [fid for fid in filler_ids if fid != 0]
+if not fired: return
+longest_run = 1; longest_id = fired[0]
+cur_run = 1; cur_id = fired[0]
+for fid in fired[1:]:
+    if fid == cur_id:
+        cur_run += 1
+        if cur_run &gt; longest_run:
+            longest_run = cur_run
+            longest_id = cur_id
+    else:
+        cur_id = fid
+        cur_run = 1
+if longest_run &lt; threshold: return
+emit(...)</code></pre>
+<p>Now:</p>
+<pre class="code-block"><code>fired = [fid for fid in filler_ids if fid != 0]
+if not fired: return
+longest_run, longest_id = _longest_consecutive_run(fired)
+if longest_run &lt; threshold: return
+emit(...)</code></pre>
+<p>iter-115 collapses similarly (~12 lines → 2 lines per call site).</p>
+<p><strong>Tests</strong> (<code>tests/unit/test_longest_consecutive_run.py</code>, 19 tests):</p>
+<p><em>Empty / singleton (3 tests):</em> empty → (0, None); single int; single string.</p>
+<p><em>Single run (2 tests):</em> all-same; two-in-a-row.</p>
+<p><em>Multiple runs (5 tests):</em> one run in distinct sequence; alternating returns 1; runs at start, end; two equal-length runs (first wins); longer-later-run wins.</p>
+<p><em>Type variety (4 tests):</em> string runs; mixed strings; zeros counted (no filter); None values.</p>
+<p><em>Stress (1 test):</em> large list with central run.</p>
+<p><em>Round-trip parity (3 tests):</em> shapes that iter-114 and iter-115 actually pass after their pre-filter; locked tuple return shape.</p>
+<p><strong>Key invariant tested: ties resolve to EARLIEST run.</strong> <code>[1, 1, 1, 2, 2, 2]</code> returns <code>(3, 1)</code>, not <code>(3, 2)</code>. This matches the prior in-place implementations exactly — both iter-114 and iter-115 always reported the FIRST run encountered in case of a tie. Documenting the rule as a tested invariant prevents a future &quot;it doesn&#x27;t matter&quot; refactor from accidentally flipping it.</p>
+<p>Verification:</p>
+<ul><li>`python -m pytest tests/unit/test_longest_consecutive_run.py -q` → <strong>19 passed in 30ms</strong>.</li><li>Regression sentinel for both iter-114 + iter-115 callers: `pytest tests/unit/test_emit_filler_diversity_line.py tests/unit/test_emit_naturalness_consistency_line.py tests/unit/test_session_summary.py -q` → <strong>55 passed</strong> byte-for-byte unchanged.</li><li>Full unit + integration: <strong>1364 passed, 1 skipped</strong> (1345 prior + 19 new).</li><li>Perf snapshot: <strong>23 passed</strong>.</li></ul>
+<p>Notes:</p>
+<ul><li><strong>Borderline extraction, justified by future-instances bias.</strong> Two instances of a 10-line scan is small. But: 1. The duplication was VERBATIM — no per-instance variation in the loop body, suggesting it&#x27;s purely shared logic. 2. The shape (return longest run + value) is general — fits any &quot;consecutive same value&quot; check. 3. Tests now lock the tie-resolution rule explicitly, which was implicit in the prior duplicated code.</li><li><strong>Pure primitive, no filtering.</strong> Keeping the helper a scan-only function rather than baking in zero-filtering preserves composability. iter-114 filters zeros; iter-115 filters empty strings; a hypothetical iter-117 might filter None. Each caller&#x27;s filter rule is its own concern.</li><li><strong>Tuple return locks call-site shape.</strong> <code>length, value = _longest_consecutive_run(items)</code> reads cleanly. Returning a dataclass would be over-engineered for two fields.</li><li>**streaming_overlap_ratio investigation (recorded for future):** the metric has structural ceilings most scenarios hit. Real headroom only exists when: Turning aggressive_first_sentence on is the only lever; and it&#x27;s a config opt-in with prosody tradeoffs. A future iteration could grid-search a tighter splitter heuristic (e.g., comma-end at &gt;= 30 chars instead of &gt;= 20) to find a sweet spot, but this is real architecture work, not a one-iteration job.<ul><li>LLM stream is long enough to overlap with synth+playback</li><li>First sentence emits before the stream finishes</li></ul></li><li>Next directions: installed on this system — verified). Eight iterations overdue. Worth attempting now. instance of the diversity-check pattern, validating both iter-116&#x27;s helper extraction and the diversity shape itself. different signal.<ul><li>Real audio fixtures + CPU-only STT (faster-whisper IS</li><li>barge_in_phase consistency check — would be the third</li><li>Sentence-length-bucket consistency check — same shape on a</li></ul></li></ul><nav><a href="index.html">← Index</a><a href="iter-115.html">← iter-115</a><a href="testing.html">Testing →</a><a href="performance.html">Performance →</a></nav>
+</div>
+</body>
+</html>
