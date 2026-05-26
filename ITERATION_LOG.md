@@ -7767,3 +7767,149 @@ Notes:
     iter-102).
   - Real audio fixtures + CPU-only STT (still pending from
     iter-106).
+
+## iter-108 — Extract load_engines into _chat_engines module
+
+**Goal:** Continue iter-107's mic_chat.py refactor. Pull the
+13-line STT + TTS engine loading + timing block out of
+`run_chat` into a tested module. Side benefit: abstracts the
+Mac-only `WhisperEngine` import behind a factory callable, which
+opens the door for x86_64 STT integration without touching
+`mic_chat.py` itself.
+
+**Original block:**
+
+```python
+# Load STT
+t0 = time.monotonic()
+stt_engine = WhisperEngine(model_repo=model_repo)
+stt_engine._load()
+stt_load = time.monotonic() - t0
+
+# Load TTS
+t1 = time.monotonic()
+tts_engine = get_tts_engine("kokoro")
+tts_engine._load()
+tts_load = time.monotonic() - t1
+
+print(f"  STT loaded in {stt_load*1000:.0f}ms")
+print(f"  TTS loaded in {tts_load*1000:.0f}ms")
+```
+
+Three concerns tangled: hardcoded engine classes, timing logic,
+ANSI-styled stdout logging. Untestable without spinning up real
+mlx-whisper + kokoro.
+
+**Change:** New module `examples/_chat_engines.py` exposing:
+
+```python
+@dataclass
+class LoadedEngines:
+    stt: Any
+    tts: Any
+    stt_load_seconds: float
+    tts_load_seconds: float
+
+def load_engines(
+    stt_factory: Callable[[], Any],
+    tts_factory: Callable[[], Any],
+    *,
+    log: Callable[[str], None] = print,
+) -> LoadedEngines:
+```
+
+Three test seams (matching the iter-107 `prerender_fillers`
+shape):
+- `stt_factory` / `tts_factory` — `() -> engine` callables. The
+  caller bakes `model_repo` / voice / preferences into a closure;
+  `load_engines` itself knows nothing about engine constructors.
+- `log` — callable, default `print`. Module emits plain text;
+  caller (`mic_chat.py`) re-applies ANSI styling and 2-space
+  indent.
+- Returns a `LoadedEngines` dataclass — not a tuple or dict —
+  so future fields (e.g., `vad_engine`) can extend without
+  breaking callers.
+
+**Caller (mic_chat.py) shrinks from 13 lines to 9:**
+
+```python
+from examples._chat_engines import load_engines
+
+engines = load_engines(
+    stt_factory=lambda: WhisperEngine(model_repo=model_repo),
+    tts_factory=lambda: get_tts_engine("kokoro"),
+    log=lambda line: print(f"  {line}"),
+)
+stt_engine = engines.stt
+tts_engine = engines.tts
+```
+
+The factory closures preserve the existing wiring exactly — no
+behavior change for production. The log adapter prepends 2 spaces
+to match the original indented output.
+
+**Tests** (`tests/unit/test_chat_engines.py`, 12 tests):
+
+- Happy path: bundle returned, both factories called once,
+  both `_load()` invoked.
+- Timing: timings are non-negative; a 50ms `_load()` delay
+  shows up in `stt_load_seconds ≥ 0.04` (permissive lower bound
+  for sleep granularity).
+- Logging: 2 lines emitted in STT-then-TTS order; both lines
+  are plain text (no ANSI / leading spaces); default `log=
+  print` flows to stdout via capsys.
+- Error propagation: STT factory exception propagates; TTS
+  factory NOT called on STT failure (no half-load); TTS
+  `_load()` exceptions also propagate.
+- Factory contract: factories receive `()` — no positional or
+  keyword args added by `load_engines` itself.
+- Return shape: `LoadedEngines` dataclass with the 4 named
+  fields, locking in the API.
+
+Verification:
+- `python -m pytest tests/unit/test_chat_engines.py -q` →
+  **12 passed in 70ms**.
+- Full unit + integration: `tests/ --ignore=tests/performance
+  --ignore=tests/test_session.py --ignore=tests/e2e -q` →
+  **1235 passed, 1 skipped** (1223 prior + 12 new).
+- Perf snapshot: **21 passed**.
+
+Notes:
+- **Two mic_chat.py extractions in two iterations.** iter-107
+  + iter-108 share the exact same shape: `(callable_dep, log)`
+  injection, plain-text emit, ANSI ownership at the caller,
+  dataclass return. This is now the **default extraction
+  shape for any mic_chat.py subroutine** — a third instance
+  would let me promote it to a documented pattern in GENO.md.
+- **WhisperEngine is no longer a hard import boundary.** The
+  factory callable means `_chat_engines.py` could be tested
+  on x86_64 Linux even if `WhisperEngine` itself can't be
+  imported (its module-level `mlx-whisper` import would fail
+  on Linux). A future faster-whisper or whisper.cpp wrapper
+  can drop in by changing the factory closure in `mic_chat.py`
+  — no other call site touched.
+- **The "fail-fast on engine load error" decision is now
+  tested.** The `test_stt_factory_failure_skips_tts` invariant
+  prevents a future refactor from accidentally introducing a
+  partial-load state. This isn't speculative: a try/except
+  around the STT load would be a tempting "robustness"
+  addition; the test makes the cost explicit.
+- **mic_chat.py size after iter-107 + iter-108:** ~365 lines
+  total, ~125 in `run_chat`. Down from ~395 / ~155 pre-iter-107.
+  Remaining extractable blocks in run_chat:
+  - speaker_factory + synth + play closures (~17 lines)
+  - aggressive_first_sentence + auto_aggressive_threshold
+    config read (~6 lines, very small — probably stays inline)
+  - main turn loop with KeyboardInterrupt handler (~30 lines —
+    largest remaining block)
+- Next directions:
+  - Extract the 3 closures (`_speaker_factory`, `_synth`, `_play`)
+    into a single factory builder. Would round out the
+    "everything before the turn loop" extraction.
+  - Real audio fixtures + CPU-only STT (still pending from
+    iter-106). Now easier given iter-108 — the `stt_factory`
+    closure can return a faster-whisper wrapper instead of
+    `WhisperEngine`.
+  - Extract the main turn loop with KeyboardInterrupt handler
+    into a `run_session` function — would complete the
+    `run_chat` decomposition.

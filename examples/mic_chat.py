@@ -185,20 +185,19 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
     print(f"{DIM}stt: {model_short} │ llm: {llm_config['model']} │ tts: kokoro/{voice}{RESET}")
     print()
 
-    # Load STT
-    t0 = time.monotonic()
-    stt_engine = WhisperEngine(model_repo=model_repo)
-    stt_engine._load()
-    stt_load = time.monotonic() - t0
+    # iter-108: engine loading + timing + log moved to
+    # examples/_chat_engines so the sequence is testable without
+    # importing mlx-whisper / kokoro at the test level. The
+    # factory closures here preserve the previous wiring exactly.
+    from examples._chat_engines import load_engines
 
-    # Load TTS
-    t1 = time.monotonic()
-    tts_engine = get_tts_engine("kokoro")
-    tts_engine._load()
-    tts_load = time.monotonic() - t1
-
-    print(f"  STT loaded in {stt_load*1000:.0f}ms")
-    print(f"  TTS loaded in {tts_load*1000:.0f}ms")
+    engines = load_engines(
+        stt_factory=lambda: WhisperEngine(model_repo=model_repo),
+        tts_factory=lambda: get_tts_engine("kokoro"),
+        log=lambda line: print(f"  {line}"),
+    )
+    stt_engine = engines.stt
+    tts_engine = engines.tts
 
     # Pre-render fillers (iter-011). Empty by default; opt in via
     # config.local.yaml:
