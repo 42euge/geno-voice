@@ -11899,3 +11899,124 @@ merely fails to fix a long-standing failure.
   - Document the GENO.md diversity-check + extraction patterns in
     the README so contributors discover them without reading
     GENO.md (carried over from iter-136).
+
+## iter-138 — `--fail-on-removed` coverage gate (block silent corpus shrink)
+
+**Branch:** `iter-138-fail-on-removed` (merged ff to main, commit `0c4a574`)
+**Date:** 2026-06-16
+
+**Goal:** iter-137 shipped `--fail-on-regression` — a clean CI
+gate that blocks a PR which flips a fixture PASS→FAIL while
+ignoring pre-existing failures. But that gate has a blind spot:
+it only sees fixtures that are still in the corpus. **Deleting a
+failing fixture reads as "fewer failures" to `--fail-on-regression`
+and slips straight through.** A contributor (or an accident) can
+dodge a red fixture by removing it, and the regression gate stays
+green. iter-138 closes that gap with the orthogonal coverage
+gate.
+
+**The semantic — block on a baseline fixture that vanished.**
+`--fail-on-removed` exits 1 iff at least one fixture present in
+the baseline JSON is MISSING from the current corpus (a
+`status_change == "removed"` row, i.e. `diff.removed_fixtures` is
+non-empty). New fixtures never trip it (adding coverage is always
+allowed); regressions on surviving fixtures are not its concern
+(that's `--fail-on-regression`'s job). The two gates compose: set
+both for a strict policy that blocks a PR which makes a fixture
+worse OR drops one.
+
+**What changed:**
+
+1. **`scripts/run_stt_benchmark.py`:**
+   - New `--fail-on-removed` flag (`action="store_true"`).
+   - Usage guard generalized: the `requires --diff` check now
+     fires for `--fail-on-regression` OR `--fail-on-removed`, and
+     names whichever flag(s) were passed in the exit-2 stderr
+     message ("... requires --diff <baseline.json>; without a
+     baseline there is nothing to compare against").
+   - Exit-code logic in diff mode generalized to an OR of the two
+     gates: `blocked = (fail_on_regression and diff.regressions)
+     or (fail_on_removed and diff.removed_fixtures)`; returns
+     `1 if blocked else 0`. With neither flag, diff mode keeps the
+     iter-134/135 absolute-failure exit so existing callers are
+     unaffected. Reused iter-134's existing `removed_fixtures`
+     property on `BenchmarkDiff` — no new diff plumbing needed.
+
+2. **README CI section extended:** a new paragraph explains the
+   `--fail-on-regression` blind spot (deleting a failing fixture)
+   and introduces `--fail-on-removed` as the coverage-loss gate,
+   with a copy-pasteable strict-gate example combining both flags.
+   Notes the exit-2 `--diff` requirement.
+
+3. **Tests — `tests/unit/test_run_stt_benchmark.py` (+8):**
+   reuse the iter-137 `_run_main` hermetic driver (temp corpus +
+   baseline, monkeypatched engine builder, returns exit code).
+   The driver already supported a removed-fixture scenario for
+   free — a baseline entry whose name isn't in `fixtures`.
+   Cases: requires-diff (exit 2 + stderr), removal → exit 1,
+   nothing-removed → exit 0 (even when a fixture regressed —
+   proving the gates are independent), new fixture ignored →
+   exit 0, strict-gate (both flags) firing on regression-only,
+   on removal-only, and clean exit 0, and a backward-compat case
+   proving plain `--diff` without the flag does NOT block on a
+   removal.
+
+4. **Drift sentinel — `tests/unit/test_readme_benchmark_docs.py`
+   (+1):** `test_readme_documents_fail_on_removed_flag` asserts
+   the flag is both defined in the script source AND documented
+   in the README (bidirectional sync, same shape as iter-136/137
+   sentinels).
+
+**Verification:**
+- `python -m pytest tests/unit/test_run_stt_benchmark.py
+  tests/unit/test_readme_benchmark_docs.py -q` → **86 passed in
+  0.15s** (77 prior + 8 benchmark + 1 README).
+- Full unit suite: **1594 passed** (1585 prior + 9 new).
+- Full unit + integration: **1624 passed, 1 skipped** (1615 prior
+  + 9 new).
+- Perf snapshot (`tests/performance/`): **23 passed**.
+- End-to-end smoke (faster_whisper tiny, real 5-fixture corpus):
+  - `--fail-on-removed` without `--diff` → exit 2 with the guard
+    message.
+  - Real baseline (all 5 pass), re-run with `--fail-on-removed`,
+    nothing dropped → exit 0.
+  - Baseline doctored with a phantom 6th fixture, re-run with
+    `--fail-on-removed` → exit 1, diff prints
+    "phantom  REMOV  WER 0.00 -> —  (removed)" and
+    "Removed fixtures: phantom".
+
+**Notes:**
+- **Two orthogonal CI gates, freely composable.**
+  `--fail-on-regression` (PASS→FAIL flip) and `--fail-on-removed`
+  (fixture vanished) answer different questions; either alone, or
+  both together (`--diff baseline.json --fail-on-regression
+  --fail-on-removed`) for the strict policy. The exit-code logic
+  is a simple OR over the two gate conditions.
+
+- **Zero new diff plumbing.** iter-134 already computed
+  `removed_fixtures` on `BenchmarkDiff` for the text/json/csv diff
+  renderers. iter-138 just wires that existing signal to the exit
+  code. The lesson from the iter-132→138 arc: build the data model
+  once (the diff), then each gate is a thin exit-code policy on top.
+
+- **The iter-137 `_run_main` hermetic driver paid off immediately.**
+  All 8 new tests reused it unchanged — the removed-fixture case
+  needed no new test infrastructure, just a baseline entry with a
+  name absent from the corpus. Hermetic `main()` testing is now
+  the standard for benchmark exit-code behavior.
+
+- **Bookkeeping:** the merge commit also swept in regenerated
+  `iter-reports/perf-*.json` snapshots (the perf suite rewrites
+  them on run, same as iter-135/136 commits). No source impact.
+
+- Next directions:
+  - `--fail-on-new-fixture` is the deliberate non-feature: adding
+    coverage should never block, so there's no symmetric gate. If a
+    future need arises (e.g. "corpus is frozen, reject additions"),
+    it'd be a separate `--frozen-corpus` flag, not a `--fail-on-*`.
+  - A committed `.github/workflows/` example (or `scripts/ci-gate.sh`)
+    wiring `--fail-on-regression --fail-on-removed` end to end
+    (carried over from iter-137).
+  - Document the GENO.md diversity-check + extraction patterns in
+    the README so contributors discover them without reading
+    GENO.md (carried over from iter-136).
