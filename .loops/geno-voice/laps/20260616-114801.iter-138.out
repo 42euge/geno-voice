@@ -1,0 +1,24 @@
+Lap complete. Clean tree on main, worktree removed.
+
+## iter-138 summary
+
+**Picked:** the `--strict` / coverage-loss gate from iter-137's "next directions" — a `--fail-on-removed` CLI flag for the STT benchmark.
+
+**Why:** `--fail-on-regression` (iter-137) only sees surviving fixtures, so deleting a *failing* fixture reads as "fewer failures" and slips past the gate. `--fail-on-removed` blocks that — exits 1 when a baseline fixture vanishes from the corpus. Composes with `--fail-on-regression` for a strict gate (fail on regression OR removal).
+
+**Implementation:** Reused iter-134's existing `BenchmarkDiff.removed_fixtures` — zero new diff plumbing, just a thin exit-code policy. Generalized the `requires --diff` guard and exit logic to an OR over both gates. Backward-compatible: plain `--diff` unaffected.
+
+**Verification (all green):**
+- Benchmark + README tests: **86 passed**
+- Full unit: **1594 passed**
+- Unit + integration: **1624 passed, 1 skipped**
+- Perf snapshot: **23 passed**
+- End-to-end (faster_whisper tiny, real corpus): guard→exit 2, no-removal→exit 0, phantom-fixture removal→exit 1 with correct diff output
+
+Merged ff to main (`0c4a574` + log `3d8e620`), worktree removed.
+
+---
+
+To keep improving this benchmark CI tooling:
+
+`/loop Iterate on the geno-voice STT benchmark CI gates: add a committed .github/workflows/ example (or scripts/ci-gate.sh) wiring --fail-on-regression --fail-on-removed end to end, with a drift sentinel test keeping it in sync with the CLI flags.`

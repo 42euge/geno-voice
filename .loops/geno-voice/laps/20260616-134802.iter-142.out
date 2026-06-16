@@ -1,0 +1,23 @@
+My worktree is removed and main is clean (the untracked `.loops/` and `scripts/run-lap.sh` are pre-existing, not mine). The many other worktrees are stale leftovers from prior iterations, outside this lap's scope.
+
+Lap 142 complete.
+
+## Summary
+
+**iter-142 — LLM-TPS consistency check (7th diversity-check instance)**
+
+Landed the signposted 7th instance of the session-summary diversity-check pattern, targeting `llm_tps` (LLM stream throughput, iter-052). A sustained slow LLM stream starves the TTS worker no matter how fast STT/TTS run — there was a per-turn print and a median line but no sustained-run sentinel.
+
+What's notable: this is the **first inverted-direction continuous bucketer**. The three prior continuous instances (sentence-length, stt-rtf, tts-rtf) all had a *low* "fine" value; `llm_tps` is bigger-is-better, so `_llm_tps_bucket` puts the fine state (`"fast"`, ≥25 tps) at the *high* end and flips the boundaries. The inversion lives entirely in the bucketer boundaries and the filter's excluded-set — `_longest_consecutive_run` and the emit machinery are untouched, confirming the run-scan primitive is genuinely direction-agnostic.
+
+- `examples/_chat_metrics.py`: `_llm_tps_bucket` + `_emit_llm_tps_consistency_line`, wired into `print_session_summary`.
+- `GENO.md`: updated atomically (six→seven instances + filter-rule/continuous-metric/threshold bullets).
+- Tests: new `test_emit_llm_tps_consistency_line.py` (+21), doc-sync test extended.
+
+**Verification:** unit `1674 passed` (1653 prior + 21 new); integration `30 passed, 1 skipped`. FF-merged to main (`f274aad`), log committed (`a043e05`), worktree removed.
+
+---
+
+To continue improving this area:
+
+`/loop Iterate on geno-voice: land the 8th diversity-check instance for streaming_overlap_ratio (a sustained low-overlap run would flag the iter-008 design failing to mask synth), following the GENO.md pattern with full test matrix.`

@@ -12671,3 +12671,93 @@ testable and lands the first tests for it.
     are still untested at the argv/dispatch level; the same seam could
     extend if they grow flags. For now they are trivially thin.
   - Diversity-check surface remains paused per iter-143/144.
+
+## iter-146 — extract a pure stabilization seam in mic_stream + first tests
+
+**Branch:** `iter-146-stream-stabilize` (merged ff to main, commit `9a8cc69`)
+**Date:** 2026-06-16
+
+**Goal:** iter-145 closed by noting that other thin entrypoints
+(`mic_stream.run_stream`, `mic_talk.run_talk`) were still untested at
+the dispatch level but "trivially thin." On a closer look, `mic_stream.py`
+is *not* trivially thin: its `run_stream` mic loop embeds the core
+iter-008 streaming-overlap algorithm — the longest-common-prefix
+stabilization that promotes a transcript prefix from speculative (dim) to
+stable (bright) once it holds unchanged across consecutive inference
+passes. That logic had **zero test coverage** and was unreachable from a
+test because it lived inline in the loop and the module imported `pyaudio`
+at module scope. This lap extracts it into a pure function and lands the
+first tests for the streaming entrypoint.
+
+**What changed:**
+
+1. **`examples/mic_stream.py` — extract `stabilize_pass()`** (no behavior
+   change for real use). Follows the GENO.md mic_chat.py extraction
+   convention:
+   - `stabilize_pass(text, prev_full_text, stable, stable_candidate,
+     stable_count, passes, settled_at_pass, *, stability_passes=...)` is a
+     **pure** per-pass step: computes the new stable/speculative split and
+     candidate-run bookkeeping. **No clock reads, no I/O.**
+   - Returns a `StabilizeStep` **dataclass** (not a tuple, per convention)
+     carrying the updated locals plus two signals, `changed` and
+     `promoted`. **Wall-clock side-effects stay at the caller** —
+     `run_stream` sets `state.last_change_at = time.monotonic()` when
+     `changed` and appends to `state.collapse_times` when `promoted`. This
+     keeps the monotonic-clock dependency out of the testable unit, the
+     same way `build_audio_io` keeps `pyaudio` at the caller.
+   - **`pyaudio` is now a lazy import** inside `run_stream` (was
+     module-scope), so the module imports on Linux x86_64 and the pure
+     helpers are unit-testable. Mirrors `_chat_recording.py`'s
+     "pyaudio-free at module scope" note and GENO.md extraction point 5.
+
+2. **`tests/unit/test_stream_stabilize.py` (new, +21 tests):**
+   - `_longest_common_prefix` matrix (empty operands, equal, prefix in
+     either direction, disjoint) + a guard that the result is a genuine
+     prefix of the first arg.
+   - `stabilize_pass` single-pass shape: first pass is all-speculative;
+     empty-candidate/empty-common no-change edge; candidate change resets
+     count + flags `changed`; held candidate increments count.
+   - Promotion: fires at the default `STABILITY_PASSES` threshold (sets
+     `stable`, `settled_at_pass`, trims `speculative`); no re-promotion
+     when the candidate isn't longer than current stable; custom
+     `stability_passes` both promotes (count==threshold) and defers
+     (count<threshold).
+   - Speculative tail: tail past stable; defensive full-text branch when
+     the new hypothesis doesn't start with the stable prefix.
+   - Full sequences driven exactly like `run_stream`'s loop: a converging
+     stream that promotes a held prefix (`"the cat sat"`) and reconstructs
+     `stable + speculative`; and a never-agreeing stream that never
+     promotes (stable stays `""`).
+
+**Verification:**
+- `python -m pytest tests/unit/test_stream_stabilize.py -q` →
+  **21 passed in 0.16s**.
+- Full unit suite: **1745 passed** (1724 prior + 21 new).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+
+**Notes:**
+- **First tests for the streaming entrypoint.** Prior laps tested the
+  chat pipeline (`_chat_*`), the benchmark CLI, and (iter-145) the `gv`
+  dispatch layer, but the live progressive-transcription path
+  (`gv stream`) was untested. The extracted unit is the part most worth
+  guarding: it *is* the iter-008 design whose health the iter-143
+  streaming-overlap sentinel watches at runtime — now its promotion logic
+  is pinned by unit tests too.
+- **No runtime behavior change.** Real `gv stream` invocations run the
+  identical algorithm; the only structural difference is the loop now
+  calls a function and applies the two clock side-effects from its return
+  signals. Lazy `pyaudio` import is invisible to mic users (imported
+  before the stream opens).
+- Next directions:
+  - `mic_talk.run_talk` (295 lines) is the remaining untested entrypoint;
+    scan it for a similar pure seam (sentence chunking / barge handling)
+    before assuming it's trivially thin — iter-146 showed "thin" can hide
+    a real algorithm.
+  - `run_stream`'s loop still mixes VAD level-gating, the inference cadence
+    timer, and rendering; a `StreamState`-style step that advances the
+    speaking/silence machine per chunk could be the next pure seam if a
+    lap wants deeper coverage of the loop itself.
+  - The CI workflow (`.github/workflows/stt-benchmark.yml` →
+    `scripts/ci-gate.sh`) remains carried over, still blocked on a
+    committed `baseline.json` from a real STT model run.
+  - Diversity-check surface remains paused per iter-143/144.

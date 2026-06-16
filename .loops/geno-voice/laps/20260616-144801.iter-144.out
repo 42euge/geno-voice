@@ -1,0 +1,22 @@
+The worktree I created is removed and its branch merged+deleted. (The many older worktrees are pre-existing from prior laps — not part of this lap's cleanup.) Main is clean with only the untracked `.loops/` and `scripts/run-lap.sh` that were there at lap start.
+
+Lap 144 complete.
+
+## Summary
+
+**iter-144 — surface GENO.md pattern docs in README + drift sentinel**
+
+Following iter-143's own explicit recommendation to pause the (now near-mechanical) diversity-check expansion and pivot to a carried-over item, this lap landed the README pattern-docs item that had been carried forward since iter-136.
+
+- **`README.md`** — new `## Contributing patterns` section pointing contributors at the two GENO.md code patterns (mic_chat.py extraction; session-summary diversity-check) with one-paragraph summaries and references to their guarding test files.
+- **`tests/unit/test_readme_pattern_docs.py`** (new, +7 tests) — a bidirectional drift sentinel (same shape as iter-129/130/136): the README must name each GENO.md pattern section *and* each section must be a real heading in GENO.md; the README must name each guarding test file *and* each file must exist. First README sentinel that points *out* of the README into another doc rather than the CLI.
+
+Picked the README item over the other carried-over CI-workflow item because the latter is blocked on a committed `baseline.json` that requires running a real STT engine/model — impossible headless on x86_64 Linux.
+
+**Verification:** new file 7 passed; full unit suite **1702 passed** (1695 prior + 7 new); integration **30 passed, 1 skipped**. ff-merged to main (`bae6dab` + log `f287489`), worktree removed.
+
+---
+
+To continue improving this area next:
+
+`/loop Iterate on geno-voice: land the carried-over CI workflow by committing a tiny synthetic baseline.json for the faster_whisper --model tiny path and wiring .github/workflows/stt-benchmark.yml to call scripts/ci-gate.sh on PRs, with a test asserting the workflow invokes the gate.`

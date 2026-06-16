@@ -1,0 +1,19 @@
+Lap 141 complete. Clean tree (only pre-existing untracked files remain), branch merged and deleted, worktree removed.
+
+## Summary
+
+**iter-141 — TTS-RTF consistency check (6th diversity-check instance)**
+
+Landed the explicitly signposted 6th instance of the session-summary diversity-check pattern, a near-mechanical clone of iter-140's STT-RTF sentinel applied to the `tts_rtf` metric (iter-050):
+
+- **`_tts_rtf_bucket`** — third continuous-metric bucketer, same `realtime`/`slow`/`very_slow` boundaries as STT-RTF.
+- **`_emit_tts_rtf_consistency_line`** — fires when 5+ consecutive turns synthesize slower than realtime, with per-value suggestions (lighter voice / pre-rendered fillers vs. hardware mismatch), naming `iter-050 tts_rtf` for grep-ability.
+- Wired into `print_session_summary` after the STT-RTF line.
+- **GENO.md** updated atomically (five→six instances, filter-rule bullet, third-continuous-metric note, threshold-5 convention) — forced by the doc-sync sentinel.
+- **+21 tests** mirroring iter-140's matrix, plus doc-sync test updates.
+
+**Results:** 1653 unit passed (+21); 30 integration passed, 1 skipped. FF-merged to main (`7a205de` + log `3694bb1`), worktree cleaned.
+
+To keep refining this area:
+
+`/loop Iterate on geno-voice diversity-check sentinels: add a 7th instance for LLM streaming speed or TTFS jitter following the GENO.md pattern, or extract the shared RTF realtime/slow/very_slow bucketer now that stt-rtf and tts-rtf duplicate it.`

@@ -1,0 +1,21 @@
+The lap is complete. Main is at `eea99b4` with a clean tree (the earlier-iteration worktrees are pre-existing, not mine to touch this lap).
+
+## iter-143 summary
+
+**Picked:** the 8th diversity-check instance the iter-142 log signposted — a sustained-run sentinel for `streaming_overlap_ratio` (iter-043).
+
+**What landed:**
+- `_streaming_overlap_bucket(ratio)` → `""`/`"high"`/`"low"`/`"very_low"` (5th continuous-metric bucketer, 2nd inverted-direction: high overlap = good).
+- `_emit_streaming_overlap_consistency_line(...)` — fires when 5+ consecutive turns barely overlapped synth with the LLM stream, the direct symptom of the iter-008 streaming-overlap *architecture* failing to mask synth (distinct from the STT/TTS/LLM sentinels that flag a slow *component*).
+- Wired into `print_session_summary` after the iter-142 LLM-TPS line.
+- GENO.md doc + `test_diversity_pattern_doc.py` updated atomically (seven→eight instances); the doc-sync sentinel forced both to stay in lockstep.
+
+**Verification:** targeted 31 passed; full unit **1695 passed** (1674 + 21 new); integration **30 passed, 1 skipped**. ff-merged to main as `0b5bee6`; worktree removed.
+
+**Next-lap note (in the log):** the per-turn-signal seam is nearly exhausted — remaining candidates (TTFS jitter, token-lag) are weak. Better to pivot to a carried-over item than mine a 9th near-mechanical instance.
+
+To continue improving this area:
+
+```
+/loop document the GENO.md diversity-check + mic_chat extraction patterns in geno-voice's README so contributors discover them without reading GENO.md (carried over from iter-136), then pivot to the CI baseline workflow
+```

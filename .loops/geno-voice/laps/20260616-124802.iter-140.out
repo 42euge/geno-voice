@@ -1,0 +1,23 @@
+Lap complete. The new worktree was removed; main is clean (the leftover `.loops/` and `scripts/run-lap.sh` are pre-existing untracked files from before this lap, and the older worktrees are from prior iterations — outside this lap's scope).
+
+## iter-140 summary
+
+**What I did:** Landed the long-signposted **5th instance of the diversity-check pattern** — an STT real-time-factor consistency check in `examples/_chat_metrics.py`.
+
+- `_stt_rtf_bucket(rtf)` — second continuous-metric bucketer (after iter-128): `""`/`realtime`/`slow`/`very_slow`.
+- `_emit_stt_rtf_consistency_line(...)` — fires when 5+ consecutive turns ran STT slower than realtime, surfacing an engine/model too heavy for the host. Per-value suggestions, defensive `else`, `iter-049 stt_rtf` attribution in the warning.
+- Wired into `print_session_summary` next to the other four cross-turn sentinels.
+- Updated GENO.md (four→five instances, filter rule, continuous-metric note, threshold convention) and the `test_diversity_pattern_doc.py` sync sentinel atomically — the sentinel red-lit until both caught up.
+
+**Tests:** new `test_emit_stt_rtf_consistency_line.py` (+21, mirrors iter-128's matrix). 
+- New + doc tests: **31 passed in 0.11s**
+- Full unit suite: **1632 passed** (1611 → 1632)
+- Integration: **30 passed, 1 skipped**
+
+Merged ff to main (`cb1f69c` code, `e5d4a85` log entry).
+
+**To continue improving this area:**
+
+```
+/loop Add a 6th diversity-check sentinel to geno-voice: _emit_tts_rtf_consistency_line in examples/_chat_metrics.py, cloning iter-140's STT-RTF check for tts_rtf (iter-050). Update GENO.md (five->six instances) and the doc-sync test atomically; mirror the iter-140 test matrix.
+```

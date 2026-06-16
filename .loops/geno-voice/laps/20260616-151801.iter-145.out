@@ -1,0 +1,26 @@
+Lap complete. The merge landed cleanly on main and the worktree was removed (the older `iter-001`…`iter-028` worktrees listed are leftovers from prior laps, not mine to touch this lap).
+
+## iter-145 summary
+
+**What I did:** The `gv.py` CLI — the primary user-facing entrypoint (`gv bench|stream|talk|chat`) — had **zero test coverage**, and its `main()` coupled parser construction, dispatch, and `sys.exit` so none of it was testable.
+
+- Refactored `examples/gv.py` into a testable seam following GENO.md's "inject callables, not engines" convention:
+  - `build_parser()` — pure, no audio imports
+  - `dispatch(args, parser, *, handlers=None)` — routing with an injectable `DEFAULT_HANDLERS` map, returns an exit code
+  - `main(argv=None)` — takes optional argv, returns exit code; `__main__` does `sys.exit(main())`
+- Added `tests/unit/test_gv_cli.py` (+22): parser defaults/overrides per subcommand, float coercion + `SystemExit(2)` on bad input, dispatch routing via stub handlers (no audio imports), no-/unknown-command help paths, `main()` end-to-end, and `cmd_bench`'s argv-rebuild logic.
+
+**No runtime behavior change** — real invocations route identically with the same exit codes.
+
+**Verification:**
+- `test_gv_cli.py` → **22 passed**
+- Full unit suite → **1724 passed** (1702 prior + 22 new)
+- Integration → **30 passed, 1 skipped**
+
+Branch `iter-145-gv-cli` ff-merged to main (commits `b08c268`, `5fb8b0b`), worktree removed, log appended.
+
+---
+
+To continue improving this area:
+
+`/loop extract a testable build/dispatch seam in mic_stream.py and mic_talk.py the same way iter-145 did for gv.py, and add their first unit tests`

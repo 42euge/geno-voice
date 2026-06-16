@@ -1,0 +1,17 @@
+Lap complete. The worktree and branch are removed; main is at `7142fd8` with a clean tree (the remaining untracked `.loops/` and `scripts/run-lap.sh` are pre-existing loop infrastructure, not part of this change).
+
+## iter-139 summary
+
+**Picked:** the next direction carried over from both iter-137 and iter-138 — a committed wrapper wiring the two CI gates end to end.
+
+**Shipped:** `scripts/ci-gate.sh`, a one-line STT-benchmark CI gate. A CI step is now `scripts/ci-gate.sh --baseline baseline.json` instead of memorizing `--diff baseline.json --fail-on-regression --fail-on-removed`. It forwards `--engine`/`--model`, passes extra benchmark flags after `--`, propagates the benchmark exit code unchanged, and fails fast (exit 2) on a missing baseline with the exact command to create one.
+
+**Tests:** first shell-script tests in the repo — 15 hermetic subprocess cases driving the wrapper against a stub benchmark (`BENCHMARK_SCRIPT` + `STUB_EXIT` overrides, no real engine), plus 2 README drift sentinels.
+
+**Verification:** 1611 unit + 30 integration (1 skipped) + 23 perf passed; end-to-end smoke against the real corpus confirmed clean→exit 0, removed-fixture→exit 1, missing-baseline→exit 2.
+
+**Next planned:** a `.github/workflows/stt-benchmark.yml` calling `ci-gate.sh` on PRs against a committed baseline (now that the gate is one line).
+
+To keep improving this area, you can run:
+
+`/loop add a .github/workflows/stt-benchmark.yml that runs scripts/ci-gate.sh on PRs against a committed baseline.json, deciding which engine/model CI uses`

@@ -1,0 +1,27 @@
+My iter-137 worktree is removed and the branch deleted. (There are many stale worktrees from prior iterations, but those are out of scope for this lap.) The lap is complete.
+
+## iter-137 summary
+
+**What I shipped:** A `--fail-on-regression` CI gate flag for `scripts/run_stt_benchmark.py`.
+
+**The increment:** The benchmark eval pipeline (iter-132→136) was feature-complete, but the README's recommended CI gate was a brittle `... --format json | jq '.regression_count > 0' | grep -q true && exit 1` pipeline. iter-137 moves the gate into the CLI: `--fail-on-regression` makes the **process exit code** the signal.
+
+**Key semantic:** exits 1 only on a *new* regression (PASS in baseline → FAIL now). Pre-existing failures don't block — a PR passes as long as it leaves the corpus no worse. Requires `--diff` (exit 2 otherwise). Plain `--diff` keeps its iter-134/135 absolute-failure exit behavior, so existing callers are unaffected.
+
+**Changes:** flag + usage guard + exit-code branch in the script; README CI section rewritten to lead with the new gate; 7 new hermetic `main()` exit-code tests (first in this suite, via a reusable `_run_main` helper with temp corpus + stubbed engine); 1 new README drift sentinel.
+
+**Verification:**
+- Unit: **1585 passed**
+- Unit + integration: **1615 passed, 1 skipped**
+- Perf snapshot: **23 passed**
+- End-to-end smoke against the real corpus confirmed exit 2 (no `--diff`) and exit 0 when nothing regressed despite a pre-existing failure.
+
+Merged ff to main (`5edb35e`), worktree removed, branch deleted, tree clean.
+
+**Next planned item:** A `--strict` mode that also blocks on removed fixtures (corpus shrinking unnoticed), or a committed `.github/workflows/` example wiring the gate end to end.
+
+---
+
+To continue improving this area:
+
+`/loop Iterate on geno-voice STT benchmark CLI: add a committed CI workflow example (.github/workflows or scripts/ci-gate.sh) that wires --fail-on-regression end to end, plus a --strict mode that also blocks on removed fixtures. Write tests, run pytest, ff-merge to main, append an iter- log entry.`
