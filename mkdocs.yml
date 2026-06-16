@@ -40,6 +40,9 @@ theme:
 nav:
   - Home: index.md
   - Getting Started: getting-started.md
+  - Research:
+      - Organic / full-duplex turn-taking: research/organic-turn-taking.md
+      - Performance metrics taxonomy: perf-metrics-taxonomy.md
 
 extra_css:
   - stylesheets/extra.css

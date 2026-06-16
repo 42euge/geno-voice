@@ -12844,3 +12844,118 @@ function and lands the first tests for the talk entrypoint.
     `scripts/ci-gate.sh`) remains carried over, still blocked on a
     committed `baseline.json` from a real STT model run.
   - Diversity-check surface remains paused per iter-143/144.
+
+## iter-148 — research bootstrap: organic turn-taking track + backchannel classifier
+
+**Branch:** `iter-148-organic-turn-taking` (merged ff to main)
+**Date:** 2026-06-16
+
+**Goal:** Operator steering pivoted the loop from incremental
+test-hardening to a higher-value RESEARCH + PROTOTYPE track: move
+geno-voice beyond rigid half-duplex ("you speak, it waits, it replies")
+toward organic conversation — backchannels, overlap, smart end-of-turn
+(EOU), utterance queueing, barge-in. This lap bootstraps the track: a
+living research doc, a prioritized backlog, and the first shippable
+backlog item with tests.
+
+**What changed:**
+
+1. **`docs/research/organic-turn-taking.md` (new) — living research doc.**
+   - Seeds the SOTA landscape with fit assessments for geno-voice's
+     actual pipeline (Silero VAD + mlx-whisper STT + Kokoro TTS +
+     `pipecat_server.py` / `session/turn_taking.py`):
+     - **Full-duplex:** Moshi (dual audio streams + text inner-monologue;
+       aspirational, GPU-bound, replaces our stack — track, don't build).
+     - **Semantic EOU:** pipecat `smart-turn` (most directly adoptable —
+       its output IS the `smart_turn_confidence` param the engine already
+       takes but hardcodes to `0.5`); LiveKit `turn-detector` (text EOU
+       reference); Krisp 6M model (EOU + backchannel-timing reference);
+       arXiv 2603.13379 hierarchical EOU + primary-speaker (robustness
+       frontier).
+     - **Backchanneling:** recognizing continuers ("mm-hmm/yeah/right")
+       NOT as turn-ends + emitting agent backchannels during user speech.
+     - **Utterance queueing / barge-in:** abandon-vs-finish discrimination
+       (continuer ⇒ finish; substantive ⇒ abandon) — geno-voice already
+       has `BargeInWatcher`/`Coordinator` but always abandons today.
+   - **Key realization documented:** the pipeline is *already shaped* for
+     semantic turn-taking — `TurnTakingEngine.decide` accepts a
+     `smart_turn_confidence` parameter that `pipecat_server.py` hardcodes
+     to `0.5`, and `filter_noise` *discards* backchannels as noise. The
+     cheapest organic wins are seams that *feed* existing parameters, not
+     rewrites.
+   - Carries an 8-item prioritized backlog (easiest-highest-leverage
+     first) and a per-lap findings log.
+
+2. **`session/backchannel.py` (new) — backlog item #1, the first prototype.**
+   - Pure, dependency-free `classify_backchannel(text, energy=None)`
+     returning `Backchannel.CONTINUER` / `SUBSTANTIVE` / `NOT_SPEECH`.
+   - Rules in order: empty ⇒ NOT_SPEECH; > `max_words` (default 2) ⇒
+     SUBSTANTIVE (continuers are short); normalized phrase or all-tokens
+     in the closed `CONTINUER_LEXICON` AND (if energy given) energy ≤
+     `energy_ceiling` (default 0.35) ⇒ CONTINUER; else SUBSTANTIVE.
+   - The optional injected `energy` (normalized RMS) gate keeps the
+     audio signal at the boundary (GENO.md convention) — a loud emphatic
+     "YEAH!" is taking the floor, not backchanneling. Text-only callers
+     (tests, the turn engine) pass `energy=None` and the gate is skipped.
+   - `is_continuer(...)` convenience boolean. Normalization strips
+     punctuation + hyphens so "Mm-hmm.", "uh-huh!", "mm hmm" all map to a
+     lexicon key.
+   - This recognizes the backchannels `filter_noise` currently drops as a
+     distinct *continuer* signal, the foundation for backlog #5
+     (continuer-aware barge-in: a continuer shouldn't abandon the agent's
+     turn).
+
+3. **`tests/unit/test_backchannel.py` (new, +50 tests).** Covers
+   NOT_SPEECH (empty/whitespace/punct-only), single-token + multi-word +
+   repeated continuers, case-insensitivity, punctuation/hyphen/whitespace
+   normalization, substantive (over-word-limit short-circuit, unknown
+   short words, mixed continuer+content), the energy gate (low stays
+   continuer, at-ceiling strict-`>` stays continuer, loud flips to
+   substantive, `None` skips, never upgrades substantive, custom ceiling),
+   custom `max_words` both directions, `is_continuer` forwarding, and
+   lexicon/return-type sanity. The test loads `backchannel.py` by file
+   path (via `importlib`) to bypass `session/__init__.py`'s
+   pipecat-dependent eager imports — mirrors how the mic_* tests keep
+   platform deps out of the unit path.
+
+4. **Discoverability:** added a **Research** nav section to `mkdocs.yml`
+   (organic-turn-taking + perf-metrics-taxonomy) and a **Research**
+   section to `README.md` pointing at both docs and naming the shipped
+   classifier + its guarding test.
+
+**Verification:**
+- `python -m pytest tests/unit/test_backchannel.py -q` → **50 passed in 0.10s**.
+- Full unit suite: **1807 passed** (1757 prior + 50 new).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+
+**Notes:**
+- **First lap of the organic turn-taking research track.** Per operator
+  steering, `docs/research/organic-turn-taking.md` is now the track's
+  home; subsequent laps either deepen the research or ship one backlog
+  item with tests, pipecat-native where possible, measuring naturalness
+  rather than asserting it. The STEER.md bootstrap file is deleted this
+  lap so it isn't repeated.
+- **No runtime behavior change.** `backchannel.py` is a new, as-yet-unwired
+  pure module; nothing imports it from the live path yet. Wiring it (into
+  the turn engine and the barge-in coordinator) is backlog #5.
+- Next directions (mirrored from the doc's backlog, top items first):
+  - **#2 `turn_decider` seam** — a pure function wrapping today's
+    silence→confidence heuristic behind the interface a smart-turn model
+    would use, so `smart_turn_confidence` stops being the hardcoded `0.5`
+    in `pipecat_server.py` and the model swaps in later without touching
+    `TurnTakingEngine`. (Highest leverage, fully testable, no deps.)
+  - **#3 full-duplex config flag** — `GENO_FULL_DUPLEX` / `TurnTakingConfig`
+    scaffolding to gate organic behaviors off by default so the
+    half-duplex path is never regressed.
+  - **#4 rule-based text EOU precursor** — `is_utterance_complete(text)`
+    lowering end-of-turn likelihood on trailing conjunctions/fillers
+    (reuses `_TRAILING_PATTERNS`); feeds #2's confidence.
+  - **#5 continuer-aware barge-in** — wire `classify_backchannel` into
+    `BargeInCoordinator` so a continuer finishes the turn instead of
+    abandoning it; measure false-abandon rate.
+  - **#6 adopt pipecat `smart-turn`** (blocked on model + Apple Silicon),
+    **#7 agent backchannel emission timing**, **#8 naturalness metrics**.
+  - Carried over (off-track): the CI workflow
+    (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still
+    blocked on a committed `baseline.json` from a real STT model run;
+    diversity-check surface paused per iter-143/144.

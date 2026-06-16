@@ -183,6 +183,23 @@ Both sections are guarded by drift-sentinel tests
 `tests/unit/test_diversity_pattern_doc.py`) that fail if a new
 instance lands without a matching doc update.
 
+## Research
+
+Longer-horizon design exploration lives under [`docs/research/`](docs/research/):
+
+- **[Organic / full-duplex turn-taking](docs/research/organic-turn-taking.md)** —
+  a living research doc on moving geno-voice beyond rigid half-duplex
+  ("you speak, it waits, it replies") toward backchannels, semantic
+  end-of-turn, utterance queueing, and barge-in. Surveys the SOTA
+  (Moshi, pipecat `smart-turn`, LiveKit `turn-detector`, Krisp) with a
+  fit assessment for our pipeline, and carries a prioritized backlog
+  that subsequent laps work through. The first shipped item is the
+  rule-based backchannel/continuer classifier
+  (`session/backchannel.py`, guarded by
+  `tests/unit/test_backchannel.py`).
+- **[Performance metrics taxonomy](docs/perf-metrics-taxonomy.md)** — a
+  catalog of metrics worth instrumenting on a local-first voice agent.
+
 ## Project Structure
 
 ```
