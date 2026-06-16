@@ -20,6 +20,10 @@ DEFAULT_MODEL = "mlx-community/whisper-large-v3-turbo"
 
 
 def cmd_bench(args):
+    # bench is a legacy argv-driven entrypoint: it parses its own sys.argv
+    # rather than taking kwargs, so we rebuild argv here. Only forward
+    # --model when it differs from the default so the bench parser keeps
+    # using its own default otherwise.
     from mic_bench import main as bench_main
     sys.argv = ["gv bench"]
     if args.model != DEFAULT_MODEL:
@@ -42,7 +46,22 @@ def cmd_chat(args):
     run_chat(model_repo=args.model, voice=args.voice, speed=args.speed)
 
 
-def main():
+# Command-name → handler. Injectable so dispatch() can be unit-tested with
+# stub handlers instead of importing the audio modules.
+DEFAULT_HANDLERS = {
+    "bench": cmd_bench,
+    "stream": cmd_stream,
+    "talk": cmd_talk,
+    "chat": cmd_chat,
+}
+
+
+def build_parser():
+    """Construct the gv argument parser.
+
+    Pure: no I/O, no audio imports. The returned parser is safe to
+    exercise from tests with ``parse_args([...])``.
+    """
     parser = argparse.ArgumentParser(prog="gv", description="geno-voice CLI")
     sub = parser.add_subparsers(dest="command")
 
@@ -62,20 +81,32 @@ def main():
     chat.add_argument("--voice", default="af_heart", help="TTS voice (default: af_heart)")
     chat.add_argument("--speed", type=float, default=1.0, help="TTS speed (default: 1.0)")
 
-    args = parser.parse_args()
+    return parser
 
-    if args.command == "bench":
-        cmd_bench(args)
-    elif args.command == "stream":
-        cmd_stream(args)
-    elif args.command == "talk":
-        cmd_talk(args)
-    elif args.command == "chat":
-        cmd_chat(args)
-    else:
+
+def dispatch(args, parser, *, handlers=None):
+    """Route parsed args to the matching command handler.
+
+    Returns the process exit code: 0 on a dispatched command, 1 when no
+    (or an unknown) command was given. Handlers are injectable for
+    testing; the default map wires the real audio entrypoints.
+    """
+    handlers = DEFAULT_HANDLERS if handlers is None else handlers
+
+    handler = handlers.get(args.command)
+    if handler is None:
         parser.print_help()
-        sys.exit(1)
+        return 1
+
+    handler(args)
+    return 0
+
+
+def main(argv=None):
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    return dispatch(args, parser)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
