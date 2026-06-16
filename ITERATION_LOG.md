@@ -12761,3 +12761,86 @@ first tests for the streaming entrypoint.
     `scripts/ci-gate.sh`) remains carried over, still blocked on a
     committed `baseline.json` from a real STT model run.
   - Diversity-check surface remains paused per iter-143/144.
+
+## iter-147 — extract a pure VAD seam in mic_talk + first tests
+
+**Branch:** `iter-147-talk-vad` (merged ff to main, commit `edb0770`)
+**Date:** 2026-06-16
+
+**Goal:** iter-146 closed by flagging `mic_talk.run_talk` (the last
+untested entrypoint) and warning that "thin" can hide a real algorithm —
+just as `mic_stream` did. A scan confirmed it: `record_utterance` embeds a
+silence-gated voice-activity state machine (above-threshold audio opens a
+speaking window; below-threshold audio while speaking starts a
+trailing-silence timer; the utterance ends once that timer holds for
+`SILENCE_DURATION`). That logic had **zero test coverage** and was
+unreachable from a test because the module imported `pyaudio` at module
+scope (unimportable on Linux x86_64). This lap extracts it into a pure
+function and lands the first tests for the talk entrypoint.
+
+**What changed:**
+
+1. **`examples/mic_talk.py` — extract `vad_step()`** (no behavior change
+   for real use). Follows the GENO.md mic_chat.py extraction convention,
+   mirroring iter-146's `stabilize_pass`:
+   - `vad_step(level, speaking, silence_start, now, *,
+     silence_threshold=..., silence_duration=...)` is a **pure** per-chunk
+     step computing the updated speaking/silence locals. **No clock reads,
+     no I/O** — `now` is injected by the caller.
+   - Returns a `VadStep` **dataclass** (not a tuple, per convention)
+     carrying the updated locals plus three signals: `started` (speech
+     just began — caller stamps `speech_start` and prints the live cue),
+     `append` (chunk belongs to the utterance — caller appends raw bytes),
+     and `done` (trailing silence elapsed — caller breaks). **Wall-clock
+     and presentation side-effects stay at the caller**, the same way
+     `stabilize_pass` keeps the monotonic clock at `run_stream` and
+     `build_audio_io` keeps `pyaudio` at the caller.
+   - **`pyaudio` is now a lazy import** inside `run_talk` (was
+     module-scope), so the module imports on Linux x86_64 and the pure
+     helper is unit-testable. Mirrors `mic_stream` (iter-146) and GENO.md
+     extraction point 5.
+
+2. **`tests/unit/test_talk_vad.py` (new, +12 tests):**
+   - Single-step shape: loud chunk before speech opens the window
+     (`started`); loud chunk while speaking doesn't re-signal start; loud
+     chunk clears a pending silence timer; quiet chunk before speech is
+     ignored (no `append`); quiet chunk while speaking stamps
+     `silence_start` from the injected `now`; silence below duration keeps
+     recording; silence at/over duration signals `done`.
+   - Threshold semantics: exactly-at-threshold counts as silence (strict
+     `>`); just-above opens. Custom `silence_threshold`/`silence_duration`
+     override the module defaults.
+   - Full-utterance sequences driven exactly like `record_utterance`'s
+     loop (integer dt to avoid float fragility): leading silence dropped +
+     trailing silence held until done; all-silence never finishes; a loud
+     chunk mid-silence resets the timer so done fires only after the final
+     silence run, with no chunk dropped once speaking.
+
+**Verification:**
+- `python -m pytest tests/unit/test_talk_vad.py -q` → **12 passed in 0.16s**.
+- Full unit suite: **1757 passed** (1745 prior + 12 new).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+
+**Notes:**
+- **All three live mic entrypoints now have their core algorithm under
+  test.** iter-145 covered the `gv` dispatch layer, iter-146 the
+  `mic_stream` stabilization, and this lap the `mic_talk` VAD. The chat
+  pipeline (`_chat_*`) and benchmark CLI were already covered.
+- **No runtime behavior change.** Real `gv talk` invocations run the
+  identical state machine; the loop now calls `vad_step` and applies the
+  three signals (stamp clock on `started`, append on `append`, break on
+  `done`). Lazy `pyaudio` import is invisible to mic users (imported
+  before the stream opens).
+- Next directions:
+  - `run_talk`'s loop still mixes STT → trigger → response-pick → TTS →
+    playback with per-stage timing; a `TurnMetrics`-producing pure step
+    over an injected set of callables (mirroring the mic_chat.py
+    `inject callables` convention) could be the next seam if a lap wants
+    coverage of the turn pipeline itself.
+  - `run_stream`'s loop still mixes VAD level-gating, the inference
+    cadence timer, and rendering — a per-chunk `StreamState` step remains
+    a candidate (carried from iter-146).
+  - The CI workflow (`.github/workflows/stt-benchmark.yml` →
+    `scripts/ci-gate.sh`) remains carried over, still blocked on a
+    committed `baseline.json` from a real STT model run.
+  - Diversity-check surface remains paused per iter-143/144.
