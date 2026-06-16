@@ -1902,6 +1902,115 @@ def _emit_tts_rtf_consistency_line(
     )
 
 
+def _llm_tps_bucket(tps: float) -> str:
+    """iter-142: bucket a per-turn ``llm_tps`` (LLM stream
+    throughput in tokens/sec, measured after first token) into a
+    coarse category. Used by ``_emit_llm_tps_consistency_line`` to
+    detect runs of the LLM streaming slowly — the signal that the
+    model can't feed complete sentences to the TTS worker fast
+    enough, starving synth-overlap regardless of how fast STT/TTS
+    run.
+
+    SEVENTH instance of the diversity-check pattern, and the FOURTH
+    applied to a continuous metric (after iter-128 sentence-length,
+    iter-140 stt-rtf, iter-141 tts-rtf). UNLIKE the three RTF-style
+    bucketers, ``llm_tps`` is "bigger is better" — the fine state is
+    a HIGH value, so the boundaries invert: small tps is the
+    problematic end. This is the first inverted-direction continuous
+    bucketer in the family.
+
+    Buckets (chosen against iter-052's TPS semantics — local 7B-13B
+    models on Apple Silicon land 30-80 tps, cloud APIs 20-60 tps):
+
+        ``fast``   — >= 25 tps: the LLM keeps up; the desired state.
+            Complete sentences reach the worker fast enough that the
+            iter-008 streaming-overlap design buys real TTFS savings.
+        ``slow``   — 10-25 tps: the LLM lags. Sentences arrive in
+            bursts; synth-overlap is partially starved.
+        ``very_slow``— < 10 tps: the LLM is the dominant bottleneck.
+            The worker idles waiting for tokens; a smaller/quantized
+            model or a faster backend is needed.
+
+    Returns ``""`` when ``tps`` is non-positive (no measurable LLM
+    stream this turn — e.g. a single-token or empty response) —
+    empty-string filter applies in the consumer, mirroring
+    iter-114/115/120/126/128/140/141.
+    """
+    if tps <= 0:
+        return ""
+    if tps >= 25.0:
+        return "fast"
+    if tps >= 10.0:
+        return "slow"
+    return "very_slow"
+
+
+def _emit_llm_tps_consistency_line(
+    emit, llm_tps_list: list[float], threshold: int = 5,
+) -> None:
+    """iter-142: detect consecutive runs of the LLM streaming
+    slower than its useful throughput. SEVENTH instance of the
+    diversity-check pattern after iter-114 (filler), iter-115/126
+    (naturalness), iter-120 (barge-phase), iter-128
+    (sentence-length), iter-140 (stt-rtf), iter-141 (tts-rtf).
+    FOURTH instance applied to a CONTINUOUS metric — buckets it via
+    ``_llm_tps_bucket`` before running the scan (same shape as
+    iter-128/140/141).
+
+    Filter rule: drop the ``"fast"`` bucket before the scan. It's
+    the "fine" state; only "slow" and "very_slow" warrant warning.
+    Empty buckets (turns with no measurable LLM stream) also drop.
+    NOTE the inversion versus iter-140/141: there the fine bucket is
+    "realtime" (a LOW value); here it's "fast" (a HIGH value),
+    because tps is bigger-is-better. The filter rule absorbs the
+    inversion — the run-scan stays direction-agnostic.
+
+    Threshold = 5: same as iter-115/128/140/141, since tps varies
+    turn to turn with prompt size and backend warm-up and a brief
+    slow excursion is normal; a sustained run is the real signal.
+
+    Output:
+
+        LLM speed: 5 consecutive 'very_slow' turns — LLM is the
+                   dominant bottleneck, try a smaller/quantized
+                   model or a faster backend (iter-052 llm_tps)
+    """
+    # Bucketize, then drop the "uninteresting" bucket (empty, fast).
+    interesting = {"slow", "very_slow"}
+    filtered = [
+        b for b in (
+            _llm_tps_bucket(t) for t in llm_tps_list
+        )
+        if b in interesting
+    ]
+    if not filtered:
+        return
+
+    longest_run, longest_bucket = _longest_consecutive_run(filtered)
+    if longest_run < threshold:
+        return
+
+    if longest_bucket == "very_slow":
+        suggestion = (
+            "LLM is the dominant bottleneck, try a "
+            "smaller/quantized model or a faster backend"
+        )
+    elif longest_bucket == "slow":
+        suggestion = (
+            "LLM stream lags synth, try a smaller model or "
+            "fewer context tokens"
+        )
+    else:
+        # Defensive: future buckets that pass the filter rule.
+        suggestion = "consider a faster LLM backend"
+
+    emit(
+        f"    LLM speed:        {longest_run} consecutive "
+        f"{longest_bucket!r} turns — {suggestion} "
+        f"(iter-052 llm_tps)"
+    )
+
+
 def _emit_bargeable_line(emit, bargeable_values: list[float]) -> None:
     """iter-104: extracted from print_session_summary's iter-074
     bargeable line. Reports the WORST bargeable fraction across
@@ -2465,6 +2574,15 @@ def print_session_summary(
     _emit_tts_rtf_consistency_line(
         _emit,
         [m.tts_rtf for m in metrics_list],
+    )
+    # iter-142: LLM-TPS consistency check. Only fires when 5+
+    # consecutive turns streamed the LLM slower than its useful
+    # throughput (slow 10-25 tps / very_slow < 10 tps) — surfaces an
+    # LLM that's starving the TTS worker, the one continuous-metric
+    # sentinel where the fine state is a HIGH value (fast tps).
+    _emit_llm_tps_consistency_line(
+        _emit,
+        [m.llm_tps for m in metrics_list],
     )
     # iter-090: barge block extracted to _emit_barge_block helper.
     # ~76 lines of co-emitted lines (count, interruption rate,
