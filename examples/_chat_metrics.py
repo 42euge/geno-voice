@@ -1708,6 +1708,100 @@ def _emit_sentence_length_consistency_line(
     )
 
 
+def _stt_rtf_bucket(rtf: float) -> str:
+    """iter-140: bucket a per-turn ``stt_rtf`` (stt_time /
+    speech_duration) into a coarse category. Used by
+    ``_emit_stt_rtf_consistency_line`` to detect runs of STT that
+    consistently runs slower than realtime — the signal that the
+    chosen engine/model is too heavy for the host hardware and
+    end-of-turn STT is the latency bottleneck.
+
+    Buckets (chosen against the iter-049 RTF semantics where
+    mlx-whisper on Apple Silicon lands ~0.1-0.3):
+
+        ``realtime`` — < 1.0: STT keeps up; the desired state.
+            Can be invoked inline at end-of-turn with no stall.
+        ``slow``     — 1.0-2.0: STT is the bottleneck. Streaming
+            partial transcription would help, or a smaller model.
+        ``very_slow``— > 2.0: STT takes 2x+ the speech duration.
+            The engine/model is badly mismatched to the hardware.
+
+    Returns ``""`` when ``rtf`` is non-positive (false-trigger
+    turn or stt_time unmeasured) — empty-string filter applies in
+    the consumer, mirroring iter-114/115/120/126/128.
+    """
+    if rtf <= 0:
+        return ""
+    if rtf < 1.0:
+        return "realtime"
+    if rtf <= 2.0:
+        return "slow"
+    return "very_slow"
+
+
+def _emit_stt_rtf_consistency_line(
+    emit, stt_rtf_list: list[float], threshold: int = 5,
+) -> None:
+    """iter-140: detect consecutive runs of STT running slower
+    than realtime. FIFTH instance of the diversity-check pattern
+    after iter-114 (filler), iter-115/126 (naturalness), iter-120
+    (barge-phase), iter-128 (sentence-length). Second instance
+    applied to a CONTINUOUS metric — buckets it via
+    ``_stt_rtf_bucket`` before running the scan (same shape as
+    iter-128).
+
+    Filter rule (mirrors iter-128's "medium"/"short" exclusion):
+    drop the "realtime" bucket before the scan. It's the "fine"
+    state; only "slow" and "very_slow" warrant warning. Empty
+    buckets (turns with no measurable STT) also drop.
+
+    Threshold = 5: same as iter-115/128, since RTF varies turn to
+    turn with utterance length and a brief slow excursion is
+    normal; a sustained run is the real signal.
+
+    Output:
+
+        STT speed: 5 consecutive 'very_slow' turns — STT engine
+                   is the bottleneck, try a smaller model or
+                   streaming STT (iter-049 stt_rtf)
+    """
+    # Bucketize, then drop the "uninteresting" bucket (empty,
+    # realtime).
+    interesting = {"slow", "very_slow"}
+    filtered = [
+        b for b in (
+            _stt_rtf_bucket(r) for r in stt_rtf_list
+        )
+        if b in interesting
+    ]
+    if not filtered:
+        return
+
+    longest_run, longest_bucket = _longest_consecutive_run(filtered)
+    if longest_run < threshold:
+        return
+
+    if longest_bucket == "very_slow":
+        suggestion = (
+            "STT engine is badly mismatched to the hardware "
+            "(>2x realtime)"
+        )
+    elif longest_bucket == "slow":
+        suggestion = (
+            "STT is the bottleneck, try a smaller model or "
+            "streaming STT"
+        )
+    else:
+        # Defensive: future buckets that pass the filter rule.
+        suggestion = "consider a lighter STT engine"
+
+    emit(
+        f"    STT speed:        {longest_run} consecutive "
+        f"{longest_bucket!r} turns — {suggestion} "
+        f"(iter-049 stt_rtf)"
+    )
+
+
 def _emit_bargeable_line(emit, bargeable_values: list[float]) -> None:
     """iter-104: extracted from print_session_summary's iter-074
     bargeable line. Reports the WORST bargeable fraction across
@@ -2254,6 +2348,14 @@ def print_session_summary(
     _emit_sentence_length_consistency_line(
         _emit,
         [m.mean_sentence_chars for m in metrics_list],
+    )
+    # iter-140: STT-RTF consistency check. Only fires when 5+
+    # consecutive turns ran STT slower than realtime
+    # (slow 1.0-2.0 / very_slow > 2.0) — surfaces an engine/model
+    # that's too heavy for the host hardware.
+    _emit_stt_rtf_consistency_line(
+        _emit,
+        [m.stt_rtf for m in metrics_list],
     )
     # iter-090: barge block extracted to _emit_barge_block helper.
     # ~76 lines of co-emitted lines (count, interruption rate,

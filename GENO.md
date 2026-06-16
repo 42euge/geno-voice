@@ -67,11 +67,12 @@ default to this shape (four instances confirm it: iter-107
 
 When adding a session-summary warning that fires on **N+
 consecutive turns sharing the same problematic value**, follow
-this template (four instances confirm it: iter-114
+this template (five instances confirm it: iter-114
 `_emit_filler_diversity_line`, iter-115 + iter-126
 `_emit_naturalness_consistency_line`, iter-120
 `_emit_barge_phase_consistency_line`, iter-128
-`_emit_sentence_length_consistency_line`):
+`_emit_sentence_length_consistency_line`, iter-140
+`_emit_stt_rtf_consistency_line`):
 
 1. **Filter "uninteresting" values BEFORE the run scan.**
    Each instance has its own filter rule:
@@ -81,6 +82,8 @@ this template (four instances confirm it: iter-114
    - iter-120 drops `""` (no barge that turn).
    - iter-128 drops `""` (no sentences) and `"medium"`/`"short"`
      (the fine states).
+   - iter-140 drops `""` (no measurable STT) and `"realtime"`
+     (the fine state).
 
    The filter rule is per-instance policy — never bake it into
    the shared run-finder. Keeps `_longest_consecutive_run`
@@ -94,8 +97,9 @@ this template (four instances confirm it: iter-114
    instances:
    - 3 (iter-114 filler) — for high-noise random-pick signals.
    - 4 (iter-120 barge-phase) — for semantically-loaded events.
-   - 5 (iter-115 naturalness, iter-128 sentence-length) — for
-     general "natural variation is normal" signals.
+   - 5 (iter-115 naturalness, iter-128 sentence-length,
+     iter-140 stt-rtf) — for general "natural variation is
+     normal" signals.
 
    Higher threshold = lower false-positive rate at the cost
    of longer runs needed to fire. Pick based on how rare the
@@ -104,18 +108,19 @@ this template (four instances confirm it: iter-114
 4. **For continuous metrics, bucket BEFORE filtering.**
    iter-128 is the first instance applied to a non-string
    signal: `_sentence_length_bucket` maps `mean_sentence_chars`
-   to `"very_short"`/`"short"`/`"medium"`/`"long"`. The
-   bucketing function is testable in isolation; the run-scan
-   then consumes the bucketed values like any other categorical
-   signal.
+   to `"very_short"`/`"short"`/`"medium"`/`"long"`. iter-140 is
+   the second: `_stt_rtf_bucket` maps `stt_rtf` to
+   `"realtime"`/`"slow"`/`"very_slow"`. The bucketing function
+   is testable in isolation; the run-scan then consumes the
+   bucketed values like any other categorical signal.
 
 5. **Per-value suggestion mapping inside the helper.** When
    multiple values warrant warnings (rushed/slow,
-   llm_stream/playback, very_short/long), the suggestion text
-   per value lives inside the helper. Don't externalize to
-   the caller (overkill for two values), don't make it
-   one-size-fits-all (loses signal). Per-value branches are
-   the right shape.
+   llm_stream/playback, very_short/long, slow/very_slow), the
+   suggestion text per value lives inside the helper. Don't
+   externalize to the caller (overkill for two values), don't
+   make it one-size-fits-all (loses signal). Per-value branches
+   are the right shape.
 
 6. **Defensive fallback for unknown values.** Each helper has
    an `else` branch that emits a generic suggestion when the

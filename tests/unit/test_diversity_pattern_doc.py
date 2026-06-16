@@ -28,7 +28,7 @@ GENO_MD = ROOT / "GENO.md"
 
 
 # Names of the helpers that ARE diversity-check instances. This
-# list is the source of truth — when a 5th iteration lands,
+# list is the source of truth — when a 6th iteration lands,
 # update this list AND the GENO.md template count + bullet list
 # atomically. If they fall out of sync, the doc-sync tests fire.
 _DIVERSITY_HELPERS = (
@@ -36,6 +36,7 @@ _DIVERSITY_HELPERS = (
     "_emit_naturalness_consistency_line",  # iter-115 / iter-126
     "_emit_barge_phase_consistency_line",  # iter-120
     "_emit_sentence_length_consistency_line",  # iter-128
+    "_emit_stt_rtf_consistency_line",      # iter-140
 )
 
 
@@ -106,6 +107,7 @@ def test_doc_references_each_responsible_iteration():
         "iter-120",  # barge-phase
         "iter-126",  # naturalness (filter fix; iter-131 added to list)
         "iter-128",  # sentence-length (continuous-metric instance)
+        "iter-140",  # stt-rtf (2nd continuous-metric instance)
     ]
     for it in expected_iters:
         assert it in doc, f"missing {it} attribution in GENO.md"
