@@ -12521,3 +12521,76 @@ is a HIGH value.
     pivoting to one of the two carried-over items (CI baseline or
     README pattern docs) next lap rather than mining a 9th
     near-mechanical instance.
+
+## iter-144 — surface GENO.md pattern docs in README + drift sentinel
+
+**Branch:** `iter-144-readme-pattern-docs` (merged ff to main, commit `bae6dab`)
+**Date:** 2026-06-16
+
+**Goal:** iter-143 closed by explicitly recommending a pause on the
+diversity-check expansion ("the per-turn-signal seam is nearly
+exhausted; remaining candidates are weaker... Worth pausing the
+diversity-check expansion and pivoting to one of the two carried-over
+items"). This lap takes that advice and lands the README pattern-docs
+item that has been carried forward since iter-136: "Document the
+GENO.md diversity-check + extraction patterns in the README so
+contributors discover them without reading GENO.md."
+
+Of the two carried-over items, this one is fully achievable headless.
+The other (a `.github/workflows/stt-benchmark.yml` calling
+`scripts/ci-gate.sh` against a committed baseline) needs a real
+`baseline.json` produced by running an STT engine — not possible on
+x86_64 Linux without the model — so it stays carried over.
+
+**What changed:**
+
+1. **`README.md` — new "## Contributing patterns" section** (between
+   "Adding a new STT engine" and "Project Structure"). Points
+   contributors at the two GENO.md code patterns —
+   *mic_chat.py extraction pattern* and *Session-summary
+   diversity-check pattern* — with a one-paragraph summary of each so a
+   reader knows whether the pattern applies before opening GENO.md.
+   Names both guarding test files (`test_extraction_pattern_doc.py`,
+   `test_diversity_pattern_doc.py`) so the drift-sentinel story is
+   discoverable.
+
+2. **`tests/unit/test_readme_pattern_docs.py` (new, +7 tests)** — a
+   drift sentinel in the same shape as iter-129/130/136. Source of
+   truth is `_PATTERN_SECTIONS = ((section_heading, guarding_test),
+   ...)`. Asserts: the README has the section + links to GENO.md;
+   the README names each pattern section AND each section is a real
+   `### ` heading in GENO.md; the README names each guarding test file
+   AND each file exists on disk; and a count guard (exactly two pattern
+   sections today — nudges a contributor to extend README + test
+   together if a third is added). Bidirectional drift protection: a
+   GENO.md section rename or a guarding-test delete both red-light the
+   suite.
+
+**Verification:**
+- `python -m pytest tests/unit/test_readme_pattern_docs.py -q` →
+  **7 passed in 0.07s**.
+- Full unit suite: **1702 passed** (1695 prior + 7 new).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+
+**Notes:**
+- **First README sentinel that points OUT of the README into GENO.md.**
+  iter-136's `test_readme_benchmark_docs.py` keeps the README in sync
+  with the *CLI* (script flags, format choices, corpus count). This
+  new sentinel keeps the README in sync with *another doc* (GENO.md
+  sections) and with *test files*. Same drift-sentinel pattern, new
+  pair of synced artifacts.
+- **No code behavior change.** This is pure documentation +
+  doc-sync coverage. The voice pipeline itself is untouched.
+- Next directions:
+  - The remaining carried-over item is the CI workflow
+    (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`).
+    It is blocked on producing a committed `baseline.json`, which
+    needs an STT engine + model run on real hardware. A future lap on
+    Apple Silicon (or with a model available) could generate the
+    baseline and wire the workflow; alternatively, commit a tiny
+    synthetic baseline for the `faster_whisper --model tiny` path that
+    the existing benchmark already exercises in CI-less form.
+  - The diversity-check surface remains paused per iter-143 — eight
+    instances cover the meaningful per-turn signals; a 9th would be
+    near-mechanical. Revisit only if a new per-turn signal with a
+    genuine sustained-run failure mode appears.
