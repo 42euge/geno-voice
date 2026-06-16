@@ -674,12 +674,29 @@ def main() -> int:
              "brittle `... | jq '.regression_count > 0' | grep -q "
              "true && exit 1` shell pipeline.",
     )
+    parser.add_argument(
+        "--fail-on-removed", action="store_true",
+        help="iter-138: requires --diff. Exit non-zero (1) when a "
+             "fixture present in the baseline is MISSING from the "
+             "current corpus. Catches a silently shrinking corpus — "
+             "a fixture dropped (by accident or to dodge a failing "
+             "case) reads as 'fewer failures' to --fail-on-regression "
+             "but is a coverage loss this flag blocks. Combine with "
+             "--fail-on-regression for a strict gate: block PRs that "
+             "make a fixture worse OR delete one.",
+    )
     args = parser.parse_args()
 
-    if args.fail_on_regression and not args.diff:
+    if (args.fail_on_regression or args.fail_on_removed) and not args.diff:
+        flags = []
+        if args.fail_on_regression:
+            flags.append("--fail-on-regression")
+        if args.fail_on_removed:
+            flags.append("--fail-on-removed")
+        joined = " / ".join(flags)
         print(
-            "--fail-on-regression requires --diff <baseline.json>; "
-            "without a baseline there is nothing to regress against",
+            f"{joined} requires --diff <baseline.json>; "
+            "without a baseline there is nothing to compare against",
             file=sys.stderr,
         )
         return 2
@@ -745,11 +762,22 @@ def main() -> int:
         # of "is everything passing?". Returns 1 iff at least one
         # fixture regressed (PASS→FAIL); pre-existing failures are
         # ignored, so an already-red corpus doesn't block a PR
-        # that leaves it no worse. Without the flag, diff mode
+        # that leaves it no worse.
+        #
+        # iter-138: --fail-on-removed adds the orthogonal coverage
+        # gate — block when a baseline fixture vanished from the
+        # corpus. The two compose: with both set the gate fails on
+        # a regression OR a removal (either is a "this PR made
+        # things worse" signal). Without either flag, diff mode
         # keeps the iter-134/135 behavior (exit reflects absolute
         # current failures) so existing callers are unaffected.
-        if args.fail_on_regression:
-            return 1 if diff.regressions else 0
+        if args.fail_on_regression or args.fail_on_removed:
+            blocked = False
+            if args.fail_on_regression and diff.regressions:
+                blocked = True
+            if args.fail_on_removed and diff.removed_fixtures:
+                blocked = True
+            return 1 if blocked else 0
         return 0 if summary.failing == 0 else 1
     elif args.format == "text":
         summary = run_benchmark(

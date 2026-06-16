@@ -97,6 +97,22 @@ CI logs show exactly what changed. `--fail-on-regression`
 requires `--diff` (exit 2 otherwise — there's no baseline to
 regress against).
 
+`--fail-on-regression` only sees fixtures that are still in the
+corpus, so deleting a failing fixture would slip past it as
+"fewer failures". `--fail-on-removed` closes that gap: it exits
+non-zero when a fixture present in the baseline is missing from
+the current corpus. Combine the two for a strict gate that
+blocks a PR which makes a fixture worse **or** drops one:
+
+```bash
+# Fail if anything regressed OR a baseline fixture disappeared.
+python scripts/run_stt_benchmark.py --engine faster_whisper \
+    --diff baseline.json --fail-on-regression --fail-on-removed
+```
+
+Like `--fail-on-regression`, `--fail-on-removed` requires
+`--diff` (exit 2 otherwise).
+
 If you'd rather gate in a shell pipeline against the JSON dump,
 `regression_count` carries the same signal:
 

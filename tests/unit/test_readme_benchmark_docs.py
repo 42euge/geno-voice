@@ -119,6 +119,21 @@ def test_readme_documents_fail_on_regression_flag():
     )
 
 
+def test_readme_documents_fail_on_removed_flag():
+    """iter-138: --fail-on-removed is the coverage-loss gate. If
+    the script defines the flag, the README must document it
+    (and vice versa)."""
+    src = SCRIPT_PATH.read_text()
+    doc = _read_readme()
+    assert '"--fail-on-removed"' in src, (
+        "script must define the --fail-on-removed flag"
+    )
+    assert "--fail-on-removed" in doc, (
+        "--fail-on-removed accepted by the script but not "
+        "documented in the README CI section"
+    )
+
+
 # ---- Corpus references ---------------------------------------------
 
 

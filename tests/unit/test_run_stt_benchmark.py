@@ -1146,3 +1146,120 @@ def test_fail_on_regression_mixed_one_regressed(monkeypatch, tmp_path):
         extra_argv=["--fail-on-regression"],
     )
     assert rc == 1
+
+
+# ---- iter-138: --fail-on-removed coverage gate -----------------
+
+
+def test_fail_on_removed_requires_diff(monkeypatch, tmp_path, capsys):
+    """Without --diff there is no baseline to compare against —
+    the flag is a usage error (exit 2)."""
+    rc = _run_main(
+        monkeypatch, tmp_path,
+        fixtures=[("a", "hello", 0.0, 0.5)],
+        transcripts={"a": "hello"},
+        baseline_entries=None,
+        extra_argv=["--fail-on-removed"],
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "--fail-on-removed requires --diff" in err
+
+
+def test_fail_on_removed_exit_1_when_fixture_dropped(monkeypatch, tmp_path):
+    """A fixture in the baseline but absent from the current corpus
+    is a coverage loss — the gate fails (exit 1)."""
+    rc = _run_main(
+        monkeypatch, tmp_path,
+        # Corpus has only "a"; baseline also knew "gone".
+        fixtures=[("a", "hello world", 0.0, 0.5)],
+        transcripts={"a": "hello world"},
+        baseline_entries=[("a", True, 0.0), ("gone", True, 0.0)],
+        extra_argv=["--fail-on-removed"],
+    )
+    assert rc == 1
+
+
+def test_fail_on_removed_exit_0_when_nothing_removed(monkeypatch, tmp_path):
+    """Every baseline fixture still present → exit 0, even if a
+    fixture regressed (that's --fail-on-regression's job, not
+    this gate's)."""
+    rc = _run_main(
+        monkeypatch, tmp_path,
+        # "a" regresses (FAIL now) but is still present → not removed.
+        fixtures=[("a", "hello world", 0.0, 0.3)],
+        transcripts={"a": "totally wrong text"},
+        baseline_entries=[("a", True, 0.10)],
+        extra_argv=["--fail-on-removed"],
+    )
+    assert rc == 0
+
+
+def test_fail_on_removed_ignores_new_fixtures(monkeypatch, tmp_path):
+    """A new fixture (current only) is not a removal — exit 0.
+    Adding coverage must never trip the coverage-loss gate."""
+    rc = _run_main(
+        monkeypatch, tmp_path,
+        fixtures=[
+            ("a", "hello world", 0.0, 0.5),
+            ("brand_new", "good morning", 0.0, 0.5),
+        ],
+        transcripts={"a": "hello world", "brand_new": "good morning"},
+        baseline_entries=[("a", True, 0.0)],
+        extra_argv=["--fail-on-removed"],
+    )
+    assert rc == 0
+
+
+def test_strict_gate_both_flags_fail_on_regression(monkeypatch, tmp_path):
+    """Both flags set: a regression alone (nothing removed) still
+    fails the gate (exit 1)."""
+    rc = _run_main(
+        monkeypatch, tmp_path,
+        fixtures=[("a", "hello world", 0.0, 0.3)],
+        transcripts={"a": "totally wrong text"},
+        baseline_entries=[("a", True, 0.10)],
+        extra_argv=["--fail-on-regression", "--fail-on-removed"],
+    )
+    assert rc == 1
+
+
+def test_strict_gate_both_flags_fail_on_removal(monkeypatch, tmp_path):
+    """Both flags set: a removal alone (nothing regressed) still
+    fails the gate (exit 1)."""
+    rc = _run_main(
+        monkeypatch, tmp_path,
+        fixtures=[("a", "hello world", 0.0, 0.5)],
+        transcripts={"a": "hello world"},
+        baseline_entries=[("a", True, 0.0), ("gone", True, 0.0)],
+        extra_argv=["--fail-on-regression", "--fail-on-removed"],
+    )
+    assert rc == 1
+
+
+def test_strict_gate_both_flags_clean_exit_0(monkeypatch, tmp_path):
+    """Both flags set, nothing regressed and nothing removed →
+    exit 0."""
+    rc = _run_main(
+        monkeypatch, tmp_path,
+        fixtures=[("a", "hello world", 0.0, 0.5)],
+        transcripts={"a": "hello world"},
+        baseline_entries=[("a", True, 0.0)],
+        extra_argv=["--fail-on-regression", "--fail-on-removed"],
+    )
+    assert rc == 0
+
+
+def test_diff_without_removed_flag_ignores_removal(monkeypatch, tmp_path):
+    """Backward compat: plain --diff (no --fail-on-removed) does
+    NOT block on a removed fixture. The remaining fixture passes,
+    so absolute-failure exit is 0 despite the dropped baseline
+    fixture."""
+    rc = _run_main(
+        monkeypatch, tmp_path,
+        fixtures=[("a", "hello world", 0.0, 0.5)],
+        transcripts={"a": "hello world"},
+        baseline_entries=[("a", True, 0.0), ("gone", True, 0.0)],
+        extra_argv=None,
+    )
+    assert rc == 0
