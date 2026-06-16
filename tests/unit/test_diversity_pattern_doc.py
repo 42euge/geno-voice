@@ -39,6 +39,7 @@ _DIVERSITY_HELPERS = (
     "_emit_stt_rtf_consistency_line",      # iter-140
     "_emit_tts_rtf_consistency_line",      # iter-141
     "_emit_llm_tps_consistency_line",      # iter-142
+    "_emit_streaming_overlap_consistency_line",  # iter-143
 )
 
 
@@ -112,6 +113,7 @@ def test_doc_references_each_responsible_iteration():
         "iter-140",  # stt-rtf (2nd continuous-metric instance)
         "iter-141",  # tts-rtf (3rd continuous-metric instance)
         "iter-142",  # llm-tps (4th continuous; first inverted-direction)
+        "iter-143",  # overlap (5th continuous; second inverted-direction)
     ]
     for it in expected_iters:
         assert it in doc, f"missing {it} attribution in GENO.md"
@@ -151,6 +153,7 @@ def test_doc_template_claims_match_actual_instance_count():
         5: ("five instances", "Five"),
         6: ("six instances", "Six"),
         7: ("seven instances", "Seven"),
+        8: ("eight instances", "Eight"),
     }
     actual = len(_DIVERSITY_HELPERS)
     if actual not in counts:

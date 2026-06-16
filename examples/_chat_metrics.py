@@ -2011,6 +2011,123 @@ def _emit_llm_tps_consistency_line(
     )
 
 
+def _streaming_overlap_bucket(ratio: float) -> str:
+    """iter-143: bucket a per-turn ``streaming_overlap_ratio`` (the
+    fraction of bot synth that ran concurrently with LLM streaming,
+    iter-043) into a coarse category. Used by
+    ``_emit_streaming_overlap_consistency_line`` to detect runs of
+    turns where the iter-008 streaming-overlap design isn't paying
+    off — the worker barely overlaps synth with the LLM stream, so
+    TTFS savings evaporate.
+
+    EIGHTH instance of the diversity-check pattern, and the FIFTH
+    applied to a continuous metric (after iter-128 sentence-length,
+    iter-140 stt-rtf, iter-141 tts-rtf, iter-142 llm-tps). Like
+    iter-142 ``llm_tps`` — and UNLIKE the iter-140/141 RTF
+    bucketers — ``streaming_overlap_ratio`` is "bigger is better":
+    the fine state is a HIGH value (lots of overlap), so the
+    boundaries invert and the problematic end is a small ratio. This
+    is the SECOND inverted-direction continuous bucketer.
+
+    Buckets (chosen against iter-043's overlap semantics — the
+    session-summary "Median overlap" line already calls >50% healthy
+    and <20% a sign overlap isn't happening):
+
+        ``high``  — >= 0.50: the worker generally got audio out
+            before the LLM finished; the iter-008 design is paying
+            off. The desired state.
+        ``low``   — 0.20-0.50: overlap is partial. The bot is
+            responding fast or the LLM is chatty enough that synth
+            and stream only partly overlap.
+        ``very_low``— < 0.20 (but > 0): overlap is essentially not
+            happening — synth runs sequentially after the stream.
+            Investigate first-sentence latency (iter-038 TTFsent)
+            and synth time.
+
+    Returns ``""`` when ``ratio`` is non-positive (no measurable
+    overlap this turn — e.g. a single-sentence response where the
+    whole-stream ratio is undefined) — empty-string filter applies
+    in the consumer, mirroring iter-114/115/120/126/128/140/141/142.
+    """
+    if ratio <= 0:
+        return ""
+    if ratio >= 0.50:
+        return "high"
+    if ratio >= 0.20:
+        return "low"
+    return "very_low"
+
+
+def _emit_streaming_overlap_consistency_line(
+    emit, overlap_list: list[float], threshold: int = 5,
+) -> None:
+    """iter-143: detect consecutive runs of turns where the
+    streaming-overlap design barely overlapped synth with the LLM
+    stream. EIGHTH instance of the diversity-check pattern after
+    iter-114 (filler), iter-115/126 (naturalness), iter-120
+    (barge-phase), iter-128 (sentence-length), iter-140 (stt-rtf),
+    iter-141 (tts-rtf), iter-142 (llm-tps). FIFTH instance applied
+    to a CONTINUOUS metric — buckets it via
+    ``_streaming_overlap_bucket`` before running the scan (same
+    shape as iter-128/140/141/142).
+
+    Filter rule: drop the ``"high"`` bucket before the scan. It's
+    the "fine" state; only "low" and "very_low" warrant warning.
+    Empty buckets (turns with no measurable overlap) also drop.
+    Like iter-142 and UNLIKE iter-140/141, the fine bucket is a HIGH
+    value ("high") because overlap is bigger-is-better — the SECOND
+    inverted-direction instance. The filter rule absorbs the
+    inversion; the run-scan stays direction-agnostic.
+
+    Threshold = 5: same as iter-115/128/140/141/142. Overlap varies
+    turn to turn with response length and LLM speed, and a brief
+    low-overlap excursion (e.g. a one-sentence reply) is normal; a
+    sustained run is the real signal that the iter-008 design is
+    failing to mask synth.
+
+    Output:
+
+        Synth overlap: 5 consecutive 'very_low' turns — synth runs
+                       sequentially after the LLM stream; check
+                       first-sentence latency and synth time
+                       (iter-043 streaming_overlap_ratio)
+    """
+    # Bucketize, then drop the "uninteresting" bucket (empty, high).
+    interesting = {"low", "very_low"}
+    filtered = [
+        b for b in (
+            _streaming_overlap_bucket(r) for r in overlap_list
+        )
+        if b in interesting
+    ]
+    if not filtered:
+        return
+
+    longest_run, longest_bucket = _longest_consecutive_run(filtered)
+    if longest_run < threshold:
+        return
+
+    if longest_bucket == "very_low":
+        suggestion = (
+            "synth runs sequentially after the LLM stream; "
+            "check first-sentence latency and synth time"
+        )
+    elif longest_bucket == "low":
+        suggestion = (
+            "overlap is only partial; the bot may be replying "
+            "too fast or the LLM stream lags synth"
+        )
+    else:
+        # Defensive: future buckets that pass the filter rule.
+        suggestion = "investigate first-sentence latency and synth time"
+
+    emit(
+        f"    Synth overlap:    {longest_run} consecutive "
+        f"{longest_bucket!r} turns — {suggestion} "
+        f"(iter-043 streaming_overlap_ratio)"
+    )
+
+
 def _emit_bargeable_line(emit, bargeable_values: list[float]) -> None:
     """iter-104: extracted from print_session_summary's iter-074
     bargeable line. Reports the WORST bargeable fraction across
@@ -2583,6 +2700,16 @@ def print_session_summary(
     _emit_llm_tps_consistency_line(
         _emit,
         [m.llm_tps for m in metrics_list],
+    )
+    # iter-143: streaming-overlap consistency check. Only fires when
+    # 5+ consecutive turns barely overlapped synth with the LLM
+    # stream (low 0.20-0.50 / very_low < 0.20) — surfaces the iter-008
+    # streaming-overlap design failing to mask synth, the SECOND
+    # continuous-metric sentinel whose fine state is a HIGH value
+    # (lots of overlap).
+    _emit_streaming_overlap_consistency_line(
+        _emit,
+        [m.streaming_overlap_ratio for m in metrics_list],
     )
     # iter-090: barge block extracted to _emit_barge_block helper.
     # ~76 lines of co-emitted lines (count, interruption rate,

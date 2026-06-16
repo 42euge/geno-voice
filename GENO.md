@@ -67,14 +67,15 @@ default to this shape (four instances confirm it: iter-107
 
 When adding a session-summary warning that fires on **N+
 consecutive turns sharing the same problematic value**, follow
-this template (seven instances confirm it: iter-114
+this template (eight instances confirm it: iter-114
 `_emit_filler_diversity_line`, iter-115 + iter-126
 `_emit_naturalness_consistency_line`, iter-120
 `_emit_barge_phase_consistency_line`, iter-128
 `_emit_sentence_length_consistency_line`, iter-140
 `_emit_stt_rtf_consistency_line`, iter-141
 `_emit_tts_rtf_consistency_line`, iter-142
-`_emit_llm_tps_consistency_line`):
+`_emit_llm_tps_consistency_line`, iter-143
+`_emit_streaming_overlap_consistency_line`):
 
 1. **Filter "uninteresting" values BEFORE the run scan.**
    Each instance has its own filter rule:
@@ -92,6 +93,11 @@ this template (seven instances confirm it: iter-114
      (the fine state). NOTE the inversion: the fine bucket is a
      HIGH value here, not a low one — `llm_tps` is
      bigger-is-better, so the problematic end is small tps.
+   - iter-143 drops `""` (no measurable overlap) and `"high"`
+     (the fine state). SECOND inverted instance — like iter-142,
+     `streaming_overlap_ratio` is bigger-is-better, so the fine
+     bucket is a HIGH value and the problematic end is a small
+     ratio.
 
    The filter rule is per-instance policy — never bake it into
    the shared run-finder. Keeps `_longest_consecutive_run`
@@ -106,8 +112,9 @@ this template (seven instances confirm it: iter-114
    - 3 (iter-114 filler) — for high-noise random-pick signals.
    - 4 (iter-120 barge-phase) — for semantically-loaded events.
    - 5 (iter-115 naturalness, iter-128 sentence-length,
-     iter-140 stt-rtf, iter-141 tts-rtf, iter-142 llm-tps) —
-     for general "natural variation is normal" signals.
+     iter-140 stt-rtf, iter-141 tts-rtf, iter-142 llm-tps,
+     iter-143 overlap) — for general "natural variation is
+     normal" signals.
 
    Higher threshold = lower false-positive rate at the cost
    of longer runs needed to fire. Pick based on how rare the
@@ -125,9 +132,14 @@ this template (seven instances confirm it: iter-114
    is the fourth: `_llm_tps_bucket` maps `llm_tps` to
    `"fast"`/`"slow"`/`"very_slow"` — the first INVERTED-direction
    bucketer, where the fine state is a HIGH value (fast tps) so the
-   boundaries flip (small tps is the problematic end). The
-   bucketing function is testable in isolation; the run-scan then
-   consumes the bucketed values like any other categorical signal.
+   boundaries flip (small tps is the problematic end). iter-143
+   is the fifth: `_streaming_overlap_bucket` maps
+   `streaming_overlap_ratio` to `"high"`/`"low"`/`"very_low"` — the
+   SECOND inverted-direction bucketer (like iter-142, the fine
+   state is a HIGH value: lots of overlap), watching the iter-008
+   streaming-overlap design itself for failure. The bucketing
+   function is testable in isolation; the run-scan then consumes
+   the bucketed values like any other categorical signal.
 
 5. **Per-value suggestion mapping inside the helper.** When
    multiple values warrant warnings (rushed/slow,
