@@ -16,7 +16,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
-import pyaudio
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from stt import WhisperEngine
@@ -101,6 +100,77 @@ def rms(frame: np.ndarray) -> float:
 
 
 @dataclass
+class VadStep:
+    """Result of one per-chunk voice-activity step in ``record_utterance``.
+
+    Carries the updated speaking/silence locals back to the caller plus
+    three signals the caller acts on:
+
+    - ``started``  — speech just began on this chunk (caller stamps
+      ``speech_start`` with its own clock and prints the live cue).
+    - ``append``   — this chunk belongs to the utterance (caller appends
+      the raw bytes to ``frames``).
+    - ``done``     — trailing silence has held for ``silence_duration``;
+      the caller stops recording.
+
+    No I/O and no clock reads: the caller passes ``now`` in and applies
+    wall-clock side-effects, mirroring the GENO.md extraction convention
+    (keep clock / presentation owned by the entrypoint, the same way
+    ``stabilize_pass`` keeps the monotonic clock at ``run_stream``).
+    """
+
+    speaking: bool
+    silence_start: float | None
+    started: bool
+    append: bool
+    done: bool
+
+
+def vad_step(
+    level: float,
+    speaking: bool,
+    silence_start: float | None,
+    now: float,
+    *,
+    silence_threshold: float = SILENCE_THRESHOLD,
+    silence_duration: float = SILENCE_DURATION,
+) -> VadStep:
+    """Pure per-chunk silence-gated VAD step for utterance recording.
+
+    Above-threshold audio (re)opens the speaking window and clears the
+    trailing-silence timer; below-threshold audio while speaking starts (or
+    continues) that timer and signals ``done`` once it has held for
+    ``silence_duration``. Below-threshold audio before any speech is
+    ignored. Frames are kept (``append``) while speaking or on the chunk
+    that opens speech.
+    """
+    started = False
+    append = False
+    done = False
+
+    if level > silence_threshold:
+        if not speaking:
+            speaking = True
+            started = True
+        silence_start = None
+        append = True
+    elif speaking:
+        append = True
+        if silence_start is None:
+            silence_start = now
+        elif now - silence_start >= silence_duration:
+            done = True
+
+    return VadStep(
+        speaking=speaking,
+        silence_start=silence_start,
+        started=started,
+        append=append,
+        done=done,
+    )
+
+
+@dataclass
 class TurnMetrics:
     speech_duration: float = 0.0
     stt_time: float = 0.0
@@ -150,19 +220,16 @@ def record_utterance(stream) -> tuple[bytes, float]:
         audio = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
         level = rms(audio)
 
-        if level > SILENCE_THRESHOLD:
-            if not speaking:
-                speaking = True
-                speech_start = time.monotonic()
-                print(f"  {CYAN}● listening...{RESET}", end="", flush=True)
-            silence_start = None
+        step = vad_step(level, speaking, silence_start, time.monotonic())
+        speaking = step.speaking
+        silence_start = step.silence_start
+        if step.started:
+            speech_start = time.monotonic()
+            print(f"  {CYAN}● listening...{RESET}", end="", flush=True)
+        if step.append:
             frames.append(data)
-        elif speaking:
-            frames.append(data)
-            if silence_start is None:
-                silence_start = time.monotonic()
-            elif time.monotonic() - silence_start >= SILENCE_DURATION:
-                break
+        if step.done:
+            break
 
     speech_duration = time.monotonic() - speech_start - SILENCE_DURATION
     if speech_duration < MIN_SPEECH_DURATION:
@@ -214,6 +281,8 @@ def run_talk(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
     print(f"  STT loaded in {stt_load*1000:.0f}ms")
     print(f"  TTS loaded in {tts_load*1000:.0f}ms")
     print(f"  {GREEN}Ready.{RESET} Speak and I'll respond. Ctrl+C to quit.\n")
+
+    import pyaudio  # lazy: keep mic_talk importable on non-mic hosts (Linux CI)
 
     pa = pyaudio.PyAudio()
     mic = pa.open(format=pyaudio.paInt16, channels=CHANNELS,
