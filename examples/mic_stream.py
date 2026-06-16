@@ -15,7 +15,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
-import pyaudio
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from stt import WhisperEngine
@@ -59,6 +58,81 @@ def _longest_common_prefix(a: str, b: str) -> str:
     while i < len(a) and i < len(b) and a[i] == b[i]:
         i += 1
     return a[:i]
+
+
+@dataclass
+class StabilizeStep:
+    """Result of one per-pass stabilization step.
+
+    Carries the updated stabilization locals back to the caller. ``changed``
+    and ``promoted`` are signals the caller acts on with its own clock —
+    time side-effects (``state.last_change_at``, ``state.collapse_times``)
+    stay at the entrypoint, mirroring the GENO.md extraction convention
+    (keep wall-clock / presentation owned by the caller).
+    """
+
+    stable: str
+    speculative: str
+    stable_candidate: str
+    stable_count: int
+    settled_at_pass: int
+    prev_full_text: str
+    changed: bool
+    promoted: bool
+
+
+def stabilize_pass(
+    text: str,
+    prev_full_text: str,
+    stable: str,
+    stable_candidate: str,
+    stable_count: int,
+    passes: int,
+    settled_at_pass: int,
+    *,
+    stability_passes: int = STABILITY_PASSES,
+) -> StabilizeStep:
+    """Pure per-pass stabilization step for streaming transcription.
+
+    Implements the iter-008 streaming-overlap design: track the longest
+    common prefix across consecutive inference passes; once a prefix has
+    held unchanged for ``stability_passes`` passes (and is longer than the
+    current stable text), promote it to ``stable``. Everything past the
+    stable prefix is ``speculative`` (rendered dim until it settles).
+
+    No I/O and no clock reads — the caller applies wall-clock side-effects
+    when ``changed`` / ``promoted`` are set, so this is fully unit-testable.
+    """
+    common = _longest_common_prefix(text, prev_full_text)
+
+    changed = common != stable_candidate
+    if changed:
+        stable_candidate = common
+        stable_count = 1
+    else:
+        stable_count += 1
+
+    promoted = False
+    if stable_count >= stability_passes and len(stable_candidate) > len(stable):
+        stable = stable_candidate
+        settled_at_pass = passes
+        promoted = True
+
+    if text.startswith(stable):
+        speculative = text[len(stable):]
+    else:
+        speculative = text
+
+    return StabilizeStep(
+        stable=stable,
+        speculative=speculative,
+        stable_candidate=stable_candidate,
+        stable_count=stable_count,
+        settled_at_pass=settled_at_pass,
+        prev_full_text=text,
+        changed=changed,
+        promoted=promoted,
+    )
 
 
 def _transcribe(engine: WhisperEngine, wav_bytes: bytes) -> tuple[str | None, float]:
@@ -130,6 +204,10 @@ def run_stream(model_repo: str):
     print(f"  Model loaded in {(time.monotonic() - t_load)*1000:.0f}ms")
     print(f"  {GREEN}Ready.{RESET} Speak into your mic. Ctrl+C to quit.\n")
 
+    # Lazy import — keeps the module importable on hosts without pyaudio
+    # (e.g. Linux x86_64) so the pure helpers can be unit-tested.
+    import pyaudio
+
     pa = pyaudio.PyAudio()
     stream = pa.open(format=pyaudio.paInt16, channels=CHANNELS,
                      rate=RATE, input=True, frames_per_buffer=CHUNK)
@@ -196,30 +274,27 @@ def run_stream(model_repo: str):
                 state.passes += 1
 
                 if text:
-                    # Diff against previous full text
-                    common = _longest_common_prefix(text, prev_full_text)
+                    step = stabilize_pass(
+                        text,
+                        prev_full_text,
+                        state.stable,
+                        stable_candidate,
+                        stable_count,
+                        state.passes,
+                        state.settled_at_pass,
+                    )
+                    stable_candidate = step.stable_candidate
+                    stable_count = step.stable_count
+                    state.stable = step.stable
+                    state.speculative = step.speculative
+                    state.settled_at_pass = step.settled_at_pass
+                    prev_full_text = step.prev_full_text
 
-                    # Check if the common prefix has been stable
-                    if common == stable_candidate:
-                        stable_count += 1
-                    else:
-                        stable_candidate = common
-                        stable_count = 1
+                    # Wall-clock side-effects stay at the caller.
+                    if step.changed:
                         state.last_change_at = time.monotonic()
-
-                    # Promote to stable if held for enough passes
-                    if stable_count >= STABILITY_PASSES and len(stable_candidate) > len(state.stable):
-                        state.stable = stable_candidate
-                        state.settled_at_pass = state.passes
+                    if step.promoted:
                         state.collapse_times.append(time.monotonic())
-
-                    # Everything past stable is speculative
-                    if text.startswith(state.stable):
-                        state.speculative = text[len(state.stable):]
-                    else:
-                        state.speculative = text
-
-                    prev_full_text = text
 
                 # Render
                 since_change = time.monotonic() - state.last_change_at if state.last_change_at else 0
