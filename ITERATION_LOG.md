@@ -12020,3 +12020,110 @@ worse OR drops one.
   - Document the GENO.md diversity-check + extraction patterns in
     the README so contributors discover them without reading
     GENO.md (carried over from iter-136).
+
+## iter-139 — `scripts/ci-gate.sh` — one-line CI gate wrapper
+
+**Branch:** `iter-139-ci-gate` (merged ff to main, commit `64b45f4`)
+**Date:** 2026-06-16
+
+**Goal:** iter-137 and iter-138 each carried over the same next
+direction: a committed `scripts/ci-gate.sh` (or
+`.github/workflows/` example) wiring `--fail-on-regression` +
+`--fail-on-removed` end to end. The flags exist and compose, but
+a CI author still has to know the exact incantation
+(`--diff baseline.json --fail-on-regression --fail-on-removed`).
+iter-139 ships the wrapper so a CI step is a single call.
+
+**What changed:**
+
+1. **`scripts/ci-gate.sh` (new, executable):** the committed
+   one-line gate. Defaults `--engine faster_whisper` and
+   `--baseline baseline.json`; always passes `--diff <baseline>
+   --fail-on-regression --fail-on-removed` to
+   `run_stt_benchmark.py` and passes the benchmark's exit code
+   through unchanged (0 clean / 1 regressed-or-removed / 3
+   baseline parse error). Design points:
+   - **`--` separator forwards extra benchmark flags verbatim**
+     (e.g. `-- --device cpu --compute int8 --format json`), so
+     the wrapper never has to grow a flag per benchmark option.
+   - **`--engine` / `--model` (both space- and `=`-form)** picked
+     out explicitly since they're the common knobs; `--model`
+     omitted from the forwarded command when unset (engine's own
+     default).
+   - **Fail-fast on a missing baseline (exit 2)** with the exact
+     `... --format json > baseline.json` command to create one —
+     more actionable than letting the benchmark exit 3.
+   - **`PYTHON` and `BENCHMARK_SCRIPT` env overrides** so tests
+     (and non-standard layouts) can point at a stub; resolves the
+     benchmark alongside the script by default via `BASH_SOURCE`.
+   - **`--help`** prints the leading comment block and exits 0.
+
+2. **README CI section** documents the wrapper as the convenience
+   path right after the two-flag strict-gate example: the
+   single-call form, `--engine`/`--model`, the `--` forwarding
+   convention, and the exit-2 missing-baseline behavior.
+
+3. **Tests — `tests/unit/test_ci_gate_script.py` (new, +15):**
+   first shell-script tests in the suite. Hermetic: a stub
+   benchmark (written to `tmp_path`, wired via `BENCHMARK_SCRIPT`)
+   echoes its argv on line 1 and exits with `STUB_EXIT`, so the
+   tests assert flag wiring and exit-code passthrough with **no
+   real engine, model download, or corpus**. Cases: script exists
+   + executable, default flags wire both gates, exit-code
+   passthrough (0/1/3), engine override, model forwarded /
+   omitted, `--` extras forwarded, `=`-form args, gate-flags-
+   precede-extras ordering, missing-baseline usage error (exit 2
+   + creation hint), unknown-arg (exit 2), `--help` (exit 0),
+   empty `--baseline` value (exit 2). All gated on `bash` being
+   available (`skipif`).
+
+4. **Drift sentinels — `tests/unit/test_readme_benchmark_docs.py`
+   (+2):** `test_readme_documents_ci_gate_wrapper` (wrapper exists
+   ⇔ README references `scripts/ci-gate.sh`) and
+   `test_ci_gate_wraps_both_benchmark_flags` (the wrapper source
+   actually invokes `--fail-on-regression`, `--fail-on-removed`,
+   and `--diff` — so the README's "wires both gates together"
+   claim can't go stale). Same bidirectional-sync shape as the
+   iter-136/137/138 sentinels.
+
+**Verification:**
+- `python -m pytest tests/unit/test_ci_gate_script.py
+  tests/unit/test_readme_benchmark_docs.py -q` → **31 passed in
+  0.32s** (15 ci-gate + 16 README; +3 over prior 13 README).
+- Full unit suite: **1611 passed** (1594 prior + 17 new).
+- Unit + integration: **30 passed, 1 skipped** integration on top
+  of the 1611 unit.
+- Perf snapshot (`tests/performance/`): **23 passed**.
+- End-to-end smoke (faster_whisper tiny, real 5-fixture corpus):
+  - Missing baseline → exit 2 with the creation-command hint (no
+    engine run).
+  - Real baseline, re-run clean → "5/5 → 5/5 fixtures passing
+    (+0)", exit 0.
+  - Baseline doctored with a phantom 6th fixture → diff prints
+    "phantom_gone  REMOV ... (removed)" and "Removed fixtures:
+    phantom_gone", exit 1 (removal gate fires through the
+    wrapper).
+
+**Notes:**
+- **The arc closes.** iter-132→134 built the diff data model;
+  iter-135 added format dispatch; iter-137/138 added the two
+  exit-code gates; iter-139 packages them as the one-line CI
+  entry point. A CI step is now literally `scripts/ci-gate.sh
+  --baseline baseline.json` — no flag memorization, no jq/grep.
+- **First shell-script tests in the repo.** The `BENCHMARK_SCRIPT`
+  stub pattern (echo argv + `STUB_EXIT`) is the reusable shape for
+  testing any future wrapper script without standing up the real
+  pipeline — analogous to the `_run_main` hermetic driver iter-137
+  introduced for `main()`-level Python behavior.
+- **Restored regenerated perf snapshots** (`iter-reports/perf-*.json`)
+  before committing so the diff is scoped to the actual change —
+  the perf suite rewrites them on every run.
+- Next directions:
+  - A `.github/workflows/stt-benchmark.yml` that calls
+    `scripts/ci-gate.sh` on PRs against a committed baseline
+    (the actual CI wiring, now that the gate is one line). Would
+    need a committed `baseline.json` and a decision on which
+    engine/model CI runs.
+  - Document the GENO.md diversity-check + extraction patterns in
+    the README so contributors discover them without reading
+    GENO.md (carried over from iter-136).
