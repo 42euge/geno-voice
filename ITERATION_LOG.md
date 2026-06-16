@@ -12594,3 +12594,80 @@ x86_64 Linux without the model — so it stays carried over.
     instances cover the meaningful per-turn signals; a 9th would be
     near-mechanical. Revisit only if a new per-turn signal with a
     genuine sustained-run failure mode appears.
+
+## iter-145 — extract a testable seam in the `gv` CLI + first CLI tests
+
+**Branch:** `iter-145-gv-cli` (merged ff to main, commit `b08c268`)
+**Date:** 2026-06-16
+
+**Goal:** iter-144 closed by recommending a pivot away from the (paused)
+diversity-check surface. Scanning the codebase for an untested, central
+surface, `examples/gv.py` — the primary user-facing CLI entrypoint
+(`gv bench|stream|talk|chat`) — stood out with **zero test coverage**.
+Its `main()` coupled parser construction, dispatch, and `sys.exit` in
+one function, and `cmd_bench` carried non-obvious argv-rebuild logic, so
+none of it could be exercised from a test. This lap makes the CLI
+testable and lands the first tests for it.
+
+**What changed:**
+
+1. **`examples/gv.py` refactor into a testable seam** (no behavior change
+   for real use):
+   - `build_parser()` — pure argparse construction, no audio imports, no
+     I/O. Safe to call from tests with `parse_args([...])`.
+   - `dispatch(args, parser, *, handlers=None)` — routes the parsed
+     command to a handler and returns an exit code (0 dispatched, 1 when
+     no/unknown command → prints help). Handlers are **injectable**
+     (`DEFAULT_HANDLERS` maps the four command names to the real
+     `cmd_*` functions), so dispatch can be tested with stub handlers
+     that never import the STT/TTS/LLM modules. This follows the GENO.md
+     "inject callable dependencies, not engines" convention.
+   - `main(argv=None)` now takes optional argv and **returns** an exit
+     code; `__main__` does `sys.exit(main())`. Lets tests drive
+     `main([...])` end-to-end without patching `sys.argv` or catching
+     `SystemExit`.
+   - Documented `cmd_bench`'s legacy argv-rebuild logic with a comment
+     (it parses its own `sys.argv` rather than taking kwargs).
+
+2. **`tests/unit/test_gv_cli.py` (new, +22 tests):**
+   - Parser defaults for all four subcommands (incl. asserting bench/
+     stream are STT-only — no `voice`/`speed` attrs).
+   - Overrides: `--model` on every command, `--voice`/`--speed` on
+     talk/chat, `--speed` float coercion.
+   - argparse error paths: unknown subcommand and non-float speed both
+     `SystemExit(2)`.
+   - `dispatch` routing via recording stub handlers (parametrized over
+     all four commands), arg pass-through, no-command + unknown-command
+     help+rc=1 paths, and a guard asserting `DEFAULT_HANDLERS` wires the
+     real `cmd_*` functions.
+   - `main([...])` end-to-end with a monkeypatched handler (no audio
+     imports), and `main([])` → rc=1 + help.
+   - `cmd_bench` argv-rebuild: default model omits `--model` from the
+     rebuilt argv; a custom model forwards `["--model", "tiny"]`. Uses a
+     fake `mic_bench` module in `sys.modules` so no real bench import.
+
+**Verification:**
+- `python -m pytest tests/unit/test_gv_cli.py -q` → **22 passed in 0.10s**.
+- Full unit suite: **1724 passed** (1702 prior + 22 new).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+
+**Notes:**
+- **First tests for the CLI dispatch layer.** Prior laps tested the chat
+  pipeline internals (`_chat_*` modules) and the benchmark CLI
+  (`run_stt_benchmark`, `ci-gate.sh`) but never `gv.py` itself — the
+  thin glue every user actually types. The seam mirrors the mic_chat.py
+  extraction convention (inject callables, keep the entrypoint thin).
+- **No runtime behavior change.** Real invocations route identically;
+  the only observable difference is `main()` returning an int instead of
+  calling `sys.exit` inline (and `__main__` now forwards it), which is
+  invisible to shell users (same exit codes).
+- Next directions:
+  - The remaining carried-over item is still the CI workflow
+    (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`),
+    blocked on a committed `baseline.json` that needs an STT model run on
+    real hardware. A synthetic tiny-model baseline remains the headless
+    workaround if a lap wants to unblock it.
+  - Other thin entrypoints (`mic_stream.run_stream`, `mic_talk.run_talk`)
+    are still untested at the argv/dispatch level; the same seam could
+    extend if they grow flags. For now they are trivially thin.
+  - Diversity-check surface remains paused per iter-143/144.
