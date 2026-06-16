@@ -1802,6 +1802,106 @@ def _emit_stt_rtf_consistency_line(
     )
 
 
+def _tts_rtf_bucket(rtf: float) -> str:
+    """iter-141: bucket a per-turn ``tts_rtf`` (tts_time /
+    audio_seconds_total) into a coarse category. Used by
+    ``_emit_tts_rtf_consistency_line`` to detect runs of TTS that
+    consistently synthesizes slower than the audio it produces —
+    the signal that synth, not playback, is the latency bottleneck
+    and synth-overlap won't help.
+
+    SIXTH instance of the diversity-check pattern, and the THIRD
+    applied to a continuous metric (after iter-128 sentence-length
+    and iter-140 stt-rtf). A near-mechanical clone of
+    ``_stt_rtf_bucket`` (iter-140) — same boundaries, same
+    semantics, different source metric (iter-050 tts_rtf).
+
+    Buckets (chosen against the iter-050 RTF semantics where
+    Kokoro on Apple Silicon lands ~0.1-0.3):
+
+        ``realtime`` — < 1.0: synth keeps up; the desired state.
+            Synth-overlap streams usefully ahead of playback.
+        ``slow``     — 1.0-2.0: synth is the bottleneck. A lighter
+            voice/engine or pre-rendered fillers would help.
+        ``very_slow``— > 2.0: synth takes 2x+ the audio duration.
+            The engine/voice is badly mismatched to the hardware.
+
+    Returns ``""`` when ``rtf`` is non-positive (no audio produced
+    this turn or tts_time unmeasured) — empty-string filter applies
+    in the consumer, mirroring iter-114/115/120/126/128/140.
+    """
+    if rtf <= 0:
+        return ""
+    if rtf < 1.0:
+        return "realtime"
+    if rtf <= 2.0:
+        return "slow"
+    return "very_slow"
+
+
+def _emit_tts_rtf_consistency_line(
+    emit, tts_rtf_list: list[float], threshold: int = 5,
+) -> None:
+    """iter-141: detect consecutive runs of TTS synthesizing
+    slower than realtime. SIXTH instance of the diversity-check
+    pattern after iter-114 (filler), iter-115/126 (naturalness),
+    iter-120 (barge-phase), iter-128 (sentence-length), iter-140
+    (stt-rtf). THIRD instance applied to a CONTINUOUS metric —
+    buckets it via ``_tts_rtf_bucket`` before running the scan
+    (same shape as iter-128/140).
+
+    Filter rule (mirrors iter-140's "realtime" exclusion): drop the
+    "realtime" bucket before the scan. It's the "fine" state; only
+    "slow" and "very_slow" warrant warning. Empty buckets (turns
+    with no audio produced) also drop.
+
+    Threshold = 5: same as iter-115/128/140, since RTF varies turn
+    to turn with utterance length and a brief slow excursion is
+    normal; a sustained run is the real signal.
+
+    Output:
+
+        TTS speed: 5 consecutive 'very_slow' turns — TTS engine
+                   is the bottleneck, try a lighter voice or
+                   pre-rendered fillers (iter-050 tts_rtf)
+    """
+    # Bucketize, then drop the "uninteresting" bucket (empty,
+    # realtime).
+    interesting = {"slow", "very_slow"}
+    filtered = [
+        b for b in (
+            _tts_rtf_bucket(r) for r in tts_rtf_list
+        )
+        if b in interesting
+    ]
+    if not filtered:
+        return
+
+    longest_run, longest_bucket = _longest_consecutive_run(filtered)
+    if longest_run < threshold:
+        return
+
+    if longest_bucket == "very_slow":
+        suggestion = (
+            "TTS engine is badly mismatched to the hardware "
+            "(>2x realtime)"
+        )
+    elif longest_bucket == "slow":
+        suggestion = (
+            "TTS is the bottleneck, try a lighter voice or "
+            "pre-rendered fillers"
+        )
+    else:
+        # Defensive: future buckets that pass the filter rule.
+        suggestion = "consider a lighter TTS engine"
+
+    emit(
+        f"    TTS speed:        {longest_run} consecutive "
+        f"{longest_bucket!r} turns — {suggestion} "
+        f"(iter-050 tts_rtf)"
+    )
+
+
 def _emit_bargeable_line(emit, bargeable_values: list[float]) -> None:
     """iter-104: extracted from print_session_summary's iter-074
     bargeable line. Reports the WORST bargeable fraction across
@@ -2356,6 +2456,15 @@ def print_session_summary(
     _emit_stt_rtf_consistency_line(
         _emit,
         [m.stt_rtf for m in metrics_list],
+    )
+    # iter-141: TTS-RTF consistency check. Only fires when 5+
+    # consecutive turns synthesized TTS slower than realtime
+    # (slow 1.0-2.0 / very_slow > 2.0) — surfaces an engine/voice
+    # that's too heavy for the host hardware (synth-overlap won't
+    # help when synth itself is the bottleneck).
+    _emit_tts_rtf_consistency_line(
+        _emit,
+        [m.tts_rtf for m in metrics_list],
     )
     # iter-090: barge block extracted to _emit_barge_block helper.
     # ~76 lines of co-emitted lines (count, interruption rate,

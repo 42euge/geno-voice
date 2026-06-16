@@ -37,6 +37,7 @@ _DIVERSITY_HELPERS = (
     "_emit_barge_phase_consistency_line",  # iter-120
     "_emit_sentence_length_consistency_line",  # iter-128
     "_emit_stt_rtf_consistency_line",      # iter-140
+    "_emit_tts_rtf_consistency_line",      # iter-141
 )
 
 
@@ -108,6 +109,7 @@ def test_doc_references_each_responsible_iteration():
         "iter-126",  # naturalness (filter fix; iter-131 added to list)
         "iter-128",  # sentence-length (continuous-metric instance)
         "iter-140",  # stt-rtf (2nd continuous-metric instance)
+        "iter-141",  # tts-rtf (3rd continuous-metric instance)
     ]
     for it in expected_iters:
         assert it in doc, f"missing {it} attribution in GENO.md"
@@ -145,6 +147,7 @@ def test_doc_template_claims_match_actual_instance_count():
     counts = {
         4: ("four instances", "Four"),
         5: ("five instances", "Five"),
+        6: ("six instances", "Six"),
     }
     actual = len(_DIVERSITY_HELPERS)
     if actual not in counts:
