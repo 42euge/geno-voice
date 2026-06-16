@@ -155,6 +155,34 @@ The corpus is forgiving on espeak-ng-generated audio. Production-
 grade STT (whisper-large, etc.) typically lands at WER 0.0-0.10 on
 the clean fixtures.
 
+## Contributing patterns
+
+The voice pipeline has accreted two reusable code patterns. Both are
+documented in detail in [`GENO.md`](GENO.md) — read that section
+before adding similar code, so a new instance matches the existing
+shape (and the doc-sync tests in `tests/unit/` stay green).
+
+- **mic_chat.py extraction pattern** — how to pull a subroutine out of
+  `examples/mic_chat.py:run_chat` into its own testable module: inject
+  callable dependencies (not engine classes), inject a `log` callable,
+  keep ANSI styling at the caller, return a dataclass, and lazy-import
+  platform deps inside closures. See `GENO.md` →
+  *mic_chat.py extraction pattern*.
+
+- **Session-summary diversity-check pattern** — how to add a
+  session-summary warning that fires when N+ consecutive turns share
+  the same problematic metric value (e.g. a run of rushed-sounding
+  turns, or low LLM-stream/synth overlap). Filter uninteresting values
+  first, reuse the `_longest_consecutive_run` primitive, pick a
+  per-signal threshold, and name the responsible iteration in the
+  warning text. See `GENO.md` → *Session-summary diversity-check
+  pattern*.
+
+Both sections are guarded by drift-sentinel tests
+(`tests/unit/test_extraction_pattern_doc.py`,
+`tests/unit/test_diversity_pattern_doc.py`) that fail if a new
+instance lands without a matching doc update.
+
 ## Project Structure
 
 ```
