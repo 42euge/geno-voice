@@ -113,6 +113,21 @@ python scripts/run_stt_benchmark.py --engine faster_whisper \
 Like `--fail-on-regression`, `--fail-on-removed` requires
 `--diff` (exit 2 otherwise).
 
+For convenience, `scripts/ci-gate.sh` is the committed wrapper
+that wires both gates together so a CI step is a single call:
+
+```bash
+# Fails (exit 1) if anything regressed OR a baseline fixture was
+# dropped; exit 0 otherwise. Defaults: --engine faster_whisper,
+# --baseline baseline.json.
+scripts/ci-gate.sh --baseline baseline.json
+```
+
+Pass `--engine`/`--model` to pick the engine, and forward any
+extra benchmark flags after a `--` separator (e.g.
+`scripts/ci-gate.sh --baseline baseline.json -- --device cpu`).
+A missing baseline exits 2 with the exact command to create one.
+
 If you'd rather gate in a shell pipeline against the JSON dump,
 `regression_count` carries the same signal:
 

@@ -20,6 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 README = ROOT / "README.md"
 SCRIPT_PATH = ROOT / "scripts" / "run_stt_benchmark.py"
+CI_GATE_PATH = ROOT / "scripts" / "ci-gate.sh"
 CORPUS_PATH = ROOT / "tests" / "fixtures" / "wer" / "corpus.json"
 
 sys.path.insert(0, str(ROOT))
@@ -132,6 +133,31 @@ def test_readme_documents_fail_on_removed_flag():
         "--fail-on-removed accepted by the script but not "
         "documented in the README CI section"
     )
+
+
+def test_readme_documents_ci_gate_wrapper():
+    """iter-139: scripts/ci-gate.sh is the committed wrapper that
+    wires both gates end to end. If the wrapper exists, the README
+    must reference it (and vice versa) — keeps the one-line CI
+    story discoverable."""
+    doc = _read_readme()
+    assert CI_GATE_PATH.exists(), (
+        "scripts/ci-gate.sh missing — README references it as the "
+        "one-line CI gate"
+    )
+    assert "scripts/ci-gate.sh" in doc, (
+        "scripts/ci-gate.sh exists but is not documented in the "
+        "README CI section"
+    )
+
+
+def test_ci_gate_wraps_both_benchmark_flags():
+    """The wrapper must actually invoke both gate flags — otherwise
+    the README's 'wires both gates together' claim is false."""
+    src = CI_GATE_PATH.read_text()
+    assert "--fail-on-regression" in src
+    assert "--fail-on-removed" in src
+    assert "--diff" in src
 
 
 # ---- Corpus references ---------------------------------------------
