@@ -12409,3 +12409,115 @@ the boundaries relative to the iter-140/141 RTF bucketers.
     TTFS jitter and `streaming_overlap_ratio` (a low-overlap run
     would flag the iter-008 design failing to mask synth) — either
     is a candidate 8th instance if a need surfaces.
+
+## iter-143 — streaming-overlap consistency check (8th diversity-check instance)
+
+**Branch:** `iter-143-overlap-consistency` (merged ff to main, commit `0b5bee6`)
+**Date:** 2026-06-16
+
+**Goal:** iter-142 closed by signposting `streaming_overlap_ratio`
+as a candidate 8th diversity-check instance ("a low-overlap run
+would flag the iter-008 design failing to mask synth"). This lap
+lands it. `streaming_overlap_ratio` (iter-043, the fraction of bot
+synth that ran concurrently with the LLM stream) already had a
+per-turn field and a session-summary "Median overlap" line but no
+sustained-run sentinel. A run of low-overlap turns is the direct
+symptom of the iter-008 streaming-sentence-dispatch design failing
+to mask synth — synth ends up running sequentially after the
+stream, evaporating the TTFS savings the design exists to buy. This
+is the SECOND inverted-direction continuous-metric instance (after
+iter-142 llm-tps): overlap is bigger-is-better, so the "fine" bucket
+is a HIGH value.
+
+**What changed:**
+
+1. **`_streaming_overlap_bucket(ratio)` (new) in
+   `examples/_chat_metrics.py`:** fifth continuous-metric bucketer
+   (after iter-128 sentence-length, iter-140 stt-rtf, iter-141
+   tts-rtf, iter-142 llm-tps). Maps `streaming_overlap_ratio` →
+   `""` (≤0, no measurable overlap) / `"high"` (≥0.50, the fine
+   state) / `"low"` (0.20–0.50) / `"very_low"` (<0.20). Boundaries
+   chosen against iter-043's existing "Median overlap" semantics
+   (>50% = healthy, <20% = overlap isn't happening). Like iter-142
+   and UNLIKE the RTF bucketers, the fine bucket is the HIGH end —
+   the second inverted-direction bucketer in the family.
+
+2. **`_emit_streaming_overlap_consistency_line(emit, overlap_list,
+   threshold=5)` (new):** the 8th diversity-check helper. Filters
+   out `""` and `"high"` before the scan (the inversion is absorbed
+   entirely by the filter rule — the run-scan stays
+   direction-agnostic), runs iter-116's `_longest_consecutive_run`,
+   fires at threshold 5 (same as iter-115/128/140/141/142).
+   Per-value suggestions: `low` → "overlap is only partial; the bot
+   may be replying too fast or the LLM stream lags synth",
+   `very_low` → "synth runs sequentially after the LLM stream;
+   check first-sentence latency and synth time", plus a defensive
+   `else`. Names `iter-043 streaming_overlap_ratio` in the warning
+   text.
+
+3. **Wired into `print_session_summary`** right after the iter-142
+   LLM-TPS sentinel, fed `[m.streaming_overlap_ratio for m in
+   metrics_list]`.
+
+4. **GENO.md diversity-check pattern doc updated atomically:**
+   seven→**eight instances** in the header, added the iter-143
+   filter-rule bullet (drops `""` + `"high"`, with an explicit
+   "second inverted" note), the iter-143 fifth-continuous-metric
+   note under rule 4 (calling out the inverted direction and that
+   it watches the iter-008 design itself), and iter-143 under the
+   threshold-5 convention bullet.
+
+5. **Tests:**
+   - `tests/unit/test_emit_streaming_overlap_consistency_line.py`
+     (new, +21): mirrors iter-142's matrix probing the HIGH end as
+     the good state — bucket boundaries (incl. float edges and the
+     ≤0 → `""` defensive path), empty/all-zero suppression,
+     high-run never fires, at/above/below threshold per bucket,
+     high-interleave doesn't break a run, phase-change
+     (low↔very_low) DOES break a run, custom threshold (3 catches /
+     10 suppresses), longest-of-multiple, leading-indent + iter-043
+     attribution formatting, 1000-elem scale sanity.
+   - `tests/unit/test_diversity_pattern_doc.py` (+1 helper in
+     `_DIVERSITY_HELPERS`, iter-143 in `expected_iters`, `8:
+     ("eight instances", "Eight")` in the counts map): the doc-sync
+     sentinel now enforces the eight-instance count.
+
+**Verification:**
+- `python -m pytest
+  tests/unit/test_emit_streaming_overlap_consistency_line.py
+  tests/unit/test_diversity_pattern_doc.py -q` → **31 passed in 0.11s**.
+- Full unit suite: **1695 passed** (1674 prior + 21 new).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+
+**Notes:**
+- **Second inverted-direction continuous bucketer confirms the
+  inversion is pure filter-rule policy.** iter-142 was the first;
+  iter-143 reuses the same trick (the fine bucket "high" is a HIGH
+  value, excluded by the filter set) without touching
+  `_longest_consecutive_run` or the emit machinery — two
+  independent inverted instances now demonstrate the run-scan
+  primitive is genuinely direction-agnostic.
+- **This instance is special: it watches the core design itself.**
+  Unlike STT/TTS/LLM RTF sentinels (which flag a slow *component*),
+  the overlap sentinel flags the iter-008 *architecture* failing to
+  do its job — a sustained low-overlap run means synth-overlap
+  isn't masking synth even when each component is fast.
+- **The doc-sync sentinel did its job again.** Adding the helper to
+  `_DIVERSITY_HELPERS` red-lit the count/attribution/test-file
+  assertions until GENO.md and the new test file caught up.
+- Next directions:
+  - A `.github/workflows/stt-benchmark.yml` that calls
+    `scripts/ci-gate.sh` on PRs against a committed baseline
+    (carried over from iter-139; needs a committed `baseline.json`
+    and an engine/model choice for CI).
+  - Document the GENO.md diversity-check + extraction patterns in
+    the README so contributors discover them without reading
+    GENO.md (carried over from iter-136).
+  - The diversity-check surface now covers filler, naturalness,
+    barge-phase, sentence-length, stt-rtf, tts-rtf, llm-tps,
+    streaming-overlap. The per-turn-signal seam is nearly
+    exhausted; remaining candidates are weaker (TTFS jitter,
+    token-lag). Worth pausing the diversity-check expansion and
+    pivoting to one of the two carried-over items (CI baseline or
+    README pattern docs) next lap rather than mining a 9th
+    near-mechanical instance.
