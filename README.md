@@ -81,8 +81,24 @@ Regressions: multispeaker_audio
 
 ### CI integration
 
-Combine `--diff` with `--format json` to gate PRs on regression
-detection:
+The cleanest gate is `--fail-on-regression`: the process exits
+non-zero only when a fixture that **passed** in the baseline now
+**fails**. Pre-existing failures don't block — a PR is allowed
+through as long as it leaves the corpus no worse than it found it.
+
+```bash
+# Exits 1 iff something regressed; no jq/grep plumbing needed.
+python scripts/run_stt_benchmark.py --engine faster_whisper \
+    --diff baseline.json --fail-on-regression
+```
+
+The diff report still prints (text/json/csv per `--format`), so
+CI logs show exactly what changed. `--fail-on-regression`
+requires `--diff` (exit 2 otherwise — there's no baseline to
+regress against).
+
+If you'd rather gate in a shell pipeline against the JSON dump,
+`regression_count` carries the same signal:
 
 ```bash
 python scripts/run_stt_benchmark.py --engine faster_whisper \

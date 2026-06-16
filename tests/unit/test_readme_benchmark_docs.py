@@ -104,6 +104,21 @@ def test_readme_documents_engine_flag():
     assert "--engine" in doc
 
 
+def test_readme_documents_fail_on_regression_flag():
+    """iter-137: --fail-on-regression is the recommended CI gate.
+    If the script defines the flag, the README must document it
+    (and vice versa — keeps the CI story in sync with the CLI)."""
+    src = SCRIPT_PATH.read_text()
+    doc = _read_readme()
+    assert '"--fail-on-regression"' in src, (
+        "script must define the --fail-on-regression flag"
+    )
+    assert "--fail-on-regression" in doc, (
+        "--fail-on-regression accepted by the script but not "
+        "documented in the README CI section"
+    )
+
+
 # ---- Corpus references ---------------------------------------------
 
 

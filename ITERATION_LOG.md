@@ -11790,3 +11790,112 @@ Notes:
   - Document the GENO.md patterns in the README too — point
     contributors at the diversity-check + extraction patterns
     (currently only discoverable from GENO.md).
+
+## iter-137 — `--fail-on-regression` CI gate (exit code on regressions only)
+
+**Branch:** `iter-137-fail-on-regression` (merged ff to main)
+**Date:** 2026-06-16
+
+**Goal:** The benchmark eval pipeline (iter-132 → 136) was
+feature-complete, but the README's recommended CI gate was a
+brittle three-stage shell pipeline:
+
+    ... --diff baseline.json --format json | jq '.regression_count > 0' | grep -q true && exit 1
+
+That works but is fragile (depends on `jq`, swallows exit codes,
+hard to read in a CI YAML). iter-137 moves the gate into the CLI
+itself: a `--fail-on-regression` flag that makes the **process
+exit code** the signal.
+
+**The key semantic — gate on NEW regressions, not absolute
+failures.** `--fail-on-regression` exits 1 iff at least one
+fixture was PASS in the baseline and is FAIL now (a
+`status_change == "regressed"` row). Pre-existing failures do
+NOT block: an already-red corpus lets a PR through as long as it
+leaves things no worse. This is the correct PR-gate policy — you
+block a change that *makes something worse*, not a change that
+merely fails to fix a long-standing failure.
+
+**What changed:**
+
+1. **`scripts/run_stt_benchmark.py`:**
+   - New `--fail-on-regression` flag (`action="store_true"`).
+   - Usage guard: requires `--diff` (exit 2 with a clear stderr
+     message otherwise — there's no baseline to regress against).
+   - In diff mode, when the flag is set the exit code becomes
+     `1 if diff.regressions else 0`. Without the flag, diff mode
+     keeps the iter-134/135 behavior (`0 if summary.failing == 0
+     else 1`) so existing callers are unaffected. The diff report
+     still prints (text/json/csv per `--format`) so CI logs show
+     what changed.
+
+2. **README CI section rewritten:** leads with
+   `--fail-on-regression` as the clean gate (no jq/grep), explains
+   the pre-existing-failure semantics, notes the exit-2 guard, and
+   keeps the `jq '.regression_count'` pipeline as the alternative
+   for shell-based gating against the JSON dump.
+
+3. **Tests — `tests/unit/test_run_stt_benchmark.py` (+7):** first
+   hermetic `main()` tests in this file. A `_run_main` helper
+   writes a temp corpus.json + baseline.json, monkeypatches
+   `module.CORPUS_PATH` and `module._build_transcribe_from_engine_args`
+   (stub transcribe), sets `sys.argv`, and returns the exit code.
+   Cases: requires-diff (exit 2 + stderr), regressed → exit 1,
+   no-regression → exit 0, **pre-existing failure ignored → exit
+   0** (the headline semantic), improvement → exit 0, mixed
+   (one regressed) → exit 1, and a backward-compat case proving
+   plain `--diff` without the flag still exits 1 on absolute
+   current failure.
+
+4. **Drift sentinel — `tests/unit/test_readme_benchmark_docs.py`
+   (+1):** `test_readme_documents_fail_on_regression_flag` asserts
+   the flag is both defined in the script source AND documented in
+   the README (bidirectional sync, same shape as iter-136's
+   format-choices sentinel).
+
+**Verification:**
+- `python -m pytest tests/unit/test_run_stt_benchmark.py
+  tests/unit/test_readme_benchmark_docs.py -q` → **77 passed in
+  0.15s** (64 prior + 7 benchmark + 1 README... net +8 over the
+  combined prior 69).
+- Full unit suite: **1585 passed**.
+- Full unit + integration: **1615 passed, 1 skipped** (1607 prior
+  + 8 new).
+- Perf snapshot: **23 passed**.
+- End-to-end smoke against the real corpus (faster_whisper tiny):
+  `--fail-on-regression` without `--diff` → exit 2 with the guard
+  message; against a saved baseline with a pre-existing
+  multispeaker failure but nothing regressed → exit 0 (the legacy
+  absolute-failure gate would block here, the new gate correctly
+  passes).
+
+**Notes:**
+- **The CI gate is now a single flag.** A CI step is one line:
+  `python scripts/run_stt_benchmark.py --engine faster_whisper
+  --diff baseline.json --fail-on-regression`. The exit code drives
+  the pipeline; no `jq`/`grep` plumbing, no swallowed errors.
+
+- **Two gate policies, both available.** `--fail-on-regression`
+  (NEW regressions only) vs the iter-135 `passing_delta < 0` /
+  `regression_count > 0` JSON checks. iter-135's note already
+  distinguished `passing_delta` (allows fixture reshuffling within
+  the same passing total) from `regression_count`. iter-137 adds
+  the in-process equivalent of the strictest-but-fairest policy:
+  block on any PASS→FAIL flip, ignore the rest.
+
+- **First hermetic `main()` test in the benchmark suite.** Prior
+  tests all exercised pure functions (`run_benchmark`,
+  `compute_diff`, `format_*`). The exit-code logic lives in
+  `main()`, so testing it required driving `main()` with a temp
+  corpus + monkeypatched engine builder. The `_run_main` helper is
+  reusable for any future `main()`-level behavior (new flags,
+  error paths).
+
+- Next directions:
+  - `--fail-on-new-fixture` or a `--strict` mode that also blocks
+    on removed fixtures (corpus shrinking unnoticed).
+  - A committed `.github/workflows/` example (or a
+    `scripts/ci-gate.sh`) wiring `--fail-on-regression` end to end.
+  - Document the GENO.md diversity-check + extraction patterns in
+    the README so contributors discover them without reading
+    GENO.md (carried over from iter-136).

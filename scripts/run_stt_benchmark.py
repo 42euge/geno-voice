@@ -663,7 +663,26 @@ def main() -> int:
              "iter-135: --format chooses how the diff is rendered "
              "(text default, json, csv).",
     )
+    parser.add_argument(
+        "--fail-on-regression", action="store_true",
+        help="iter-137: requires --diff. Exit non-zero (1) only "
+             "when a fixture regressed (was PASS in the baseline, "
+             "now FAIL). Pre-existing failures do NOT block — a "
+             "fixture already failing in the baseline keeps the "
+             "exit code 0. This is the clean CI gate: block a PR "
+             "only when it makes something worse. Replaces the "
+             "brittle `... | jq '.regression_count > 0' | grep -q "
+             "true && exit 1` shell pipeline.",
+    )
     args = parser.parse_args()
+
+    if args.fail_on_regression and not args.diff:
+        print(
+            "--fail-on-regression requires --diff <baseline.json>; "
+            "without a baseline there is nothing to regress against",
+            file=sys.stderr,
+        )
+        return 2
 
     with CORPUS_PATH.open() as f:
         corpus = json.load(f)
@@ -721,6 +740,17 @@ def main() -> int:
             print(format_diff_csv(diff), end="")
         else:
             print(format_diff_text(diff))
+        # iter-137: --fail-on-regression repurposes the exit code
+        # to answer "did this change make anything worse?" instead
+        # of "is everything passing?". Returns 1 iff at least one
+        # fixture regressed (PASS→FAIL); pre-existing failures are
+        # ignored, so an already-red corpus doesn't block a PR
+        # that leaves it no worse. Without the flag, diff mode
+        # keeps the iter-134/135 behavior (exit reflects absolute
+        # current failures) so existing callers are unaffected.
+        if args.fail_on_regression:
+            return 1 if diff.regressions else 0
+        return 0 if summary.failing == 0 else 1
     elif args.format == "text":
         summary = run_benchmark(
             transcribe, fixtures, CORPUS_PATH.parent,

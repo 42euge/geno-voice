@@ -9,6 +9,7 @@ faster-whisper availability.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -994,3 +995,154 @@ def test_diff_csv_negative_delta_includes_sign():
     diff = module.compute_diff(current, baseline)
     out = module.format_diff_csv(diff)
     assert "-0.2000" in out
+
+
+# ---- iter-137: --fail-on-regression exit-code gate -------------
+
+
+def _run_main(monkeypatch, tmp_path, *, fixtures, transcripts,
+              baseline_entries=None, extra_argv=None):
+    """Drive ``module.main()`` hermetically.
+
+    Writes a corpus.json (with the given fixtures) and optionally a
+    baseline.json into ``tmp_path``, monkeypatches the module's
+    ``CORPUS_PATH`` and engine builder, sets ``sys.argv``, and
+    returns the integer exit code.
+
+    fixtures: list of (name, ref, lo, hi).
+    transcripts: dict name -> hypothesis string.
+    baseline_entries: list of (name, passed, wer) or None (no --diff).
+    extra_argv: list of extra CLI tokens (e.g. ["--fail-on-regression"]).
+    """
+    corpus = {
+        "audio_fixtures": [
+            {
+                "name": n, "reference": ref,
+                "audio_path": f"{n}.wav",
+                "expected_wer_min": lo, "expected_wer_max": hi,
+            }
+            for (n, ref, lo, hi) in fixtures
+        ]
+    }
+    corpus_path = tmp_path / "corpus.json"
+    corpus_path.write_text(json.dumps(corpus))
+    monkeypatch.setattr(module, "CORPUS_PATH", corpus_path)
+
+    def _fake_builder(engine, model, device, compute, **kw):
+        def _transcribe(audio_path: str) -> str:
+            return transcripts[Path(audio_path).stem]
+        return _transcribe
+
+    monkeypatch.setattr(
+        module, "_build_transcribe_from_engine_args", _fake_builder,
+    )
+
+    argv = ["run_stt_benchmark.py", "--engine", "stub"]
+    if baseline_entries is not None:
+        baseline_path = tmp_path / "baseline.json"
+        baseline_path.write_text(json.dumps(_baseline_payload(*baseline_entries)))
+        argv += ["--diff", str(baseline_path)]
+    if extra_argv:
+        argv += extra_argv
+    monkeypatch.setattr(sys, "argv", argv)
+    return module.main()
+
+
+def test_fail_on_regression_requires_diff(monkeypatch, tmp_path, capsys):
+    """Without --diff there is no baseline to regress against —
+    the flag is a usage error (exit 2)."""
+    rc = _run_main(
+        monkeypatch, tmp_path,
+        fixtures=[("a", "hello", 0.0, 0.5)],
+        transcripts={"a": "hello"},
+        baseline_entries=None,
+        extra_argv=["--fail-on-regression"],
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "--fail-on-regression requires --diff" in err
+
+
+def test_fail_on_regression_exit_1_when_fixture_regressed(monkeypatch, tmp_path):
+    """A fixture that PASSed in the baseline and now FAILs makes
+    the gate fail (exit 1)."""
+    rc = _run_main(
+        monkeypatch, tmp_path,
+        # band [0.0, 0.3]; "totally wrong" → WER 1.0 → FAIL now.
+        fixtures=[("a", "hello world", 0.0, 0.3)],
+        transcripts={"a": "totally wrong text"},
+        baseline_entries=[("a", True, 0.10)],
+        extra_argv=["--fail-on-regression"],
+    )
+    assert rc == 1
+
+
+def test_fail_on_regression_exit_0_when_no_regression(monkeypatch, tmp_path):
+    """All fixtures pass and match the baseline → exit 0."""
+    rc = _run_main(
+        monkeypatch, tmp_path,
+        fixtures=[("a", "hello world", 0.0, 0.5)],
+        transcripts={"a": "hello world"},
+        baseline_entries=[("a", True, 0.0)],
+        extra_argv=["--fail-on-regression"],
+    )
+    assert rc == 0
+
+
+def test_fail_on_regression_ignores_preexisting_failure(monkeypatch, tmp_path):
+    """The key semantic: a fixture that was ALREADY failing in the
+    baseline and is STILL failing now is not a regression — exit 0.
+    This is what lets a PR through when it leaves a red corpus no
+    worse than it found it."""
+    rc = _run_main(
+        monkeypatch, tmp_path,
+        # band [0.0, 0.3]; "wrong" → WER 1.0 → FAIL, same as baseline.
+        fixtures=[("a", "hello world", 0.0, 0.3)],
+        transcripts={"a": "wrong"},
+        baseline_entries=[("a", False, 1.0)],
+        extra_argv=["--fail-on-regression"],
+    )
+    assert rc == 0
+
+
+def test_fail_on_regression_improvement_is_exit_0(monkeypatch, tmp_path):
+    """FAIL→PASS is an improvement, never a regression — exit 0."""
+    rc = _run_main(
+        monkeypatch, tmp_path,
+        fixtures=[("a", "hello world", 0.0, 0.5)],
+        transcripts={"a": "hello world"},
+        baseline_entries=[("a", False, 1.0)],
+        extra_argv=["--fail-on-regression"],
+    )
+    assert rc == 0
+
+
+def test_diff_without_flag_keeps_absolute_failure_exit(monkeypatch, tmp_path):
+    """Backward compat: plain --diff (no --fail-on-regression)
+    still exits based on absolute current failures, not regression.
+    Here nothing regressed (baseline already failing) but the
+    fixture fails NOW, so the legacy exit code is 1."""
+    rc = _run_main(
+        monkeypatch, tmp_path,
+        fixtures=[("a", "hello world", 0.0, 0.3)],
+        transcripts={"a": "wrong"},
+        baseline_entries=[("a", False, 1.0)],
+        extra_argv=None,
+    )
+    assert rc == 1
+
+
+def test_fail_on_regression_mixed_one_regressed(monkeypatch, tmp_path):
+    """Two fixtures: one stays passing, one regresses → exit 1.
+    A single regression anywhere fails the gate."""
+    rc = _run_main(
+        monkeypatch, tmp_path,
+        fixtures=[
+            ("a", "hello world", 0.0, 0.5),
+            ("b", "good morning", 0.0, 0.3),
+        ],
+        transcripts={"a": "hello world", "b": "totally different stuff"},
+        baseline_entries=[("a", True, 0.0), ("b", True, 0.10)],
+        extra_argv=["--fail-on-regression"],
+    )
+    assert rc == 1
