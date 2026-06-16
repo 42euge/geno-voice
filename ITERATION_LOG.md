@@ -12311,3 +12311,101 @@ help because synth itself is the bottleneck.
     per-turn signals without a sustained-run sentinel: LLM
     streaming speed (`llm_first`/`llm_total` ratio) and TTFS
     jitter — either is a candidate 7th instance if a need surfaces.
+
+## iter-142 — LLM-TPS consistency check (7th diversity-check instance)
+
+**Branch:** `iter-142-llm-tps` (merged ff to main, commit `f274aad`)
+**Date:** 2026-06-16
+
+**Goal:** iter-141 closed by signposting LLM streaming speed as a
+candidate 7th diversity-check instance. This lap lands it:
+`llm_tps` (iter-052, LLM stream throughput in tokens/sec measured
+after first token) had a per-turn print and a session-median line
+but no sustained-slow sentinel. A slow LLM stream starves the TTS
+worker — complete sentences arrive too slowly to feed synth-overlap
+— regardless of how fast STT/TTS themselves run. This is the FIRST
+continuous-metric instance with an INVERTED direction: `llm_tps`
+is bigger-is-better, so the "fine" bucket is a HIGH value, flipping
+the boundaries relative to the iter-140/141 RTF bucketers.
+
+**What changed:**
+
+1. **`_llm_tps_bucket(tps)` (new) in `examples/_chat_metrics.py`:**
+   fourth continuous-metric bucketer (after iter-128
+   `_sentence_length_bucket`, iter-140 `_stt_rtf_bucket`, iter-141
+   `_tts_rtf_bucket`). Maps `llm_tps` → `""` (≤0, no measurable
+   stream) / `"fast"` (≥25 tps, the fine state) / `"slow"`
+   (10–25 tps) / `"very_slow"` (<10 tps). Boundaries chosen against
+   iter-052's TPS semantics (local 7B-13B on Apple Silicon land
+   30-80 tps, cloud APIs 20-60 tps). UNLIKE the RTF bucketers, the
+   fine bucket is the HIGH end — the first inverted-direction
+   bucketer in the family.
+
+2. **`_emit_llm_tps_consistency_line(emit, llm_tps_list, threshold=5)`
+   (new):** the 7th diversity-check helper. Filters out `""` and
+   `"fast"` before the scan (the inversion is absorbed entirely by
+   the filter rule — the run-scan stays direction-agnostic), runs
+   iter-116's `_longest_consecutive_run`, fires at threshold 5
+   (same as iter-115/128/140/141). Per-value suggestions: `slow` →
+   "LLM stream lags synth, try a smaller model or fewer context
+   tokens", `very_slow` → "LLM is the dominant bottleneck, try a
+   smaller/quantized model or a faster backend", plus a defensive
+   `else`. Names `iter-052 llm_tps` in the warning text.
+
+3. **Wired into `print_session_summary`** right after the iter-141
+   TTS-RTF sentinel, fed `[m.llm_tps for m in metrics_list]`.
+
+4. **GENO.md diversity-check pattern doc updated atomically:**
+   six→**seven instances** in the header, added the iter-142
+   filter-rule bullet (drops `""` + `"fast"`, with an explicit
+   inversion note), the iter-142 fourth-continuous-metric note
+   under rule 4 (calling out the inverted direction), and iter-142
+   under the threshold-5 convention bullet.
+
+5. **Tests:**
+   - `tests/unit/test_emit_llm_tps_consistency_line.py` (new, +21):
+     mirrors iter-141's matrix but probes the HIGH end as the good
+     state — bucket boundaries (incl. float edges and the ≤0 → `""`
+     defensive path), empty/all-zero suppression, fast-run never
+     fires, at/above/below threshold per bucket, fast-interleave
+     doesn't break a run, phase-change (slow↔very_slow) DOES break
+     a run, custom threshold (3 catches / 10 suppresses),
+     longest-of-multiple, leading-indent + iter-052 attribution
+     formatting, 1000-elem scale sanity.
+   - `tests/unit/test_diversity_pattern_doc.py` (+1 helper in
+     `_DIVERSITY_HELPERS`, iter-142 in `expected_iters`, `7:
+     ("seven instances", "Seven")` in the counts map): the doc-sync
+     sentinel now enforces the seven-instance count.
+
+**Verification:**
+- `python -m pytest tests/unit/test_emit_llm_tps_consistency_line.py
+  tests/unit/test_diversity_pattern_doc.py -q` → **31 passed in 0.11s**.
+- Full unit suite: **1674 passed** (1653 prior + 21 new).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+
+**Notes:**
+- **First inverted-direction continuous bucketer.** The three prior
+  continuous instances (iter-128/140/141) all had a LOW "fine"
+  value. `llm_tps` flips this — and the key design observation is
+  that the inversion lives entirely in the bucketer's boundaries
+  and the filter rule's excluded-set (`"fast"` instead of
+  `"realtime"`). `_longest_consecutive_run` and the warning-emit
+  machinery are unchanged, confirming the run-scan primitive is
+  genuinely direction-agnostic.
+- **The doc-sync sentinel did its job again.** Adding the helper to
+  `_DIVERSITY_HELPERS` red-lit the count/attribution/test-file
+  assertions until GENO.md and the new test file caught up.
+- Next directions:
+  - A `.github/workflows/stt-benchmark.yml` that calls
+    `scripts/ci-gate.sh` on PRs against a committed baseline
+    (carried over from iter-139; needs a committed `baseline.json`
+    and an engine/model choice for CI).
+  - Document the GENO.md diversity-check + extraction patterns in
+    the README so contributors discover them without reading
+    GENO.md (carried over from iter-136).
+  - The diversity-check surface now covers filler, naturalness,
+    barge-phase, sentence-length, stt-rtf, tts-rtf, llm-tps.
+    Remaining per-turn signals without a sustained-run sentinel:
+    TTFS jitter and `streaming_overlap_ratio` (a low-overlap run
+    would flag the iter-008 design failing to mask synth) — either
+    is a candidate 8th instance if a need surfaces.
