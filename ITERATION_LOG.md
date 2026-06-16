@@ -12127,3 +12127,98 @@ iter-139 ships the wrapper so a CI step is a single call.
   - Document the GENO.md diversity-check + extraction patterns in
     the README so contributors discover them without reading
     GENO.md (carried over from iter-136).
+
+## iter-140 — STT-RTF consistency check (5th diversity-check instance)
+
+**Branch:** `iter-140-stt-rtf` (merged ff to main, commit `cb1f69c`)
+**Date:** 2026-06-16
+
+**Goal:** The diversity-check pattern (GENO.md "Session-summary
+diversity-check pattern") had four instances; two prior next-
+directions had drifted toward STT/benchmark CI tooling. This lap
+returns to the session-summary surface and lands the long-
+signposted **5th instance**: a cross-turn sentinel for STT
+real-time factor. The signal already existed (`TurnMetrics.stt_rtf`,
+iter-049) but only as a per-turn print and a session-median line —
+nothing flagged a *sustained* slow streak, which is the symptom of
+an engine/model mismatched to the host hardware.
+
+**What changed:**
+
+1. **`_stt_rtf_bucket(rtf)` (new) in `examples/_chat_metrics.py`:**
+   second continuous-metric bucketer (after iter-128's
+   `_sentence_length_bucket`). Maps `stt_rtf` → `""` (≤0, no
+   measurable STT) / `"realtime"` (<1.0, the fine state) /
+   `"slow"` (1.0–2.0) / `"very_slow"` (>2.0). Boundaries chosen
+   against iter-049's RTF semantics (mlx-whisper on Apple Silicon
+   lands ~0.1–0.3).
+
+2. **`_emit_stt_rtf_consistency_line(emit, stt_rtf_list, threshold=5)`
+   (new):** the 5th diversity-check helper. Filters out `""` and
+   `"realtime"` before the scan, runs iter-116's
+   `_longest_consecutive_run`, fires at threshold 5 (same as
+   iter-115/128 — RTF is a noisy "natural variation is normal"
+   signal). Per-value suggestions: `slow` → "try a smaller model
+   or streaming STT", `very_slow` → "badly mismatched to the
+   hardware (>2x realtime)", plus a defensive `else`. Names
+   `iter-049 stt_rtf` in the warning text so operators can grep
+   the source metric.
+
+3. **Wired into `print_session_summary`** right after the
+   iter-128 sentence-length sentinel, fed
+   `[m.stt_rtf for m in metrics_list]`.
+
+4. **GENO.md diversity-check pattern doc updated atomically:**
+   four→**five instances** in the header, added the iter-140
+   filter-rule bullet (drops `""` + `"realtime"`), the iter-140
+   continuous-metric note under rule 4 (second bucketer), the
+   `slow`/`very_slow` per-value-suggestion mention under rule 5,
+   and iter-140 under the threshold-5 convention.
+
+5. **Tests:**
+   - `tests/unit/test_emit_stt_rtf_consistency_line.py` (new, +21):
+     mirrors iter-128's matrix — bucket boundaries (incl. float
+     edges and the ≤0 → `""` defensive path), empty/all-zero
+     suppression, realtime-run never fires, at/above/below
+     threshold per bucket, realtime-interleave doesn't break a
+     run, phase-change (slow↔very_slow) DOES break a run, custom
+     threshold (3 catches / 10 suppresses), longest-of-multiple,
+     leading-indent + iter-049 attribution formatting, 1000-elem
+     scale sanity.
+   - `tests/unit/test_diversity_pattern_doc.py` (+1 helper in
+     `_DIVERSITY_HELPERS`, iter-140 in `expected_iters`): the
+     doc-sync sentinel now enforces the five-instance count, the
+     helper's existence/callability/test-file-presence, and the
+     iter-140 attribution in GENO.md. This is what forced the
+     GENO.md edits to be atomic with the code.
+
+**Verification:**
+- `python -m pytest tests/unit/test_emit_stt_rtf_consistency_line.py
+  tests/unit/test_diversity_pattern_doc.py -q` → **31 passed in 0.11s**.
+- Full unit suite: **1632 passed** (1611 prior + 21 new).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+
+**Notes:**
+- **The doc-sync sentinel did its job.** Adding the helper to
+  `_DIVERSITY_HELPERS` immediately red-lit four assertions in
+  `test_diversity_pattern_doc.py` (count phrase, helper-name
+  reference, iter attribution, test-file presence) until GENO.md
+  and the new test file caught up — exactly the atomic-update
+  guarantee iter-129/131 built it for.
+- **Second continuous-metric instance confirms the bucket-before-
+  filter sub-pattern.** iter-128 introduced "bucket a float, then
+  treat it like any categorical signal"; iter-140 reuses it
+  verbatim with a different bucketer, so rule 4 is now a
+  two-instance pattern rather than a one-off.
+- Next directions:
+  - A `.github/workflows/stt-benchmark.yml` that calls
+    `scripts/ci-gate.sh` on PRs against a committed baseline
+    (carried over from iter-139; needs a committed `baseline.json`
+    and an engine/model choice for CI).
+  - Document the GENO.md diversity-check + extraction patterns in
+    the README so contributors discover them without reading
+    GENO.md (carried over from iter-136).
+  - A 6th diversity-check candidate: TTS RTF (`tts_rtf`, iter-050)
+    has the same continuous-metric shape and a session-median line
+    but no sustained-slow sentinel — a near-mechanical clone of
+    iter-140 if a need surfaces.
