@@ -15233,3 +15233,87 @@ reset-keeps-position semantics, and the single-source-of-truth share with
     (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
     on a committed `baseline.json`; diversity-check surface paused per
     iter-143/144.
+
+## iter-172 — wire the live `PLAY_CUE` path to the shared cue rotation (backlog #7)
+
+**Branch:** `iter-172-live-cue-rotation` (merged ff to main, commit `c06c47f`)
+**Date:** 2026-06-17
+
+**Goal:** Close the rotation drift on the *silence-driven* cue side. iter-171
+unified the **pure** cue layer (`session/cue_rotation.py`) so `TurnTakingEngine`
+and the mid-speech `BackchannelMonitor` index one `CUE_ROTATION` list — but the
+**live sidecar** (`pipecat_server.py`'s `Broadcaster`), the one place the
+silence-driven `PLAY_CUE` actually reaches a speaker today, never consumed it.
+
+**Why:** Reviewing the live cue path for the named #7 wiring follow-on surfaced
+**two real bugs** in `pipecat_server.py`, both latent because the path needs a
+running pipecat sidecar (absent on the x86_64 runner) to exercise:
+
+1. The decision branch read `decision.action == Action.play_cue` — but the enum
+   member is `PLAY_CUE`. `Action.play_cue` is an **`AttributeError`**, so the
+   cue branch *crashed on every transcript frame* inside `process_frame` (not
+   merely dead — it raised).
+2. `broadcast_cue()` discarded the engine's rotated `decision.cue` and re-picked
+   a **random** cue from a private `CUE_TYPES = ["mhmm", "hmm", "okay", "i_see",
+   "right", "go_on"]` list — dropping the rotation iter-171 unified *and*
+   including cue keys ("hmm", "okay") not in the shared `CUE_ROTATION`.
+
+Rather than fake the absent pipecat dep, the fix lands a pure, file-path-testable
+gate and wires the live path to it — so the silence-driven cue is rotation-correct
+and crash-free now, and the gate is the template the still-blocked mid-speech
+`BackchannelMonitor` → `Broadcaster` wiring will reuse.
+
+**What changed:**
+
+1. **`plan_cue_broadcast(decision, *, trigger_fired=False)`** — new pure,
+   dependency-free function in `session/turn_taking.py`. Returns the cue to play
+   (the engine's **rotated** `decision.cue.cue_type`) or `None` when: the action
+   isn't `PLAY_CUE`, an NLP trigger fired (a continuer would step on a warranted
+   real response), or no cue is attached. Centralizes the gate that was inline
+   (and broken) in the sidecar.
+
+2. **`pipecat_server.py`** now reads
+   `cue_type = plan_cue_broadcast(decision, trigger_fired=trigger.triggered)`
+   and, on a non-`None`, `broadcast_cue(cue_type)` fetches *that* cue. The
+   `/cue/{cue_type}` server endpoint still randomizes the *take* within the
+   cue's bank, so the agent doesn't sound identical each time it plays the same
+   continuer — but *which* continuer is now the engine's rotation, not a coin
+   flip. The private `CUE_TYPES` list is deleted; `Action` is no longer imported
+   (the gate moved into the seam).
+
+**+8 tests** (`tests/unit/test_plan_cue_broadcast.py`, new file, loads
+`turn_taking` by file path into a synthetic `session` namespace like
+`test_turn_decider.py` to dodge `session/__init__`'s eager pipecat import):
+PLAY_CUE returns the rotated cue; the `Action.play_cue` typo raises (regression
+pin); a fired trigger suppresses; every non-PLAY_CUE action returns None;
+PLAY_CUE without a cue returns None; default `trigger_fired` allows; the cue
+tracks the shared rotation not a private list; and an end-to-end engine test
+that consecutive backchannel-tier decisions rotate through `CUE_ROTATION` and
+wrap.
+
+**Discoverability:** iter-172 findings-log entry + backlog #7 row update in
+`docs/research/organic-turn-taking.md`; README Research section names
+`plan_cue_broadcast`, the two fixed live-path bugs, and the single-source-of-truth
+share with `CUE_ROTATION`.
+
+**Verification:**
+- `python -m pytest tests/unit/test_plan_cue_broadcast.py -q` → **8 passed**.
+- Full unit suite (in worktree, pre-merge): **2337 passed** (2329 prior + 8).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `python -W error::SyntaxWarning -m py_compile pipecat_server.py
+  session/turn_taking.py` clean.
+
+**Notes:**
+- Next directions:
+  - **Mid-speech live cue wiring for #7** — the silence-driven path is now
+    rotation-correct; the remaining piece is feeding `BackchannelMonitor.observe`
+    from `pipecat_server.py`'s `Broadcaster` so a well-timed mid-speech pause
+    emits a cue *during* long user speech (not only on trailing silence), playing
+    `decision.cue_type` via `broadcast_cue`. `plan_cue_broadcast` is the template.
+    Still blocked on the absent pipecat dep on the x86_64 runner.
+  - **Live barge-path wiring for #5** — `should_abandon_turn` (iter-152) into the
+    `mic_chat` barge path; blocked on no transcript at VAD-trigger time.
+  - Carried over (off-track): the CI workflow
+    (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
+    on a committed `baseline.json`; diversity-check surface paused per
+    iter-143/144.
