@@ -282,7 +282,19 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   `max_merge_depth` cap (iter-157, default 8) bounds how many continuations a
   held pending may absorb before it is force-emitted — a backstop so a
   pathological unfinished-forever STT stream can't starve the engine; it sits
-  well above any realistic conversation, so it never fires in practice.
+  well above any realistic conversation, so it never fires in practice. Built
+  on top: the **cross-turn aggregator** (`session/utterance_aggregator.py`,
+  `tests/unit/test_utterance_aggregator.py`, iter-158) — the buffer's
+  `offer(text, gap_secs)` needs the inter-utterance silence gap, which the
+  buffer deliberately never measures (no clock reads). `UtteranceAggregator`
+  owns the one scalar of state the buffer can't — the previous utterance's
+  endpoint timestamp — and `offer(text, speech_start_at, speech_end_at)`
+  derives `gap_secs` from the speech timestamps the recorder already surfaces,
+  routes through the buffer, and returns an `AggregatedResult` (turns, held,
+  and the measured `gap_secs`). This keeps the eventual live STT-loop wiring a
+  thin driver: it hands the aggregator the two timestamps and feeds the
+  returned turns to the engine. With a default config the aggregator is the
+  same transparent passthrough as the buffer beneath it.
 - **[Performance metrics taxonomy](docs/perf-metrics-taxonomy.md)** — a
   catalog of metrics worth instrumenting on a local-first voice agent.
 
