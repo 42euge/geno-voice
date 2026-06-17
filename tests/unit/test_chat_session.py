@@ -1138,3 +1138,227 @@ def test_real_half_duplex_aggregator_never_strands():
         aggregator=agg,
     )
     assert state.stranded_utterance is None
+
+
+# ---- iter-169: speak a flushed mid-session fragment as its own turn --------
+
+
+class _RespondFn:
+    """Stub for the injected respond_fn (ChatLoop.respond_to_text shape).
+
+    Records each (messages-snapshot, text) call. By default returns a result
+    carrying a fresh _StubMetrics and appends a user+assistant message pair to
+    `messages` (mirroring respond_to_text's history mutation), so the session
+    bookkeeping has something real to fold in.
+    """
+
+    def __init__(self, *, had_error=False, metrics_none=False, raise_exc=False):
+        self.calls: list[tuple] = []
+        self._had_error = had_error
+        self._metrics_none = metrics_none
+        self._raise = raise_exc
+        self.metrics_made: list = []
+
+    def __call__(self, messages, text):
+        self.calls.append((list(messages), text))
+        if self._raise:
+            raise RuntimeError("respond boom")
+        if self._had_error:
+            return SimpleNamespace(metrics=None, had_error=True,
+                                   next_primed_frames=None)
+        if self._metrics_none:
+            return SimpleNamespace(metrics=None, had_error=False,
+                                   next_primed_frames=None)
+        m = _StubMetrics()
+        self.metrics_made.append(m)
+        # respond_to_text appends user + assistant to history on success.
+        messages.append({"role": "user", "content": text})
+        messages.append({"role": "assistant", "content": "ok"})
+        return SimpleNamespace(metrics=m, had_error=False,
+                               next_primed_frames=None)
+
+
+def _flushing_agg(text="I was thinking about the"):
+    return _StubAggregatorWithPending(
+        pending=text,
+        flush_result=_StubFlushResult(turns=[_StubEmittedTurn(text)], held=None),
+    )
+
+
+def test_flushed_fragment_spoken_when_respond_fn_wired():
+    """A mid-session flush + a wired respond_fn SPEAKS the fragment: respond_fn
+    is called with the flushed text, the spoken turn is counted (metrics
+    printed, all_metrics appended, turn counter advanced)."""
+    agg = _flushing_agg()
+    respond = _RespondFn()
+    captured_turns: list[int] = []
+    loop = _StubChatLoop(queue=[
+        _StubResult(metrics=None, idle_timed_out=True),
+        _StubResult(metrics=_StubMetrics()),  # a normal mic turn after
+    ])
+    state = run_session(
+        loop, "p", log=_silent,
+        prompt_log=lambda t: captured_turns.append(t),
+        trim_messages=_stub_trim,
+        aggregator=agg, idle_timeout=5.0, flush_decider=lambda h, s: True,
+        respond_fn=respond,
+    )
+    # The fragment was both recorded AND spoken.
+    assert state.flushed_utterances == ["I was thinking about the"]
+    assert len(respond.calls) == 1
+    assert respond.calls[0][1] == "I was thinking about the"
+    # The spoken flush counts as a real turn: its metrics printed under turn 1,
+    # appended to all_metrics alongside the later mic turn (2 total).
+    assert len(state.all_metrics) == 2
+    assert respond.metrics_made[0].printed_turns == [1]
+    # idle_timeout turn did NOT consume the prompt counter, but the spoken turn
+    # advanced it: prompt [1] (idle), then mic turn sees [2], queue-empty KI [3].
+    assert captured_turns == [1, 2, 3]
+    assert state.idle_timeouts == 1
+
+
+def test_flushed_fragment_recorded_not_spoken_without_respond_fn():
+    """No respond_fn (default) ⇒ the fragment is recorded on flushed_utterances
+    but NOT spoken — byte-for-byte the pre-iter-169 path."""
+    agg = _flushing_agg()
+    loop = _StubChatLoop(queue=[_StubResult(metrics=None, idle_timed_out=True)])
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+        aggregator=agg, idle_timeout=5.0, flush_decider=lambda h, s: True,
+        # respond_fn omitted (None)
+    )
+    assert state.flushed_utterances == ["I was thinking about the"]
+    assert state.all_metrics == []  # nothing spoken
+
+
+def test_respond_fn_not_called_when_nothing_flushed():
+    """A HOLD decision (nothing flushed) never calls respond_fn, even when one
+    is wired."""
+    agg = _flushing_agg()
+    respond = _RespondFn()
+    loop = _StubChatLoop(queue=[_StubResult(metrics=None, idle_timed_out=True)])
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+        aggregator=agg, idle_timeout=5.0, flush_decider=lambda h, s: False,
+        respond_fn=respond,
+    )
+    assert state.flushed_utterances == []
+    assert respond.calls == []
+
+
+def test_spoken_flush_appends_to_conversation_history():
+    """The spoken flush threads the SAME messages list through respond_fn, so
+    the user+assistant pair it appends persists into state.messages."""
+    agg = _flushing_agg("the meeting is at three")
+    respond = _RespondFn()
+    loop = _StubChatLoop(queue=[_StubResult(metrics=None, idle_timed_out=True)])
+    state = run_session(
+        loop, "sys", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+        aggregator=agg, idle_timeout=5.0, flush_decider=lambda h, s: True,
+        respond_fn=respond,
+    )
+    assert state.messages == [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "the meeting is at three"},
+        {"role": "assistant", "content": "ok"},
+    ]
+
+
+def test_spoken_flush_llm_error_counts_as_llm_error():
+    """respond_fn returning had_error counts the spoken flush as an LLM error
+    and does NOT advance the turn counter — mirrors the mic-turn error path.
+    The fragment is still recorded on flushed_utterances."""
+    agg = _flushing_agg()
+    respond = _RespondFn(had_error=True)
+    loop = _StubChatLoop(queue=[_StubResult(metrics=None, idle_timed_out=True)])
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+        aggregator=agg, idle_timeout=5.0, flush_decider=lambda h, s: True,
+        respond_fn=respond,
+    )
+    assert state.flushed_utterances == ["I was thinking about the"]
+    assert state.llm_errors == 1
+    assert state.all_metrics == []
+
+
+def test_spoken_flush_respond_fn_exception_swallowed():
+    """A respond_fn that RAISES must not break the live loop: counted as an
+    llm_error, the fragment stays recorded, the session returns normally."""
+    agg = _flushing_agg()
+    respond = _RespondFn(raise_exc=True)
+    loop = _StubChatLoop(queue=[_StubResult(metrics=None, idle_timed_out=True)])
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+        aggregator=agg, idle_timeout=5.0, flush_decider=lambda h, s: True,
+        respond_fn=respond,
+    )
+    assert state.flushed_utterances == ["I was thinking about the"]
+    assert state.llm_errors == 1
+    assert state.all_metrics == []
+
+
+def test_spoken_flush_metrics_none_records_nothing():
+    """respond_fn returning metrics=None (declined to produce a turn) records
+    no metrics and leaves the turn counter alone — the fragment stays only on
+    flushed_utterances."""
+    agg = _flushing_agg()
+    respond = _RespondFn(metrics_none=True)
+    loop = _StubChatLoop(queue=[_StubResult(metrics=None, idle_timed_out=True)])
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+        aggregator=agg, idle_timeout=5.0, flush_decider=lambda h, s: True,
+        respond_fn=respond,
+    )
+    assert state.flushed_utterances == ["I was thinking about the"]
+    assert state.llm_errors == 0
+    assert state.all_metrics == []
+
+
+def test_spoken_flush_runs_trim_after_turn():
+    """The spoken flush runs trim_messages like any completed turn — an
+    eviction increments the trim counters."""
+    agg = _flushing_agg()
+    respond = _RespondFn()
+
+    def _evicting_trim(messages, max_user_assistant):
+        # Drop the oldest non-system message to force one eviction.
+        if len(messages) > 2:
+            return messages[:1] + messages[2:]
+        return messages
+
+    loop = _StubChatLoop(queue=[_StubResult(metrics=None, idle_timed_out=True)])
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent,
+        trim_messages=_evicting_trim,
+        aggregator=agg, idle_timeout=5.0, flush_decider=lambda h, s: True,
+        respond_fn=respond,
+    )
+    assert state.trim_events == 1
+    assert state.trim_messages_evicted == 1
+
+
+def test_real_organic_flush_spoken_end_to_end():
+    """End-to-end with the REAL aggregator + decider AND a respond_fn: the held
+    fragment is flushed mid-session and spoken as its own turn."""
+    UtteranceAggregator, FullDuplexConfig = _load_real_aggregator()
+    should_flush = _load_real_silence_flush()
+
+    config = FullDuplexConfig(enabled=True, utterance_merging=True)
+    agg = UtteranceAggregator(config=config)
+    agg.offer("I was about to", speech_start_at=10.0, speech_end_at=11.0)
+    assert agg.pending == "I was about to"
+
+    decider = lambda held, silence: should_flush(
+        held_text=held, silence_secs=silence, config=config,
+    )
+    respond = _RespondFn()
+    loop = _StubChatLoop(queue=[_StubResult(metrics=None, idle_timed_out=True)])
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+        aggregator=agg, idle_timeout=5.0, flush_decider=decider,
+        respond_fn=respond,
+    )
+    assert state.flushed_utterances == ["I was about to"]
+    assert respond.calls and respond.calls[0][1] == "I was about to"
+    assert len(state.all_metrics) == 1  # the spoken flush turn
+    assert state.stranded_utterance is None

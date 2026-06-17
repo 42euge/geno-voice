@@ -385,6 +385,13 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
         # both None in half-duplex so the proven path is unchanged.
         idle_timeout=idle_timeout,
         flush_decider=flush_decider,
+        # iter-169: speak a flushed mid-session fragment as its own turn via
+        # ChatLoop.respond_to_text (iter-168). Wired only in organic mode — the
+        # same gate as flush_decider, so half-duplex never speaks a flush (it
+        # never holds). None there keeps the proven path byte-for-byte.
+        respond_fn=(
+            chat_loop.respond_to_text if flush_decider is not None else None
+        ),
     )
 
     # iter-017 / iter-086: hand the populated SessionState to the

@@ -420,6 +420,21 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   not modified). Wiring `run_session`'s `_maybe_flush_on_idle` to call it (so a
   flushed fragment is spoken, not just listed in `flushed_utterances`) is the
   remaining hop.
+  **Speaking the flushed fragment — #9's mid-session flush, end-to-end**
+  (`run_session`'s `respond_fn` param + `_speak_flushed_fragment` /
+  `_record_completed_turn` helpers, `examples/_chat_session.py`,
+  `tests/unit/test_chat_session.py`, iter-169): the last hop.
+  `_maybe_flush_on_idle` now *returns* the flushed text (`None` whenever nothing
+  was flushed), and `run_session` answers it through an injected `respond_fn`
+  (production binds `ChatLoop.respond_to_text`, gated to organic mode like
+  `flush_decider`). The spoken flush is counted exactly like a mic turn — metrics
+  printed, `all_metrics` appended, turn counter advanced, trim run — via a shared
+  `_record_completed_turn` extracted from the success block. A raising / errored
+  / no-metrics `respond_fn` degrades to the iter-167 record-only behavior
+  (`llm_errors` bumped, fragment still on `flushed_utterances`); `respond_fn=None`
+  (default / half-duplex) keeps that path byte-for-byte. **Backlog #9's
+  mid-session flush is now closed end-to-end: a trailed-off fragment, after a
+  long idle silence, is flushed *and* spoken.**
 - **[Performance metrics taxonomy](docs/perf-metrics-taxonomy.md)** — a
   catalog of metrics worth instrumenting on a local-first voice agent.
 
