@@ -386,6 +386,24 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   byte-for-byte. The last wiring hop — `run_session` reading `idle_timed_out`,
   measuring the inter-turn silence, and driving `should_flush_held_utterance`
   (iter-164) to flush a held fragment mid-session — is the named follow-on.
+  **`run_session` mid-session flush wiring** (`run_session`'s `idle_timeout` +
+  `flush_decider` params, `SessionState.idle_timeouts` + `.flushed_utterances`,
+  `examples/_chat_session.py`, `tests/unit/test_chat_session.py` +
+  `tests/unit/test_flushed_utterances_line.py`, iter-167): the second wiring hop
+  consumes `TurnResult.idle_timed_out`. `run_session` grows an injected
+  `flush_decider(held_text, silence_secs) -> bool` (production binds
+  `should_flush_held_utterance` to the aggregator's own config) and an
+  `idle_timeout` (the recorder window, used only as the `silence_secs` fed to the
+  decider — `run_session` reads no clock itself). On an idle-timeout turn it bumps
+  a separate `SessionState.idle_timeouts` counter (so enabling a timeout never
+  inflates the false-trigger rate) and `_maybe_flush_on_idle` flushes a held
+  mid-thought fragment when the decider says so, recording the released text on
+  `SessionState.flushed_utterances` + a "Flushed uttr." summary line — the
+  mid-session-idle analog of iter-160's shutdown strand and iter-162's displaced
+  fragments. Half-duplex wires neither param so the wait-forever path is unchanged.
+  Records but does not yet *respond* to the fragment — a `ChatLoop` text-only
+  response entrypoint (`run_one_turn` always records from the mic first) is the
+  named follow-on.
 - **[Performance metrics taxonomy](docs/perf-metrics-taxonomy.md)** — a
   catalog of metrics worth instrumenting on a local-first voice agent.
 

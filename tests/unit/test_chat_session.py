@@ -38,6 +38,10 @@ class _StubResult:
     # in this offer (abandoned, surfaced separately, not glued onto the
     # response). Defaults empty so the legacy path is unchanged.
     displaced: tuple = ()
+    # iter-166: the recorder's pre-speech idle timeout fired on this turn
+    # (the user stayed silent for the whole inter-turn window). Defaults
+    # False so the legacy no-metrics path is unchanged.
+    idle_timed_out: bool = False
 
 
 class _StubMetrics:
@@ -695,6 +699,424 @@ def test_real_organic_aggregator_strands_held_fragment_on_exit():
     )
     assert state.stranded_utterance == "I was about to"
     # Flush reset the buffer's cross-turn state.
+    assert agg.pending is None
+
+
+# ---- iter-167: idle-timeout handling + mid-session flush ------------------
+
+
+class _StubAggregatorWithPending:
+    """Aggregator stub exposing ``pending`` and a canned ``flush()``.
+
+    Mirrors the real ``UtteranceAggregator`` surface ``_maybe_flush_on_idle``
+    touches: a ``pending`` property (the held text) and ``flush()`` returning a
+    duck-typed result with ``.turns`` / ``.held``."""
+
+    def __init__(self, pending=None, flush_result=None, raise_on_flush=False):
+        self._pending = pending
+        self._flush_result = flush_result
+        self._raise = raise_on_flush
+        self.flush_calls = 0
+
+    @property
+    def pending(self):
+        return self._pending
+
+    def flush(self):
+        # Idempotent like the real aggregator: a flush clears the pending, so a
+        # SECOND flush (run_session always flushes again on shutdown — the
+        # iter-160 path) releases nothing. This lets a test distinguish a
+        # MID-SESSION flush (records on flushed_utterances) from the shutdown
+        # flush (records on stranded_utterance).
+        self.flush_calls += 1
+        if self._raise:
+            raise RuntimeError("boom")
+        if self._pending is None or not self._pending.strip():
+            return _StubFlushResult(turns=[], held=None)
+        self._pending = None
+        return self._flush_result
+
+
+def test_idle_timeout_increments_idle_timeouts_not_false_triggers():
+    """A no-metrics turn flagged ``idle_timed_out`` is the recorder's
+    pre-speech idle timeout firing — a deliberate inter-turn-silence signal,
+    NOT a VAD misfire. It bumps ``idle_timeouts`` and leaves ``false_triggers``
+    and ``utterances_held`` alone, reusing the turn counter like a false
+    trigger."""
+    loop = _StubChatLoop(queue=[
+        _StubResult(metrics=None, idle_timed_out=True),
+        _StubResult(metrics=_StubMetrics()),
+    ])
+    captured_turns: list[int] = []
+    state = run_session(
+        loop, "p",
+        log=_silent,
+        prompt_log=lambda t: captured_turns.append(t),
+        trim_messages=_stub_trim,
+    )
+    assert state.idle_timeouts == 1
+    assert state.false_triggers == 0
+    assert state.utterances_held == 0
+    assert len(state.all_metrics) == 1
+    assert captured_turns == [1, 1, 2]
+
+
+def test_idle_timeout_held_and_false_trigger_counted_separately():
+    """idle-timeout, held, and genuine false-trigger turns land in three
+    distinct counters — none pollutes another."""
+    loop = _StubChatLoop(queue=[
+        _StubResult(metrics=None, idle_timed_out=True),
+        _StubResult(metrics=None, held=True),
+        _StubResult(metrics=None),  # genuine false trigger
+        _StubResult(metrics=_StubMetrics()),
+    ])
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+    )
+    assert state.idle_timeouts == 1
+    assert state.utterances_held == 1
+    assert state.false_triggers == 1
+
+
+def test_idle_timeout_without_attr_defaults_to_false_trigger():
+    """Back-compat: a result lacking ``idle_timed_out`` (pre-iter-166 shape)
+    is still a false trigger — read defensively via getattr."""
+    ns = SimpleNamespace(
+        metrics=None, had_error=False, next_primed_frames=None,
+    )
+    loop = _StubChatLoop(queue=[ns])
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+    )
+    assert state.idle_timeouts == 0
+    assert state.false_triggers == 1
+
+
+def test_idle_timeouts_and_flushed_default_zero_and_empty():
+    """Defaults: no idle timeouts seen, nothing flushed."""
+    loop = _StubChatLoop(queue=[_StubResult(metrics=_StubMetrics())])
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+    )
+    assert state.idle_timeouts == 0
+    assert state.flushed_utterances == []
+
+
+def test_idle_timeout_no_flush_decider_does_not_flush():
+    """An idle timeout with an aggregator holding a fragment but NO
+    flush_decider wired never flushes MID-SESSION — byte-for-byte the
+    pre-iter-167 path. (The shutdown flush still runs — iter-160 — so the held
+    fragment strands rather than being flushed mid-session.)"""
+    agg = _StubAggregatorWithPending(
+        pending="I was thinking about the",
+        flush_result=_StubFlushResult(
+            turns=[_StubEmittedTurn("I was thinking about the")], held=None,
+        ),
+    )
+    loop = _StubChatLoop(queue=[_StubResult(metrics=None, idle_timed_out=True)])
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+        aggregator=agg,
+        idle_timeout=5.0,
+        # flush_decider omitted (None)
+    )
+    assert state.idle_timeouts == 1
+    assert state.flushed_utterances == []  # nothing flushed mid-session
+    # The shutdown flush (iter-160) released it instead — stranded, not flushed.
+    assert agg.flush_calls == 1
+    assert state.stranded_utterance == "I was thinking about the"
+
+
+def test_idle_timeout_decider_says_flush_records_fragment():
+    """An idle timeout + a held fragment + a decider that says FLUSH
+    releases the fragment and records it on flushed_utterances."""
+    agg = _StubAggregatorWithPending(
+        pending="I was thinking about the",
+        flush_result=_StubFlushResult(
+            turns=[_StubEmittedTurn("I was thinking about the")], held=None,
+        ),
+    )
+    seen: list[tuple] = []
+
+    def decider(held, silence):
+        seen.append((held, silence))
+        return True
+
+    loop = _StubChatLoop(queue=[_StubResult(metrics=None, idle_timed_out=True)])
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+        aggregator=agg, idle_timeout=5.0, flush_decider=decider,
+    )
+    assert state.idle_timeouts == 1
+    assert state.flushed_utterances == ["I was thinking about the"]
+    # Mid-session flush (1) + shutdown flush (2, releases nothing now).
+    assert agg.flush_calls == 2
+    # The decider saw the held text and the idle_timeout as the silence.
+    assert seen == [("I was thinking about the", 5.0)]
+    # Mid-session flush already released it, so nothing strands at shutdown.
+    assert state.stranded_utterance is None
+
+
+def test_idle_timeout_decider_says_hold_does_not_flush():
+    """A decider that says HOLD (e.g. idle_timeout shorter than the merge
+    window) leaves the fragment held — nothing flushed."""
+    agg = _StubAggregatorWithPending(
+        pending="I was thinking about the",
+        flush_result=_StubFlushResult(turns=[], held="I was thinking about the"),
+    )
+    loop = _StubChatLoop(queue=[_StubResult(metrics=None, idle_timed_out=True)])
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+        aggregator=agg, idle_timeout=1.0, flush_decider=lambda h, s: False,
+    )
+    assert state.idle_timeouts == 1
+    assert state.flushed_utterances == []  # HOLD ⇒ no mid-session flush
+    # Only the shutdown flush ran (HOLD short-circuited the mid-session one).
+    assert agg.flush_calls == 1
+
+
+def test_idle_timeout_nothing_held_does_not_flush():
+    """An idle timeout with the aggregator holding nothing never calls the
+    decider or flush — there is nothing to flush."""
+    agg = _StubAggregatorWithPending(pending=None)
+    called = []
+    loop = _StubChatLoop(queue=[_StubResult(metrics=None, idle_timed_out=True)])
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+        aggregator=agg, idle_timeout=5.0,
+        flush_decider=lambda h, s: called.append((h, s)) or True,
+    )
+    assert state.idle_timeouts == 1
+    assert state.flushed_utterances == []
+    # Only the shutdown flush ran; the mid-session path bailed (nothing held).
+    assert agg.flush_calls == 1
+    assert called == []  # decider never consulted — nothing held
+
+
+def test_idle_timeout_blank_pending_does_not_flush():
+    """A whitespace-only pending is treated as nothing held."""
+    agg = _StubAggregatorWithPending(pending="   ")
+    loop = _StubChatLoop(queue=[_StubResult(metrics=None, idle_timed_out=True)])
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+        aggregator=agg, idle_timeout=5.0, flush_decider=lambda h, s: True,
+    )
+    assert state.flushed_utterances == []
+    # Mid-session path bailed (blank pending); only the shutdown flush ran.
+    assert agg.flush_calls == 1
+
+
+def test_idle_timeout_none_idle_timeout_feeds_inf_silence():
+    """When idle_timeout is None (caller didn't tell run_session the
+    recorder's window) the decider is fed inf silence — the timeout
+    demonstrably fired, so let the decider's own gate decide."""
+    agg = _StubAggregatorWithPending(
+        pending="held bit",
+        flush_result=_StubFlushResult(
+            turns=[_StubEmittedTurn("held bit")], held=None,
+        ),
+    )
+    seen: list[tuple] = []
+    loop = _StubChatLoop(queue=[_StubResult(metrics=None, idle_timed_out=True)])
+    run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+        aggregator=agg, idle_timeout=None,
+        flush_decider=lambda h, s: seen.append((h, s)) or True,
+    )
+    assert seen == [("held bit", float("inf"))]
+
+
+def test_idle_timeout_no_aggregator_does_not_flush():
+    """An idle timeout with no aggregator wired just counts — no flush."""
+    loop = _StubChatLoop(queue=[_StubResult(metrics=None, idle_timed_out=True)])
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+        idle_timeout=5.0, flush_decider=lambda h, s: True,
+    )
+    assert state.idle_timeouts == 1
+    assert state.flushed_utterances == []
+
+
+def test_idle_timeout_flush_releasing_blank_records_nothing():
+    """A flush that releases only blank text collapses (resolve_turn
+    respond=False) — nothing recorded even though flush was called."""
+    agg = _StubAggregatorWithPending(
+        pending="held bit",
+        flush_result=_StubFlushResult(turns=[_StubEmittedTurn("   ")], held=None),
+    )
+    loop = _StubChatLoop(queue=[_StubResult(metrics=None, idle_timed_out=True)])
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+        aggregator=agg, idle_timeout=5.0, flush_decider=lambda h, s: True,
+    )
+    # Mid-session flush (1, blank → resolve_turn respond=False) + shutdown (2).
+    assert agg.flush_calls == 2
+    assert state.flushed_utterances == []
+
+
+def test_idle_timeout_decider_exception_swallowed():
+    """A misbehaving decider must not crash the live loop — treated as HOLD,
+    nothing flushed, the session continues."""
+    agg = _StubAggregatorWithPending(
+        pending="held bit",
+        flush_result=_StubFlushResult(
+            turns=[_StubEmittedTurn("held bit")], held=None,
+        ),
+    )
+
+    def boom(held, silence):
+        raise RuntimeError("decider blew up")
+
+    loop = _StubChatLoop(queue=[
+        _StubResult(metrics=None, idle_timed_out=True),
+        _StubResult(metrics=_StubMetrics()),
+    ])
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+        aggregator=agg, idle_timeout=5.0, flush_decider=boom,
+    )
+    assert state.idle_timeouts == 1
+    assert state.flushed_utterances == []  # decider raised ⇒ no mid-session flush
+    # The decider raised before any mid-session flush; only the shutdown flush
+    # ran (releasing the still-held fragment as stranded).
+    assert agg.flush_calls == 1
+    assert state.stranded_utterance == "held bit"
+    # The completed turn still landed.
+    assert len(state.all_metrics) == 1
+
+
+def test_idle_timeout_flush_exception_swallowed():
+    """A misbehaving aggregator.flush() must not crash the loop — swallowed,
+    nothing recorded, the session continues."""
+    agg = _StubAggregatorWithPending(pending="held bit", raise_on_flush=True)
+    loop = _StubChatLoop(queue=[
+        _StubResult(metrics=None, idle_timed_out=True),
+        _StubResult(metrics=_StubMetrics()),
+    ])
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+        aggregator=agg, idle_timeout=5.0, flush_decider=lambda h, s: True,
+    )
+    assert state.idle_timeouts == 1
+    assert state.flushed_utterances == []
+    # Mid-session flush raised (1, caught); shutdown flush raised too (2, caught).
+    assert agg.flush_calls == 2
+    assert state.stranded_utterance is None
+    assert len(state.all_metrics) == 1
+
+
+def test_multiple_idle_flushes_accumulate_in_order():
+    """Two idle-timeout turns each flushing a fragment accumulate on
+    flushed_utterances in order."""
+    class _MultiAgg:
+        def __init__(self):
+            self._pendings = ["first frag", "second frag"]
+            self._results = [
+                _StubFlushResult(turns=[_StubEmittedTurn("first frag")]),
+                _StubFlushResult(turns=[_StubEmittedTurn("second frag")]),
+            ]
+            self.flush_calls = 0
+
+        @property
+        def pending(self):
+            return self._pendings[self.flush_calls] if (
+                self.flush_calls < len(self._pendings)
+            ) else None
+
+        def flush(self):
+            # The shutdown flush (iter-160) calls once more after the two
+            # mid-session flushes; return an empty result then.
+            if self.flush_calls >= len(self._results):
+                self.flush_calls += 1
+                return _StubFlushResult(turns=[], held=None)
+            r = self._results[self.flush_calls]
+            self.flush_calls += 1
+            return r
+
+    agg = _MultiAgg()
+    loop = _StubChatLoop(queue=[
+        _StubResult(metrics=None, idle_timed_out=True),
+        _StubResult(metrics=None, idle_timed_out=True),
+    ])
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+        aggregator=agg, idle_timeout=5.0, flush_decider=lambda h, s: True,
+    )
+    assert state.idle_timeouts == 2
+    assert state.flushed_utterances == ["first frag", "second frag"]
+
+
+def _load_real_silence_flush():
+    """Load session.silence_flush by path (same eager-pipecat dodge as
+    _load_real_aggregator)."""
+    import importlib.util
+    session_dir = ROOT / "session"
+    spec = importlib.util.spec_from_file_location(
+        "session.silence_flush", session_dir / "silence_flush.py",
+    )
+    sf = importlib.util.module_from_spec(spec)
+    sf.__package__ = "session"
+    spec.loader.exec_module(sf)
+    return sf.should_flush_held_utterance
+
+
+def test_real_organic_aggregator_flushes_held_fragment_mid_session():
+    """End-to-end with a REAL organic UtteranceAggregator + the REAL
+    should_flush_held_utterance decider: offer an unfinished fragment (held),
+    then an idle-timeout turn with a long silence flushes it mid-session and
+    records it on flushed_utterances — the held pending is released, not left
+    until shutdown."""
+    UtteranceAggregator, FullDuplexConfig = _load_real_aggregator()
+    should_flush = _load_real_silence_flush()
+
+    config = FullDuplexConfig(enabled=True, utterance_merging=True)
+    agg = UtteranceAggregator(config=config)
+    res = agg.offer("I was about to", speech_start_at=10.0, speech_end_at=11.0)
+    assert res.turns == []  # held
+    assert agg.pending == "I was about to"
+
+    decider = lambda held, silence: should_flush(
+        held_text=held, silence_secs=silence, config=config,
+    )
+    # idle_timeout=5.0 > the 2.0s merge window so the decider flushes.
+    loop = _StubChatLoop(queue=[_StubResult(metrics=None, idle_timed_out=True)])
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+        aggregator=agg, idle_timeout=5.0, flush_decider=decider,
+    )
+    assert state.idle_timeouts == 1
+    assert state.flushed_utterances == ["I was about to"]
+    assert agg.pending is None  # the flush released it mid-session
+    # And nothing was left to strand at shutdown.
+    assert state.stranded_utterance is None
+
+
+def test_real_organic_aggregator_holds_when_idle_timeout_under_window():
+    """An idle_timeout SHORTER than the merge window leaves the real decider
+    saying HOLD — the fragment stays pending, nothing flushed mid-session
+    (it would still strand at shutdown)."""
+    UtteranceAggregator, FullDuplexConfig = _load_real_aggregator()
+    should_flush = _load_real_silence_flush()
+
+    config = FullDuplexConfig(enabled=True, utterance_merging=True)
+    agg = UtteranceAggregator(config=config)
+    agg.offer("I was about to", speech_start_at=10.0, speech_end_at=11.0)
+    assert agg.pending == "I was about to"
+
+    decider = lambda held, silence: should_flush(
+        held_text=held, silence_secs=silence, config=config,
+    )
+    # idle_timeout=1.0 < 2.0s merge window ⇒ HOLD.
+    loop = _StubChatLoop(queue=[_StubResult(metrics=None, idle_timed_out=True)])
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+        aggregator=agg, idle_timeout=1.0, flush_decider=decider,
+    )
+    assert state.idle_timeouts == 1
+    assert state.flushed_utterances == []  # HOLD ⇒ no mid-session flush
+    # The fragment was NOT flushed mid-session; the iter-160 shutdown flush
+    # then released it as stranded (so pending is cleared by that final flush).
+    assert state.stranded_utterance == "I was about to"
     assert agg.pending is None
 
 

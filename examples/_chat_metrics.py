@@ -1636,6 +1636,43 @@ def _emit_displaced_utterances_line(emit, displaced) -> None:
             emit(f"                      {frag!r}")
 
 
+def _emit_flushed_utterances_line(emit, flushed) -> None:
+    """iter-167: surface mid-thought fragments the organic
+    ``UtteranceAggregator`` flushed *mid-session* on a long inter-turn idle
+    silence.
+
+    Backlog #9's hold-and-merge driver (iter-156) holds an utterance that looks
+    unfinished, waiting for a quick continuation to merge on. Before iter-167
+    that pending could only ever resolve when the NEXT utterance arrived
+    (iter-162's displaced path) or at shutdown (iter-160's ``stranded_utterance``).
+    The one case neither reached is the user who trails off mid-thought and then
+    says *nothing* for a long beat. iter-165's recorder idle timeout + iter-166's
+    ``idle_timed_out`` flag let ``run_session`` notice that silence; iter-164's
+    ``decide_silence_flush`` (wired here via an injected decider) decides to give
+    up waiting and flush the fragment to the engine as its own turn. The flushed
+    text is recorded on ``state.flushed_utterances`` so this line surfaces it.
+
+    Suppressed (the overwhelmingly common case) when nothing was flushed: no
+    aggregator wired in, no ``flush_decider`` configured, no idle timeout fired,
+    or half-duplex mode (which never holds). A clean session never sees it.
+    """
+    frags = [f.strip() for f in (flushed or []) if f and f.strip()]
+    if not frags:
+        return
+    if len(frags) == 1:
+        emit(
+            f"    Flushed uttr.:    {frags[0]!r} "
+            f"(trailed off, flushed on idle silence mid-session — iter-167)"
+        )
+    else:
+        emit(
+            f"    Flushed uttr.:    {len(frags)} fragments flushed "
+            f"on idle silence mid-session — iter-167:"
+        )
+        for frag in frags:
+            emit(f"                      {frag!r}")
+
+
 def _emit_wer_line(emit, wer_values: list[float]) -> None:
     """iter-105: report median + max WER across turns where a
     reference transcript was supplied. Suppressed when no turn
@@ -2470,6 +2507,13 @@ class SessionMeta:
     # mid-session analog of ``stranded_utterance`` — surfaced rather than
     # silently glued onto the response. Empty for the common case.
     utterances_displaced: list[str] = field(default_factory=list)
+    # iter-167: mid-thought fragments the organic aggregator flushed
+    # mid-session on a long inter-turn idle silence (the recorder's iter-165
+    # idle timeout fired, and iter-164's ``decide_silence_flush`` chose FLUSH).
+    # The mid-session-idle analog of ``stranded_utterance`` (shutdown) and
+    # ``utterances_displaced`` (new-thought displacement). Empty for the common
+    # case — no idle timeout wired, no flush decider, or half-duplex.
+    flushed_utterances: list[str] = field(default_factory=list)
 
 
 def print_session_summary(
@@ -2545,6 +2589,8 @@ def print_session_summary(
             utterances_held=meta.utterances_held,
             # iter-162: displaced mid-thought fragments — SessionMeta-only.
             utterances_displaced=meta.utterances_displaced,
+            # iter-167: mid-session idle-flushed fragments — SessionMeta-only.
+            flushed_utterances=meta.flushed_utterances,
         )
     else:
         meta_eff = SessionMeta(
@@ -2566,6 +2612,8 @@ def print_session_summary(
     utterances_held = meta_eff.utterances_held
     # iter-162: mid-thought fragments displaced by a genuinely-new thought.
     utterances_displaced = meta_eff.utterances_displaced
+    # iter-167: mid-thought fragments flushed mid-session on idle silence.
+    flushed_utterances = meta_eff.flushed_utterances
 
     def _emit(line: str = "") -> None:
         if file is None:
@@ -2593,6 +2641,11 @@ def print_session_summary(
         # complete zero turns (each abandoned fragment rode in on a turn
         # whose new utterance was itself then held). Surface them too.
         _emit_displaced_utterances_line(_emit, utterances_displaced)
+        # iter-167: likewise a zero-turn session can flush a fragment on an
+        # inter-turn idle silence — the user trailed off, stayed silent past
+        # the idle window, the fragment was flushed, then they quit before
+        # speaking a completed turn. Surface it before the early return.
+        _emit_flushed_utterances_line(_emit, flushed_utterances)
         _emit()
         return
 
@@ -3086,6 +3139,9 @@ def print_session_summary(
     # iter-162: surface mid-thought fragments the aggregator released
     # alongside a responded turn (suppressed unless any were displaced).
     _emit_displaced_utterances_line(_emit, utterances_displaced)
+    # iter-167: surface mid-thought fragments flushed mid-session on a long
+    # inter-turn idle silence (suppressed unless any were flushed).
+    _emit_flushed_utterances_line(_emit, flushed_utterances)
     # iter-058: error rate per stage. LLM errors are session-level
     # (kill the turn outright); worker errors are per-turn (partial
     # turn — some sentences synthed, others raised). Show only when

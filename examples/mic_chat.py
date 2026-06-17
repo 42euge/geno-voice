@@ -306,7 +306,32 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
     # a device running the live chat.
     from session.full_duplex import full_duplex_config_from_env
     from session.utterance_aggregator import UtteranceAggregator
-    aggregator = UtteranceAggregator(config=full_duplex_config_from_env())
+    full_duplex_config = full_duplex_config_from_env()
+    aggregator = UtteranceAggregator(config=full_duplex_config)
+    # iter-167: mid-session long-silence flush (backlog #9, wiring hop 2).
+    # The recorder's pre-speech idle timeout (iter-165) lets run_session notice
+    # a long inter-turn pause; iter-164's decide_silence_flush decides whether
+    # to flush a held mid-thought fragment then. Both only matter when utterance
+    # merging is on (half-duplex never holds), so wire the idle_timeout (chat
+    # config, default the merge window) and the flush decider ONLY in organic
+    # mode — half-duplex keeps the proven wait-forever recorder path byte-for-
+    # byte. The decider is bound to the same config the aggregator runs with so
+    # its half-duplex gate + max_gap_secs window agree with the buffer.
+    idle_timeout = None
+    flush_decider = None
+    if full_duplex_config.utterance_merging_active():
+        from session.silence_flush import should_flush_held_utterance
+        from session.utterance_merging import DEFAULT_MAX_GAP_SECS
+        raw_idle = chat_cfg.get("idle_timeout", DEFAULT_MAX_GAP_SECS)
+        try:
+            idle_timeout = float(raw_idle)
+            if idle_timeout <= 0:
+                idle_timeout = DEFAULT_MAX_GAP_SECS
+        except (TypeError, ValueError):
+            idle_timeout = DEFAULT_MAX_GAP_SECS
+        flush_decider = lambda held, silence: should_flush_held_utterance(
+            held_text=held, silence_secs=silence, config=full_duplex_config,
+        )
     chat_loop = ChatLoop(
         aggregator=aggregator,
         mic=mic,
@@ -325,6 +350,9 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
         idle_threshold=filler_idle_threshold,
         aggressive_first_sentence=aggressive_first_sentence,
         auto_aggressive_threshold=auto_aggressive_threshold,
+        # iter-167: pre-speech idle timeout on the recorder (iter-165),
+        # wired only in organic mode (None in half-duplex = wait forever).
+        idle_timeout=idle_timeout,
     )
 
     # iter-110: main turn loop + KeyboardInterrupt handler moved
@@ -352,6 +380,11 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
         # iter-160: hand run_session the same aggregator so it can flush
         # a held mid-thought fragment on shutdown (otherwise stranded).
         aggregator=aggregator,
+        # iter-167: the recorder's idle-timeout window (used as the
+        # silence_secs fed to the decider) and the flush decision itself,
+        # both None in half-duplex so the proven path is unchanged.
+        idle_timeout=idle_timeout,
+        flush_decider=flush_decider,
     )
 
     # iter-017 / iter-086: hand the populated SessionState to the
@@ -380,6 +413,9 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
                 # iter-162: mid-thought fragments the aggregator released
                 # alongside a responded turn (abandoned, not glued on).
                 utterances_displaced=state.utterances_displaced,
+                # iter-167: mid-thought fragments flushed mid-session on a
+                # long inter-turn idle silence (backlog #9 wiring hop 2).
+                flushed_utterances=state.flushed_utterances,
             ),
         )
     finally:
