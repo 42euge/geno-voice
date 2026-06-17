@@ -233,6 +233,7 @@ output discoverable from README" discipline. Local only.
 | 6 | **Adopt pipecat `smart-turn`** — replace #2's heuristic body with the smart-turn model inside `pipecat_server.py`'s pipeline; same `turn_decider` interface. Measure false-endpoint rate vs silence-only baseline on recorded sessions. | High | TODO (blocked on model + Apple Silicon) |
 | 7 | **Agent backchannel emission timing** — a learned/heuristic "good moment to backchannel" signal (Krisp-style) feeding the existing `PLAY_CUE` path, so the agent emits continuers *during* long user speech, not only on silence. | Medium | **DONE iter-153** (decision seam `decide_backchannel_timing`; cue-path wiring is the follow-on) |
 | 8 | **Naturalness metrics for the organic path** — extend `TurnMetrics` / session-summary with false-endpoint rate and continuer-detection counts so the track is measured, not asserted. | Medium | **DONE iter-154** (`false_endpoint` + `continuers_detected` `TurnMetrics` fields; `_emit_organic_block` summary block; populating them from the live organic path is the follow-on) |
+| 9 | **Utterance buffer-merge** (Section 4's second half) — a pure `decide_utterance_continuation(prev_text, next_text, gap_secs)` that, when a silence endpoint fires on *unfinished*-looking text and a continuation arrives within the pause window, returns `MERGE` (the endpoint was a false positive — user paused mid-thought) vs `NEW`. Composes #4's `utterance_completeness` + #3's gate. Repairs the false endpoints #8 measures. | Medium | **DONE iter-155** (decision seam `decide_utterance_continuation`; STT-loop wiring is the follow-on) |
 
 ---
 
@@ -532,3 +533,58 @@ output discoverable from README" discipline. Local only.
   by resumed speech, and when `decide_barge_action` returns `FINISH`); or wire
   the still-pending `should_abandon_turn` (iter-152) / `should_emit_backchannel`
   (iter-153) seams into `mic_chat`.
+
+### iter-155 (2026-06-16) — utterance buffer-merge decision (#9, Section 4's 2nd half)
+
+- **Shipped backlog #9** — `session/utterance_merging.py`, the pure decision
+  seam for the *other* half of Section 4 ("Utterance queueing"). #5 (iter-152)
+  covered abandon-vs-finish on the agent side; this covers **buffer/merge**
+  on the user side: when a silence endpoint fires on unfinished-looking text
+  and a continuation arrives within the pause window, the prior endpoint was a
+  **false positive** (the user paused mid-thought, "I was thinking about the…
+  [pause] …deadline"). `decide_utterance_continuation(prev_text, next_text,
+  gap_secs)` returns `MERGE` (glue the two into one turn) or `NEW` (a genuine
+  new turn). Convenience boolean `should_merge_utterance`.
+- **Composes two shipped seams:** `text_eou.utterance_completeness` (#4,
+  iter-150) scores the prior text's incompleteness; `FullDuplexConfig` (#3,
+  iter-151) gates the behavior off by default. Added a fourth sub-flag
+  `utterance_merging` (+ `GENO_FULL_DUPLEX_UTTERANCE_MERGING` env var,
+  `utterance_merging_active()`, folded into `any_active()`).
+- **Two gates, both required (organic mode only).** A merge needs (1) a *quick*
+  gap (`gap_secs <= max_gap_secs`, default 2.0s — the `turn_decider`
+  silence-floor "a pause, not a turn-end") **and** (2) an *unfinished* prior
+  (`utterance_completeness(prev) <= incomplete_ceiling`, default 0.6 — the
+  `text_eou` complete-threshold). Only the unfinished-AND-quick corner is a
+  false endpoint to repair: a quick gap after a complete sentence is a new
+  thought; an unfinished prior after a long gap is an abandoned one. Both stay
+  `NEW`.
+- **The half-duplex invariant is the whole point.** With a default
+  `FullDuplexConfig()` (`utterance_merging` inactive), `decide_utterance_
+  continuation` returns `NEW` for *every* input — byte-for-byte today's "each
+  endpoint is its own turn" behavior; the prior text isn't even scored. So
+  wiring this into the live STT loop (the follow-on) can never regress the
+  proven half-duplex path.
+- **Asymmetry vs `barge_decision` is deliberate.** There the conservative
+  default is `ABANDON` (stay responsive — never trap a user talking over a
+  droning agent); here it is `NEW` (never glue two genuinely separate turns
+  together). Both err toward today's behavior on ambiguity, but the "safe"
+  direction differs by which failure is worse for each path.
+- **Directly repairs the `false_endpoint` metric #8 (iter-154) added.** That
+  metric *counts* false endpoints; this seam is the decision that would *avoid*
+  them once wired in — the measure and the repair were shipped one lap apart.
+- 29 unit tests (`tests/unit/test_utterance_merging.py`): the half-duplex
+  invariant (default/explicit-default config ⇒ `NEW` across a grid, boolean
+  False); the two organic gates (unfinished+quick merges; conjunction/filler
+  merges; complete-prior, long-gap, and complete+long all `NEW`); boundaries
+  (gap at-max inclusive, just-above exclusive, zero; completeness at-ceiling
+  inclusive via comma=0.6, above-ceiling `NEW`); empty/blank/empty-prior
+  continuation; sub-flag resolution (master-off+sub-on, master-on+sub-off);
+  custom `max_gap_secs` / `incomplete_ceiling` / `eou_config`; purity
+  (no input/config mutation, keyword-only config, distinct enum values,
+  defaults match sibling seams, boolean matches decide). Plus 8 new
+  `test_full_duplex.py` cases for the fourth sub-flag.
+- **Next:** wire `should_merge_utterance` into the live STT loop (hold the
+  just-finalized text + its silence gap, merge the next chunk before feeding
+  the turn engine, and set `TurnMetrics.false_endpoint` when a merge fires —
+  closing the iter-154 metric's live-population loop); or wire the still-pending
+  `should_abandon_turn` (iter-152) / `should_emit_backchannel` (iter-153) seams.

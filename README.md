@@ -249,7 +249,24 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   held). Both default off and stay zero on the half-duplex path, so the
   block is fully suppressed and today's summaries are byte-for-byte
   unchanged; the track becomes *measured, not asserted* once the seams
-  are wired in.
+  are wired in. Also shipped: the **utterance buffer-merge decision**
+  (`session/utterance_merging.py`,
+  `tests/unit/test_utterance_merging.py`) — the *user*-side half of
+  utterance queueing that complements the agent-side abandon-vs-finish
+  decision. `decide_utterance_continuation(prev_text, next_text,
+  gap_secs, *, config)` returns `MERGE` / `NEW`: when a silence endpoint
+  fires on *unfinished*-looking text (`text_eou` completeness ≤ 0.6) and
+  a continuation arrives within the pause window (gap ≤ 2.0s, the
+  `turn_decider` silence-floor), the prior endpoint was a **false
+  positive** — the user paused mid-thought ("…about the [pause]
+  …deadline") — so the two are glued into one turn. Both gates must hold;
+  a quick gap after a complete sentence or an unfinished prior after a
+  long gap both stay `NEW`. Gated behind `utterance_merging_active()`
+  (the fourth `FullDuplexConfig` sub-flag,
+  `GENO_FULL_DUPLEX_UTTERANCE_MERGING`): with a default config it returns
+  `NEW` for every input, byte-for-byte today's "each endpoint is its own
+  turn" behavior. This is the decision that *avoids* the false endpoints
+  the iter-154 `false_endpoint` metric *counts*.
 - **[Performance metrics taxonomy](docs/perf-metrics-taxonomy.md)** — a
   catalog of metrics worth instrumenting on a local-first voice agent.
 

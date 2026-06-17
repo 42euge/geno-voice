@@ -39,6 +39,7 @@ FALSY = _fd.FALSY
 ENV_FULL_DUPLEX = _fd.ENV_FULL_DUPLEX
 ENV_CONTINUER_AWARE = _fd.ENV_CONTINUER_AWARE
 ENV_AGENT_BACKCHANNELS = _fd.ENV_AGENT_BACKCHANNELS
+ENV_UTTERANCE_MERGING = _fd.ENV_UTTERANCE_MERGING
 
 
 # ---- parse_bool_flag ---------------------------------------------------------
@@ -99,11 +100,13 @@ class TestDefaultIsHalfDuplex:
         cfg = FullDuplexConfig()
         assert cfg.continuer_aware_listening is None
         assert cfg.agent_backchannels is None
+        assert cfg.utterance_merging is None
 
     def test_default_all_active_resolve_false(self):
         cfg = FullDuplexConfig()
         assert cfg.continuer_aware_listening_active() is False
         assert cfg.agent_backchannels_active() is False
+        assert cfg.utterance_merging_active() is False
         assert cfg.any_active() is False
 
     def test_is_frozen(self):
@@ -120,6 +123,7 @@ class TestInheritLogic:
         cfg = FullDuplexConfig(enabled=True)
         assert cfg.continuer_aware_listening_active() is True
         assert cfg.agent_backchannels_active() is True
+        assert cfg.utterance_merging_active() is True
         assert cfg.any_active() is True
 
     def test_subflag_true_overrides_master_off(self):
@@ -142,10 +146,28 @@ class TestInheritLogic:
             enabled=True,
             continuer_aware_listening=False,
             agent_backchannels=False,
+            utterance_merging=False,
         )
         assert cfg.continuer_aware_listening_active() is False
         assert cfg.agent_backchannels_active() is False
+        assert cfg.utterance_merging_active() is False
         assert cfg.any_active() is False
+
+    def test_utterance_merging_subflag_independent(self):
+        # Master off, only utterance-merging forced on.
+        cfg = FullDuplexConfig(enabled=False, utterance_merging=True)
+        assert cfg.utterance_merging_active() is True
+        assert cfg.continuer_aware_listening_active() is False
+        assert cfg.agent_backchannels_active() is False
+        # any_active picks up the lone merging flag.
+        assert cfg.any_active() is True
+
+    def test_utterance_merging_held_back_with_master_on(self):
+        cfg = FullDuplexConfig(enabled=True, utterance_merging=False)
+        assert cfg.utterance_merging_active() is False
+        # Other behaviors still inherit the master.
+        assert cfg.continuer_aware_listening_active() is True
+        assert cfg.any_active() is True
 
 
 # ---- full_duplex_config_from_env ---------------------------------------------
@@ -209,6 +231,30 @@ class TestFromEnv:
         assert cfg.enabled is False
         assert cfg.continuer_aware_listening_active() is True
         assert cfg.agent_backchannels_active() is False
+
+    def test_utterance_merging_flag_on(self):
+        cfg = full_duplex_config_from_env({ENV_UTTERANCE_MERGING: "yes"})
+        assert cfg.enabled is False
+        assert cfg.utterance_merging_active() is True
+        assert cfg.continuer_aware_listening_active() is False
+
+    def test_master_on_enables_utterance_merging(self):
+        cfg = full_duplex_config_from_env({ENV_FULL_DUPLEX: "1"})
+        assert cfg.utterance_merging_active() is True
+        assert cfg.utterance_merging is None  # inherits, not coerced
+
+    def test_utterance_merging_held_back_via_env(self):
+        cfg = full_duplex_config_from_env(
+            {ENV_FULL_DUPLEX: "true", ENV_UTTERANCE_MERGING: "off"}
+        )
+        assert cfg.enabled is True
+        assert cfg.utterance_merging_active() is False
+        assert cfg.continuer_aware_listening_active() is True
+
+    def test_bad_utterance_merging_value_names_flag(self):
+        with pytest.raises(ValueError) as exc:
+            full_duplex_config_from_env({ENV_UTTERANCE_MERGING: "maybe"})
+        assert ENV_UTTERANCE_MERGING in str(exc.value)
 
     def test_returns_frozen_config(self):
         cfg = full_duplex_config_from_env({ENV_FULL_DUPLEX: "1"})

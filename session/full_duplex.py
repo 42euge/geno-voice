@@ -45,6 +45,7 @@ __all__ = [
     "ENV_FULL_DUPLEX",
     "ENV_CONTINUER_AWARE",
     "ENV_AGENT_BACKCHANNELS",
+    "ENV_UTTERANCE_MERGING",
 ]
 
 #: Recognized truthy / falsy env-var spellings (case-insensitive, trimmed).
@@ -58,6 +59,7 @@ FALSY: frozenset[str] = frozenset({"0", "false", "no", "off", "n", "f", ""})
 ENV_FULL_DUPLEX = "GENO_FULL_DUPLEX"
 ENV_CONTINUER_AWARE = "GENO_FULL_DUPLEX_CONTINUER_AWARE"
 ENV_AGENT_BACKCHANNELS = "GENO_FULL_DUPLEX_AGENT_BACKCHANNELS"
+ENV_UTTERANCE_MERGING = "GENO_FULL_DUPLEX_UTTERANCE_MERGING"
 
 
 def parse_bool_flag(value: str | None, *, name: str = "flag") -> bool | None:
@@ -103,6 +105,7 @@ class FullDuplexConfig:
     enabled: bool = False
     continuer_aware_listening: bool | None = None
     agent_backchannels: bool | None = None
+    utterance_merging: bool | None = None
 
     def _resolve(self, sub_flag: bool | None) -> bool:
         """Effective value of a sub-flag: itself if set, else the master."""
@@ -123,6 +126,15 @@ class FullDuplexConfig:
         """
         return self._resolve(self.agent_backchannels)
 
+    def utterance_merging_active(self) -> bool:
+        """True iff a freshly-endpointed utterance whose text looks unfinished
+        should be *merged* with a quick follow-on utterance (the previous
+        endpoint was a false positive — the user paused mid-thought and
+        resumed) rather than treated as two separate turns. Backlog #4's
+        second half (utterance queueing / buffer-merge) consumes this.
+        """
+        return self._resolve(self.utterance_merging)
+
     def any_active(self) -> bool:
         """True iff *any* organic behavior is effectively on. A cheap guard
         for call sites that only need 'are we doing anything organic at all?'
@@ -131,6 +143,7 @@ class FullDuplexConfig:
         return (
             self.continuer_aware_listening_active()
             or self.agent_backchannels_active()
+            or self.utterance_merging_active()
         )
 
 
@@ -140,12 +153,12 @@ def full_duplex_config_from_env(
     """Build a ``FullDuplexConfig`` from environment variables.
 
     Reads ``GENO_FULL_DUPLEX`` (master) and the per-behavior overrides
-    ``GENO_FULL_DUPLEX_CONTINUER_AWARE`` / ``GENO_FULL_DUPLEX_AGENT_BACKCHANNELS``.
-    An unset master defaults to ``False`` (half-duplex); unset sub-flags stay
-    ``None`` so they inherit the master. ``env`` is injected (default
-    ``os.environ``) so the parsing is testable without mutating the process
-    environment. Propagates ``ValueError`` from ``parse_bool_flag`` on an
-    unrecognized value.
+    ``GENO_FULL_DUPLEX_CONTINUER_AWARE`` / ``GENO_FULL_DUPLEX_AGENT_BACKCHANNELS``
+    / ``GENO_FULL_DUPLEX_UTTERANCE_MERGING``. An unset master defaults to
+    ``False`` (half-duplex); unset sub-flags stay ``None`` so they inherit the
+    master. ``env`` is injected (default ``os.environ``) so the parsing is
+    testable without mutating the process environment. Propagates
+    ``ValueError`` from ``parse_bool_flag`` on an unrecognized value.
     """
     if env is None:
         env = os.environ
@@ -157,9 +170,13 @@ def full_duplex_config_from_env(
     backchannels = parse_bool_flag(
         env.get(ENV_AGENT_BACKCHANNELS), name=ENV_AGENT_BACKCHANNELS
     )
+    merging = parse_bool_flag(
+        env.get(ENV_UTTERANCE_MERGING), name=ENV_UTTERANCE_MERGING
+    )
 
     return FullDuplexConfig(
         enabled=bool(master),  # unset master ⇒ off
         continuer_aware_listening=continuer,
         agent_backchannels=backchannels,
+        utterance_merging=merging,
     )
