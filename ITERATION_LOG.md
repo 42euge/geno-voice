@@ -16224,3 +16224,84 @@ catching empty/whitespace/typo/wrong-case/wrong-separator ids at the parser
     the `mic_chat` barge path; blocked on no transcript at VAD-trigger time.
   - Carried over (off-track): the CI workflow still blocked on a committed
     `baseline.json`; diversity-check surface paused per iter-143/144.
+
+## iter-184 — sanity-check `gv --model` (reject empty / whitespace ids) via a `model_type` validator (gv CLI hardening trio complete)
+
+**Branch:** `iter-184-model-validation` (merged ff to main)
+**Date:** 2026-06-17
+
+**Goal:** Close the last unvalidated knob on the `gv` CLI, completing the
+hardening trio iter-182 (`--speed`) and iter-183 (`--voice`) began. `--model` is
+the broadest of the three string inputs — every subcommand (`bench`, `stream`,
+`talk`, `chat`) accepts it and forwards it raw to the STT engine
+(`run_*` → `WhisperEngine(model_repo=...)` / `mic_bench`). An empty string, a
+whitespace-only value, or an accidental `"  tiny"` / `"large v3"` all sailed
+through `add_argument("--model", default=...)` unchecked. This lap adds a
+`model_type` argparse validator so the parser rejects the obvious garbage with
+the usual `SystemExit(2)` before it reaches model load.
+
+**Why:** iter-183's next direction named `--model` as the remaining raw
+pass-through (flagged lower priority — a bad model id fails loudly at load,
+unlike speed/voice which silently degrade synthesis). The key design call is the
+inverse of iter-183's: **no grammar to validate against.** `--model` legitimately
+accepts short aliases (`tiny`, `large-v3`), full HF repo ids
+(`mlx-community/whisper-large-v3-turbo`), and local filesystem paths — three
+unrelated shapes with no shared format. A strict format check (like `voice_type`'s
+regex) would wrongly reject valid inputs. So `model_type` validates only the one
+property *every* valid form agrees on: a model id is a non-empty token with no
+surrounding or embedded whitespace. That catches empty / whitespace-only / space-
+bearing garbage at the parser (a clear
+`error: argument --model: model must not contain whitespace, got 'large v3'`)
+while leaving model *existence* to lazy load-time resolution, exactly as before.
+
+**What changed:**
+
+1. **`examples/gv.py`** — new pure `model_type(raw)` argparse `type` callable:
+   raises `argparse.ArgumentTypeError` (→ `SystemExit(2)`) on a non-string,
+   empty, or whitespace-only value (message: "model must be a non-empty id"),
+   and on any value with leading/trailing or embedded whitespace (message:
+   "model must not contain whitespace", naming the bad value). All four
+   subcommands' `--model` args switch from bare `add_argument` to
+   `type=model_type`. Anything well-formed (alias, repo id, or path) passes
+   through unchanged. A module docstring block explains the "no single grammar,
+   so validate only non-empty + no-whitespace" design contrast with iter-182/183.
+
+2. **`tests/unit/test_gv_cli.py`** — 29 new test cases (parametrize expansion):
+   `model_type` accepts 9 well-formed forms (aliases, version suffixes, the
+   default repo id, third-party repos, absolute + relative local paths); rejects
+   empty / whitespace-only (4 forms) and whitespace-bearing ids (6 forms incl.
+   leading/trailing/embedded space, tab, newline); both error messages name the
+   value / fault; and end-to-end parser checks across **all four** commands —
+   a whitespace `--model` exits 2, a well-formed alias parses. Existing
+   `--model`-override tests (`test_model_override_all_commands`,
+   `test_cmd_bench_*`) still hold (all use well-formed ids).
+
+**Verification:**
+- `python -m pytest tests/unit/test_gv_cli.py -q` → **93 passed** (64 prior + 29
+  new test cases).
+- Full unit suite (in worktree, pre-merge): **2482 passed** (2453 prior + 29).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `python -W error::SyntaxWarning -m py_compile examples/gv.py
+  tests/unit/test_gv_cli.py` clean.
+- Manual CLI check: `gv bench --model ''` → exit 2 ("must be a non-empty id");
+  `gv talk --model 'large v3'` → exit 2 ("must not contain whitespace");
+  `gv stream --model tiny` passes the parser and reaches load (the load-time
+  traceback is the expected lazy failure, not a validation rejection).
+- Drift check: confirmed `model_type` rejects `""`, `"  "`, `" tiny"`,
+  `"large v3"` and accepts `tiny`, the default repo id, and a local path.
+- (`tests/test_session.py` still errors on collection — `ModuleNotFoundError:
+  pipecat` — pre-existing on main, not a regression.)
+
+**Notes:**
+- The `gv` CLI's garbage-in surface is now fully closed: `--speed` (numeric,
+  iter-182), `--voice` (format, iter-183), and `--model` (non-empty/no-whitespace,
+  this lap) all reject malformed input at the parser. Next directions:
+  - **Live mid-speech cue wiring for #7** — feed the VAD frames to a
+    `BackchannelDriver` in `pipecat_server.py`'s `Broadcaster`, `broadcast_cue`
+    on emit, surface `driver.emit_count` into the
+    `SessionMeta.backchannels_emitted` slot (iter-175). Still blocked only on
+    the absent pipecat dep on the x86_64 runner.
+  - **Live barge-path wiring for #5** — `should_abandon_turn` (iter-152) into
+    the `mic_chat` barge path; blocked on no transcript at VAD-trigger time.
+  - Carried over (off-track): the CI workflow still blocked on a committed
+    `baseline.json`; diversity-check surface paused per iter-143/144.
