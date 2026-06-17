@@ -84,8 +84,11 @@ class BackchannelTimingConfig:
         territory; hand it to the silence-driven ``PLAY_CUE`` path instead of
         emitting a *mid-speech* backchannel. Default 2.0s — exactly
         ``turn_decider.py``'s ``silence_floor_secs`` ("a pause, not a
-        turn-end"), so the two backchannel paths partition the silence axis
-        with no overlap.
+        turn-end") and ``monologue_clock.py``'s ``reset_gap_secs``, so the two
+        backchannel paths partition the silence axis with no overlap. That
+        cross-module equality is pinned by
+        ``tests/unit/test_shared_silence_floor_invariant.py`` (iter-179) against
+        the sibling modules themselves, not a hardcoded ``2.0``.
     """
 
     min_speaking_before_first_cue_secs: float = 15.0

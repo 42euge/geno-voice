@@ -15818,3 +15818,85 @@ slot with no signal anywhere. This lap makes that drift a red test instead.
     the `mic_chat` barge path; blocked on no transcript at VAD-trigger time.
   - Carried over (off-track): the CI workflow still blocked on a committed
     `baseline.json`; diversity-check surface paused per iter-143/144.
+
+## iter-179 — the shared clause-pause/turn-end scalar invariant: pin `reset_gap_secs == max_pause_secs == silence_floor_secs` cross-module (#7 hardening)
+
+**Branch:** `iter-179-shared-floor-invariant` (merged ff to main)
+**Date:** 2026-06-17
+
+**Goal:** Pin the invariant the organic stack's docstrings repeatedly assert
+but no test enforced — that the clause-pause/turn-end boundary is **one shared
+scalar** across three modules (`turn_decider.py`'s `silence_floor_secs`,
+`backchannel_timing.py`'s `max_pause_secs`, `monologue_clock.py`'s
+`reset_gap_secs`, all 2.0s) — against the **sibling modules themselves**,
+replacing the per-module hardcoded-`2.0` checks that could drift just as easily
+as the thing they were guarding. The direct analog of iter-178's
+`CUE_ROTATION ⊆ CUE_BANK` lap, applied to the shared silence scalar.
+
+**Why:** All three modules' docstrings claim the same thing — e.g.
+`monologue_clock.py`: "default 2.0s — exactly `backchannel_timing.py`'s
+`max_pause_secs` and `turn_decider.py`'s `silence_floor_secs`, so the
+clause-pause/turn-end boundary is one shared scalar across the whole organic
+stack and the three paths can't drift." The scalar exists to keep the two
+backchannel paths from overlapping: below it a gap is a clause pause (the
+monologue continues, the mid-speech `BackchannelMonitor` may emit); at/above it
+the gap is turn-end territory the silence-driven `PLAY_CUE` path owns. **But
+nothing tested the cross-module equality.** Each module's own suite only
+asserted its default `== 2.0` against a *hardcoded literal*
+(`test_config_defaults_match_shared_silence_floor` in test_monologue_clock,
+`test_max_pause_equals_turn_decider_floor` in test_backchannel_timing) — itself
+a hand-maintained mirror, the exact trap iter-178 removed from the cue guard.
+Retuning `silence_floor_secs` to 2.5 (a plausible "endpoint a touch later"
+tweak) would leave the clock still resetting at 2.0 and the backchannel window
+still closing at 2.0, **silently** reopening the [2.0, 2.5) band where *both*
+paths fire — and every per-module `== 2.0` test would stay green, because none
+looks at a sibling. This lap makes that drift a red test.
+
+**What changed:**
+
+1. **`tests/unit/test_shared_silence_floor_invariant.py`** (new) — 5 tests that
+   assert the three defaults equal *each other*, derived from the modules
+   (loaded by file path into a stub `session` namespace, like the siblings),
+   not from a literal:
+   - `test_clock_reset_gap_equals_turn_decider_silence_floor`
+   - `test_backchannel_max_pause_equals_turn_decider_silence_floor`
+   - `test_backchannel_max_pause_equals_clock_reset_gap` (pairwise, to localize
+     a failure to the right pair)
+   - `test_all_three_defaults_are_one_shared_scalar` (three-way headline; also
+     pins the module-level `DEFAULT_SILENCE_FLOOR_SECS`)
+   - `test_shared_scalar_is_currently_two_seconds` (records the present value so
+     an *intentional* retune is a deliberate edit to this test, not a silent
+     change — distinct from the equality tests, which guarantee the three move
+     together).
+
+2. **Docstring cross-references** added in all three modules
+   (`session/monologue_clock.py`, `session/backchannel_timing.py`,
+   `session/turn_decider.py`) and the **README** Research section, each naming
+   the iter-179 guard so the "can't drift" claim points at its enforcing test.
+
+**Verification:**
+- `python -m pytest tests/unit/test_shared_silence_floor_invariant.py -q` →
+  **5 passed**.
+- Confirmed the invariant catches drift: setting
+  `DEFAULT_SILENCE_FLOOR_SECS = 2.5` turns **4 of the 5 red** (the
+  max-pause==clock-reset pair correctly stays green — those two didn't move
+  relative to each other, so the failure localizes to the floor), then restored.
+- Full unit suite (in worktree, pre-merge): **2402 passed** (2397 prior + 5).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `python -W error::SyntaxWarning -m py_compile session/monologue_clock.py
+  session/backchannel_timing.py session/turn_decider.py
+  tests/unit/test_shared_silence_floor_invariant.py` clean.
+- (`tests/test_session.py` still errors on collection — `ModuleNotFoundError:
+  pipecat` — pre-existing on main, not a regression.)
+
+**Notes:**
+- Next directions:
+  - **Live mid-speech cue wiring for #7** — feed the VAD frames to a
+    `BackchannelDriver` in `pipecat_server.py`'s `Broadcaster`, `broadcast_cue`
+    on emit, surface `driver.emit_count` into the
+    `SessionMeta.backchannels_emitted` slot (iter-175). Still blocked only on
+    the absent pipecat dep on the x86_64 runner.
+  - **Live barge-path wiring for #5** — `should_abandon_turn` (iter-152) into
+    the `mic_chat` barge path; blocked on no transcript at VAD-trigger time.
+  - Carried over (off-track): the CI workflow still blocked on a committed
+    `baseline.json`; diversity-check surface paused per iter-143/144.

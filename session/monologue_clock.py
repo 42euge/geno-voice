@@ -75,7 +75,11 @@ class MonologueClockConfig:
     same monologue continues. Default 2.0s — exactly
     ``backchannel_timing.py``'s ``max_pause_secs`` and ``turn_decider.py``'s
     ``silence_floor_secs``, so the clause-pause/turn-end boundary is one shared
-    scalar across the whole organic stack and the three paths can't drift.
+    scalar across the whole organic stack and the three paths can't drift. That
+    cross-module equality is pinned by
+    ``tests/unit/test_shared_silence_floor_invariant.py`` (iter-179) against the
+    sibling modules themselves, not a hardcoded ``2.0``, so retuning one default
+    without the others fails the test instead of silently reopening the overlap.
     """
 
     reset_gap_secs: float = 2.0

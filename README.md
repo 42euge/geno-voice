@@ -284,7 +284,10 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   can't compute itself — `monologue_start_at` (a speech run that **survives**
   brief clause-boundary pauses and resets only on a `stop → start` gap
   ≥ `reset_gap_secs`, default 2.0s = `backchannel_timing.py`'s `max_pause_secs`
-  = `turn_decider.py`'s `silence_floor_secs`, one shared scalar) and
+  = `turn_decider.py`'s `silence_floor_secs`, one shared scalar — pinned by
+  `tests/unit/test_shared_silence_floor_invariant.py` (iter-179) against the
+  sibling modules themselves so retuning one default without the others fails
+  the test instead of silently reopening the clause-pause/turn-end overlap) and
   `pause_secs(now)` (the live within-speech gap, zero while speaking). So a
   long monologue accumulates `user_speaking_secs` across its clause pauses (the
   warm-up gate eventually clears) and the monitor emits exactly in the

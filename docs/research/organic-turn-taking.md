@@ -1773,3 +1773,46 @@ frames to a `BackchannelDriver`, `broadcast_cue` on emit, surface `emit_count`)
 remains the headline follow-on, blocked only on the absent pipecat dep. The
 `should_abandon_turn` (iter-152) → `mic_chat` barge-path wiring remains, blocked
 on no transcript at VAD-trigger time.
+
+### iter-179 (2026-06-17) — the shared clause-pause/turn-end scalar invariant (#7 hardening)
+
+- **The gap (an iter-178-shaped one).** Three modules across the organic stack
+  each carry a default that their docstrings repeatedly call *the same scalar* —
+  the single boundary between "a clause-boundary pause (keep going)" and "a
+  turn-end-sized gap (the user yielded the floor)": `turn_decider.py`'s
+  `silence_floor_secs`, `backchannel_timing.py`'s `max_pause_secs`, and
+  `monologue_clock.py`'s `reset_gap_secs`, all 2.0s. The docstrings claim the
+  three "can't drift," but **nothing tested the cross-module equality.** Each
+  module's own suite only asserted its default `== 2.0` against a *hardcoded
+  literal* (`test_config_defaults_match_shared_silence_floor`,
+  `test_max_pause_equals_turn_decider_floor`) — the same hand-maintained-mirror
+  trap iter-178 removed from the cue-rotation guard. Retuning `silence_floor_secs`
+  to 2.5 (a plausible "endpoint a touch later" tweak) would leave the clock
+  resetting at 2.0 and the backchannel window closing at 2.0, **silently**
+  reopening the [2.0, 2.5) band where the mid-speech backchannel path and the
+  silence-driven `PLAY_CUE` path both fire — and every per-module `== 2.0` test
+  would stay green, because none looks at a sibling.
+- **Shipped:** `tests/unit/test_shared_silence_floor_invariant.py` — 5 tests
+  that assert the three defaults are equal *to each other*, derived from the
+  modules themselves (loaded by file path, like the siblings), not from a
+  literal: clock-reset == silence-floor, max-pause == silence-floor, max-pause
+  == clock-reset (pairwise, to localize a failure to the right pair), a
+  three-way "all one shared scalar" headline (also pinning the module-level
+  `DEFAULT_SILENCE_FLOOR_SECS`), and one test that records the present value
+  (2.0s) so an *intentional* retune is a deliberate edit to this test rather
+  than a silent change.
+- **Doc notes** added in all three modules' docstrings (`monologue_clock.py`,
+  `backchannel_timing.py`, `turn_decider.py`) and the README Research section,
+  each naming the iter-179 guard so the "can't drift" claim points at its test.
+- **Verification:** `test_shared_silence_floor_invariant.py` → 5 passed.
+  Confirmed it catches drift: setting `DEFAULT_SILENCE_FLOOR_SECS = 2.5` turns
+  4 of the 5 red (the max-pause==clock-reset pair correctly stays green, since
+  those two didn't move relative to each other — the failure localizes to the
+  floor). Full unit suite 2402 passed (2397 + 5). Integration 30 passed, 1
+  skipped. `py_compile` clean on all three touched modules + the new test.
+
+**Next:** the live `pipecat_server.py` `Broadcaster` wiring for #7 (feed the VAD
+frames to a `BackchannelDriver`, `broadcast_cue` on emit, surface `emit_count`)
+remains the headline follow-on, blocked only on the absent pipecat dep. The
+`should_abandon_turn` (iter-152) → `mic_chat` barge-path wiring remains, blocked
+on no transcript at VAD-trigger time.

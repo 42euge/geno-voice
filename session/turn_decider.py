@@ -39,6 +39,12 @@ __all__ = [
 #: Below this much trailing silence, we assume the user is still mid-thought
 #: (a pause, not a turn-end): confidence floors at 0.0. A natural mid-utterance
 #: pause ("I was thinking… about the deadline") sits under this.
+#:
+#: This is the organic stack's shared clause-pause/turn-end boundary: it equals
+#: ``monologue_clock.py``'s ``reset_gap_secs`` and ``backchannel_timing.py``'s
+#: ``max_pause_secs`` so the three paths can't drift. That cross-module equality
+#: is pinned by ``tests/unit/test_shared_silence_floor_invariant.py`` (iter-179)
+#: against the sibling modules themselves, not a hardcoded ``2.0``.
 DEFAULT_SILENCE_FLOOR_SECS: float = 2.0
 
 #: At/above this much trailing silence, we're as confident as a silence-only
