@@ -15585,3 +15585,73 @@ user-continuer count.
     the `mic_chat` barge path; blocked on no transcript at VAD-trigger time.
   - Carried over (off-track): the CI workflow still blocked on a committed
     `baseline.json`; diversity-check surface paused per iter-143/144.
+
+## iter-176 — `MonologueClock.user_speaking_secs(now)`: completing the accessor trio (#7)
+
+**Branch:** `iter-176-clock-speaking-accessor` (merged ff to main)
+**Date:** 2026-06-17
+
+**Goal:** Give `MonologueClock` (iter-173) the third derived accessor —
+`user_speaking_secs(now)` — so all three quantities `BackchannelMonitor.observe`
+consumes come from one place with consistent None/clamp handling.
+
+**Why:** `BackchannelMonitor.observe(*, now, monologue_start_at, pause_secs)`
+needs *three* derived quantities, and the clock supplied only two. The third —
+`user_speaking_secs = now - monologue_start_at` — was left for every caller to
+recompute by hand. That hand-recompute is **exactly the unguarded subtraction
+that raised the `TypeError` the iter-174 `BackchannelDriver` had to patch
+around**: `monologue_start_at` is `None` until the first speech start (and after
+`reset`), so `now - monologue_start_at` crashes on a no-monologue tick. The
+clock owns `monologue_start_at`, so it is the right home for the guarded,
+skew-clamped derivation — keeping the None guard and the `>= 0` clamp in one
+place rather than duplicated (and forgotten) at each call site. This is a pure,
+fully-unblocked completeness fix on the #7 stack (no pipecat), in the same
+"fold cross-event derivation onto the driver" spirit as the rest of the track.
+
+**What changed:**
+
+1. **`session/monologue_clock.py` — `MonologueClock.user_speaking_secs(now)`**
+   — returns `now - monologue_start_at` clamped `>= 0`, or `0.0` when there is
+   no monologue yet (`monologue_start_at is None`) instead of raising. Measures
+   monologue *length* (keeps counting across a clause-boundary pause), the same
+   quantity the `min_speaking_before_first_cue_secs` warm-up gate checks against.
+
+2. **`session/backchannel_driver.py` — `observe` None-tick short-circuit** now
+   sources `user_speaking_secs` from `self._clock.user_speaking_secs(now)`
+   instead of a magic literal `0.0`. Behavior-preserving (the accessor returns
+   `0.0` on the `None`-start path, so the existing
+   `test_observe_before_any_speech_does_not_crash` assertion still holds) but
+   now indexed to the single source of truth — the clock and the driver can't
+   drift on how a no-monologue tick reports speaking time.
+
+**+7 tests** (`tests/unit/test_monologue_clock.py`): zero before any speech (no
+`TypeError`); grows with the monologue; counts across a clause pause; resets
+with a new monologue; clamps against clock skew; zero after `reset`; keeps
+counting during an unresolved pause.
+
+**Discoverability:** iter-176 findings-log entry in
+`docs/research/organic-turn-taking.md`; README Research section now names the
+clock's `user_speaking_secs(now)` accessor and ties it to the driver's
+former hand-recompute / `TypeError`.
+
+**Verification:**
+- `python -m pytest tests/unit/test_monologue_clock.py
+  tests/unit/test_backchannel_driver.py -q` → **44 passed** (37 prior + 7).
+- Full unit suite (in worktree, pre-merge): **2389 passed** (2382 prior + 7).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `python -W error::SyntaxWarning -m py_compile session/monologue_clock.py
+  session/backchannel_driver.py` clean.
+- (`tests/test_session.py` still errors on collection — `ModuleNotFoundError:
+  pipecat` — pre-existing on main, not a regression.)
+
+**Notes:**
+- Next directions:
+  - **Live mid-speech cue wiring for #7** — feed the VAD frames to a
+    `BackchannelDriver` in `pipecat_server.py`'s `Broadcaster`, `broadcast_cue`
+    on emit, surface `driver.emit_count` into `SessionMeta.backchannels_emitted`
+    (iter-175). Still blocked only on the absent pipecat dep on the x86_64
+    runner.
+  - **Live barge-path wiring for #5** — `should_abandon_turn` (iter-152) into
+    the `mic_chat` barge path; blocked on no transcript at VAD-trigger time.
+  - Carried over (off-track): the CI workflow still blocked on a committed
+    `baseline.json`; diversity-check surface paused per iter-143/144.

@@ -111,6 +111,62 @@ def test_pause_zero_again_after_resuming_speech():
     assert clock.pause_secs(13.0) == 0.0
 
 
+# --- user_speaking_secs: the third derived accessor -------------------------
+
+def test_user_speaking_secs_zero_before_any_speech():
+    # No monologue yet ⇒ 0.0, never a TypeError from ``now - None``.
+    clock = MonologueClock()
+    assert clock.user_speaking_secs(100.0) == 0.0
+
+
+def test_user_speaking_secs_grows_with_monologue():
+    clock = MonologueClock()
+    clock.on_speech_start(10.0)
+    assert clock.user_speaking_secs(16.0) == pytest.approx(6.0)
+
+
+def test_user_speaking_secs_counts_across_a_clause_pause():
+    # The whole point of the monologue clock: speaking time accumulates across
+    # a brief clause-boundary pause (monologue_start_at unchanged).
+    clock = MonologueClock()
+    clock.on_speech_start(10.0)
+    clock.on_speech_stop(11.0)
+    clock.on_speech_start(11.5)  # 0.5s gap < 2.0s ⇒ same monologue
+    assert clock.user_speaking_secs(14.0) == pytest.approx(4.0)
+
+
+def test_user_speaking_secs_resets_with_a_new_monologue():
+    clock = MonologueClock()
+    clock.on_speech_start(10.0)
+    clock.on_speech_stop(12.0)
+    clock.on_speech_start(15.0)  # 3.0s gap >= 2.0s ⇒ new monologue at 15.0
+    assert clock.user_speaking_secs(16.0) == pytest.approx(1.0)
+
+
+def test_user_speaking_secs_clamps_against_clock_skew():
+    # now < monologue_start_at (skew) ⇒ clamped to 0, never negative.
+    clock = MonologueClock()
+    clock.on_speech_start(10.0)
+    assert clock.user_speaking_secs(9.0) == 0.0
+
+
+def test_user_speaking_secs_zero_after_reset():
+    clock = MonologueClock()
+    clock.on_speech_start(10.0)
+    clock.reset()
+    assert clock.user_speaking_secs(20.0) == 0.0
+
+
+def test_user_speaking_secs_keeps_counting_during_a_pause():
+    # The accessor measures monologue length, not active-speech length, so it
+    # keeps growing while the user is paused mid-monologue (the pause hasn't
+    # yet been resolved as a turn-end).
+    clock = MonologueClock()
+    clock.on_speech_start(10.0)
+    clock.on_speech_stop(12.0)
+    assert clock.user_speaking_secs(13.0) == pytest.approx(3.0)
+
+
 # --- clause-boundary pause: monologue CONTINUES -----------------------------
 
 def test_short_gap_continues_monologue():

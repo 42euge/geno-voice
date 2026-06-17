@@ -190,7 +190,7 @@ class BackchannelDriver:
             secs_since = None if last_emit is None else max(0.0, now - last_emit)
             return BackchannelDecision(
                 emit=False,
-                user_speaking_secs=0.0,
+                user_speaking_secs=self._clock.user_speaking_secs(now),
                 pause_secs=self._clock.pause_secs(now),
                 secs_since_last_backchannel=secs_since,
                 cue_type=None,

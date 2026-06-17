@@ -1657,3 +1657,39 @@ VAD frames to a `BackchannelDriver`, `broadcast_cue` on emit, and surface its
 added) remains the headline follow-on, blocked only on the absent pipecat dep.
 The `should_abandon_turn` (iter-152) → `mic_chat` barge-path wiring also
 remains, blocked on no transcript at VAD-trigger time.
+
+### iter-176 (2026-06-17) — `MonologueClock.user_speaking_secs(now)`: the third derived accessor (#7)
+
+- **Shipped:** `MonologueClock.user_speaking_secs(now)` completes the clock's
+  accessor trio. `BackchannelMonitor.observe` consumes *three* derived
+  quantities — `monologue_start_at`, `pause_secs(now)`, and
+  `user_speaking_secs` (`now - monologue_start_at`) — but the clock (iter-173)
+  exposed only the first two, forcing every consumer to recompute the third by
+  hand with a None guard and a skew clamp. That hand-recompute is **exactly the
+  unguarded `now - monologue_start_at` that raised the `TypeError` the iter-174
+  `BackchannelDriver` had to patch around** at its own call site. Folding it
+  onto the clock keeps the None guard (returns `0.0` before any speech / after
+  `reset`, when `monologue_start_at is None`) and the `>= 0` skew clamp in *one*
+  place, mirroring the monitor's own `max(0.0, now - monologue_start_at)`. It
+  measures monologue *length* (keeps counting across a clause-boundary pause),
+  the same quantity the `min_speaking_before_first_cue_secs` warm-up gate checks.
+- **Driver call site rewired:** `BackchannelDriver.observe`'s None-tick
+  short-circuit now sources `user_speaking_secs` from
+  `self._clock.user_speaking_secs(now)` instead of a magic literal `0.0` —
+  behavior-preserving (the accessor returns `0.0` on the `None`-start path) but
+  now indexed to the single source of truth, so the clock and the driver can't
+  drift on how a no-monologue tick reports speaking time.
+- **+7 unit tests** (`tests/unit/test_monologue_clock.py`): zero before any
+  speech (no `TypeError`); grows with the monologue; counts across a clause
+  pause; resets with a new monologue; clamps against clock skew; zero after
+  `reset`; keeps counting during an unresolved pause.
+- **Verification:** `test_monologue_clock.py` + `test_backchannel_driver.py` →
+  44 passed (37 + 7). Full unit suite 2389 passed (2382 + 7). Integration 30
+  passed, 1 skipped. `py_compile session/monologue_clock.py
+  session/backchannel_driver.py` clean.
+
+**Next:** the live `pipecat_server.py` `Broadcaster` wiring for #7 (feed the VAD
+frames to a `BackchannelDriver`, `broadcast_cue` on emit, surface `emit_count`)
+remains the headline follow-on, blocked only on the absent pipecat dep. The
+`should_abandon_turn` (iter-152) → `mic_chat` barge-path wiring remains, blocked
+on no transcript at VAD-trigger time.

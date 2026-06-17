@@ -168,6 +168,30 @@ class MonologueClock:
             return 0.0
         return max(0.0, now - self._last_stop_at)
 
+    def user_speaking_secs(self, now: float) -> float:
+        """How long the current monologue has run: ``now - monologue_start_at``.
+
+        The third quantity ``BackchannelMonitor.observe`` consumes, alongside
+        ``monologue_start_at`` and ``pause_secs`` — and the one every consumer
+        used to recompute by hand. Folding it onto the clock keeps the None
+        guard and the skew clamp in *one* place: it returns ``0.0`` before any
+        speech / after ``reset`` (``monologue_start_at`` is ``None``) rather
+        than raising on ``now - None`` — exactly the ``TypeError`` the iter-174
+        ``BackchannelDriver`` had to patch around at its own call site — and
+        clamps ``>= 0`` against clock skew, mirroring the monitor's own
+        ``max(0.0, now - monologue_start_at)``.
+
+        Note this measures *monologue length*, not active-speech length: it
+        keeps growing through a clause-boundary pause (the monologue continues
+        until a turn-end-sized gap resets ``monologue_start_at``), which is the
+        same quantity the warm-up gate (``min_speaking_before_first_cue_secs``)
+        is checked against.
+        """
+        start = self._monologue_start_at
+        if start is None:
+            return 0.0
+        return max(0.0, now - start)
+
     def reset(self) -> None:
         """Clear all state — no monologue, not speaking, no pending pause.
 

@@ -284,7 +284,11 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   `pause_secs(now)` (the live within-speech gap, zero while speaking). So a
   long monologue accumulates `user_speaking_secs` across its clause pauses (the
   warm-up gate eventually clears) and the monitor emits exactly in the
-  clause-pause window. `session/backchannel_driver.py`
+  clause-pause window. The clock also exposes `user_speaking_secs(now)` — the
+  *third* quantity `observe` consumes (`now - monologue_start_at`) — so the None
+  guard and skew clamp live in one place rather than being recomputed by hand at
+  every call site (the unguarded `now - None` that raised the driver's
+  `TypeError` below). `session/backchannel_driver.py`
   (`tests/unit/test_backchannel_driver.py`) then **composes** the clock and the
   monitor into one `BackchannelDriver` so the live `Broadcaster` wiring is a
   *truly* thin shim — `on_speech_start` / `on_speech_stop` off the VAD frames,
