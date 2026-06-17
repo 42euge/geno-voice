@@ -1,4 +1,5 @@
 import io
+import math
 import struct
 import time
 import wave
@@ -6,6 +7,36 @@ import wave
 RATE = 16000
 SAMPLE_WIDTH = 2
 FRAME_SIZE = RATE * SAMPLE_WIDTH
+
+
+def _require_positive(name: str, value: float) -> float:
+    """Validate that a ``SilenceDetector`` timing/threshold knob is a
+    finite, strictly-positive number.
+
+    Raises :class:`ValueError` on a non-number, ``NaN``/``inf``, or a
+    value ``<= 0``. This mirrors the ``val > 0`` rule that
+    ``examples/_chat_config.parse_vad_config`` applies when it sanitizes
+    the optional ``vad`` config section (iter-033) — but where that
+    parser is *tolerant* (falls back to defaults so a typo'd config can't
+    take down the chat loop), the constructor is *strict*: a caller
+    building a ``SilenceDetector`` directly in code has no defaults to
+    fall back on, and a non-positive ``threshold``/duration would silently
+    break the state machine (e.g. ``silence_duration=0`` emits on the
+    first silent frame; ``threshold<=0`` marks every frame as speech).
+    Fail fast at construction with a message that names the offending
+    knob, the same garbage-in contract the ``gv`` CLI trio established
+    (iter-182 ``--speed`` / iter-183 ``--voice`` / iter-184 ``--model``).
+
+    ``bool`` is rejected explicitly: ``True``/``False`` are ``int``
+    subclasses that would otherwise sail through as ``1``/``0``.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name} must be a number, got {value!r}")
+    if not math.isfinite(value):
+        raise ValueError(f"{name} must be finite, got {value!r}")
+    if value <= 0:
+        raise ValueError(f"{name} must be positive, got {value!r}")
+    return float(value)
 
 
 def make_wav(pcm_bytes: bytes, rate: int = RATE, channels: int = 1, sample_width: int = SAMPLE_WIDTH) -> bytes:
@@ -26,10 +57,19 @@ class SilenceDetector:
         min_chunk_duration: float = 0.5,
         max_chunk_duration: float = 25,
     ):
-        self.threshold = threshold
-        self.silence_duration = silence_duration
-        self.min_chunk_duration = min_chunk_duration
-        self.max_chunk_duration = max_chunk_duration
+        self.threshold = _require_positive("threshold", threshold)
+        self.silence_duration = _require_positive("silence_duration", silence_duration)
+        self.min_chunk_duration = _require_positive("min_chunk_duration", min_chunk_duration)
+        self.max_chunk_duration = _require_positive("max_chunk_duration", max_chunk_duration)
+
+        # max must exceed min, else the max-duration cut would fire on a
+        # buffer the min-duration floor then drops as "too short" — every
+        # emit would silently return None and no chunk would ever surface.
+        if self.max_chunk_duration <= self.min_chunk_duration:
+            raise ValueError(
+                "max_chunk_duration must be greater than min_chunk_duration, "
+                f"got max={self.max_chunk_duration!r} <= min={self.min_chunk_duration!r}"
+            )
 
         self.audio_buffer = bytearray()
         self.silence_start: float | None = None

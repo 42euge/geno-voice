@@ -293,3 +293,90 @@ class TestBufferDuration:
         # FRAME_SIZE is one second of mono 16-bit PCM; buffer_duration divides
         # the byte count by it.
         assert FRAME_SIZE == RATE * SAMPLE_WIDTH
+
+
+# --------------------------------------------------------------------------- #
+# constructor validation (iter-186) — fail fast on garbage knobs              #
+# --------------------------------------------------------------------------- #
+#
+# The detector used to accept any threshold / *_duration (negative, zero, NaN,
+# inf, non-number) without complaint, silently breaking the state machine
+# downstream — flagged as a next-direction in iter-185. The constructor now
+# requires each knob to be a finite, strictly-positive number, and enforces
+# max_chunk_duration > min_chunk_duration. This mirrors the tolerant ``> 0``
+# rule in parse_vad_config (iter-033) but applies it strictly, like the gv CLI
+# garbage-in trio (iter-182/183/184).
+
+# The four positive-number knobs, in constructor order, with their kwarg name.
+_KNOBS = ["threshold", "silence_duration", "min_chunk_duration", "max_chunk_duration"]
+
+
+class TestConstructorValidation:
+    def test_defaults_construct(self):
+        # The no-arg default config is valid and must keep working.
+        d = SilenceDetector()
+        assert d.threshold == pytest.approx(0.02)
+        assert d.silence_duration == pytest.approx(0.8)
+        assert d.min_chunk_duration == pytest.approx(0.5)
+        assert d.max_chunk_duration == pytest.approx(25)
+
+    def test_explicit_valid_config_constructs(self):
+        d = SilenceDetector(
+            threshold=0.1,
+            silence_duration=1.0,
+            min_chunk_duration=0.4,
+            max_chunk_duration=10.0,
+        )
+        assert d.threshold == pytest.approx(0.1)
+        assert d.silence_duration == pytest.approx(1.0)
+        assert d.min_chunk_duration == pytest.approx(0.4)
+        assert d.max_chunk_duration == pytest.approx(10.0)
+
+    def test_int_values_coerced_to_float(self):
+        # Positive ints are accepted and stored as floats.
+        d = SilenceDetector(threshold=1, silence_duration=2, min_chunk_duration=1, max_chunk_duration=3)
+        for knob in _KNOBS:
+            assert isinstance(getattr(d, knob), float)
+
+    @pytest.mark.parametrize("knob", _KNOBS)
+    @pytest.mark.parametrize("bad", [0, 0.0, -1, -0.5])
+    def test_non_positive_rejected(self, knob, bad):
+        with pytest.raises(ValueError, match=knob):
+            SilenceDetector(**{knob: bad})
+
+    @pytest.mark.parametrize("knob", _KNOBS)
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+    def test_non_finite_rejected(self, knob, bad):
+        with pytest.raises(ValueError, match="finite"):
+            SilenceDetector(**{knob: bad})
+
+    @pytest.mark.parametrize("knob", _KNOBS)
+    @pytest.mark.parametrize("bad", ["0.5", None, [1], {}])
+    def test_non_number_rejected(self, knob, bad):
+        with pytest.raises(ValueError, match="must be a number"):
+            SilenceDetector(**{knob: bad})
+
+    @pytest.mark.parametrize("knob", _KNOBS)
+    def test_bool_rejected(self, knob):
+        # bool is an int subclass; True would otherwise pass as 1.0.
+        with pytest.raises(ValueError, match="must be a number"):
+            SilenceDetector(**{knob: True})
+
+    def test_error_message_names_the_knob(self):
+        with pytest.raises(ValueError) as exc:
+            SilenceDetector(silence_duration=-1)
+        assert "silence_duration" in str(exc.value)
+        assert "-1" in str(exc.value)
+
+    def test_max_must_exceed_min(self):
+        with pytest.raises(ValueError, match="greater than min_chunk_duration"):
+            SilenceDetector(min_chunk_duration=5.0, max_chunk_duration=2.0)
+
+    def test_max_equal_to_min_rejected(self):
+        # Equal is also invalid: the cut buffer would be dropped as too-short.
+        with pytest.raises(ValueError, match="greater than min_chunk_duration"):
+            SilenceDetector(min_chunk_duration=3.0, max_chunk_duration=3.0)
+
+    def test_max_just_above_min_accepted(self):
+        d = SilenceDetector(min_chunk_duration=3.0, max_chunk_duration=3.0001)
+        assert d.max_chunk_duration > d.min_chunk_duration
