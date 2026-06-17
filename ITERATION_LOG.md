@@ -14871,3 +14871,90 @@ line, and the spoken-response follow-on.
     (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
     on a committed `baseline.json`; diversity-check surface paused per
     iter-143/144.
+
+## iter-168 — ChatLoop.respond_to_text, the spoken-response hop (backlog #9, last wiring piece)
+
+**Branch:** `iter-168-respond-to-text` (merged ff to main, commit `575773c`)
+**Date:** 2026-06-17
+
+**Goal:** Ship the named follow-on from iter-167 — a `ChatLoop` text-only
+response entrypoint so a flushed mid-thought fragment can be *answered* as its
+own turn, not merely recorded. iter-167 wired `run_session` to flush a held
+fragment on a long inter-turn idle silence and record it on
+`SessionState.flushed_utterances`, but it could only *record* the fragment: the
+sole path into the LLM→TTS machinery was `ChatLoop.run_one_turn`, which always
+records from the mic first. This lap gives the flushed text a path straight into
+the response half.
+
+**Why:** The whole #9 mid-session-flush chain (decision iter-164 → mechanism
+iter-165 → ChatLoop wiring iter-166 → run_session wiring iter-167) deliberately
+stopped short of *responding* to the flushed fragment because `run_one_turn`
+records first. Every lap since iter-167 named the same blocker: the flushed text
+needs a path into the LLM→TTS half of the turn without a mic recording. That
+path is this entrypoint.
+
+**What changed:** `examples/_chat_loop.py`:
+
+1. **Extracted `_stream_response`.** The LLM-stream → synth/play →
+   barge-in-watcher half of `run_one_turn` (everything after Phase 1's record +
+   STT + organic aggregation) is pulled into a private
+   `ChatLoop._stream_response(messages, metrics, *, speech_ended_at, stt_time,
+   turn_start, displaced=())`. Phase-1 locals that leak forward are exactly
+   three (`speech_ended_at`, `stt_time`, `turn_start`) plus `metrics` and
+   `displaced` — confirmed by grep before the cut — so the seam is narrow. The
+   body is **moved, not modified**: the `run_one_turn` path is byte-for-byte the
+   pre-iter-168 inline Phase 2, proven by the unchanged 16-test
+   `test_chat_loop.py` suite still passing.
+
+2. **`respond_to_text(messages, text)`.** The public entrypoint. Strips `text`
+   (blank ⇒ a no-op `TurnResult(metrics=None)` with no history mutation and no
+   speaker opened — flushing an empty fragment is harmless), builds a
+   `TurnMetrics(speech_duration=0.0, model=…)` with `transcript=stripped`,
+   anchors the response-half clocks at `self._clock()` (no recording happened,
+   so TTFS / total_e2e measure from the moment answering starts and
+   `stt_time=0`), and delegates to `_stream_response`. User + assistant messages
+   are appended exactly as a recorded turn would (popped on LLM error), so
+   conversation history stays consistent and the response is spoken through the
+   same worker. `displaced` is always empty — a flushed fragment IS the turn,
+   nothing was displaced by it.
+
+3. **No runtime behavior change yet.** `respond_to_text` has no production call
+   site this lap; `run_session._maybe_flush_on_idle` still only records the
+   flushed fragment. The entrypoint is the deliverable — same
+   decision-seam/mechanism/wiring rhythm as iter-164→165→166→167 (ship one
+   well-scoped layer, leave the next wiring as the explicit follow-on).
+
+**+7 tests** (`tests/unit/test_chat_loop.py`, `TestRespondToText`): answers text
+and updates history (transcript = the fragment, response spoken, `stt_time` /
+`speech_duration` zeroed, audio reached the speaker); strips whitespace; blank
+and empty text are no-ops (no history mutation, no speaker opened); `displaced`
+always empty; LLM error pops the user message leaving history clean; model
+stamped from config. These tests never push mic audio — `respond_to_text`
+bypasses Phase 1 entirely.
+
+**Discoverability:** iter-168 findings-log entry + backlog #9 row update in
+`docs/research/organic-turn-taking.md`; README Research section names
+`ChatLoop.respond_to_text`, the extracted `_stream_response`, the
+no-mic-recording / synthetic-anchor framing, and the `_maybe_flush_on_idle`
+wiring follow-on.
+
+**Verification:**
+- `python -m pytest tests/unit/test_chat_loop.py -q` → **23 passed**
+  (16 prior + 7 net new).
+- Full unit suite (in worktree, pre-merge): **2294 passed** (2287 prior + 7).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `python -W error::SyntaxWarning -m py_compile examples/_chat_loop.py` clean.
+
+**Notes:**
+- Next directions:
+  - **Wire `respond_to_text` into `_maybe_flush_on_idle`** so a mid-session
+    flushed fragment is *spoken* as its own turn, not just listed in
+    `flushed_utterances` — with the turn-counter / metrics-print semantics that
+    implies. That closes backlog #9's mid-session flush end-to-end.
+  - Wire the still-pending `should_abandon_turn` (iter-152) into the `mic_chat`
+    barge path and `should_emit_backchannel` (iter-153) into the live cue path,
+    both behind their full-duplex sub-flags.
+  - Carried over (off-track): the CI workflow
+    (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
+    on a committed `baseline.json`; diversity-check surface paused per
+    iter-143/144.
