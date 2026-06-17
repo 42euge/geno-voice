@@ -16305,3 +16305,80 @@ while leaving model *existence* to lazy load-time resolution, exactly as before.
     the `mic_chat` barge path; blocked on no transcript at VAD-trigger time.
   - Carried over (off-track): the CI workflow still blocked on a committed
     `baseline.json`; diversity-check surface paused per iter-143/144.
+
+## iter-185 — direct unit tests for `vad/silence.py:SilenceDetector` (core VAD state machine, previously untested)
+
+**Branch:** `iter-185-vad-tests` (merged ff to main)
+**Date:** 2026-06-17
+
+**Goal:** Close a long-standing coverage gap flagged as far back as iter-002's
+next-direction note ("the VAD state machine is the most fragile part of the loop
+and currently has zero tests"). The `gv` CLI hardening trio (iter-182 `--speed`,
+iter-183 `--voice`, iter-184 `--model`) is complete and the remaining live-wiring
+directions (#5 barge-path, #7 mid-speech cues) stay blocked on the absent pipecat
+dep on the x86_64 runner — so this lap turns to the most valuable *unblocked*
+increment: the `vad/silence.py:SilenceDetector` class itself had **zero direct
+unit tests**. Only its downstream config wiring was covered
+(`test_vad_config.py`, `test_watcher_vad_threshold.py` exercise
+`parse_vad_config` / threshold forwarding, never the detector). The class is the
+four-way decision at the heart of every turn — "still speaking" vs. "silence
+beat → emit" vs. "max duration → cut" vs. "too short → drop" — and shipped
+untested since the initial commit (`10b9eec`, the only commit ever to touch the
+file).
+
+**Why:** This is the highest-fragility, lowest-coverage surface left in the
+unblocked set. The decision logic in `feed()` is timing-dependent
+(`time.monotonic()` arms and checks the silence-duration window), which is
+exactly why it had been skipped — but the barge-in coordinator tests already
+established the fake-monotonic-clock pattern (`test_bargein_coordinator_clock.py`),
+so the timing branch is testable deterministically without real time or audio
+hardware. The pure helpers (`rms_amplitude`, `make_wav`) needed no clock at all.
+
+**What changed:**
+
+1. **`tests/unit/test_silence_detector.py`** (new) — 29 tests in five classes:
+   - `TestRmsAmplitude` (7) — empty/single-byte guard → 0.0, all-zero → 0.0,
+     full-scale → ~1.0, half-scale → ~0.5 (constant signal ⇒ RMS == |level|),
+     odd-trailing-byte ignored (unpack truncates to `n*2`), monotonic louder >
+     softer > 0.
+   - `TestMakeWav` (5) — header defaults (mono / 16-bit / 16 kHz), payload
+     round-trip, frame-count = bytes // sample_width, custom rate+channels,
+     empty payload → valid 0-frame WAV.
+   - `TestFeedStateMachine` (9) — loud input starts `speaking` without emitting;
+     pre-speech silence ignored; silence beat past the window emits + resets;
+     sub-window silence holds; resumed speech clears the silence timer;
+     short utterance dropped on silence; max-duration cuts in one frame and
+     across buffered frames (whole buffer flushed, not one frame); `amp`
+     returned every call.
+   - `TestFlush` (5) — empty → None, long buffer emits, short buffer dropped,
+     state reset after flush, idempotent (second flush → None).
+   - `TestBufferDuration` (3) — empty → 0.0, tracks accumulated speech,
+     `FRAME_SIZE == RATE * SAMPLE_WIDTH` invariant.
+   - A `fake_clock` fixture monkeypatches `vad.silence.time.monotonic` with a
+     controllable list so the silence-beat timing is deterministic; `_pcm`/
+     `_loud`/`_quiet` helpers synthesize constant-amplitude PCM frames at a
+     known duration.
+
+**Verification:**
+- `python -m pytest tests/unit/test_silence_detector.py -q` → **29 passed**.
+- Full unit suite (in worktree, pre-merge): **2511 passed** (2482 prior + 29).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- (`tests/test_session.py` still errors on collection — `ModuleNotFoundError:
+  pipecat` — pre-existing on main, not a regression.)
+
+**Notes:**
+- The VAD state machine is now covered for the first time. Behavioral facts
+  pinned by these tests (so a future refactor can't silently break them): the
+  min-chunk floor drops both on silence-beat and on flush; the max-duration cut
+  flushes the *entire* buffer; resumed speech clears the silence timer; and
+  `rms_amplitude` is robust to odd-length input. Next directions:
+  - **Property/fuzz coverage for `rms_amplitude`** — a hypothesis test that the
+    RMS of any constant-amplitude signal equals `|level|/32768` would harden the
+    discriminator against future sample-format changes.
+  - **`SilenceDetector` constructor validation** — like the `gv` CLI trio, the
+    detector accepts any `threshold`/`*_duration` (negative, zero, NaN) without
+    complaint; a guard would close the sibling garbage-in path on the VAD knob.
+  - **Live mid-speech cue wiring for #7** and **live barge-path wiring for #5**
+    — both still blocked only on the absent pipecat dep on the x86_64 runner.
+  - Carried over (off-track): the CI workflow still blocked on a committed
+    `baseline.json`; diversity-check surface paused per iter-143/144.
