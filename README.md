@@ -193,10 +193,15 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   end-of-turn, utterance queueing, and barge-in. Surveys the SOTA
   (Moshi, pipecat `smart-turn`, LiveKit `turn-detector`, Krisp) with a
   fit assessment for our pipeline, and carries a prioritized backlog
-  that subsequent laps work through. The first shipped item is the
-  rule-based backchannel/continuer classifier
-  (`session/backchannel.py`, guarded by
-  `tests/unit/test_backchannel.py`).
+  that subsequent laps work through. Shipped so far: the rule-based
+  backchannel/continuer classifier (`session/backchannel.py`,
+  `tests/unit/test_backchannel.py`) and the **turn-decider seam**
+  (`session/turn_decider.py`, `tests/unit/test_turn_decider.py`) —
+  a swappable silence→confidence mapper that un-hardcodes
+  `pipecat_server.py`'s `smart_turn_confidence` (the old literal `0.5`
+  sat below the engine's backchannel threshold, leaving the
+  silence-driven turn tiers dead) and is the drop-in interface a future
+  audio `smart-turn` model implements.
 - **[Performance metrics taxonomy](docs/perf-metrics-taxonomy.md)** — a
   catalog of metrics worth instrumenting on a local-first voice agent.
 

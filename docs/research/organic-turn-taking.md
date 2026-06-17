@@ -226,7 +226,7 @@ output discoverable from README" discipline. Local only.
 | # | Item | Leverage | Status |
 |---|------|----------|--------|
 | 1 | **Rule-based backchannel/continuer classifier** — pure `classify_backchannel(text, energy=…)` in `session/backchannel.py`: short-token + closed-lexicon + optional low-energy gate ⇒ `CONTINUER` / `SUBSTANTIVE` / `NOT_SPEECH`. Dependency-free, fully testable. Foundation for #5. | High | **DONE iter-148** |
-| 2 | **`turn_decider` seam** — pure function wrapping today's silence→confidence heuristic behind the same interface a smart-turn model would use, so `smart_turn_confidence` stops being hardcoded `0.5` and the model swaps in later without touching `TurnTakingEngine`. | High | TODO |
+| 2 | **`turn_decider` seam** — pure function wrapping today's silence→confidence heuristic behind the same interface a smart-turn model would use, so `smart_turn_confidence` stops being hardcoded `0.5` and the model swaps in later without touching `TurnTakingEngine`. | High | **DONE iter-149** |
 | 3 | **Full-duplex config flag scaffolding** — a `TurnTakingConfig` / env flag (`GENO_FULL_DUPLEX`) that gates organic behaviors (continuer-aware listening, agent backchannels) off by default, so the half-duplex path is never regressed while the track matures. | Medium | TODO |
 | 4 | **Rule-based text EOU precursor** — `is_utterance_complete(text)` that lowers end-of-turn likelihood when the transcript ends in a conjunction / filler / trailing-off marker (mirrors LiveKit turn-detector's linguistic signal; reuses `_TRAILING_PATTERNS`). Feeds #2's confidence. | Medium | TODO |
 | 5 | **Continuer-aware barge-in** — wire #1 into `BargeInCoordinator` so a *continuer* utterance ("mhmm") during agent speech does NOT abandon the turn (finish), while a substantive interruption does (abandon). Measure: false-abandon rate. | High | TODO |
@@ -255,3 +255,32 @@ output discoverable from README" discipline. Local only.
   barge-abandon. 30 unit tests; see `tests/unit/test_backchannel.py`.
 - **Next:** backlog #2 (`turn_decider` seam) — unhardcode
   `smart_turn_confidence`.
+
+### iter-149 (2026-06-16) — turn-decider seam (#2)
+
+- **Shipped backlog #2:** `session/turn_decider.py` — the swappable seam
+  between *where turn-end confidence comes from* and *what the engine does
+  with it*. `silence_confidence(silence_duration_secs, config)` is a pure,
+  monotone, saturating map: 0.0 at/below `silence_floor_secs` (2.0s — a pause,
+  not a turn-end), linear ramp, 1.0 at/above `silence_ceiling_secs` (5.0s).
+  `SilenceTurnDecider.confidence(silence_duration_secs=…, transcript_chunk=…)`
+  is the interface a future audio `smart-turn` decider (backlog #6) implements
+  unchanged; `transcript_chunk` is accepted-and-ignored today for forward-compat
+  with a text EOU signal (#4). 25 tests (`tests/unit/test_turn_decider.py`),
+  including two that load the real `TurnTakingEngine` by file path.
+- **Bug this surfaced and fixed:** the hardcoded `0.5` was *below* the engine's
+  `smart_turn_backchannel_min` (0.6), so **every silence-driven backchannel /
+  response tier in `TurnTakingEngine` was dead in production** — the engine
+  could only ever fire on an NLP trigger or LLM assessment. The default ramp is
+  tuned so `confidence(4.0)≈0.67 ≥ 0.6` (backchannel tier now reachable at the
+  engine's `silence_backchannel_min`) and `confidence(6.0)=1.0 ≥ 0.85` (response
+  tier reachable at `silence_response_min`). An integration test pins this:
+  `decide(4.5, 0.5)` ⇒ `STAY_SILENT` (old) vs `decide(4.5, silence_confidence(4.5))`
+  ⇒ `PLAY_CUE` (new).
+- **Wired into `pipecat_server.py`:** `Broadcaster` now holds a
+  `SilenceTurnDecider`; both `decide(...)` call sites source confidence from it
+  instead of the literal `0.5` (live transcription path + offline replay path).
+- **Next:** backlog #4 (rule-based text EOU precursor `is_utterance_complete`,
+  reusing `_TRAILING_PATTERNS`) — its output feeds this seam's confidence via
+  the already-present `transcript_chunk` argument; or backlog #3 (full-duplex
+  config flag scaffolding) to gate organic behaviors off by default.

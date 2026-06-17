@@ -12959,3 +12959,103 @@ backlog item with tests.
     (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still
     blocked on a committed `baseline.json` from a real STT model run;
     diversity-check surface paused per iter-143/144.
+
+## iter-149 — turn-decider seam: unhardcode smart_turn_confidence (backlog #2)
+
+**Branch:** `iter-149-turn-decider` (merged ff to main)
+**Date:** 2026-06-16
+
+**Goal:** iter-148 bootstrapped the organic turn-taking research track and
+shipped backlog #1 (the backchannel classifier). This lap ships backlog #2,
+the highest-leverage seam: a pure `turn_decider` that un-hardcodes the
+`smart_turn_confidence` parameter `TurnTakingEngine.decide` already accepts but
+which `pipecat_server.py` passed as a literal `0.5` at both call sites.
+
+**Bug this surfaced and fixed:** the hardcoded `0.5` is *below* the engine's
+`smart_turn_backchannel_min` (`0.6`). Because Tier 1 of `decide` short-circuits
+to `STAY_SILENT` whenever `smart_turn_confidence < smart_turn_backchannel_min`,
+**every silence-driven backchannel / response tier in `TurnTakingEngine` was
+dead in production** — the engine could only ever fire on an NLP trigger or an
+LLM assessment, never on the silence + confidence path it was built around.
+Feeding a real silence-derived confidence makes those tiers reachable.
+
+**What changed:**
+
+1. **`session/turn_decider.py` (new) — backlog #2 seam.** Pure,
+   dependency-free, GENO.md-conventional:
+   - `silence_confidence(silence_duration_secs, config=None) -> float` — a
+     monotone, saturating map from trailing-silence duration to a turn-end
+     confidence in `[0.0, 1.0]`: `0.0` at/below `silence_floor_secs` (2.0s — a
+     mid-thought pause, not a turn-end), a linear ramp, `1.0` at/above
+     `silence_ceiling_secs` (5.0s). Negative durations clamp to `0.0`. Pure: no
+     I/O, no clock — `silence_duration_secs` is injected.
+   - `TurnDeciderConfig` (frozen dataclass) carries the two tunables and
+     validates `ceiling > floor` in `__post_init__`.
+   - `SilenceTurnDecider.confidence(*, silence_duration_secs, transcript_chunk=None)`
+     is the **swappable interface** a future pipecat `smart-turn` decider
+     (backlog #6) implements unchanged. `transcript_chunk` is
+     accepted-and-ignored today for forward-compat with a text EOU signal
+     (backlog #4) so wiring it later needs no call-site change.
+   - The default band is tuned against the engine's own thresholds:
+     `confidence(4.0) ≈ 0.67 ≥ smart_turn_backchannel_min (0.6)` at the engine's
+     `silence_backchannel_min`, and `confidence(6.0) = 1.0 ≥ smart_turn_response_min
+     (0.85)` at its `silence_response_min` — so both previously-dead tiers
+     become reachable within the engine's own silence windows.
+
+2. **`pipecat_server.py` — wire the seam.** `Broadcaster.__init__` holds a
+   `SilenceTurnDecider`; both `decide(...)` call sites (live transcription path
+   + offline replay path) now source `smart_turn_confidence` from
+   `self._turn_decider.confidence(silence_duration_secs=…, transcript_chunk=text)`
+   instead of the literal `0.5`. Behavior for the offline replay path is
+   documented (silence isn't measured between fixed chunks, so its nominal
+   `1.0` flows through the same seam).
+
+3. **`tests/unit/test_turn_decider.py` (new, +25 tests):** clamping
+   (at/below floor → 0, at/above ceiling → 1, negative → 0); linear ramp
+   (midpoint = 0.5, quarter point, monotonic-in-band, just-above-floor
+   positive); the **engine-threshold contract** (backchannel/response windows
+   clear their thresholds; documents that old `0.5` < `0.6`; short pause → 0);
+   custom config (remapped band, frozen, `ceiling <= floor` raises, narrow
+   steep band); the `SilenceTurnDecider` interface (matches the function,
+   ignores `transcript_chunk` today, uses injected config, keyword-only
+   `confidence`); and **two integration tests** that load the real
+   `TurnTakingEngine` by file path and prove `decide(4.5, 0.5) → STAY_SILENT`
+   (old) vs `decide(4.5, silence_confidence(4.5)) → PLAY_CUE` (new), plus the
+   response tier reaching `SPEAK_BRIEF` after a long monologue.
+
+4. **Discoverability:** marked backlog #2 **DONE iter-149** in
+   `docs/research/organic-turn-taking.md` with a findings-log entry; extended
+   the README Research section to name the seam, the bug it fixed, and its
+   guarding test.
+
+**Verification:**
+- `python -m pytest tests/unit/test_turn_decider.py -q` → **25 passed in 0.10s**.
+- Full unit suite: **1832 passed** (1807 prior + 25 new).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `python -m py_compile pipecat_server.py session/turn_decider.py` → clean
+  (pipecat isn't installable on this x86_64 Linux runner, so the server is
+  syntax-checked, not imported; the engine integration tests load
+  `turn_taking` by file path with a stub `session` namespace to dodge
+  `session/__init__`'s pipecat imports — same trick the mic_*/backchannel
+  tests use).
+
+**Notes:**
+- **Runtime behavior DOES change** (intentionally, and only for the pipecat
+  sidecar): silence-driven backchannels/responses can now fire where the
+  hardcoded `0.5` suppressed them. The `mic_chat`/`mic_talk` half-duplex paths
+  don't use `TurnTakingEngine` and are untouched. The change is conservative —
+  it activates an existing, already-tested code path rather than adding new
+  behavior, and triggers/LLM-assessment overrides still take precedence.
+- Next directions:
+  - **#4 rule-based text EOU precursor** — `is_utterance_complete(text)`
+    lowering confidence on trailing conjunctions/fillers (reuse
+    `_TRAILING_PATTERNS`); feeds this seam via the already-present
+    `transcript_chunk` arg without a call-site change.
+  - **#3 full-duplex config flag** — `GENO_FULL_DUPLEX` / `TurnTakingConfig`
+    scaffolding to gate organic behaviors off by default.
+  - **#5 continuer-aware barge-in** — wire iter-148's `classify_backchannel`
+    into `BargeInCoordinator` (continuer ⇒ finish, substantive ⇒ abandon).
+  - Carried over (off-track): the CI workflow
+    (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still
+    blocked on a committed `baseline.json`; diversity-check surface paused per
+    iter-143/144.

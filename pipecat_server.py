@@ -40,6 +40,7 @@ from pipecat.transports.local.audio import LocalAudioTransport, LocalAudioTransp
 
 from session.triggers import detect_triggers, filter_noise
 from session.turn_taking import TurnTakingEngine, Action
+from session.turn_decider import SilenceTurnDecider
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 log = logging.getLogger("sidecar")
@@ -188,6 +189,12 @@ class Broadcaster(FrameProcessor):
         self._engine = TurnTakingEngine()
         self._engine.state.session_start = time.time() - 300
         self._last_stop = time.time()
+        # Source smart-turn confidence from a swappable decider instead of a
+        # hardcoded 0.5 (which sat below the engine's backchannel threshold,
+        # leaving the silence-driven tiers dead). Today this is the silence
+        # heuristic; a later lap swaps in pipecat smart-turn behind the same
+        # interface. See session/turn_decider.py + organic-turn-taking.md #2.
+        self._turn_decider = SilenceTurnDecider()
 
     async def process_frame(self, frame, direction):
         await super().process_frame(frame, direction)
@@ -207,7 +214,10 @@ class Broadcaster(FrameProcessor):
             self._engine.update_state(user_spoke_secs=5)
             silence = time.time() - self._last_stop
             trigger = detect_triggers(text)
-            decision = self._engine.decide(silence, 0.5, text)
+            confidence = self._turn_decider.confidence(
+                silence_duration_secs=silence, transcript_chunk=text
+            )
+            decision = self._engine.decide(silence, confidence, text)
 
             await broadcast({
                 "type": "transcript",
@@ -366,7 +376,14 @@ async def run_test_audio(audio_path, start=60, duration=120):
             p.write_bytes(buf.getvalue())
 
         trigger = detect_triggers(text)
-        decision = broadcaster._engine.decide(1.0, 0.5, text)
+        # Offline replay: silence isn't measured between fixed-size chunks, so
+        # pass the chunk's nominal silence through the same decider seam rather
+        # than a hardcoded 0.5. Triggers/LLM assessment still drive responses.
+        replay_silence = 1.0
+        confidence = broadcaster._turn_decider.confidence(
+            silence_duration_secs=replay_silence, transcript_chunk=text
+        )
+        decision = broadcaster._engine.decide(replay_silence, confidence, text)
 
         msg = {
             "type": "transcript",
