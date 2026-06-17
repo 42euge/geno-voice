@@ -284,8 +284,18 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   `pause_secs(now)` (the live within-speech gap, zero while speaking). So a
   long monologue accumulates `user_speaking_secs` across its clause pauses (the
   warm-up gate eventually clears) and the monitor emits exactly in the
-  clause-pause window — the last pure piece before the (pipecat-blocked) live
-  `Broadcaster` wiring becomes a thin adapter. Also shipped: the **organic-path naturalness
+  clause-pause window. `session/backchannel_driver.py`
+  (`tests/unit/test_backchannel_driver.py`) then **composes** the clock and the
+  monitor into one `BackchannelDriver` so the live `Broadcaster` wiring is a
+  *truly* thin shim — `on_speech_start` / `on_speech_stop` off the VAD frames,
+  `observe(now)` on a tick, `broadcast_cue(d.cue_type)` on emit — and closes a
+  latent crash the hand-spelled four-line composition carried: an `observe`
+  tick *before any speech* passed `monologue_start_at=None` into the monitor's
+  unguarded `now - monologue_start_at`, raising `TypeError`; the driver
+  short-circuits a no-monologue tick to a no-emit decision (the correct organic
+  answer — there is no speaker to backchannel). Half-duplex is inherited
+  verbatim: a default config ⇒ every tick is `emit=False`, monitor state never
+  mutated. Also shipped: the **organic-path naturalness
   metrics** (`examples/_chat_metrics.py`,
   `tests/unit/test_emit_organic_block.py`) — two additive `TurnMetrics`
   fields, `false_endpoint` (the EOU decision fired early and the user
