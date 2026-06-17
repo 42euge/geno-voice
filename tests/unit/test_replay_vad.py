@@ -171,6 +171,69 @@ class TestSimulateVad:
 
 
 # ---------------------------------------------------------------------------
+# simulate_vad — pre-roll buffer (backlog item 2)
+# ---------------------------------------------------------------------------
+
+
+class TestPrerollBuffer:
+    def _frame_dur(self, frame_size: int = 1024) -> float:
+        return (frame_size / SR) * 1000.0  # 64ms at 16k/1024
+
+    def test_zero_preroll_leaves_onset_unchanged(self):
+        # preroll_ms=0 (the default) reproduces today's clip-the-opening behaviour.
+        rms = np.concatenate([np.zeros(10), np.full(30, 0.05)])
+        segs, _ = simulate_vad(rms, self._frame_dur(), VadParams(preroll_ms=0.0))
+        base, _ = simulate_vad(rms, self._frame_dur(), VadParams())
+        assert len(segs) == 1
+        assert segs[0].onset_frame == base[0].onset_frame
+        assert segs[0].onset_ms == base[0].onset_ms
+
+    def test_preroll_moves_onset_earlier(self):
+        # 10 silent frames then sustained speech. Pre-roll should pull the
+        # emitted onset back into the silent lead-in.
+        rms = np.concatenate([np.zeros(10), np.full(30, 0.05)])
+        frame_dur = self._frame_dur()
+        no_pre, _ = simulate_vad(rms, frame_dur, VadParams(preroll_ms=0.0))
+        # 192ms ≈ 3 frames of pre-roll.
+        pre, _ = simulate_vad(rms, frame_dur, VadParams(preroll_ms=192.0))
+        assert pre[0].onset_frame == no_pre[0].onset_frame - 3
+        assert pre[0].onset_ms < no_pre[0].onset_ms
+        # The extended segment also covers more frames.
+        assert pre[0].frames > no_pre[0].frames
+
+    def test_preroll_clamps_to_recording_start(self):
+        # Speech from frame 0 — there is no lead-in, so pre-roll can't go
+        # below frame 0 even with a large preroll_ms.
+        rms = np.full(30, 0.05)
+        segs, _ = simulate_vad(rms, self._frame_dur(), VadParams(preroll_ms=5000.0))
+        assert len(segs) == 1
+        assert segs[0].onset_frame == 0
+        assert segs[0].onset_ms == 0.0
+
+    def test_preroll_clamps_to_previous_segment_end(self):
+        # Two segments split by a long silence. The second segment's pre-roll
+        # must not reach back past the first segment's end (no overlap).
+        block = np.full(20, 0.05)
+        gap = np.zeros(20)  # 1280ms > 800ms → splits
+        rms = np.concatenate([block, gap, block])
+        frame_dur = self._frame_dur()
+        # Huge pre-roll that would otherwise swallow the whole gap.
+        segs, _ = simulate_vad(rms, frame_dur, VadParams(preroll_ms=10_000.0))
+        assert len(segs) == 2
+        assert segs[1].onset_frame >= segs[0].end_frame
+
+    def test_preroll_does_not_rescue_too_short_segment(self):
+        # The min_speech gate measures the *committed* speech, not the
+        # pre-roll padding: a segment that is only long because of pre-roll
+        # is still dropped.
+        rms = np.concatenate([np.full(5, 0.05), np.zeros(10)])
+        params = VadParams(silence_ms=64.0, preroll_ms=10_000.0)
+        segs, speaking = simulate_vad(rms, self._frame_dur(), params)
+        assert segs == []
+        assert speaking > 0
+
+
+# ---------------------------------------------------------------------------
 # replay_recording — end-to-end over a synthetic WAV
 # ---------------------------------------------------------------------------
 
@@ -407,3 +470,18 @@ class TestSweepCli:
         payload = _json.loads(capsys.readouterr().out)
         assert payload[0]["params"]["frame_size"] == 512
         assert isinstance(payload[0]["params"]["frame_size"], int)
+
+    def test_preroll_ms_flag_reported_in_header(self, tmp_path, capsys):
+        corpus = _make_corpus(tmp_path)
+        rc = main(["--preroll-ms", "192", "--dir", str(corpus)])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "preroll=192.0ms" in out
+
+    def test_preroll_sweep_moves_first_onset_earlier(self, tmp_path, capsys):
+        corpus = _make_corpus(tmp_path)
+        rc = main(["--sweep", "preroll_ms", "--sweep-values", "0,256", "--dir", str(corpus)])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "preroll_ms=0" in out
+        assert "preroll_ms=256" in out

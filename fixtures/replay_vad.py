@@ -77,6 +77,16 @@ class VadParams:
     ``frame_size``    — samples per analysis frame. The client's worklet/
                         scriptProcessor delivers frames; we re-frame the WAV
                         the same way (~1024 samples by default).
+    ``preroll_ms``    — rolling pre-onset buffer (backlog item 2). The live
+                        client discards every sub-threshold frame before a
+                        speech onset, clipping the soft attack of an utterance
+                        (the quiet ramp-up below the RMS gate). A pre-roll
+                        buffer keeps the last ``preroll_ms`` of pre-onset audio
+                        and prepends it to the committed segment, so the
+                        emitted ``onset_ms`` moves *earlier* by up to this much
+                        — clamped to the recording start and the previous
+                        segment's end (no overlap). ``0.0`` (the default)
+                        reproduces today's clip-the-opening behaviour.
     """
 
     threshold: float = 0.006
@@ -85,6 +95,7 @@ class VadParams:
     min_speech_ms: float = 500.0
     gain: float = 1.0
     frame_size: int = 1024
+    preroll_ms: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -206,6 +217,11 @@ def simulate_vad(rms: np.ndarray, frame_dur_ms: float, params: VadParams) -> tup
         clock; once silence reaches ``silence_ms`` the segment ends.
       * A segment whose committed duration is < ``min_speech_ms`` is
         dropped (state returns to listening but no segment is emitted).
+      * If ``preroll_ms`` > 0, an accepted segment's emitted onset is pulled
+        back by up to that many ms of pre-onset audio (recovering the clipped
+        utterance opening), clamped to the recording start and the previous
+        segment's end. The pre-roll padding is cosmetic to the onset only —
+        the ``min_speech_ms`` gate still measures the *committed* speech.
     """
     segments: List[Segment] = []
     speaking_frames = 0
@@ -218,18 +234,33 @@ def simulate_vad(rms: np.ndarray, frame_dur_ms: float, params: VadParams) -> tup
     silence_ms_accum = 0.0
     clock_ms = 0.0
 
+    # Pre-roll: how many whole frames to reach back before a committed onset.
+    preroll_frames = (
+        int(round(params.preroll_ms / frame_dur_ms))
+        if params.preroll_ms > 0 and frame_dur_ms > 0
+        else 0
+    )
+
     def end_segment(end_frame: int, end_ms: float) -> None:
         nonlocal speaking
         speaking = False
+        # The min_speech gate measures committed speech, not pre-roll padding.
         duration = end_ms - seg_onset_ms
         if duration >= params.min_speech_ms:
+            onset_frame = seg_onset_frame
+            if preroll_frames:
+                # Clamp the pull-back to the recording start and the previous
+                # segment's end so segments never overlap.
+                floor_frame = segments[-1].end_frame if segments else 0
+                onset_frame = max(floor_frame, seg_onset_frame - preroll_frames)
+            onset_ms = onset_frame * frame_dur_ms
             segments.append(
                 Segment(
-                    onset_frame=seg_onset_frame,
+                    onset_frame=onset_frame,
                     end_frame=end_frame,
-                    onset_ms=seg_onset_ms,
+                    onset_ms=onset_ms,
                     end_ms=end_ms,
-                    frames=end_frame - seg_onset_frame,
+                    frames=end_frame - onset_frame,
                 )
             )
 
@@ -515,14 +546,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--min-speech-ms", type=float, default=VadParams.min_speech_ms)
     parser.add_argument("--gain", type=float, default=VadParams.gain)
     parser.add_argument("--frame-size", type=int, default=VadParams.frame_size)
+    parser.add_argument("--preroll-ms", type=float, default=VadParams.preroll_ms)
     parser.add_argument("--dir", type=Path, default=RECORDINGS_DIR)
     parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     parser.add_argument(
         "--sweep",
         metavar="PARAM",
         help="sweep one VadParams field (threshold, gain, debounce_ms, "
-        "silence_ms, min_speech_ms, frame_size) across --sweep-values, "
-        "holding the other flags fixed as the base",
+        "silence_ms, min_speech_ms, frame_size, preroll_ms) across "
+        "--sweep-values, holding the other flags fixed as the base",
     )
     parser.add_argument(
         "--sweep-values",
@@ -538,6 +570,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         min_speech_ms=args.min_speech_ms,
         gain=args.gain,
         frame_size=args.frame_size,
+        preroll_ms=args.preroll_ms,
     )
 
     if args.sweep:
@@ -556,7 +589,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(
         f"VAD replay — threshold={params.threshold} gain={params.gain} "
         f"debounce={params.debounce_ms}ms silence={params.silence_ms}ms "
-        f"min_speech={params.min_speech_ms}ms frame={params.frame_size}"
+        f"min_speech={params.min_speech_ms}ms frame={params.frame_size} "
+        f"preroll={params.preroll_ms}ms"
     )
     print("-" * 100)
     triggered = 0

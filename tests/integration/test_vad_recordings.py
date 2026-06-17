@@ -106,6 +106,45 @@ class TestThresholdRegression:
         )
 
 
+class TestPrerollRecoversOpening:
+    """iter-191 — A pre-roll buffer must pull each utterance's onset earlier
+    (recovering the speech clipped during the onset/debounce window) without
+    ever overlapping the previous segment. The aggregate sweep counts don't
+    move (pre-roll changes onset *timing*, not onset *count*), so this is the
+    test the research doc's backlog item 2 calls for: assert the first
+    segment's ``onset_ms`` moves earlier.
+    """
+
+    PREROLL = VadParams(threshold=0.006, preroll_ms=512.0)
+
+    def test_first_onset_moves_earlier_or_at_start(self, recording):
+        base = replay_recording(recording, PROD_PARAMS)
+        pre = replay_recording(recording, self.PREROLL)
+        if not base.segments or not pre.segments:
+            pytest.skip(f"{recording.name}: no committed segment to compare")
+        assert pre.segments[0].onset_ms <= base.segments[0].onset_ms, (
+            f"{recording.name}: pre-roll moved the first onset later "
+            f"({pre.segments[0].onset_ms:.1f}ms vs {base.segments[0].onset_ms:.1f}ms)"
+        )
+        # The recovered opening extends the committed segment too.
+        assert pre.segments[0].frames >= base.segments[0].frames
+
+    def test_segments_never_overlap_with_preroll(self, recording):
+        pre = replay_recording(recording, self.PREROLL)
+        for earlier, later in zip(pre.segments, pre.segments[1:]):
+            assert later.onset_frame >= earlier.end_frame, (
+                f"{recording.name}: pre-roll caused overlapping segments "
+                f"({later.onset_frame} < {earlier.end_frame})"
+            )
+
+    def test_onset_count_unchanged_by_preroll(self, recording):
+        # Pre-roll is a timing recovery, not a detection change: it must not
+        # create or destroy onsets.
+        base = replay_recording(recording, PROD_PARAMS)
+        pre = replay_recording(recording, self.PREROLL)
+        assert pre.onsets == base.onsets
+
+
 def test_corpus_is_non_trivial():
     """Sanity: when present, the corpus has at least one recording and
     every entry has measurable audio (peak RMS above the silence floor)."""

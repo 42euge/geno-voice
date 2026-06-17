@@ -35,6 +35,22 @@ python fixtures/replay_vad.py --sweep gain --sweep-values 1.0,1.5,2.0,3.0
 python fixtures/replay_vad.py --sweep debounce_ms --sweep-values 100,200,300 --json
 ```
 
+A **pre-roll buffer** (`--preroll-ms`, iter-191 — backlog item 2) recovers
+the soft attack of an utterance that the live client discards: every
+sub-threshold frame before a speech onset is thrown away today, so the
+committed segment starts at the debounce-committed frame and clips the
+quiet ramp-up. Pre-roll keeps the last N ms of pre-onset audio and prepends
+it, pulling the emitted `onset_ms` earlier — clamped to the recording start
+and the previous segment's end (segments never overlap). `0.0` (the
+default) reproduces today's clip-the-opening behaviour, so it is a no-op
+until wired into the client. It moves onset *timing*, not onset *count*, so
+inspect `onset_ms` (`--json`) rather than the aggregate sweep totals:
+
+```
+python fixtures/replay_vad.py --preroll-ms 256                 # single run
+python fixtures/replay_vad.py --preroll-ms 256 --json          # see onset_ms shift
+```
+
 Each row reports, across the corpus: `trig` (how many recordings'
 known speech would trigger), `min_onsets` (the worst single recording —
 the floor a sweep wants to *maximize*, since one missed recording is a
@@ -132,6 +148,31 @@ it drops a recording. Backlog item 5's "100ms may be safe" hypothesis is
 supported by the data; a follow-up should validate onset *timing* (not
 just count) before changing the client.
 
+## Pre-roll buffer over the seed corpus (iter-191)
+
+`--preroll-ms` pulls each utterance's first `onset_ms` earlier by up to the
+requested window (clamped to recording start / previous segment end). The
+onset *count* is unchanged — pre-roll recovers the clipped opening of a
+segment that was already detected. First-segment `onset_ms` at threshold
+0.006, frame 1024:
+
+| Recording | preroll 0 | preroll 256ms | preroll 512ms |
+|-----------|-----------|---------------|---------------|
+| voice-20260617-122716 | 232.2ms | 0.0ms (start clamp) | 0.0ms |
+| voice-20260617-123829 | 2995.4ms | 2740.0ms | 2484.5ms |
+| voice-20260617-131451 | 1370.0ms | 1114.6ms | 859.1ms |
+| voice-20260617-135015 | 1532.5ms | 1277.1ms | 1021.7ms |
+
+Every recording's opening moves earlier (the first clamps to 0 — its speech
+begins ~232ms in, so a 256ms pre-roll reaches the recording start). The
+committed segment's frame count rises correspondingly, so the prepended
+audio is real recovered speech, not silence padding. **A 256–512ms pre-roll
+recovers ~250–510ms of clipped utterance opening per turn** with no risk to
+detection (it cannot create or drop onsets) and no overlap (the previous-
+segment clamp is enforced and tested). This is the cheap, replay-validated
+half of the latency story: pre-warming (item 1) recovers the cold-start
+dead window; pre-roll recovers the debounce/onset clip on top.
+
 ## Findings & backlog (prioritized)
 
 1. **[latency] Pre-warm the capture pipeline.** The 3–5s `click_to_capture_ms`
@@ -148,8 +189,15 @@ just count) before changing the client.
    short ring buffer (e.g. 1–2s) of pre-onset audio so the committed
    segment includes the speech that arrived during the debounce/onset
    window. Today `_speechCandidate` discards sub-debounce audio; a pre-roll
-   would recover clipped utterance openings. Testable via replay: assert the
-   first segment's `onset_ms` moves earlier.
+   would recover clipped utterance openings. _iter-191: modelled in the
+   replay harness (`VadParams.preroll_ms` / `--preroll-ms`). On the seed
+   corpus a 256–512ms pre-roll pulls every recording's first `onset_ms`
+   earlier by ~250–510ms (see the table above) with no change to onset count
+   and no segment overlap — validated by `TestPrerollRecoversOpening` in
+   `tests/integration/test_vad_recordings.py`. Next: wire the ring buffer
+   into `ContinuousListener` — keep the last `preroll_ms` of `_handleFrame`
+   input around even while listening, and prepend it to `this.chunks` at the
+   commit point in `_handleFrame` (default `preroll_ms = 0` for parity)._
 3. **[threshold] Confirm 0.006 holds as the corpus grows.** The regression
    test guards against silent regressions. Re-run `replay_vad.py --sweep
    threshold ...` each lap on any newly-synced recordings; if a new
