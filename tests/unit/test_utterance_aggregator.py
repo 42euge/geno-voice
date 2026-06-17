@@ -266,8 +266,11 @@ def test_max_merge_depth_threads_through():
     agg.offer("I was thinking about the", speech_start_at=0.0, speech_end_at=1.0)
     res = agg.offer("big and", speech_start_at=1.2, speech_end_at=2.0)
     # "I was thinking about the big and" is still unfinished (trailing
-    # conjunction) but the cap force-emits it, still flagged false_endpoint.
-    assert res.turns == [EmittedTurn("I was thinking about the big and", True)]
+    # conjunction) but the cap force-emits it, flagged false_endpoint AND
+    # (iter-163) merge_capped — a force-emit, not a clean repair.
+    assert res.turns == [
+        EmittedTurn("I was thinking about the big and", True, merge_capped=True)
+    ]
     assert res.merged is True
     assert agg.pending is None
 
@@ -329,6 +332,43 @@ def test_aggregated_result_merged_reflects_false_endpoint():
     assert res.merged is True
     res2 = AggregatedResult(turns=[EmittedTurn("x", False)])
     assert res2.merged is False
+
+
+# ---- iter-163: capped property mirrors the buffer ----------------------------
+
+
+def test_aggregated_result_capped_default_false():
+    assert AggregatedResult().capped is False
+    assert AggregatedResult(turns=[EmittedTurn("x", True)]).capped is False
+
+
+def test_aggregated_result_capped_reflects_merge_capped():
+    res = AggregatedResult(turns=[EmittedTurn("x", True, merge_capped=True)])
+    assert res.capped is True
+
+
+def test_cap_force_emit_sets_capped_on_aggregated_result():
+    # The cap path through the aggregator surfaces capped=True end-to-end.
+    agg = UtteranceAggregator(config=ORGANIC, max_merge_depth=1)
+    agg.offer("I was thinking about the", speech_start_at=0.0, speech_end_at=1.0)
+    res = agg.offer("big and", speech_start_at=1.2, speech_end_at=2.0)
+    assert res.capped is True
+    assert res.merged is True
+    assert res.turns[0].merge_capped is True
+
+
+def test_natural_release_through_aggregator_not_capped():
+    agg = UtteranceAggregator(config=ORGANIC, max_merge_depth=8)
+    agg.offer("I was thinking about the", speech_start_at=0.0, speech_end_at=1.0)
+    res = agg.offer("deadline.", speech_start_at=1.2, speech_end_at=2.0)
+    assert res.merged is True
+    assert res.capped is False
+
+
+def test_half_duplex_aggregator_never_capped():
+    agg = UtteranceAggregator(max_merge_depth=1)         # default half-duplex
+    res = agg.offer(INCOMPLETE, speech_start_at=0.0, speech_end_at=1.0)
+    assert res.capped is False
 
 
 # ---- purity: independent aggregators don't share state -----------------------

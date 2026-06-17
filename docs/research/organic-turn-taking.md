@@ -233,7 +233,7 @@ output discoverable from README" discipline. Local only.
 | 6 | **Adopt pipecat `smart-turn`** — replace #2's heuristic body with the smart-turn model inside `pipecat_server.py`'s pipeline; same `turn_decider` interface. Measure false-endpoint rate vs silence-only baseline on recorded sessions. | High | TODO (blocked on model + Apple Silicon) |
 | 7 | **Agent backchannel emission timing** — a learned/heuristic "good moment to backchannel" signal (Krisp-style) feeding the existing `PLAY_CUE` path, so the agent emits continuers *during* long user speech, not only on silence. | Medium | **DONE iter-153** (decision seam `decide_backchannel_timing`; cue-path wiring is the follow-on) |
 | 8 | **Naturalness metrics for the organic path** — extend `TurnMetrics` / session-summary with false-endpoint rate and continuer-detection counts so the track is measured, not asserted. | Medium | **DONE iter-154** (`false_endpoint` + `continuers_detected` `TurnMetrics` fields; `_emit_organic_block` summary block; populating them from the live organic path is the follow-on) |
-| 9 | **Utterance buffer-merge** (Section 4's second half) — a pure `decide_utterance_continuation(prev_text, next_text, gap_secs)` that, when a silence endpoint fires on *unfinished*-looking text and a continuation arrives within the pause window, returns `MERGE` (the endpoint was a false positive — user paused mid-thought) vs `NEW`. Composes #4's `utterance_completeness` + #3's gate. Repairs the false endpoints #8 measures. | Medium | **DONE iter-155** (decision seam `decide_utterance_continuation`) + **iter-156** (stateful `UtteranceBuffer` hold-and-merge driver) + **iter-157** (`max_merge_depth` starvation cap) + **iter-158** (`UtteranceAggregator` cross-turn gap-measuring driver) + **iter-159** (live `ChatLoop` wiring behind the off-by-default `aggregator` seam — held ⇒ re-listen, merged ⇒ respond to joined text + set `TurnMetrics.false_endpoint`) + **iter-160** (`run_session` flushes the aggregator on shutdown — a held mid-thought fragment the user never completed before Ctrl+C surfaces on `SessionState.stranded_utterance` + a session-summary line rather than vanishing inside the buffer) + **iter-161** (held utterances counted separately from VAD false triggers — `TurnResult.held` flag ⇒ `SessionState.utterances_held` + an "Utterances held" line in the organic summary block, fixing iter-159's silent inflation of the false-trigger rate) + **iter-162** (a multi-turn release — an abandoned mid-thought fragment + a genuinely-new utterance, split by a long silence — no longer space-glued into one garbled LLM input; `resolve_turn` responds to the last turn and surfaces the abandoned fragment(s) on `TurnResult.displaced` ⇒ `SessionState.utterances_displaced` + a "Displaced uttr." summary line, the mid-session analog of iter-160's shutdown `stranded_utterance`) |
+| 9 | **Utterance buffer-merge** (Section 4's second half) — a pure `decide_utterance_continuation(prev_text, next_text, gap_secs)` that, when a silence endpoint fires on *unfinished*-looking text and a continuation arrives within the pause window, returns `MERGE` (the endpoint was a false positive — user paused mid-thought) vs `NEW`. Composes #4's `utterance_completeness` + #3's gate. Repairs the false endpoints #8 measures. | Medium | **DONE iter-155** (decision seam `decide_utterance_continuation`) + **iter-156** (stateful `UtteranceBuffer` hold-and-merge driver) + **iter-157** (`max_merge_depth` starvation cap) + **iter-158** (`UtteranceAggregator` cross-turn gap-measuring driver) + **iter-159** (live `ChatLoop` wiring behind the off-by-default `aggregator` seam — held ⇒ re-listen, merged ⇒ respond to joined text + set `TurnMetrics.false_endpoint`) + **iter-160** (`run_session` flushes the aggregator on shutdown — a held mid-thought fragment the user never completed before Ctrl+C surfaces on `SessionState.stranded_utterance` + a session-summary line rather than vanishing inside the buffer) + **iter-161** (held utterances counted separately from VAD false triggers — `TurnResult.held` flag ⇒ `SessionState.utterances_held` + an "Utterances held" line in the organic summary block, fixing iter-159's silent inflation of the false-trigger rate) + **iter-162** (a multi-turn release — an abandoned mid-thought fragment + a genuinely-new utterance, split by a long silence — no longer space-glued into one garbled LLM input; `resolve_turn` responds to the last turn and surfaces the abandoned fragment(s) on `TurnResult.displaced` ⇒ `SessionState.utterances_displaced` + a "Displaced uttr." summary line, the mid-session analog of iter-160's shutdown `stranded_utterance`) + **iter-163** (the iter-157 `max_merge_depth` cap force-emit is now a distinct `merge_capped` signal — threaded `EmittedTurn`/`BufferResult.capped` → `AggregatedResult.capped` → `ResolvedTurn.merge_capped` → `TurnMetrics.merge_capped` → `OrganicStats.merges_capped` + a "Merges capped" summary line — instead of being silently counted as a clean merge, honoring the "no silent caps" discipline) |
 
 ---
 
@@ -993,3 +993,63 @@ output discoverable from README" discipline. Local only.
   in the summary) — this lap makes the *displaced*-fragment half correct first.
   Then wire the still-pending `should_abandon_turn` (iter-152) /
   `should_emit_backchannel` (iter-153) seams behind their sub-flags.
+
+### iter-163 (2026-06-17) — merge-depth cap force-emit is a distinct signal (#9 observability fix)
+
+- **Made the iter-157 starvation backstop observable instead of silent.** The
+  `max_merge_depth` cap (default 8) exists so a pathological "unfinished forever"
+  stream can't hold an utterance indefinitely: once a held pending has absorbed
+  N continuations and the running text *still* looks mid-thought, the buffer
+  **force-emits** it rather than holding again. Before this lap that force-emit
+  was indistinguishable from a clean merge — it set `false_endpoint=True` and
+  was counted in the same summary line as genuine repairs. An operator watching
+  the session summary had no way to see the backstop fire, which is exactly the
+  "no silent caps" discipline this track keeps flagging.
+- **Fix — a distinct `merge_capped` flag threaded the full data-flow chain:**
+  - `EmittedTurn.merge_capped: bool` (`session/utterance_buffer.py`) — set
+    `True` only at the cap force-emit site. Always paired with
+    `false_endpoint=True` but semantically distinct (a backstop firing, not a
+    clean repair). `BufferResult.capped` is the any-over-turns roll-up.
+  - `AggregatedResult.capped` (`session/utterance_aggregator.py`) mirrors the
+    buffer property end-to-end.
+  - `ResolvedTurn.merge_capped` (`examples/_chat_aggregation.py`) carries the
+    **responded** turn's own flag (mirroring iter-162's `false_endpoint` rule —
+    a capped *displaced* fragment must not stamp a fresh, uncapped response).
+    Read via `getattr` so a pre-iter-163 turn double defaults to `False`.
+  - `TurnMetrics.merge_capped` (`examples/_chat_metrics.py`) stamped in
+    `ChatLoop.run_one_turn` (`examples/_chat_loop.py`), which also prints a
+    runtime `merge-depth cap hit` status line distinct from the natural-merge
+    line.
+- **Surfacing:** `OrganicStats.merges_capped` + a new "Merges capped" line in
+  `_emit_organic_block` (suppressed at zero, like every sibling signal), naming
+  `iter-157` so an operator who sees it can find the cap's context. The per-turn
+  `TurnMetrics.print` "False endpoint: yes" line now annotates *merge-depth cap
+  hit — force-emitted mid-thought* when capped, vs *user wasn't done* otherwise,
+  so the distinction survives into per-turn replay too.
+- **Half-duplex / no-aggregator unchanged.** A passthrough buffer never holds,
+  so the cap can never fire: `merge_capped` is always `False`, the counter stays
+  zero, the line is suppressed — byte-for-byte today's output. `aggregator=None`
+  is untouched.
+- **+24 tests.** `test_utterance_buffer.py` (+8): cap sets `merge_capped`,
+  natural merge doesn't, `BufferResult.capped` roll-up, defaults.
+  `test_utterance_aggregator.py` (+5, +1 fixed): `AggregatedResult.capped`
+  default/reflect, cap path end-to-end, natural release not capped, half-duplex
+  never capped; fixed `test_max_merge_depth_threads_through` to expect
+  `merge_capped=True`. `test_chat_aggregation.py` (+6): responded-turn's-own-flag
+  (both directions), displaced-capped-fragment doesn't stamp response,
+  back-compat `getattr` default, defaults. `test_chat_loop_aggregator.py` (+1
+  class, +3 assertions): the live cap force-emit stamps `TurnMetrics.merge_capped`
+  (`max_merge_depth=1` aggregator); no-aggregator/half-duplex/natural-merge all
+  assert `merge_capped is False`. `test_emit_organic_block.py` (+8): the
+  "Merges capped" line (alone, zero-suppressed, with other signals), the
+  `TurnMetrics`/`OrganicStats` defaults, and `print_session_summary` wiring
+  (capped turn surfaces both the false-endpoint rate and the capped line; an
+  uncapped false endpoint omits the capped line).
+- **Verification:** full unit suite **2225 passed** (2199 prior + 26 net new
+  test functions); integration **30 passed, 1 skipped**; `py_compile` of the
+  five touched modules clean.
+- **Next:** the mid-session long-silence *flush* iter-160/161 named still stands
+  as the larger item (feed a trailed-off fragment to the engine as its own turn
+  via an inter-turn clock read in `run_session`). Then wire the still-pending
+  `should_abandon_turn` (iter-152) / `should_emit_backchannel` (iter-153) seams
+  behind their sub-flags.

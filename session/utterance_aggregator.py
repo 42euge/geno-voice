@@ -95,6 +95,14 @@ class AggregatedResult:
         """True iff any turn released by this call repaired a false endpoint."""
         return any(t.false_endpoint for t in self.turns)
 
+    @property
+    def capped(self) -> bool:
+        """True iff any turn released by this call was force-emitted by the
+        ``max_merge_depth`` safety cap (iter-163). Mirrors
+        :attr:`session.utterance_buffer.BufferResult.capped`.
+        """
+        return any(t.merge_capped for t in self.turns)
+
 
 class UtteranceAggregator:
     """Cross-turn driver around :class:`UtteranceBuffer`.

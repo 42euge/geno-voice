@@ -390,7 +390,20 @@ class ChatLoop:
                 )
             metrics.transcript = resolved.text
             metrics.false_endpoint = resolved.false_endpoint
-            if resolved.false_endpoint:
+            # iter-163: a capped turn is a force-emit of still-unfinished text
+            # by the max_merge_depth backstop (iter-157), not a clean repair.
+            # Stamp it distinctly and print a louder status so the cap firing
+            # is visible at runtime, not only in the summary. A capped turn is
+            # always also a false_endpoint, so the merged-continuation line
+            # below is suppressed for it (the cap line says more).
+            metrics.merge_capped = resolved.merge_capped
+            if resolved.merge_capped:
+                self._print(
+                    f"  {_DIM}merge-depth cap hit — force-emitting "
+                    f"still-unfinished utterance (gap "
+                    f"{agg_result.gap_secs:.2f}s; iter-157 backstop){_RESET}"
+                )
+            elif resolved.false_endpoint:
                 self._print(
                     f"  {_DIM}merged false-endpoint continuation "
                     f"(gap {agg_result.gap_secs:.2f}s){_RESET}"

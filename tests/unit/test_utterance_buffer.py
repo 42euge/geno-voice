@@ -516,3 +516,82 @@ def test_cap_irrelevant_in_half_duplex_passthrough():
     assert r1.turns == [EmittedTurn(INCOMPLETE, False)]
     assert r2.turns == [EmittedTurn(CONT_FRAG, False)]
     assert buf.merge_count == 0
+
+
+# ---- iter-163: merge_capped flag surfaces the cap force-emit -----------------
+
+
+def test_emitted_turn_merge_capped_defaults_false():
+    # The new flag is purely additive; a turn constructed without it is not
+    # capped, so every pre-iter-163 construction reads as a natural release.
+    assert EmittedTurn("hi").merge_capped is False
+    assert EmittedTurn("hi", True).merge_capped is False
+
+
+def test_force_emitted_turn_is_merge_capped():
+    # cap=2 ⇒ the 2nd merge force-emits; that turn must be flagged merge_capped
+    # so the cap firing is visible, not silent.
+    buf = UtteranceBuffer(config=ORGANIC, max_merge_depth=2)
+    buf.offer(INCOMPLETE, gap_secs=0.2)
+    buf.offer(CONT_FRAG, gap_secs=0.3)
+    res = buf.offer(CONT_FRAG, gap_secs=0.3)             # cap → force-emit
+    assert res.turns[0].merge_capped is True
+    assert res.turns[0].false_endpoint is True           # always paired
+    assert res.capped is True
+
+
+def test_cap_of_one_force_emit_is_merge_capped():
+    buf = UtteranceBuffer(config=ORGANIC, max_merge_depth=1)
+    buf.offer(INCOMPLETE, gap_secs=0.2)                  # held (no merge)
+    res = buf.offer(CONT_FRAG, gap_secs=0.3)             # 1st merge → cap
+    assert res.turns[0].merge_capped is True
+    assert res.capped is True
+
+
+def test_natural_merge_release_is_not_capped():
+    # A merge chain that ends on a complete-looking sentence releases naturally
+    # (no cap) — false_endpoint is True (it repaired endpoints) but merge_capped
+    # must be False: this is a clean repair, not the backstop firing.
+    buf = UtteranceBuffer(config=ORGANIC, max_merge_depth=8)
+    buf.offer(INCOMPLETE, gap_secs=0.2)
+    buf.offer(CONT_FRAG, gap_secs=0.3)
+    res = buf.offer("launch date.", gap_secs=0.3)        # completes ⇒ natural
+    assert res.turns[0].false_endpoint is True
+    assert res.turns[0].merge_capped is False
+    assert res.capped is False
+
+
+def test_new_release_from_long_gap_is_not_capped():
+    # A pending released as NEW because of a long gap is not a cap force-emit.
+    buf = UtteranceBuffer(config=ORGANIC, max_merge_depth=4)
+    buf.offer(INCOMPLETE, gap_secs=0.2)
+    buf.offer(CONT_FRAG, gap_secs=0.3)
+    res = buf.offer(INCOMPLETE, gap_secs=5.0)            # long gap ⇒ NEW release
+    assert res.turns[0].false_endpoint is True           # the released pending merged
+    assert res.turns[0].merge_capped is False
+    assert res.capped is False
+
+
+def test_flush_release_is_not_capped():
+    # flush() releasing a held pending is a graceful release, never a cap.
+    buf = UtteranceBuffer(config=ORGANIC, max_merge_depth=4)
+    buf.offer(INCOMPLETE, gap_secs=0.2)
+    res = buf.flush()
+    assert len(res.turns) == 1
+    assert res.turns[0].merge_capped is False
+    assert res.capped is False
+
+
+def test_half_duplex_passthrough_never_capped():
+    buf = UtteranceBuffer(max_merge_depth=1)             # default half-duplex
+    res = buf.offer(INCOMPLETE, gap_secs=0.2)
+    assert res.turns[0].merge_capped is False
+    assert res.capped is False
+
+
+def test_buffer_result_capped_property_empty():
+    # No turns ⇒ capped is False (a held offer releases nothing).
+    buf = UtteranceBuffer(config=ORGANIC, max_merge_depth=8)
+    res = buf.offer(INCOMPLETE, gap_secs=0.2)            # held, no turns
+    assert res.turns == []
+    assert res.capped is False

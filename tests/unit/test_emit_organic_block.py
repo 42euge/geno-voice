@@ -55,6 +55,9 @@ class TestTurnMetricsDefaults:
     def test_continuers_detected_defaults_zero(self):
         assert TurnMetrics().continuers_detected == 0
 
+    def test_merge_capped_defaults_false(self):
+        assert TurnMetrics().merge_capped is False
+
 
 # ---- OrganicStats defaults --------------------------------------
 
@@ -66,6 +69,7 @@ class TestOrganicStatsDefaults:
         assert s.continuers_total == 0
         assert s.n == 0
         assert s.utterances_held == 0
+        assert s.merges_capped == 0
 
 
 # ---- Utterances held (iter-161) ---------------------------------
@@ -108,6 +112,51 @@ class TestUtterancesHeld:
         assert any("False endpoints:  1/10 turns" in ln for ln in lines)
         assert any("Continuers held:  2" in ln for ln in lines)
         assert any("Utterances held:  3" in ln for ln in lines)
+
+
+# ---- Merges capped (iter-163) -----------------------------------
+
+
+class TestMergesCapped:
+    def test_capped_alone_emits_block_and_line(self):
+        # A session that only hit the merge cap still surfaces it under the
+        # header (the cap firing must never be silent).
+        emit, lines = _capture()
+        _emit_organic_block(emit, OrganicStats(merges_capped=2, n=5))
+        assert any("Organic turn-taking:" in ln for ln in lines)
+        assert any(
+            "Merges capped:    2 (hit max_merge_depth still mid-thought "
+            "— retune merge window/EOU; iter-157 cap)" in ln
+            for ln in lines
+        )
+
+    def test_capped_zero_omits_line(self):
+        emit, lines = _capture()
+        _emit_organic_block(emit, OrganicStats(false_endpoints=1, n=5))
+        assert not any("Merges capped" in ln for ln in lines)
+
+    def test_capped_alone_does_not_emit_other_lines(self):
+        emit, lines = _capture()
+        _emit_organic_block(emit, OrganicStats(merges_capped=1))
+        assert not any("False endpoints" in ln for ln in lines)
+        assert not any("Continuers held" in ln for ln in lines)
+        assert not any("Utterances held" in ln for ln in lines)
+
+    def test_capped_with_other_signals_under_one_header(self):
+        emit, lines = _capture()
+        _emit_organic_block(
+            emit,
+            OrganicStats(
+                false_endpoints=2, continuers_total=1, utterances_held=3,
+                merges_capped=1, n=10,
+            ),
+        )
+        headers = [ln for ln in lines if "Organic turn-taking:" in ln]
+        assert len(headers) == 1
+        assert any("False endpoints:  2/10 turns" in ln for ln in lines)
+        assert any("Continuers held:  1" in ln for ln in lines)
+        assert any("Utterances held:  3" in ln for ln in lines)
+        assert any("Merges capped:    1" in ln for ln in lines)
 
 
 # ---- No-data path (the half-duplex default) ---------------------
@@ -267,6 +316,29 @@ class TestSummaryWiring:
         out = _strip_ansi(capsys.readouterr().out)
         assert "False endpoint" not in out
         assert "Continuers:" not in out
+
+    def test_merge_capped_turn_surfaces_in_summary(self):
+        # A capped turn (always also false_endpoint) surfaces BOTH the
+        # false-endpoint rate and the distinct "Merges capped" line.
+        metrics = [
+            TurnMetrics(ttfs=0.5, false_endpoint=True, merge_capped=True),
+            TurnMetrics(ttfs=0.5),
+        ]
+        out = _summary(metrics)
+        assert "Organic turn-taking:" in out
+        assert "Merges capped:    1" in out
+        assert "False endpoints:  1/2 turns" in out
+
+    def test_no_capped_turn_omits_capped_line(self):
+        # A false endpoint that was a clean repair (not capped) shows the
+        # false-endpoint line but NOT the merges-capped line.
+        metrics = [
+            TurnMetrics(ttfs=0.5, false_endpoint=True, merge_capped=False),
+            TurnMetrics(ttfs=0.5),
+        ]
+        out = _summary(metrics)
+        assert "False endpoints:  1/2 turns" in out
+        assert "Merges capped" not in out
 
 
 # ---- print_session_summary wiring of utterances_held (iter-161) -

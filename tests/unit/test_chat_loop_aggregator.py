@@ -184,6 +184,8 @@ class TestNoAggregator:
         assert result.held is False
         # iter-162: no aggregator ⇒ nothing displaced.
         assert result.displaced == ()
+        # iter-163: no aggregator ⇒ never merge-capped.
+        assert result.metrics.merge_capped is False
 
 
 # ---- Half-duplex aggregator: transparent passthrough ------------------------
@@ -205,6 +207,8 @@ class TestHalfDuplexPassthrough:
         assert result.held is False
         # iter-162: half-duplex releases one turn at a time — never displaces.
         assert result.displaced == ()
+        # iter-163: half-duplex never holds, so the cap can never fire.
+        assert result.metrics.merge_capped is False
 
 
 # ---- Organic aggregator: hold + merge ---------------------------------------
@@ -276,6 +280,9 @@ class TestOrganicMerge:
         assert agg.pending is None
         # iter-162: a genuine merge releases a SINGLE turn — nothing displaced.
         assert r2.displaced == ()
+        # iter-163: a natural merge (completed on a real sentence) is NOT the
+        # cap firing.
+        assert r2.metrics.merge_capped is False
 
     def test_long_silence_displaces_abandoned_fragment(self):
         # iter-162: the user trails off mid-thought ("I was thinking about
@@ -337,4 +344,51 @@ class TestOrganicMerge:
         assert result.metrics is not None
         assert result.metrics.transcript == "What time is it?"
         assert result.metrics.false_endpoint is False
+        assert agg.pending is None
+
+
+class TestOrganicMergeCap:
+    # iter-163: a pathological "unfinished forever" stream hits the
+    # max_merge_depth cap; the buffer force-emits the still-mid-thought text.
+    # That turn must stamp TurnMetrics.merge_capped so the operator sees the
+    # backstop fire instead of it being silently counted as a clean merge.
+
+    def _capped_aggregator(self):
+        return UtteranceAggregator(
+            config=FullDuplexConfig(enabled=True, utterance_merging=True),
+            max_merge_depth=1,   # the very first merge force-emits
+        )
+
+    def test_cap_force_emit_sets_merge_capped(self):
+        agg = self._capped_aggregator()
+        clock = _ManualClock()
+        messages = [{"role": "system", "content": "x"}]
+
+        # Turn 1: mid-thought, held (holding is not a merge, so no cap yet).
+        mic1 = VirtualMicStream(rate=RATE, chunk_size=CHUNK)
+        _push_utterance(mic1)
+        loop1 = _make_loop(
+            mic1, transcript="I was thinking about the",
+            aggregator=agg, clock=clock,
+        )
+        r1 = loop1.run_one_turn(messages)
+        assert r1.metrics is None
+        assert agg.pending == "I was thinking about the"
+
+        # Quick gap (< max_gap_secs) → would merge; but cap=1 force-emits the
+        # still-unfinished running text on this first merge.
+        clock.advance(0.5)
+        mic2 = VirtualMicStream(rate=RATE, chunk_size=CHUNK)
+        _push_utterance(mic2)
+        loop2 = _make_loop(
+            mic2, transcript="and the",      # still trailing — unfinished
+            aggregator=agg, clock=clock,
+        )
+        r2 = loop2.run_one_turn(messages)
+        assert r2.metrics is not None
+        assert r2.metrics.transcript == "I was thinking about the and the"
+        # The cap fired: both flags set.
+        assert r2.metrics.false_endpoint is True
+        assert r2.metrics.merge_capped is True
+        # Force-emit clears the buffer.
         assert agg.pending is None

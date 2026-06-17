@@ -335,6 +335,17 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   space-glued them into one garbled LLM input ("I was thinking about the What
   time is it?"); the responded turn's `false_endpoint` is now its own flag, not
   an OR across the abandoned fragments.
+  **The merge-depth cap is a distinct signal** (`session/utterance_buffer.py`,
+  `session/utterance_aggregator.py`, `examples/_chat_aggregation.py`,
+  `examples/_chat_metrics.py`, `examples/_chat_loop.py`, iter-163): when the
+  iter-157 `max_merge_depth` backstop *force-emits* a still-mid-thought utterance
+  (a pathological "unfinished forever" stream), that turn now sets a distinct
+  `merge_capped` flag — threaded `EmittedTurn` / `BufferResult.capped` →
+  `AggregatedResult.capped` → `ResolvedTurn.merge_capped` →
+  `TurnMetrics.merge_capped` → `OrganicStats.merges_capped` + a "Merges capped"
+  summary line — instead of being silently counted as a clean merge. The cap
+  firing is a tuning signal (retune the merge window/EOU), so surfacing it
+  honors the "no silent caps" discipline.
 - **[Performance metrics taxonomy](docs/perf-metrics-taxonomy.md)** — a
   catalog of metrics worth instrumenting on a local-first voice agent.
 

@@ -94,10 +94,23 @@ class EmittedTurn:
     the buffer repaired by gluing the next chunk on. The caller sets
     ``TurnMetrics.false_endpoint = turn.false_endpoint`` so iter-154's metric
     populates from the live organic path.
+
+    ``merge_capped`` (iter-163) is ``True`` iff this turn was **force-emitted**
+    by the ``max_merge_depth`` safety cap (iter-157) rather than released
+    naturally — i.e. the held pending kept looking unfinished through
+    ``max_merge_depth`` consecutive merges and the buffer gave up holding it to
+    avoid starving the engine. A capped turn is always also a ``false_endpoint``
+    (it absorbed real merges on the way up), but it is *not* a clean repair: the
+    running text still looked mid-thought when it was cut loose, so the operator
+    should see it distinctly. Without this flag the cap fired silently —
+    iter-157's docstring promised "a bounded, observable delay" but a session
+    summary had no way to show the cap engaged. ``False`` on every natural
+    release (the overwhelmingly common case) and on the half-duplex passthrough.
     """
 
     text: str
     false_endpoint: bool = False
+    merge_capped: bool = False
 
 
 @dataclass(frozen=True)
@@ -118,6 +131,14 @@ class BufferResult:
     def merged(self) -> bool:
         """True iff any turn released by this call repaired a false endpoint."""
         return any(t.false_endpoint for t in self.turns)
+
+    @property
+    def capped(self) -> bool:
+        """True iff any turn released by this call was force-emitted by the
+        ``max_merge_depth`` safety cap (iter-163). See
+        :attr:`EmittedTurn.merge_capped`.
+        """
+        return any(t.merge_capped for t in self.turns)
 
 
 def _join(prev: str, nxt: str) -> str:
@@ -274,9 +295,14 @@ class UtteranceBuffer:
             # number of merges, force-emit it now: holding again would risk
             # never feeding the engine on a pathological unfinished-forever
             # stream. The emitted turn keeps its ``false_endpoint`` flag (it
-            # repaired real false endpoints on the way up to the cap).
+            # repaired real false endpoints on the way up to the cap) and is
+            # additionally flagged ``merge_capped`` (iter-163) so the cap firing
+            # is visible end-to-end rather than silent — this is a force-emit of
+            # still-unfinished text, not a clean repair.
             if candidate_merges >= self._max_merge_depth:
-                turns.append(EmittedTurn(candidate, candidate_merged))
+                turns.append(
+                    EmittedTurn(candidate, candidate_merged, merge_capped=True)
+                )
                 return BufferResult(turns=turns, held=None)
             self._pending = candidate
             self._pending_merged = candidate_merged

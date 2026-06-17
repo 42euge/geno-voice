@@ -398,6 +398,23 @@ class TurnMetrics:
     # buys, now measured rather than asserted. Metric 3.23 in the
     # perf-metrics taxonomy ("Novel/speculative").
     continuers_detected: int = 0
+    # iter-163: organic-turn-taking diagnostic (backlog #9). True iff this
+    # turn was force-emitted by the iter-157 max_merge_depth safety cap —
+    # the organic UtteranceBuffer held a mid-thought utterance through
+    # max_merge_depth consecutive merges without it ever looking complete,
+    # then gave up holding it (to avoid starving the engine on a
+    # pathological unfinished-forever stream) and cut the still-unfinished
+    # running text loose as this turn. Always paired with
+    # false_endpoint=True (a capped turn absorbed real merges on the way up),
+    # but distinct: a clean repair lands on a complete-looking sentence,
+    # whereas a capped turn is the backstop firing — a signal the operator
+    # should see, since a recurring cap means the merge window / completeness
+    # scorer is mistuned for this speaker (or the STT is fragmenting). False
+    # on every natural release and on the half-duplex path (which never
+    # holds, so the cap can never fire). Surfaced in the organic summary
+    # block so iter-157's promised "bounded, OBSERVABLE delay" is actually
+    # observable rather than silent.
+    merge_capped: bool = False
     transcript: str = ""
     response: str = ""
     model: str = ""
@@ -768,10 +785,18 @@ class TurnMetrics:
         # off by mis-deciding end-of-turn); continuers are a positive
         # signal (the agent correctly held its floor), shown dim.
         if self.false_endpoint:
+            # iter-163: a capped turn is the max_merge_depth backstop firing
+            # (force-emit of still-unfinished text), not a clean repair —
+            # annotate the line so the per-turn readout distinguishes the two.
+            detail = (
+                "merge-depth cap hit — force-emitted mid-thought (iter-157)"
+                if self.merge_capped
+                else "user wasn't done — EOU fired early"
+            )
             print(
                 f"  {_DIM}│{_RESET}  {_YELLOW}False endpoint:"
                 f" yes{_RESET}  "
-                f"({_DIM}user wasn't done — EOU fired early{_RESET})"
+                f"({_DIM}{detail}{_RESET})"
             )
         if self.continuers_detected > 0:
             print(
@@ -1060,12 +1085,22 @@ class OrganicStats:
         engaged — and so these holds are visibly distinct from the
         VAD false-trigger count they used to be miscounted as
         (the iter-159→iter-161 fix).
+      ``merges_capped`` (iter-163): turns force-emitted by the
+        iter-157 max_merge_depth safety cap — the buffer held a
+        mid-thought utterance through max_merge_depth merges without
+        it ever looking complete, then cut it loose still-unfinished
+        to avoid starving the engine. A subset of ``false_endpoints``
+        (every capped turn absorbed real merges), surfaced separately
+        so iter-157's promised "bounded, OBSERVABLE delay" is visible
+        rather than silent. A recurring count means the merge window /
+        completeness scorer is mistuned for this speaker.
     """
 
     false_endpoints: int = 0
     continuers_total: int = 0
     n: int = 0
     utterances_held: int = 0
+    merges_capped: int = 0
 
 
 def _emit_organic_block(emit, stats: OrganicStats) -> None:
@@ -1080,18 +1115,22 @@ def _emit_organic_block(emit, stats: OrganicStats) -> None:
       - Utterances merged-held (iter-161): mid-thought fragments the
         aggregator buffered for a merge rather than responding to
         immediately.
+      - Merges capped (iter-163): turns the max_merge_depth backstop
+        force-emitted while still mid-thought — iter-157's cap firing,
+        now observable rather than silent.
 
     **Fully suppressed when all counters are zero** — which is the
     half-duplex default, so existing sessions print byte-for-byte the
     same summary they did before iter-154. The block only appears once
     the organic path is wired in and starts populating the per-turn
     ``false_endpoint`` / ``continuers_detected`` fields (or holds a
-    mid-thought utterance, iter-161).
+    mid-thought utterance, iter-161; or hits the merge cap, iter-163).
     """
     if (
         stats.false_endpoints <= 0
         and stats.continuers_total <= 0
         and stats.utterances_held <= 0
+        and stats.merges_capped <= 0
     ):
         return
 
@@ -1130,6 +1169,20 @@ def _emit_organic_block(emit, stats: OrganicStats) -> None:
         emit(
             f"    Utterances held:  {stats.utterances_held} "
             f"(mid-thought, buffered for merge — not VAD false triggers)"
+        )
+    # iter-163: turns the iter-157 max_merge_depth backstop force-emitted
+    # while still mid-thought. A subset of the false-endpoint count above
+    # (every capped turn absorbed real merges), surfaced separately because
+    # a capped turn is the cap firing — not a clean repair. A recurring
+    # count is a tuning signal: the merge window / completeness scorer is
+    # not matching this speaker (or the STT is fragmenting utterances), so
+    # the buffer keeps hitting the depth limit instead of landing on a
+    # complete-looking sentence.
+    if stats.merges_capped > 0:
+        emit(
+            f"    Merges capped:    {stats.merges_capped} "
+            f"(hit max_merge_depth still mid-thought — retune merge "
+            f"window/EOU; iter-157 cap)"
         )
 
 
@@ -2637,6 +2690,12 @@ def print_session_summary(
     false_endpoints_total = sum(
         1 for m in metrics_list if m.false_endpoint
     )
+    # iter-163: turns force-emitted by the max_merge_depth cap. Read
+    # defensively (getattr) so a pre-iter-163 TurnMetrics shape without the
+    # field contributes nothing. A subset of false_endpoints_total.
+    merges_capped_total = sum(
+        1 for m in metrics_list if getattr(m, "merge_capped", False)
+    )
     continuers_total = sum(m.continuers_detected for m in metrics_list)
     # iter-057: total seconds of audio carried over via primed frames.
     # iter-058: total worker errors across the session (sum of
@@ -3009,6 +3068,9 @@ def print_session_summary(
             # iter-161: held-utterance count tracked by run_session and
             # threaded through SessionMeta.
             utterances_held=utterances_held,
+            # iter-163: merge-cap force-emits, derived from the per-turn
+            # TurnMetrics.merge_capped flags.
+            merges_capped=merges_capped_total,
         ),
     )
     # iter-057: total seconds of audio carried over by the watcher

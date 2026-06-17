@@ -58,6 +58,16 @@ class ResolvedTurn:
     shutdown** ``stranded_utterance``: captured fine, never completed, and *not*
     part of the text the loop responds to. A single-turn release (the common
     case) leaves it empty.
+
+    ``merge_capped`` (iter-163) is ``True`` iff the *responded* turn was
+    force-emitted by the ``max_merge_depth`` safety cap (iter-157) rather than
+    released naturally — the held pending stayed unfinished-looking through
+    ``max_merge_depth`` merges and the buffer cut it loose to avoid starving the
+    engine. Always paired with ``false_endpoint=True`` (a capped turn absorbed
+    real merges), but distinct: the text still looked mid-thought when emitted,
+    so the loop surfaces it as a separate signal rather than a clean repair. The
+    flag mirrors the *responded* (last) turn only — an earlier displaced
+    fragment that happened to be capped does not stamp the fresh response.
     """
 
     respond: bool
@@ -65,6 +75,7 @@ class ResolvedTurn:
     false_endpoint: bool = False
     held: str | None = None
     displaced: tuple[str, ...] = ()
+    merge_capped: bool = False
 
 
 def resolve_turn(result) -> ResolvedTurn:
@@ -85,7 +96,8 @@ def resolve_turn(result) -> ResolvedTurn:
         are abandoned mid-thought fragments, the last is the new thing to answer
         now. iter-162 fixes the pre-existing bug where these were space-glued
         into one garbled LLM input (``"I was thinking about the What time is
-        it?"``). ``false_endpoint`` is the responded (last) turn's own flag.
+        it?"``). ``false_endpoint`` and ``merge_capped`` are the responded
+        (last) turn's own flags.
       - Earlier released turns become ``displaced`` — surfaced like iter-160's
         ``stranded_utterance`` rather than fed to the engine.
       - A release of only blank turns collapses to ``respond=False`` — there is
@@ -97,10 +109,12 @@ def resolve_turn(result) -> ResolvedTurn:
     if not turns:
         return ResolvedTurn(respond=False, text="", false_endpoint=False, held=held)
 
-    # Keep each turn paired with its own false-endpoint flag so the responded
-    # turn carries *its* flag (not an OR across abandoned fragments).
+    # Keep each turn paired with its own false-endpoint + merge-capped flags so
+    # the responded turn carries *its* flags (not an OR across abandoned
+    # fragments). ``merge_capped`` is read defensively (getattr) so a
+    # pre-iter-163 EmittedTurn shape without the field resolves to False.
     nonblank = [
-        (t.text.strip(), bool(t.false_endpoint))
+        (t.text.strip(), bool(t.false_endpoint), bool(getattr(t, "merge_capped", False)))
         for t in turns
         if t.text and t.text.strip()
     ]
@@ -109,11 +123,12 @@ def resolve_turn(result) -> ResolvedTurn:
         # Defensive: every released turn was blank — nothing to respond to.
         return ResolvedTurn(respond=False, text="", false_endpoint=False, held=held)
 
-    *earlier, (text, false_endpoint) = nonblank
+    *earlier, (text, false_endpoint, merge_capped) = nonblank
     return ResolvedTurn(
         respond=True,
         text=text,
         false_endpoint=false_endpoint,
         held=held,
-        displaced=tuple(t for t, _ in earlier),
+        displaced=tuple(t for t, _, _ in earlier),
+        merge_capped=merge_capped,
     )

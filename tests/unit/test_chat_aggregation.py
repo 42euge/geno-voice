@@ -35,6 +35,7 @@ from examples._chat_aggregation import ResolvedTurn, resolve_turn  # noqa: E402
 class _Turn:
     text: str
     false_endpoint: bool = False
+    merge_capped: bool = False
 
 
 @dataclass(frozen=True)
@@ -165,6 +166,61 @@ class TestMultiTurn:
         assert r.displaced == ()
 
 
+# ---- iter-163: merge_capped flows to the responded turn ---------------------
+#
+# A capped turn is a force-emit of still-unfinished text by the iter-157
+# backstop, not a clean repair. resolve_turn carries the RESPONDED turn's own
+# merge_capped flag (mirroring the false_endpoint rule), so the loop can stamp
+# TurnMetrics.merge_capped and the operator sees the cap fire.
+
+
+class TestMergeCapped:
+    def test_single_capped_turn_carries_flag(self):
+        r = resolve_turn(
+            _Result(turns=[_Turn("I was thinking about the", True,
+                                  merge_capped=True)])
+        )
+        assert r.respond is True
+        assert r.merge_capped is True
+        assert r.false_endpoint is True       # always paired
+
+    def test_natural_turn_is_not_capped(self):
+        r = resolve_turn(_Result(turns=[_Turn("All done.", False)]))
+        assert r.merge_capped is False
+
+    def test_merge_capped_is_responded_turns_own_flag(self):
+        # A capped DISPLACED fragment must not stamp a fresh, uncapped
+        # response — only the last (responded) turn's flag counts.
+        r = resolve_turn(
+            _Result(turns=[_Turn("a", True, merge_capped=True),
+                           _Turn("b", False, merge_capped=False)])
+        )
+        assert r.text == "b"
+        assert r.merge_capped is False
+        assert r.displaced == ("a",)
+
+    def test_responded_turn_keeps_its_own_capped_flag(self):
+        r = resolve_turn(
+            _Result(turns=[_Turn("a", False, merge_capped=False),
+                           _Turn("b", True, merge_capped=True)])
+        )
+        assert r.text == "b"
+        assert r.merge_capped is True
+        assert r.displaced == ("a",)
+
+    def test_missing_merge_capped_attr_defaults_false(self):
+        # Back-compat: a pre-iter-163 turn double without the attribute
+        # resolves to merge_capped=False (read via getattr).
+        @dataclass(frozen=True)
+        class _OldTurn:
+            text: str
+            false_endpoint: bool = False
+
+        r = resolve_turn(_Result(turns=[_OldTurn("hi.", True)]))
+        assert r.merge_capped is False
+        assert r.false_endpoint is True
+
+
 # ---- ResolvedTurn contract --------------------------------------------------
 
 
@@ -184,3 +240,5 @@ class TestResolvedTurnContract:
         assert r.held is None
         # iter-162: displaced defaults to the empty tuple (single-turn case).
         assert r.displaced == ()
+        # iter-163: merge_capped defaults False (natural release).
+        assert r.merge_capped is False
