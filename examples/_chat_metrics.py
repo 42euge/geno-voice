@@ -1496,6 +1496,31 @@ def _emit_primed_audio_line(emit, primed_seconds_total: float) -> None:
         )
 
 
+def _emit_stranded_utterance_line(emit, stranded: Optional[str]) -> None:
+    """iter-160: surface a mid-thought utterance the organic
+    ``UtteranceAggregator`` was still holding when the session ended.
+
+    backlog #9's hold-and-merge driver (iter-156) holds an utterance that
+    looks unfinished, waiting for a quick continuation to merge on. Mid-
+    session that pending always resolves: the NEXT utterance's measured
+    silence gap forces a NEW release inside ``offer``. The one case
+    ``offer`` can never reach is *shutdown* — the user trailed off after a
+    fragment, never spoke again, then hit Ctrl+C. ``run_session`` flushes
+    the aggregator on exit and records the released text on
+    ``state.stranded_utterance``; this line makes that dropped fragment
+    visible rather than silently lost.
+
+    Suppressed (the overwhelmingly common case) when ``stranded`` is
+    ``None`` or blank: no aggregator wired in, nothing was held, or
+    half-duplex mode (which never holds). A clean session never sees it.
+    """
+    if stranded and stranded.strip():
+        emit(
+            f"    Stranded uttr.:   {stranded.strip()!r} "
+            f"(held mid-thought at exit, never completed — iter-160)"
+        )
+
+
 def _emit_wer_line(emit, wer_values: list[float]) -> None:
     """iter-105: report median + max WER across turns where a
     reference transcript was supplied. Suppressed when no turn
@@ -2310,6 +2335,13 @@ class SessionMeta:
     # recommended new value from the observed llm_first_token
     # distribution and surfaces it on the FP-rate line.
     idle_threshold: float = 0.0
+    # iter-160: a mid-thought utterance the organic UtteranceAggregator
+    # was still holding when the session ended (the user trailed off and
+    # never landed a continuation, then hit Ctrl+C). ``None`` for the
+    # overwhelmingly common case — no aggregator, nothing held, or
+    # half-duplex (which never holds). When set, the summary surfaces it
+    # so the dropped final fragment is visible rather than silently lost.
+    stranded_utterance: Optional[str] = None
 
 
 def print_session_summary(
@@ -2378,6 +2410,9 @@ def print_session_summary(
             # iter-096: idle_threshold has no legacy kwarg path —
             # only flows through SessionMeta.
             idle_threshold=meta.idle_threshold,
+            # iter-160: stranded fragment — SessionMeta-only, no legacy
+            # kwarg path.
+            stranded_utterance=meta.stranded_utterance,
         )
     else:
         meta_eff = SessionMeta(
@@ -2393,6 +2428,8 @@ def print_session_summary(
     llm_errors = meta_eff.llm_errors
     trim_events = meta_eff.trim_events
     trim_messages_evicted = meta_eff.trim_messages_evicted
+    # iter-160: stranded mid-thought fragment held at shutdown.
+    stranded_utterance = meta_eff.stranded_utterance
 
     def _emit(line: str = "") -> None:
         if file is None:
@@ -2405,6 +2442,10 @@ def print_session_summary(
     _emit(f"{_DIM}{'─' * 56}{_RESET}")
     if not metrics_list:
         _emit(f"{_BOLD}  Session ended (no completed turns){_RESET}")
+        # iter-160: even a session with zero completed turns can strand a
+        # mid-thought fragment — the user spoke one unfinished utterance,
+        # it was held, then they quit. Surface it before the early return.
+        _emit_stranded_utterance_line(_emit, stranded_utterance)
         _emit()
         return
 
@@ -2880,6 +2921,9 @@ def print_session_summary(
     # totals).
     # iter-104: extracted to _emit_primed_audio_line helper.
     _emit_primed_audio_line(_emit, primed_seconds_total)
+    # iter-160: surface a mid-thought fragment the organic aggregator was
+    # holding at shutdown (suppressed unless one was actually stranded).
+    _emit_stranded_utterance_line(_emit, stranded_utterance)
     # iter-058: error rate per stage. LLM errors are session-level
     # (kill the turn outright); worker errors are per-turn (partial
     # turn — some sentences synthed, others raised). Show only when

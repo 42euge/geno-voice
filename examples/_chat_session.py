@@ -52,6 +52,13 @@ class SessionState:
     trim_messages_evicted: int = 0
     primed_frames: Optional[list[bytes]] = None
     session_start: float = 0.0
+    # iter-160: text the organic UtteranceAggregator was still holding
+    # back when the session ended (the user trailed off mid-thought and
+    # never landed a continuation, then hit Ctrl+C). ``None`` when no
+    # aggregator was wired in, when nothing was held, or when merging is
+    # off (half-duplex never holds). Surfaced in the session summary so a
+    # dropped final fragment is visible rather than silently lost.
+    stranded_utterance: Optional[str] = None
 
 
 def run_session(
@@ -65,6 +72,7 @@ def run_session(
     ),
     clock: Callable[[], float] = time.monotonic,
     trim_messages: Optional[Callable[[list[dict], int], list[dict]]] = None,
+    aggregator: Any = None,
 ) -> SessionState:
     """Run the chat loop until KeyboardInterrupt.
 
@@ -87,6 +95,15 @@ def run_session(
         trim_messages: callable for context-cap enforcement. When
             None (default), defers to the `ChatLoop.trim_messages`
             staticmethod. Tests pass a stub to avoid the import.
+        aggregator: the same `UtteranceAggregator` instance wired into
+            `chat_loop` (iter-159), or None (default). When present, on
+            exit `run_session` calls `aggregator.flush()` to release any
+            mid-thought utterance the buffer was still holding — the
+            user trailed off and never landed a continuation, then hit
+            Ctrl+C. The flushed text is recorded on
+            `state.stranded_utterance` so the session summary can surface
+            it rather than dropping it silently. None / nothing-held /
+            half-duplex all leave `stranded_utterance` at None.
 
     Returns:
         Populated SessionState. The caller is responsible for
@@ -152,5 +169,28 @@ def run_session(
     except KeyboardInterrupt:
         # Expected exit path — the caller knows to dump the summary.
         pass
+
+    # iter-160: flush the organic aggregator on the way out. A held
+    # mid-thought utterance only ever surfaces mid-session when the NEXT
+    # utterance arrives (its measured gap forces a NEW release inside
+    # ``offer``). The one case ``offer`` can never reach is *shutdown*:
+    # the user trailed off after a fragment, never spoke again, then hit
+    # Ctrl+C. That text is held inside the buffer and would be silently
+    # lost. Flushing here releases it; we record (not respond to — the
+    # session is ending) the joined text on ``state.stranded_utterance``
+    # so the summary can surface the dropped fragment. None / nothing-held
+    # / half-duplex (never holds) all leave it at None.
+    if aggregator is not None:
+        try:
+            flushed = aggregator.flush()
+        except Exception:
+            # A misbehaving aggregator must not mask the summary the
+            # caller is about to print — swallow and leave it at None.
+            flushed = None
+        if flushed is not None:
+            from examples._chat_aggregation import resolve_turn
+            resolved = resolve_turn(flushed)
+            if resolved.respond and resolved.text:
+                state.stranded_utterance = resolved.text
 
     return state

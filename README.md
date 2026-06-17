@@ -305,7 +305,14 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   *released* (possibly merged) turn is responded to and sets
   `TurnMetrics.false_endpoint`, populating iter-154's false-endpoint metric from
   the live path. With `aggregator=None` (default) or the `GENO_FULL_DUPLEX*`
-  flags unset, the path is byte-for-byte unchanged.
+  flags unset, the path is byte-for-byte unchanged. **Flushed on shutdown**
+  (`examples/_chat_session.py`, `tests/unit/test_chat_session.py`, iter-160):
+  `run_session` calls `aggregator.flush()` on exit so a mid-thought fragment the
+  buffer was still holding when the user trailed off and hit Ctrl+C isn't
+  silently lost — the released text rides out on `SessionState.stranded_utterance`
+  and the session summary surfaces it (`_emit_stranded_utterance_line`). Mid-
+  session a held pending always resolves via the next utterance's gap inside
+  `offer`; shutdown is the one path `offer` can't reach.
 - **[Performance metrics taxonomy](docs/perf-metrics-taxonomy.md)** — a
   catalog of metrics worth instrumenting on a local-first voice agent.
 

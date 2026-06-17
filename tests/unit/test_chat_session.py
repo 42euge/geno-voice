@@ -10,7 +10,7 @@ session-level state in a SessionState bundle. Tests pass:
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional
@@ -354,3 +354,221 @@ def test_system_prompt_is_first_message():
     assert state.messages[0] == {
         "role": "system", "content": "you are a helpful assistant",
     }
+
+
+# ---- iter-160: aggregator flush on exit -----------------------------------
+
+
+@dataclass
+class _StubEmittedTurn:
+    """Mimics session.utterance_buffer.EmittedTurn — resolve_turn only
+    reads .text / .false_endpoint."""
+    text: str
+    false_endpoint: bool = False
+
+
+@dataclass
+class _StubFlushResult:
+    """Mimics AggregatedResult / BufferResult — resolve_turn duck-types
+    over .turns / .held."""
+    turns: list = field(default_factory=list)
+    held: Optional[str] = None
+
+
+class _StubAggregator:
+    """Records whether flush() was called and returns a canned result."""
+
+    def __init__(self, flush_result=None, raise_on_flush=False):
+        self._flush_result = flush_result
+        self._raise = raise_on_flush
+        self.flush_calls = 0
+
+    def flush(self):
+        self.flush_calls += 1
+        if self._raise:
+            raise RuntimeError("boom")
+        return self._flush_result
+
+
+def test_no_aggregator_leaves_stranded_none():
+    """Default path (no aggregator) never sets stranded_utterance."""
+    loop = _StubChatLoop(queue=[])
+    state = run_session(
+        loop, "p",
+        log=_silent, prompt_log=_silent,
+        trim_messages=_stub_trim,
+    )
+    assert state.stranded_utterance is None
+
+
+def test_aggregator_flushed_on_exit_even_with_nothing_held():
+    """flush() is always called on exit so the buffer's cross-turn state
+    is reset; an empty flush (nothing held) leaves stranded_utterance None."""
+    agg = _StubAggregator(flush_result=_StubFlushResult(turns=[], held=None))
+    loop = _StubChatLoop(queue=[])
+    state = run_session(
+        loop, "p",
+        log=_silent, prompt_log=_silent,
+        trim_messages=_stub_trim,
+        aggregator=agg,
+    )
+    assert agg.flush_calls == 1
+    assert state.stranded_utterance is None
+
+
+def test_held_fragment_at_shutdown_recorded_as_stranded():
+    """A flush that releases a held mid-thought fragment records the text
+    on state.stranded_utterance."""
+    agg = _StubAggregator(
+        flush_result=_StubFlushResult(
+            turns=[_StubEmittedTurn("I was going to say", False)],
+            held=None,
+        )
+    )
+    loop = _StubChatLoop(queue=[])
+    state = run_session(
+        loop, "p",
+        log=_silent, prompt_log=_silent,
+        trim_messages=_stub_trim,
+        aggregator=agg,
+    )
+    assert agg.flush_calls == 1
+    assert state.stranded_utterance == "I was going to say"
+
+
+def test_flushed_blank_turn_leaves_stranded_none():
+    """A flush releasing only blank text collapses (resolve_turn returns
+    respond=False) — nothing stranded."""
+    agg = _StubAggregator(
+        flush_result=_StubFlushResult(
+            turns=[_StubEmittedTurn("   ", False)], held=None,
+        )
+    )
+    loop = _StubChatLoop(queue=[])
+    state = run_session(
+        loop, "p",
+        log=_silent, prompt_log=_silent,
+        trim_messages=_stub_trim,
+        aggregator=agg,
+    )
+    assert state.stranded_utterance is None
+
+
+def test_flush_exception_swallowed_state_still_returned():
+    """A misbehaving aggregator must not crash the summary path — the
+    exception is swallowed and stranded_utterance stays None."""
+    agg = _StubAggregator(raise_on_flush=True)
+    loop = _StubChatLoop(queue=[_StubResult(metrics=_StubMetrics())])
+    state = run_session(
+        loop, "p",
+        log=_silent, prompt_log=_silent,
+        trim_messages=_stub_trim,
+        aggregator=agg,
+    )
+    assert agg.flush_calls == 1
+    assert state.stranded_utterance is None
+    # The completed turn still landed — flush is purely additive.
+    assert len(state.all_metrics) == 1
+
+
+def test_stranded_recorded_after_completed_turns():
+    """A held fragment after one or more completed turns is still
+    surfaced — the flush runs regardless of turn count."""
+    agg = _StubAggregator(
+        flush_result=_StubFlushResult(
+            turns=[_StubEmittedTurn("and another thing", True)], held=None,
+        )
+    )
+    loop = _StubChatLoop(queue=[_StubResult(metrics=_StubMetrics())])
+    state = run_session(
+        loop, "p",
+        log=_silent, prompt_log=_silent,
+        trim_messages=_stub_trim,
+        aggregator=agg,
+    )
+    assert len(state.all_metrics) == 1
+    assert state.stranded_utterance == "and another thing"
+
+
+# ---- iter-160: real UtteranceAggregator integration -----------------------
+
+
+def _load_real_aggregator():
+    """Load session.utterance_aggregator by path (dodge the eager-pipecat
+    import in session/__init__, absent on the x86_64 runner)."""
+    import importlib.util
+    import types
+
+    session_dir = ROOT / "session"
+    if "session" not in sys.modules:
+        pkg = types.ModuleType("session")
+        pkg.__path__ = [str(session_dir)]
+        sys.modules["session"] = pkg
+    for name in (
+        "full_duplex",
+        "text_eou",
+        "utterance_merging",
+        "utterance_buffer",
+        "utterance_aggregator",
+    ):
+        full = f"session.{name}"
+        if full in sys.modules:
+            continue
+        spec = importlib.util.spec_from_file_location(
+            full, session_dir / f"{name}.py"
+        )
+        mod = importlib.util.module_from_spec(spec)
+        mod.__package__ = "session"
+        sys.modules[full] = mod
+        spec.loader.exec_module(mod)
+    from session.full_duplex import FullDuplexConfig
+    from session.utterance_aggregator import UtteranceAggregator
+
+    return UtteranceAggregator, FullDuplexConfig
+
+
+def test_real_organic_aggregator_strands_held_fragment_on_exit():
+    """End-to-end with a REAL organic UtteranceAggregator: offer an
+    unfinished-looking utterance (held, no continuation arrives), then let
+    run_session flush on KeyboardInterrupt — the held text surfaces as
+    stranded_utterance."""
+    UtteranceAggregator, FullDuplexConfig = _load_real_aggregator()
+    agg = UtteranceAggregator(
+        config=FullDuplexConfig(enabled=True, utterance_merging=True)
+    )
+    # Offer a mid-thought fragment; with no prior endpoint the gap is inf
+    # but the unfinished completeness score makes the buffer hold it.
+    res = agg.offer("I was about to", speech_start_at=10.0, speech_end_at=11.0)
+    assert res.turns == []  # held, nothing released yet
+    assert agg.pending == "I was about to"
+
+    loop = _StubChatLoop(queue=[])  # immediate KeyboardInterrupt — shutdown
+    state = run_session(
+        loop, "p",
+        log=_silent, prompt_log=_silent,
+        trim_messages=_stub_trim,
+        aggregator=agg,
+    )
+    assert state.stranded_utterance == "I was about to"
+    # Flush reset the buffer's cross-turn state.
+    assert agg.pending is None
+
+
+def test_real_half_duplex_aggregator_never_strands():
+    """A half-duplex aggregator (default config) never holds, so flush on
+    exit releases nothing — stranded_utterance stays None."""
+    UtteranceAggregator, FullDuplexConfig = _load_real_aggregator()
+    agg = UtteranceAggregator(config=FullDuplexConfig())  # half-duplex
+    # Even an unfinished-looking utterance is emitted immediately.
+    res = agg.offer("I was about to", speech_start_at=10.0, speech_end_at=11.0)
+    assert len(res.turns) == 1
+    assert agg.pending is None
+
+    loop = _StubChatLoop(queue=[])
+    state = run_session(
+        loop, "p",
+        log=_silent, prompt_log=_silent,
+        trim_messages=_stub_trim,
+        aggregator=agg,
+    )
+    assert state.stranded_utterance is None

@@ -349,6 +349,9 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
         prompt_log=lambda turn: print(
             f"  {DIM}[{turn}] waiting...{RESET}", end="", flush=True,
         ),
+        # iter-160: hand run_session the same aggregator so it can flush
+        # a held mid-thought fragment on shutdown (otherwise stranded).
+        aggregator=aggregator,
     )
 
     # iter-017 / iter-086: hand the populated SessionState to the
@@ -368,6 +371,9 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
                 trim_events=state.trim_events,
                 trim_messages_evicted=state.trim_messages_evicted,
                 idle_threshold=filler_idle_threshold,
+                # iter-160: surface a mid-thought fragment the aggregator
+                # was still holding at shutdown so it isn't silently lost.
+                stranded_utterance=state.stranded_utterance,
             ),
         )
     finally:
