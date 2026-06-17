@@ -16142,3 +16142,85 @@ rather than deep in synthesis.
     the `mic_chat` barge path; blocked on no transcript at VAD-trigger time.
   - Carried over (off-track): the CI workflow still blocked on a committed
     `baseline.json`; diversity-check surface paused per iter-143/144.
+
+## iter-183 — bound `gv --voice` to the kokoro id format via a `voice_type` validator (gv CLI hardening)
+
+**Branch:** `iter-183-voice-validation` (merged ff to main)
+**Date:** 2026-06-17
+
+**Goal:** Close the sibling garbage-in path that iter-182 flagged as its next
+direction. iter-182 bounded `gv --speed` to `[0.5, 2.0]`; `--voice` was the
+*other* user-facing TTS knob with zero validation — `talk.add_argument("--voice",
+default="af_heart")` / the `chat` twin accepted **any** string and forwarded it
+raw to the kokoro engine (`run_talk`/`run_chat` → `synthesize(..., voice=voice)`).
+An empty string, a typo (`heart`), wrong-case (`AF_HEART`), or whitespace
+(`af_heart `) all sailed through and became the engine's problem. This lap adds a
+`voice_type` argparse validator so the parser rejects malformed voice ids with
+the usual `SystemExit(2)` before they reach synthesis.
+
+**Why:** The CLI is the one surface every user touches, and after iter-182
+`--speed` was its only validated knob; `--voice` was the remaining raw
+pass-through. The key design call is **format validation, not membership.** The
+curated `tts/kokoro_engine.py:VOICES` list is American-only (`af_*`/`am_*`), but
+kokoro ships other-language packs — `bf_emma` (British female) is a legitimate
+voice the existing `test_voice_and_speed_override` already treats as valid. A
+strict whitelist against `VOICES` would have *wrongly rejected* it. So
+`voice_type` validates kokoro's `<lang><gender>_<name>` id grammar
+(`^[a-z][fm]_[a-z]+$`) — permissive about the name, strict about the shape —
+catching empty/whitespace/typo/wrong-case/wrong-separator ids at the parser
+(a clear `error: argument --voice: voice must look like '<lang><gender>_<name>'
+(e.g. af_heart, bf_emma), got 'nope!'`) without pinning to the American subset.
+
+**What changed:**
+
+1. **`examples/gv.py`** — new `VOICE_RE` (`^[a-z][fm]_[a-z]+$`) and a pure
+   `voice_type(raw)` argparse `type` callable: raises
+   `argparse.ArgumentTypeError` (→ `SystemExit(2)`) on any id that doesn't match
+   the kokoro `<lang><gender>_<name>` grammar; the message names the bad value
+   and the grammar hint. Both `talk` and `chat` `--voice` args switch from a
+   bare `add_argument` to `type=voice_type`, and their help text now states the
+   id form (`e.g. af_heart / bf_emma`). `re` added to the imports. `bench`/
+   `stream` are STT-only and unaffected.
+
+2. **`tests/unit/test_gv_cli.py`** — 24 new test cases (parametrize expansion):
+   `voice_type` accepts well-formed ids incl. the not-curated `bf_emma`/
+   `bm_george`; a loop asserts **every** id in the engine's `VOICES` passes the
+   gate; rejects 13 malformed forms (empty, whitespace, leading/trailing space,
+   no prefix, wrong separator, missing underscore, uppercase, empty name,
+   missing gender letter, non-`f`/`m` gender, digit in name, space in id);
+   message names the value + grammar; and two end-to-end parser checks per
+   command — malformed `--voice` exits 2, the non-curated `bf_emma` parses.
+   The existing `test_voice_and_speed_override` / `test_dispatch_passes_*`
+   (which pass `bf_emma`) still hold — confirming the format gate doesn't
+   regress legitimate non-American voices.
+
+**Verification:**
+- `python -m pytest tests/unit/test_gv_cli.py -q` → **64 passed** (40 prior + 24
+  new test cases).
+- Full unit suite (in worktree, pre-merge): **2453 passed** (2429 prior + 24).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `python -W error::SyntaxWarning -m py_compile examples/gv.py
+  tests/unit/test_gv_cli.py` clean.
+- Manual CLI check: `gv chat --voice ''` / `nope!` / `Heart` / `'af heart'`
+  each → exit 2 with the grammar-hint message; `gv talk --voice bf_emma`
+  accepted (the not-curated valid case).
+- (`tests/test_session.py` still errors on collection — `ModuleNotFoundError:
+  pipecat` — pre-existing on main, not a regression.)
+
+**Notes:**
+- With both numeric (`--speed`, iter-182) and string (`--voice`, this lap) TTS
+  knobs now validated at the parser, the `gv` CLI's garbage-in surface is
+  closed. Next directions:
+  - **`--model` sanity for `gv`** — the remaining unvalidated knob; a non-empty
+    / well-formed-repo-id guard would complete the CLI hardening trio (lower
+    priority — a bad model id fails loudly at load, unlike speed/voice which
+    silently degrade synthesis).
+  - **Live mid-speech cue wiring for #7** — feed the VAD frames to a
+    `BackchannelDriver` in `pipecat_server.py`'s `Broadcaster`, `broadcast_cue`
+    on emit, surface `driver.emit_count` into the
+    `SessionMeta.backchannels_emitted` slot (iter-175). Still blocked only on
+    the absent pipecat dep on the x86_64 runner.
+  - **Live barge-path wiring for #5** — `should_abandon_turn` (iter-152) into
+    the `mic_chat` barge path; blocked on no transcript at VAD-trigger time.
+  - Carried over (off-track): the CI workflow still blocked on a committed
+    `baseline.json`; diversity-check surface paused per iter-143/144.
