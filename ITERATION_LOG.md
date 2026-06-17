@@ -14958,3 +14958,92 @@ wiring follow-on.
     (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
     on a committed `baseline.json`; diversity-check surface paused per
     iter-143/144.
+
+## iter-169 — speak the flushed fragment: backlog #9 mid-session flush, end-to-end
+
+**Branch:** `iter-169-speak-flushed-fragment` (merged ff to main, commit `d1b5f09`)
+**Date:** 2026-06-17
+
+**Goal:** Ship the named follow-on from iter-168 and the LAST hop of backlog #9's
+mid-session flush: wire `run_session`'s idle-flush path to actually *speak* a
+flushed mid-thought fragment as its own turn, not merely record it. iter-167
+wired `run_session` to flush a held fragment on a long inter-turn idle silence
+(recording it on `SessionState.flushed_utterances`); iter-168 shipped
+`ChatLoop.respond_to_text`, the text-only response entrypoint. This lap connects
+them — closing the #9 chain end-to-end (decision iter-164 → mechanism iter-165 →
+ChatLoop wiring iter-166 → run_session flush iter-167 → response entrypoint
+iter-168 → spoken-response wiring this lap).
+
+**Why:** Every lap since iter-167 named the same gap: a trailed-off fragment,
+after a long idle silence, was flushed and listed but never *answered*. The sole
+path into the LLM→TTS machinery used to be `run_one_turn` (records from the mic
+first); iter-168 broke that path out as `respond_to_text`. The only thing left
+was to call it from the flush site.
+
+**What changed:**
+
+1. **`examples/_chat_session.py` — `_maybe_flush_on_idle` now returns the flushed
+   text** (was `-> None`). Every no-flush path returns `None` (any guard bailed,
+   the decider held, or the released turn was empty / no-respond), so a `None`
+   return is the unambiguous "do not speak" signal; on a real flush it returns
+   the text it just appended to `flushed_utterances`.
+
+2. **`run_session` grows an injected `respond_fn`** — `(messages, text) -> result`
+   matching `respond_to_text`. On a flush that returns text AND a wired
+   `respond_fn`, a new module-level `_speak_flushed_fragment` answers the fragment
+   through it. `respond_fn=None` (default) keeps the iter-167 record-only path
+   byte-for-byte.
+
+3. **Shared `_record_completed_turn` helper.** The success-block bookkeeping
+   (newline → `metrics.print(turn+1)` → `all_metrics.append` → `turn += 1` →
+   trim → eviction counters) is extracted so a spoken flush is counted
+   *identically* to a mic turn. Body moved, not modified — the mic-turn path is
+   byte-for-byte unchanged, proven by the unchanged `test_chat_session.py` cases.
+
+4. **Failure degrades to record-only.** `_speak_flushed_fragment` wraps
+   `respond_fn` in `try/except`: a raising callable, a `had_error` result, or a
+   `metrics=None` result never crashes the live loop — the first two bump
+   `llm_errors` (mirroring the mic-turn error path), and the fragment is already
+   recorded on `flushed_utterances`. A failed *spoken* response thus falls back
+   to exactly the pre-iter-169 record-only behavior.
+
+5. **`examples/mic_chat.py` — production wiring, organic mode only.** Binds
+   `respond_fn=chat_loop.respond_to_text` under the SAME organic-mode gate as
+   `flush_decider` (half-duplex never holds, so it never speaks a flush). `None`
+   there keeps the proven path byte-for-byte.
+
+**+9 tests** (`tests/unit/test_chat_session.py`): fragment spoken when
+`respond_fn` wired (called with the flushed text, turn counted, counter
+advanced); recorded-not-spoken without `respond_fn`; `respond_fn` not called on a
+HOLD; conversation history threaded through the same messages list; LLM-error /
+raised-exception / `metrics=None` results all degrade to record-only; trim runs
+after the spoken turn (eviction counters bump); and an end-to-end case driving
+the REAL `UtteranceAggregator` + `should_flush_held_utterance` decider +
+`respond_fn`.
+
+**Discoverability:** iter-169 findings-log entry + backlog #9 row update in
+`docs/research/organic-turn-taking.md` (now marked closed end-to-end); README
+Research section names the `respond_fn` param, `_speak_flushed_fragment` /
+`_record_completed_turn` helpers, the degrade-to-record-only behavior, and the
+end-to-end closure.
+
+**Verification:**
+- `python -m pytest tests/unit/test_chat_session.py -q` → **57 passed**
+  (48 prior + 9 net new).
+- Full unit suite (in worktree, pre-merge): **2303 passed** (2294 prior + 9).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `python -W error::SyntaxWarning -m py_compile examples/_chat_session.py
+  examples/mic_chat.py examples/_chat_loop.py` clean.
+
+**Notes:**
+- Next directions:
+  - **Backlog #9 is now closed end-to-end.** A trailed-off mid-thought fragment,
+    after a long inter-turn idle silence, is flushed AND spoken as its own turn.
+  - Wire the still-pending `should_abandon_turn` (iter-152) into the `mic_chat`
+    barge path and `should_emit_backchannel` (iter-153) into the live cue path,
+    both behind their full-duplex sub-flags — the last two unwired organic
+    decision seams.
+  - Carried over (off-track): the CI workflow
+    (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
+    on a committed `baseline.json`; diversity-check surface paused per
+    iter-143/144.
