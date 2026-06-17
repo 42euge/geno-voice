@@ -25,7 +25,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from fixtures.replay_vad import VadParams, replay_recording  # noqa: E402
+from fixtures.replay_vad import VadParams, replay_recording, sweep_grid  # noqa: E402
 
 RECORDINGS_DIR = ROOT / "fixtures" / "recordings"
 
@@ -143,6 +143,49 @@ class TestPrerollRecoversOpening:
         base = replay_recording(recording, PROD_PARAMS)
         pre = replay_recording(recording, self.PREROLL)
         assert pre.onsets == base.onsets
+
+
+class TestGridSweep:
+    """iter-192 — A 2-D threshold × gain grid over the corpus must behave
+    monotonically along each axis: lowering the threshold (more sensitive) or
+    raising the gain (louder signal) can only detect at least as much. This
+    pins the joint operating-point search the research doc's backlog item 4
+    asks for — a single-axis sweep can't see threshold×gain interaction.
+    """
+
+    THRESHOLDS = [0.006, 0.015]
+    GAINS = [1.0, 2.0]
+
+    def _grid(self):
+        return sweep_grid(
+            "threshold", self.THRESHOLDS, "gain", self.GAINS, recordings_dir=RECORDINGS_DIR
+        )
+
+    def test_grid_covers_every_cell(self):
+        points = self._grid()
+        assert len(points) == len(self.THRESHOLDS) * len(self.GAINS)
+        for p in points:
+            assert p.recordings == len(RECORDINGS)
+
+    def test_lower_threshold_never_detects_fewer_at_fixed_gain(self):
+        # Cells are row-major (threshold outer, gain inner). For each gain
+        # column, the lower threshold (first row) must detect >= the higher.
+        points = self._grid()
+        n_gain = len(self.GAINS)
+        low_row = points[:n_gain]            # threshold 0.006
+        high_row = points[n_gain:2 * n_gain]  # threshold 0.015
+        for low, high in zip(low_row, high_row):
+            assert low.total_onsets >= high.total_onsets
+            assert low.triggered >= high.triggered
+
+    def test_higher_gain_never_detects_fewer_at_fixed_threshold(self):
+        # Within each threshold row, more gain can only detect >= onsets.
+        points = self._grid()
+        n_gain = len(self.GAINS)
+        for row_start in range(0, len(points), n_gain):
+            row = points[row_start:row_start + n_gain]
+            for lo, hi in zip(row, row[1:]):
+                assert hi.total_onsets >= lo.total_onsets
 
 
 def test_corpus_is_non_trivial():

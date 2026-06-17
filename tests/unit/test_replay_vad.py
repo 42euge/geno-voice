@@ -29,6 +29,7 @@ from fixtures.replay_vad import (  # noqa: E402
     replay_all,
     aggregate_results,
     sweep_param,
+    sweep_grid,
     _parse_value_list,
     main,
 )
@@ -386,6 +387,69 @@ class TestSweepParam:
 
 
 # ---------------------------------------------------------------------------
+# sweep_grid — 2-D grid (backlog item 4)
+# ---------------------------------------------------------------------------
+
+
+class TestSweepGrid:
+    def test_one_point_per_cell_in_row_major_order(self, tmp_path):
+        corpus = _make_corpus(tmp_path)
+        points = sweep_grid(
+            "threshold", [0.006, 0.015], "gain", [1.0, 4.0], recordings_dir=corpus
+        )
+        # 2×2 grid → 4 cells, row-major: param_a outer, param_b inner.
+        assert len(points) == 4
+        observed = [(p.params.threshold, p.params.gain) for p in points]
+        assert observed == [
+            (0.006, 1.0),
+            (0.006, 4.0),
+            (0.015, 1.0),
+            (0.015, 4.0),
+        ]
+
+    def test_base_params_ride_along(self, tmp_path):
+        corpus = _make_corpus(tmp_path)
+        base = VadParams(silence_ms=600.0, min_speech_ms=400.0)
+        points = sweep_grid(
+            "threshold", [0.006], "gain", [1.0, 2.0], base=base, recordings_dir=corpus
+        )
+        for p in points:
+            assert p.params.silence_ms == 600.0
+            assert p.params.min_speech_ms == 400.0
+
+    def test_gain_recovers_quiet_recording_at_strict_threshold(self, tmp_path):
+        # At threshold 0.02 the quiet recording misses with gain 1.0 but enough
+        # gain lifts it over the gate — the grid exposes the joint operating
+        # point a single-axis sweep would miss.
+        corpus = _make_corpus(tmp_path)
+        points = sweep_grid(
+            "threshold", [0.02], "gain", [1.0, 4.0], recordings_dir=corpus
+        )
+        low_gain, high_gain = points
+        assert high_gain.total_onsets >= low_gain.total_onsets
+        assert high_gain.triggered >= low_gain.triggered
+
+    def test_rectangular_grid_dimensions(self, tmp_path):
+        corpus = _make_corpus(tmp_path)
+        points = sweep_grid(
+            "threshold", [0.006, 0.010, 0.015], "gain", [1.0, 2.0], recordings_dir=corpus
+        )
+        assert len(points) == 6  # 3×2
+
+    def test_unknown_field_raises(self, tmp_path):
+        corpus = _make_corpus(tmp_path)
+        with pytest.raises(ValueError):
+            sweep_grid("threshold", [0.006], "bogus", [1.0], recordings_dir=corpus)
+        with pytest.raises(ValueError):
+            sweep_grid("bogus", [0.006], "gain", [1.0], recordings_dir=corpus)
+
+    def test_identical_axes_raise(self, tmp_path):
+        corpus = _make_corpus(tmp_path)
+        with pytest.raises(ValueError):
+            sweep_grid("threshold", [0.006], "threshold", [0.015], recordings_dir=corpus)
+
+
+# ---------------------------------------------------------------------------
 # _parse_value_list
 # ---------------------------------------------------------------------------
 
@@ -485,3 +549,101 @@ class TestSweepCli:
         out = capsys.readouterr().out
         assert "preroll_ms=0" in out
         assert "preroll_ms=256" in out
+
+
+# ---------------------------------------------------------------------------
+# CLI — main() with --grid (2-D grid sweep)
+# ---------------------------------------------------------------------------
+
+
+class TestGridCli:
+    def test_grid_human_table(self, tmp_path, capsys):
+        corpus = _make_corpus(tmp_path)
+        rc = main([
+            "--grid", "threshold,gain",
+            "--grid-values-a", "0.006,0.015",
+            "--grid-values-b", "1.0,2.0",
+            "--dir", str(corpus),
+        ])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "VAD grid" in out
+        assert "threshold × gain" in out
+        assert "2×2 cells" in out
+        # Each cell labels both axes.
+        assert out.count("threshold=") == 4
+        assert out.count("gain=") == 4
+
+    def test_grid_json_row_major(self, tmp_path, capsys):
+        corpus = _make_corpus(tmp_path)
+        rc = main([
+            "--grid", "threshold,gain",
+            "--grid-values-a", "0.006,0.015",
+            "--grid-values-b", "1.0,2.0",
+            "--dir", str(corpus), "--json",
+        ])
+        assert rc == 0
+        import json as _json
+
+        payload = _json.loads(capsys.readouterr().out)
+        assert len(payload) == 4
+        cells = [(c["params"]["threshold"], c["params"]["gain"]) for c in payload]
+        assert cells == [(0.006, 1.0), (0.006, 2.0), (0.015, 1.0), (0.015, 2.0)]
+
+    def test_grid_frame_size_axis_casts_int(self, tmp_path, capsys):
+        corpus = _make_corpus(tmp_path)
+        rc = main([
+            "--grid", "frame_size,gain",
+            "--grid-values-a", "512,1024",
+            "--grid-values-b", "1.0",
+            "--dir", str(corpus), "--json",
+        ])
+        assert rc == 0
+        import json as _json
+
+        payload = _json.loads(capsys.readouterr().out)
+        assert isinstance(payload[0]["params"]["frame_size"], int)
+        assert payload[0]["params"]["frame_size"] == 512
+
+    def test_grid_wrong_axis_count_errors(self, tmp_path, capsys):
+        corpus = _make_corpus(tmp_path)
+        rc = main(["--grid", "threshold", "--grid-values-a", "0.006",
+                   "--grid-values-b", "1.0", "--dir", str(corpus)])
+        assert rc == 2
+        assert "exactly two" in capsys.readouterr().out
+
+    def test_grid_unknown_field_errors(self, tmp_path, capsys):
+        corpus = _make_corpus(tmp_path)
+        rc = main(["--grid", "threshold,bogus", "--grid-values-a", "0.006",
+                   "--grid-values-b", "1.0", "--dir", str(corpus)])
+        assert rc == 2
+        assert "unknown --grid field" in capsys.readouterr().out
+
+    def test_grid_identical_axes_errors(self, tmp_path, capsys):
+        corpus = _make_corpus(tmp_path)
+        rc = main(["--grid", "threshold,threshold", "--grid-values-a", "0.006",
+                   "--grid-values-b", "0.015", "--dir", str(corpus)])
+        assert rc == 2
+        assert "must differ" in capsys.readouterr().out
+
+    def test_grid_missing_values_errors(self, tmp_path, capsys):
+        corpus = _make_corpus(tmp_path)
+        rc = main(["--grid", "threshold,gain", "--grid-values-a", "0.006",
+                   "--dir", str(corpus)])
+        assert rc == 2
+        assert "requires --grid-values" in capsys.readouterr().out
+
+    def test_grid_bad_values_errors(self, tmp_path, capsys):
+        corpus = _make_corpus(tmp_path)
+        rc = main(["--grid", "threshold,gain", "--grid-values-a", "0.006,bad",
+                   "--grid-values-b", "1.0", "--dir", str(corpus)])
+        assert rc == 2
+        assert "bad --grid values" in capsys.readouterr().out
+
+    def test_grid_empty_corpus_reports_none(self, tmp_path, capsys):
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        rc = main(["--grid", "threshold,gain", "--grid-values-a", "0.006",
+                   "--grid-values-b", "1.0", "--dir", str(empty)])
+        assert rc == 1
+        assert "No recordings found" in capsys.readouterr().out

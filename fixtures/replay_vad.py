@@ -465,6 +465,45 @@ def sweep_param(
     return points
 
 
+def sweep_grid(
+    param_a: str,
+    values_a: List[float],
+    param_b: str,
+    values_b: List[float],
+    base: Optional[VadParams] = None,
+    recordings_dir: Path = RECORDINGS_DIR,
+) -> List[SweepPoint]:
+    """Replay the corpus once per cell of a 2-D ``param_a`` × ``param_b`` grid.
+
+    Backlog item 4 (``docs/research/voice-capture-tuning.md``): a single-axis
+    sweep can be too coarse for picking a *joint* operating point — e.g.
+    threshold and gain interact (more gain lifts quiet speech over the gate,
+    so the best threshold shifts). This folds both axes into one corpus pass
+    per cell and returns one ``SweepPoint`` per cell, in row-major order
+    (``param_a`` outer, ``param_b`` inner) so the result reads as a table with
+    ``param_a`` rows and ``param_b`` columns.
+
+    Both names must be ``VadParams`` fields and must differ (a 2-D grid over
+    one axis is just ``sweep_param``). The other flags ride along from
+    ``base`` (default ``VadParams()``) unchanged.
+    """
+    base = base or VadParams()
+    fields = set(VadParams.__dataclass_fields__)
+    if param_a not in fields:
+        raise ValueError(f"unknown VadParams field: {param_a!r}")
+    if param_b not in fields:
+        raise ValueError(f"unknown VadParams field: {param_b!r}")
+    if param_a == param_b:
+        raise ValueError(f"grid axes must differ; both are {param_a!r}")
+    points: List[SweepPoint] = []
+    for va in values_a:
+        for vb in values_b:
+            params = replace(base, **{param_a: va, param_b: vb})
+            results = replay_all(recordings_dir, params)
+            points.append(aggregate_results(params, results))
+    return points
+
+
 def _parse_value_list(raw: str, cast) -> List[float]:
     """Parse a comma-separated CLI value list, casting each entry."""
     out: List[float] = []
@@ -538,6 +577,70 @@ def _run_sweep(args, base: VadParams) -> int:
     return 0
 
 
+def _grid_summary_line(p: SweepPoint, param_a: str, param_b: str) -> str:
+    """One-line summary of a grid cell, labelled by both swept axes."""
+    va = getattr(p.params, param_a)
+    vb = getattr(p.params, param_b)
+    return (
+        f"{param_a}={va:<8} {param_b}={vb:<8} "
+        f"trig={p.triggered}/{p.recordings}  "
+        f"min_onsets={p.min_onsets:<2} "
+        f"onsets={p.total_onsets:<3} "
+        f"speak_frames={p.total_speaking_frames:<5} "
+        f"mean_over={p.mean_pct_over:5.1f}%"
+    )
+
+
+def _run_grid(args, base: VadParams) -> int:
+    """Handle ``--grid A,B --grid-values-a ... --grid-values-b ...``."""
+    fields = VadParams.__dataclass_fields__
+    parts = [p.strip() for p in args.grid.split(",") if p.strip()]
+    if len(parts) != 2:
+        print("--grid takes exactly two comma-separated fields, e.g. threshold,gain")
+        return 2
+    param_a, param_b = parts
+    for name in (param_a, param_b):
+        if name not in fields:
+            print(
+                f"unknown --grid field {name!r}; choose from: {', '.join(fields)}"
+            )
+            return 2
+    if param_a == param_b:
+        print(f"--grid axes must differ; both are {param_a!r}")
+        return 2
+    if not args.grid_values_a or not args.grid_values_b:
+        print("--grid requires --grid-values-a and --grid-values-b (comma-separated)")
+        return 2
+
+    try:
+        values_a = _parse_value_list(args.grid_values_a, int if param_a in _INT_FIELDS else float)
+        values_b = _parse_value_list(args.grid_values_b, int if param_b in _INT_FIELDS else float)
+    except ValueError as exc:
+        print(f"bad --grid values: {exc}")
+        return 2
+
+    points = sweep_grid(
+        param_a, values_a, param_b, values_b, base=base, recordings_dir=args.dir
+    )
+
+    if args.json:
+        print(json.dumps([_sweep_point_to_dict(p) for p in points], indent=2))
+        return 0
+
+    if not points or points[0].recordings == 0:
+        print(f"No recordings found in {args.dir}")
+        return 1
+
+    print(
+        f"VAD grid — {param_a} × {param_b} "
+        f"({len(values_a)}×{len(values_b)} cells, {points[0].recordings} recordings)"
+    )
+    print("-" * 100)
+    for p in points:
+        print(_grid_summary_line(p, param_a, param_b))
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Replay recordings through the VAD state machine.")
     parser.add_argument("--threshold", type=float, default=VadParams.threshold)
@@ -561,6 +664,23 @@ def main(argv: Optional[List[str]] = None) -> int:
         metavar="V1,V2,...",
         help="comma-separated values for --sweep (e.g. 0.004,0.006,0.015)",
     )
+    parser.add_argument(
+        "--grid",
+        metavar="A,B",
+        help="2-D sweep over two VadParams fields (e.g. threshold,gain) — one "
+        "corpus pass per cell of --grid-values-a × --grid-values-b, holding "
+        "the other flags fixed as the base",
+    )
+    parser.add_argument(
+        "--grid-values-a",
+        metavar="V1,V2,...",
+        help="comma-separated values for the first --grid axis",
+    )
+    parser.add_argument(
+        "--grid-values-b",
+        metavar="V1,V2,...",
+        help="comma-separated values for the second --grid axis",
+    )
     args = parser.parse_args(argv)
 
     params = VadParams(
@@ -575,6 +695,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.sweep:
         return _run_sweep(args, params)
+
+    if args.grid:
+        return _run_grid(args, params)
 
     results = replay_all(args.dir, params)
 

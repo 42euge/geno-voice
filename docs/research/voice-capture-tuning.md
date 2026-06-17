@@ -35,6 +35,19 @@ python fixtures/replay_vad.py --sweep gain --sweep-values 1.0,1.5,2.0,3.0
 python fixtures/replay_vad.py --sweep debounce_ms --sweep-values 100,200,300 --json
 ```
 
+When two parameters *interact* — e.g. more gain lifts quiet speech over the
+gate, so the best threshold shifts — a single-axis sweep is too coarse to
+pick the joint operating point. A **2-D grid** (`--grid`, iter-192 — backlog
+item 4) replays the corpus once per cell of two axes and reports every cell,
+row-major (first axis = rows, second = columns):
+
+```
+python fixtures/replay_vad.py --grid threshold,gain \
+    --grid-values-a 0.004,0.006,0.010,0.015 --grid-values-b 1.0,1.5,2.0
+python fixtures/replay_vad.py --grid debounce_ms,preroll_ms \
+    --grid-values-a 100,200 --grid-values-b 0,256,512 --json
+```
+
 A **pre-roll buffer** (`--preroll-ms`, iter-191 — backlog item 2) recovers
 the soft attack of an utterance that the live client discards: every
 sub-threshold frame before a speech onset is thrown away today, so the
@@ -173,6 +186,35 @@ segment clamp is enforced and tested). This is the cheap, replay-validated
 half of the latency story: pre-warming (item 1) recovers the cold-start
 dead window; pre-roll recovers the debounce/onset clip on top.
 
+## 2-D threshold × gain grid over the seed corpus (iter-192)
+
+Run with `fixtures/replay_vad.py --grid threshold,gain`. The grid replays
+the corpus once per cell and exposes the *interaction* a single-axis sweep
+hides. `--grid-values-a 0.004,0.006,0.010,0.015 --grid-values-b 1.0,1.5,2.0`:
+
+| threshold ↓ / gain → | 1.0 | 1.5 | 2.0 |
+|----------------------|-----|-----|-----|
+| **0.004** | trig 4/4, onsets 12 | 4/4, 16 | 4/4, 18 |
+| **0.006** | trig 4/4, onsets 10 | 4/4, 12 | 4/4, 16 |
+| **0.010** | trig 4/4, onsets 8  | 4/4, 7  | 4/4, 10 |
+| **0.015** | **trig 3/4, min_onsets 0** | 4/4, 8 | 4/4, 7 |
+
+**The key interaction:** at threshold 0.015 (the old under-detecting
+default) the far-field `voice-20260617-135015` misses entirely
+(`trig=3/4, min_onsets=0`) at unity gain — but **1.5× gain recovers it**
+(`trig=4/4, min_onsets=1`). Gain and threshold trade off: a louder signal
+lets a stricter gate still catch quiet far-field speech. A single-axis
+threshold sweep at gain 1.0 would conclude 0.015 is unsafe; the grid shows
+0.015 + 1.5× gain is as safe as 0.006 at unity. The chosen operating point
+(threshold 0.006, gain 1.0) keeps `trig=4/4` with margin and avoids relying
+on a gain stage that isn't wired into the client yet (backlog item 4), but
+the grid documents that **a future gain stage would let the threshold rise
+back toward 0.010–0.015 without losing the far-field recording** — useful if
+a lower threshold ever proves to admit noise on a noisier corpus. Detection
+is monotone along both axes (lower threshold ⇒ ≥ onsets; higher gain ⇒ ≥
+onsets), pinned by `TestGridSweep` in
+`tests/integration/test_vad_recordings.py`.
+
 ## Findings & backlog (prioritized)
 
 1. **[latency] Pre-warm the capture pipeline.** The 3–5s `click_to_capture_ms`
@@ -208,7 +250,13 @@ dead window; pre-roll recovers the debounce/onset clip on top.
 4. **[gain] Software gain experiment.** _iter-190: swept gain 1.0→3.0 at
    threshold 0.006. Onsets and speaking frames rise monotonically; even at
    2.0× the lifted silence floor (~0.0006) stays ~3× under the gate, so a
-   1.5–2.0× gain recovers more speech without false triggers. Next: wire a
+   1.5–2.0× gain recovers more speech without false triggers. iter-192:
+   `--grid threshold,gain` over the corpus (see the grid table above) shows
+   the joint effect a single-axis sweep can't — at threshold 0.015 the
+   far-field recording misses at gain 1.0 but **1.5× gain recovers it**
+   (`trig` 3/4 → 4/4). So a future gain stage would let the threshold rise
+   back toward 0.010–0.015 without losing far-field speech. Detection is
+   monotone along both axes, pinned by `TestGridSweep`. Next: wire a
    `gainNode` (or worklet multiply) into `ContinuousListener` so this is
    tunable in the client, defaulting to 1.0._
 5. **[debounce] Tune onset debounce against clipping.** _iter-190: swept
