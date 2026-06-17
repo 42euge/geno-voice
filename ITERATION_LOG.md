@@ -16382,3 +16382,79 @@ hardware. The pure helpers (`rms_amplitude`, `make_wav`) needed no clock at all.
     — both still blocked only on the absent pipecat dep on the x86_64 runner.
   - Carried over (off-track): the CI workflow still blocked on a committed
     `baseline.json`; diversity-check surface paused per iter-143/144.
+
+## iter-186 — `SilenceDetector` constructor validation (fail fast on garbage VAD knobs)
+
+**Branch:** `iter-186-vad-validation` (merged ff to main)
+**Commit:** `cbf2581`
+**Date:** 2026-06-17
+
+**Goal:** Close the sibling garbage-in path on the VAD knob, flagged as a
+next-direction in iter-185: the `vad/silence.py:SilenceDetector` constructor
+accepted *any* `threshold` / `*_duration` (negative, zero, NaN, inf, non-number)
+without complaint, silently breaking the state machine downstream. This is the
+VAD analogue of the `gv` CLI hardening trio (iter-182 `--speed`, iter-183
+`--voice`, iter-184 `--model`) — close the malformed-input surface at the
+construction boundary instead of letting bad values fail late and confusingly.
+
+**Why:** A non-positive knob silently corrupts the live loop: `silence_duration=0`
+emits a chunk on the first silent frame; `threshold<=0` marks every frame as
+speech (silence never detected); `max_chunk_duration <= min_chunk_duration` makes
+the max-duration cut fire on a buffer the min-floor then drops as "too short", so
+every emit returns `None` and no chunk ever surfaces. The config layer
+(`parse_vad_config`, iter-033) already applies a tolerant `val > 0` rule — but it
+*falls back to defaults* so a typo'd config can't take down the chat loop. A
+caller building a `SilenceDetector` directly in code has no defaults to fall back
+on, so the constructor is *strict*: fail fast with a message naming the offending
+knob. iter-185 left this surface untouched because it focused on covering the
+existing behavior; now that the behavior is pinned, adding the guard is safe.
+
+**What changed:**
+
+1. **`vad/silence.py`** — new module-level `_require_positive(name, value)` helper
+   validates that a knob is a finite, strictly-positive number (rejects
+   non-numbers, `NaN`/`±inf`, and `<= 0`; rejects `bool` explicitly since it is an
+   `int` subclass that would otherwise pass as `1`/`0`). Each `ValueError`
+   message names the offending knob and value. The constructor now routes all
+   four knobs (`threshold`, `silence_duration`, `min_chunk_duration`,
+   `max_chunk_duration`) through it, then enforces the ordering invariant
+   `max_chunk_duration > min_chunk_duration` with its own descriptive
+   `ValueError`. Added `import math` for `isfinite`. A docstring on the helper
+   ties the design back to the tolerant `parse_vad_config` rule and the gv CLI
+   garbage-in contract.
+
+2. **`tests/unit/test_silence_detector.py`** — new `TestConstructorValidation`
+   class (11 test methods, 55 cases after parametrize expansion across the four
+   knobs): defaults + explicit-valid configs construct; positive ints coerced to
+   float; non-positive (`0`, `0.0`, `-1`, `-0.5`), non-finite (`nan`, `±inf`), and
+   non-number (`"0.5"`, `None`, `[1]`, `{}`) values rejected per knob; `bool`
+   rejected per knob; error message names the knob + value; `max <= min` rejected
+   (strictly-less and equal), `max` just above `min` accepted.
+
+**Verification:**
+- `python -m pytest tests/unit/test_silence_detector.py -q` → **84 passed**
+  (29 prior + 55 new cases).
+- Full unit suite (in worktree, pre-merge): **2566 passed** (2511 prior + 55).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `python -W error::SyntaxWarning -m py_compile vad/silence.py
+  tests/unit/test_silence_detector.py` clean.
+- Drift check: no other `SilenceDetector(...)` construction site in the repo
+  passes values the new guard would reject (grep over `--include=*.py` returns
+  only the test file).
+- (`tests/test_session.py` still errors on collection — `ModuleNotFoundError:
+  pipecat` — pre-existing on main, not a regression.)
+
+**Notes:**
+- The VAD knob garbage-in surface is now closed at the constructor, completing
+  the validation theme that ran through the gv CLI trio (iter-182/183/184) and
+  the iter-185 coverage pass. Next directions:
+  - **Property/fuzz coverage for `rms_amplitude`** — a hypothesis test that the
+    RMS of any constant-amplitude signal equals `|level|/32768` would harden the
+    discriminator against future sample-format changes (carried from iter-185).
+  - **Mirror the strict guard into `parse_vad_config`'s caller path** — surface a
+    one-line warning when a `vad` config value is dropped to its default (today
+    the fallback is silent), so operators see the typo without reading source.
+  - **Live mid-speech cue wiring for #7** and **live barge-path wiring for #5**
+    — both still blocked only on the absent pipecat dep on the x86_64 runner.
+  - Carried over (off-track): the CI workflow still blocked on a committed
+    `baseline.json`; diversity-check surface paused per iter-143/144.
