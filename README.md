@@ -210,7 +210,13 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   would otherwise treat as a turn-end. `TextAwareTurnDecider` folds it
   into the silence seam behind the identical `confidence(...)` interface
   (a complete utterance multiplies by 1.0 — a conservative, monotone
-  refinement), and `pipecat_server.py` now uses it.
+  refinement), and `pipecat_server.py` now uses it. Also shipped: the
+  **full-duplex config flag scaffolding** (`session/full_duplex.py`,
+  `tests/unit/test_full_duplex.py`) — an off-by-default `FullDuplexConfig`
+  gate (`GENO_FULL_DUPLEX` master flag + per-behavior overrides) so future
+  organic behaviors (continuer-aware barge-in, agent backchannels) land
+  behind a switch and the proven half-duplex path is never regressed; a
+  default config is byte-for-byte today's behavior.
 - **[Performance metrics taxonomy](docs/perf-metrics-taxonomy.md)** — a
   catalog of metrics worth instrumenting on a local-first voice agent.
 

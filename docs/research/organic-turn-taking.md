@@ -227,7 +227,7 @@ output discoverable from README" discipline. Local only.
 |---|------|----------|--------|
 | 1 | **Rule-based backchannel/continuer classifier** — pure `classify_backchannel(text, energy=…)` in `session/backchannel.py`: short-token + closed-lexicon + optional low-energy gate ⇒ `CONTINUER` / `SUBSTANTIVE` / `NOT_SPEECH`. Dependency-free, fully testable. Foundation for #5. | High | **DONE iter-148** |
 | 2 | **`turn_decider` seam** — pure function wrapping today's silence→confidence heuristic behind the same interface a smart-turn model would use, so `smart_turn_confidence` stops being hardcoded `0.5` and the model swaps in later without touching `TurnTakingEngine`. | High | **DONE iter-149** |
-| 3 | **Full-duplex config flag scaffolding** — a `TurnTakingConfig` / env flag (`GENO_FULL_DUPLEX`) that gates organic behaviors (continuer-aware listening, agent backchannels) off by default, so the half-duplex path is never regressed while the track matures. | Medium | TODO |
+| 3 | **Full-duplex config flag scaffolding** — a `TurnTakingConfig` / env flag (`GENO_FULL_DUPLEX`) that gates organic behaviors (continuer-aware listening, agent backchannels) off by default, so the half-duplex path is never regressed while the track matures. | Medium | **DONE iter-151** |
 | 4 | **Rule-based text EOU precursor** — `is_utterance_complete(text)` that lowers end-of-turn likelihood when the transcript ends in a conjunction / filler / trailing-off marker (mirrors LiveKit turn-detector's linguistic signal; reuses `_TRAILING_PATTERNS`). Feeds #2's confidence. | Medium | **DONE iter-150** |
 | 5 | **Continuer-aware barge-in** — wire #1 into `BargeInCoordinator` so a *continuer* utterance ("mhmm") during agent speech does NOT abandon the turn (finish), while a substantive interruption does (abandon). Measure: false-abandon rate. | High | TODO |
 | 6 | **Adopt pipecat `smart-turn`** — replace #2's heuristic body with the smart-turn model inside `pipecat_server.py`'s pipeline; same `turn_decider` interface. Measure false-endpoint rate vs silence-only baseline on recorded sessions. | High | TODO (blocked on model + Apple Silicon) |
@@ -338,3 +338,40 @@ output discoverable from README" discipline. Local only.
 - **Next:** backlog #3 (full-duplex config flag scaffolding, `GENO_FULL_DUPLEX`)
   to gate organic behaviors off by default; or backlog #5 (continuer-aware
   barge-in — wire iter-148's `classify_backchannel` into `BargeInCoordinator`).
+
+### iter-151 (2026-06-16) — full-duplex config flag scaffolding (#3)
+
+- **Shipped backlog #3:** `session/full_duplex.py` — the off-by-default gate
+  for the organic behaviors, so subsequent laps add behavior *behind* a switch
+  rather than introducing both behavior and guard at once.
+  - `FullDuplexConfig` (frozen dataclass): a master `enabled` switch plus
+    three-state (`bool | None`) per-behavior sub-flags
+    (`continuer_aware_listening`, `agent_backchannels`). A `None` sub-flag
+    **inherits** the master; an explicit `True`/`False` overrides it (organic
+    mode on, but one behavior held back). Effective state is read through
+    `continuer_aware_listening_active()` / `agent_backchannels_active()` /
+    `any_active()` so call sites never re-derive the inherit logic.
+  - **The half-duplex invariant:** a default `FullDuplexConfig()` has
+    `enabled=False` and every `*_active()` resolves `False` — byte-for-byte
+    today's behavior. A test pins this.
+  - `full_duplex_config_from_env(env=os.environ)` reads `GENO_FULL_DUPLEX`
+    (master) + `GENO_FULL_DUPLEX_CONTINUER_AWARE` /
+    `GENO_FULL_DUPLEX_AGENT_BACKCHANNELS` (overrides). `env` is injected so
+    parsing is testable without touching the process environment.
+  - `parse_bool_flag` uses **closed** TRUTHY/FALSY sets and raises on an
+    unrecognized value (naming the offending var) — a misspelled enable flag
+    that silently leaves organic mode off is the worst failure mode for a
+    gate, so a typo surfaces loudly instead. `None` (unset) is distinct from
+    `""` (set-but-empty ⇒ falsy).
+- **No runtime behavior change, nothing wired yet.** The module is pure,
+  dependency-free, and as-yet-unconsumed; backlog #5 (continuer-aware barge-in)
+  and #7 (agent backchannels) read these flags in later laps. 38 unit tests
+  (`tests/unit/test_full_duplex.py`): bool parsing (every truthy/falsy
+  spelling, case/whitespace, unset-vs-empty, typo raises), the half-duplex
+  default invariant, the inherit/override matrix, and the env builder
+  (empty ⇒ half-duplex, master on/off, sub-flag overrides, bad value
+  propagation, frozen result).
+- **Next:** backlog #5 (continuer-aware barge-in — wire iter-148's
+  `classify_backchannel` into `BargeInCoordinator`, gated behind
+  `continuer_aware_listening_active()`); or backlog #8 (naturalness metrics:
+  false-endpoint rate + continuer counts in `TurnMetrics`/session-summary).

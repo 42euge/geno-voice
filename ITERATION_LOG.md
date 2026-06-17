@@ -13173,3 +13173,87 @@ long the silence after it.
     (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still
     blocked on a committed `baseline.json`; diversity-check surface paused per
     iter-143/144.
+
+## iter-151 — full-duplex config flag scaffolding: FullDuplexConfig (backlog #3)
+
+**Branch:** `iter-151-full-duplex-flag` (merged ff to main)
+**Date:** 2026-06-16
+
+**Goal:** iter-150 shipped the text EOU precursor (backlog #4). This lap ships
+backlog #3, the foundational gate: an off-by-default `FullDuplexConfig` that
+controls the organic turn-taking behaviors (continuer-aware listening, agent
+backchannels). Shipping the gate *first* means the higher-leverage behaviors
+that follow (#5 continuer-aware barge-in, #7 agent backchannels) add behavior
+*behind an off-by-default switch* rather than introducing both the behavior
+and its guard in one lap — so the proven half-duplex path is never regressed
+while the track matures.
+
+**What changed:**
+
+1. **`session/full_duplex.py` (new) — backlog #3 seam.** Pure,
+   dependency-free, GENO.md-conventional:
+   - `FullDuplexConfig` (frozen dataclass): a master `enabled` switch plus
+     three-state (`bool | None`) per-behavior sub-flags
+     (`continuer_aware_listening`, `agent_backchannels`). A `None` sub-flag
+     **inherits** the master switch; an explicit `True`/`False` overrides it
+     (so you can run organic mode with one behavior held back). Effective
+     state is read through `continuer_aware_listening_active()` /
+     `agent_backchannels_active()` / `any_active()`, which fold the inherit
+     logic so call sites stay one-liners and never re-derive it.
+   - **The half-duplex invariant:** a default `FullDuplexConfig()` has
+     `enabled=False` and every `*_active()` resolves `False` — byte-for-byte
+     today's behavior. A dedicated test pins this so a future edit that flips
+     a default fails loudly.
+   - `full_duplex_config_from_env(env=os.environ)` reads `GENO_FULL_DUPLEX`
+     (master) + `GENO_FULL_DUPLEX_CONTINUER_AWARE` /
+     `GENO_FULL_DUPLEX_AGENT_BACKCHANNELS` (per-behavior overrides). `env` is
+     injected (default `os.environ`) so the parsing is testable with a mapping
+     literal — no process-environment mutation in tests.
+   - `parse_bool_flag(value, name=...)` uses **closed** `TRUTHY`/`FALSY` sets
+     and **raises** `ValueError` (naming the offending var) on an unrecognized
+     value. Rationale: a misspelled enable flag (`GENO_FULL_DUPLEX=ture`) that
+     silently reads as off is the worst failure mode for a feature gate, so a
+     typo surfaces loudly rather than quietly disabling organic mode. `None`
+     (var unset ⇒ inherit) is kept distinct from `""` (set-but-empty ⇒
+     explicit falsy).
+
+2. **`tests/unit/test_full_duplex.py` (new, +38 tests):** bool parsing (every
+   truthy/falsy spelling parametrized, case-insensitivity, whitespace
+   trimming, unset `None` vs empty-string falsy, typo + numeric-`2` raise,
+   error names the var); the half-duplex default invariant (master off,
+   sub-flags None, all `*_active` false, frozen); the inherit/override matrix
+   (master-on inherits to all, sub-flag-true overrides master-off, sub-flag-
+   false overrides master-on, all-false-with-master-on ⇒ nothing active); and
+   the env builder (empty ⇒ half-duplex, master on/off, sub-flag overrides
+   both directions, unset sub-flag stays None, bad value propagates ValueError
+   naming the var, frozen result). Loaded by file path under the same
+   `session/__init__`-bypass trick the turn_decider / text_eou / backchannel
+   tests use (pipecat is absent on the x86_64 runner).
+
+3. **Discoverability:** marked backlog #3 **DONE iter-151** in
+   `docs/research/organic-turn-taking.md` with a findings-log entry; extended
+   the README Research section to name the gate, its env flags, and its
+   guarding test.
+
+**Verification:**
+- `python -m pytest tests/unit/test_full_duplex.py -q` → **38 passed in 0.10s**.
+- Full unit suite: **1919 passed** (1881 prior + 38 new).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+
+**Notes:**
+- **No runtime behavior change.** `full_duplex.py` is a new, as-yet-unwired
+  pure module; nothing imports it from the live path yet (intentional — the
+  gate ships before the behaviors it gates).
+- Next directions:
+  - **#5 continuer-aware barge-in** — wire iter-148's `classify_backchannel`
+    into `BargeInCoordinator` (continuer ⇒ finish, substantive ⇒ abandon),
+    gated behind `FullDuplexConfig.continuer_aware_listening_active()`;
+    measure false-abandon rate.
+  - **#8 naturalness metrics** — false-endpoint rate + continuer counts in
+    `TurnMetrics`/session-summary, so this track is measured not asserted.
+  - **#7 agent backchannel emission timing** — gated behind
+    `agent_backchannels_active()`.
+  - Carried over (off-track): the CI workflow
+    (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still
+    blocked on a committed `baseline.json`; diversity-check surface paused per
+    iter-143/144.
