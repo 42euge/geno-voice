@@ -13673,3 +13673,112 @@ iter-154's metric *counts*; measure and repair shipped one lap apart.
     (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still
     blocked on a committed `baseline.json`; diversity-check surface paused per
     iter-143/144.
+
+## iter-156 — stateful utterance buffer: UtteranceBuffer (backlog #9 live-loop driver)
+
+**Branch:** `iter-156-utterance-buffer` (merged ff to main, commit `5a4a9b4`)
+**Date:** 2026-06-16
+
+**Goal:** the organic track has shipped pure decision seams #1–#9 (all DONE
+except #6, blocked on the smart-turn model). Every lap since iter-155 named the
+**same** follow-on: "wire `should_merge_utterance` into the live STT loop — hold
+the just-finalized text + its silence gap, merge the next chunk before feeding
+the turn engine, and set `TurnMetrics.false_endpoint` when a merge fires." That
+follow-on needs *state* the stateless `decide_utterance_continuation` (iter-155)
+deliberately doesn't carry: a held pending utterance, the running merged text,
+and the accumulated false-endpoint flag. This lap ships that state as a pure,
+fully-tested coordinator so the actual audio loop stays a thin driver:
+`session/utterance_buffer.py`.
+
+**Why:** the decision seam answers "do these two endpointed utterances MERGE?"
+but a live STT loop can't act on it without somewhere to *hold* the first
+utterance while it waits to see if a continuation arrives. Putting that holding
+logic inline in `mic_chat` / `pipecat_server` would be untestable (buried in the
+pyaudio loop). Extracting it as a pure accumulator — `gap_secs` injected, no
+clock reads, no I/O — keeps the audio loop a thin driver and the merge state
+unit-testable, exactly as the rest of the track has done (ship the pure
+primitive behind the off-by-default gate; wire the entrypoint as a separate
+reviewable lap).
+
+**What changed:**
+
+1. **`session/utterance_buffer.py` (new) — the stateful driver.**
+   `UtteranceBuffer.offer(text, gap_secs)` returns a `BufferResult` with the
+   `EmittedTurn`s ready for the engine *now* (usually 0 or 1) plus the text still
+   `held`. `flush()` releases a held pending when no continuation arrives (a
+   silence longer than `max_gap_secs`, or shutdown). Composes iter-155's
+   `decide_utterance_continuation` for the per-chunk MERGE/NEW call and
+   `text_eou.utterance_completeness` to decide whether a freshly-formed candidate
+   is still unfinished enough to keep holding.
+
+2. **`EmittedTurn(text, false_endpoint)`.** Each released turn carries
+   `false_endpoint=True` iff it absorbed at least one merged continuation — so
+   the caller sets `TurnMetrics.false_endpoint = turn.false_endpoint` and
+   iter-154's metric finally populates from the live organic path. The measure
+   shipped iter-154, the decision iter-155, the live producer here — three laps
+   to close the false-endpoint loop on the user side.
+
+3. **The half-duplex invariant is the whole point.** With a default
+   `FullDuplexConfig()` (`utterance_merging` inactive) the buffer is a
+   *transparent zero-latency passthrough*: every `offer` emits its text
+   immediately with `false_endpoint=False`, nothing is ever held, `flush` is
+   always empty. Byte-for-byte today's "each endpoint is its own turn, fed at
+   once" behavior, **no added latency**. Only with merging explicitly on does the
+   hold-and-merge machinery engage — and even then only an *unfinished-looking*
+   utterance is held; a complete thought emits immediately, so complete turns
+   never pay the latency of waiting for a continuation.
+
+4. **The merged flag travels with the pending.** A merge that keeps the running
+   text still-unfinished stays held across calls (chained merges accumulate);
+   the `false_endpoint` flag rides along so the eventually-released turn —
+   whether released by a later NEW arrival or by `flush` — reports the repair
+   correctly. `held` is informational only (observability); the actionable
+   output is always `turns`.
+
+5. **`tests/unit/test_utterance_buffer.py` (new, +32 tests):** the half-duplex
+   passthrough invariant (default / explicit-default / master-on-but-held-back
+   all emit immediately, never hold, empty flush, even in the exact
+   unfinished+quick corner); organic holding (unfinished held, complete emits
+   immediately); the merge (single-spaced join + `false_endpoint=True`, chained
+   merges accumulate); NEW paths (long gap releases prior + emits new,
+   complete-then-quick separate, new-unfinished re-held); flush (releases held,
+   preserves merged flag, empty when nothing pending); boundaries (gap at-max
+   inclusive / just-above exclusive, completeness at-ceiling via comma,
+   empty/None/blank inputs); custom `max_gap_secs` / `incomplete_ceiling` /
+   `eou_config` threading; `BufferResult`/`EmittedTurn` contracts (defaults,
+   frozen, `.merged`); purity (independent buffers don't share state). Loads by
+   file path under a stub `session` namespace — the same pipecat-bypass trick the
+   sibling seams use.
+
+6. **Discoverability:** marked backlog #9 **DONE iter-155 + iter-156** (the
+   stateful driver; STT-loop wiring is the remaining follow-on) in
+   `docs/research/organic-turn-taking.md` with a findings-log entry; extended the
+   README Research section to name `UtteranceBuffer`, its `offer`/`flush` API,
+   the `EmittedTurn.false_endpoint` link to iter-154's metric, and the
+   zero-latency passthrough guarantee.
+
+**Verification:**
+- `python -m pytest tests/unit/test_utterance_buffer.py -q` → **32 passed in 0.10s**.
+- Full unit suite (in worktree, pre-merge): **2090 passed** (2058 prior + 32).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- Re-ran on main post-merge: **32 passed**; `py_compile session/utterance_buffer.py` clean.
+
+**Notes:**
+- **No runtime behavior change.** The new module is unwired; nothing in the live
+  `mic_chat` / `mic_talk` / `pipecat_server` path imports `utterance_buffer` yet,
+  and even when wired the default config makes it a transparent passthrough.
+- Next directions:
+  - **Wire `UtteranceBuffer` into the live STT loop** (the direct follow-on, and
+    the first lap to actually touch a live entrypoint): instantiate from
+    `full_duplex_config_from_env`, route finalized transcripts through
+    `offer(text, measured_gap)`, feed the returned `turns` to the engine, call
+    `flush()` on a long-silence / shutdown, and set each turn's
+    `TurnMetrics.false_endpoint` from `EmittedTurn.false_endpoint` — closing
+    iter-154's metric live-population loop on the user side.
+  - **Wire `should_abandon_turn`** (iter-152) into the `mic_chat` barge path,
+    and **`should_emit_backchannel`** (iter-153) into the live cue path — both
+    gated behind their full-duplex sub-flags.
+  - Carried over (off-track): the CI workflow
+    (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
+    on a committed `baseline.json`; diversity-check surface paused per
+    iter-143/144.
