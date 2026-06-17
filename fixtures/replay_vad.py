@@ -41,9 +41,9 @@ from __future__ import annotations
 import argparse
 import json
 import wave
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, replace
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 
@@ -347,6 +347,107 @@ def replay_all(recordings_dir: Path = RECORDINGS_DIR, params: Optional[VadParams
 
 
 # ---------------------------------------------------------------------------
+# Parameter sweep — run a grid of parameter values across the whole corpus
+# and aggregate detection so a tuning experiment (backlog items 3–6 in
+# docs/research/voice-capture-tuning.md) produces one comparison table
+# instead of N hand-run single-param invocations.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SweepPoint:
+    """Corpus-aggregate detection for one parameter set in a sweep.
+
+    ``params``         — the VadParams this point used.
+    ``recordings``     — how many recordings were replayed.
+    ``triggered``      — how many of them ``known_speech_would_trigger``.
+    ``total_onsets``   — sum of detected onsets across the corpus.
+    ``total_speaking_frames`` — sum of committed speaking frames.
+    ``mean_pct_over``  — mean %-of-frames-over-threshold across recordings.
+    ``min_onsets``     — fewest onsets any single recording got (the
+                         worst-case recording for this parameter set; a
+                         sweep wants to maximize this floor, not just the
+                         total — one missed recording is a real miss).
+    """
+
+    params: VadParams
+    recordings: int
+    triggered: int
+    total_onsets: int
+    total_speaking_frames: int
+    mean_pct_over: float
+    min_onsets: int
+
+    def summary_line(self, label_key: str = "threshold") -> str:
+        value = getattr(self.params, label_key)
+        return (
+            f"{label_key}={value:<8} "
+            f"trig={self.triggered}/{self.recordings}  "
+            f"min_onsets={self.min_onsets:<2} "
+            f"onsets={self.total_onsets:<3} "
+            f"speak_frames={self.total_speaking_frames:<5} "
+            f"mean_over={self.mean_pct_over:5.1f}%"
+        )
+
+
+def aggregate_results(params: VadParams, results: List[ReplayResult]) -> SweepPoint:
+    """Fold a list of per-recording results into one corpus-aggregate point."""
+    n = len(results)
+    triggered = sum(int(r.known_speech_would_trigger) for r in results)
+    total_onsets = sum(r.onsets for r in results)
+    total_speaking = sum(r.speaking_frames for r in results)
+    mean_over = (sum(r.pct_over_threshold for r in results) / n) if n else 0.0
+    min_onsets = min((r.onsets for r in results), default=0)
+    return SweepPoint(
+        params=params,
+        recordings=n,
+        triggered=triggered,
+        total_onsets=total_onsets,
+        total_speaking_frames=total_speaking,
+        mean_pct_over=mean_over,
+        min_onsets=min_onsets,
+    )
+
+
+def sweep_param(
+    param_name: str,
+    values: List[float],
+    base: Optional[VadParams] = None,
+    recordings_dir: Path = RECORDINGS_DIR,
+) -> List[SweepPoint]:
+    """Replay the whole corpus once per value of a single ``VadParams`` field.
+
+    ``param_name`` is a field of ``VadParams`` (e.g. ``"threshold"``,
+    ``"gain"``, ``"debounce_ms"``); each value in ``values`` is substituted
+    into a copy of ``base`` (default ``VadParams()``) and the corpus is
+    replayed. Returns one ``SweepPoint`` per value, in input order — the
+    machine-readable comparison table the tuning backlog asks for.
+    """
+    base = base or VadParams()
+    if param_name not in {f for f in VadParams.__dataclass_fields__}:
+        raise ValueError(f"unknown VadParams field: {param_name!r}")
+    points: List[SweepPoint] = []
+    for value in values:
+        params = replace(base, **{param_name: value})
+        results = replay_all(recordings_dir, params)
+        points.append(aggregate_results(params, results))
+    return points
+
+
+def _parse_value_list(raw: str, cast) -> List[float]:
+    """Parse a comma-separated CLI value list, casting each entry."""
+    out: List[float] = []
+    for token in raw.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        out.append(cast(token))
+    if not out:
+        raise ValueError("empty value list")
+    return out
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -355,6 +456,55 @@ def _result_to_dict(r: ReplayResult) -> dict:
     d = asdict(r)
     d["segments"] = [asdict(s) for s in r.segments]
     return d
+
+
+def _sweep_point_to_dict(p: SweepPoint) -> dict:
+    d = asdict(p)
+    d["params"] = asdict(p.params)
+    return d
+
+
+# Which VadParams fields take an int vs. float on the CLI value list.
+_INT_FIELDS = {"frame_size"}
+
+
+def _run_sweep(args, base: VadParams) -> int:
+    """Handle ``--sweep PARAM --sweep-values V1,V2,...`` and print the grid."""
+    if args.sweep not in VadParams.__dataclass_fields__:
+        print(
+            f"unknown --sweep field {args.sweep!r}; choose one of: "
+            f"{', '.join(VadParams.__dataclass_fields__)}"
+        )
+        return 2
+    if not args.sweep_values:
+        print("--sweep requires --sweep-values (comma-separated)")
+        return 2
+
+    cast = int if args.sweep in _INT_FIELDS else float
+    try:
+        values = _parse_value_list(args.sweep_values, cast)
+    except ValueError as exc:
+        print(f"bad --sweep-values: {exc}")
+        return 2
+
+    points = sweep_param(args.sweep, values, base=base, recordings_dir=args.dir)
+
+    if args.json:
+        print(json.dumps([_sweep_point_to_dict(p) for p in points], indent=2))
+        return 0
+
+    if not points or points[0].recordings == 0:
+        print(f"No recordings found in {args.dir}")
+        return 1
+
+    print(
+        f"VAD sweep — {args.sweep} over {args.sweep_values} "
+        f"({points[0].recordings} recordings)"
+    )
+    print("-" * 100)
+    for p in points:
+        print(p.summary_line(args.sweep))
+    return 0
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -367,6 +517,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--frame-size", type=int, default=VadParams.frame_size)
     parser.add_argument("--dir", type=Path, default=RECORDINGS_DIR)
     parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    parser.add_argument(
+        "--sweep",
+        metavar="PARAM",
+        help="sweep one VadParams field (threshold, gain, debounce_ms, "
+        "silence_ms, min_speech_ms, frame_size) across --sweep-values, "
+        "holding the other flags fixed as the base",
+    )
+    parser.add_argument(
+        "--sweep-values",
+        metavar="V1,V2,...",
+        help="comma-separated values for --sweep (e.g. 0.004,0.006,0.015)",
+    )
     args = parser.parse_args(argv)
 
     params = VadParams(
@@ -377,6 +539,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         gain=args.gain,
         frame_size=args.frame_size,
     )
+
+    if args.sweep:
+        return _run_sweep(args, params)
 
     results = replay_all(args.dir, params)
 

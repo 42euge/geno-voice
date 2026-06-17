@@ -24,6 +24,23 @@ python fixtures/replay_vad.py --threshold 0.006     # human-readable table
 python fixtures/replay_vad.py --json                # machine-readable
 ```
 
+To compare a whole grid of values in one run, sweep a single parameter
+across the corpus (added iter-190). It replays the whole corpus once per
+value and aggregates detection — the comparison table the tuning backlog
+below keeps asking for, instead of N hand-run single-param invocations:
+
+```
+python fixtures/replay_vad.py --sweep threshold --sweep-values 0.004,0.006,0.015
+python fixtures/replay_vad.py --sweep gain --sweep-values 1.0,1.5,2.0,3.0
+python fixtures/replay_vad.py --sweep debounce_ms --sweep-values 100,200,300 --json
+```
+
+Each row reports, across the corpus: `trig` (how many recordings'
+known speech would trigger), `min_onsets` (the worst single recording —
+the floor a sweep wants to *maximize*, since one missed recording is a
+real miss even when the total looks healthy), `onsets`/`speak_frames`
+totals, and `mean_over` (mean %-of-frames-over-threshold).
+
 `tests/integration/test_vad_recordings.py` turns every recording into a
 regression test (the data flywheel): the more the user talks to the app,
 the more fixtures land, and each must keep detecting its speech at the
@@ -59,6 +76,62 @@ Key observations:
   the user says *after* that 3–5s dead window. The replay quantifies the
   ceiling; the live path forfeits the opening of every utterance.
 
+## Parameter sweeps over the seed corpus (iter-190)
+
+Run with `fixtures/replay_vad.py --sweep`. All sweeps hold the other
+parameters at their defaults (frame 1024). `trig` = recordings whose
+known speech would trigger; `min_onsets` = the worst single recording.
+
+**Threshold** (`--sweep threshold`):
+
+| threshold | trig | min_onsets | total onsets | speak frames | mean %over |
+|-----------|------|------------|--------------|--------------|------------|
+| 0.004 | 4/4 | 1 | 12 | 1353 | 11.4% |
+| 0.006 | 4/4 | 1 | 10 | 1156 | 8.5%  |
+| 0.010 | 4/4 | 1 | 8  | 623  | 5.6%  |
+| 0.015 | 3/4 | 0 | 3  | 203  | 3.4%  |
+| 0.020 | 1/4 | 0 | 1  | 62   | 1.8%  |
+
+The cliff is between **0.010 and 0.015**: at 0.015 the far-field
+`voice-20260617-135015` drops to `min_onsets=0` (a real miss) and `trig`
+falls to 3/4. 0.006 keeps a full-corpus floor (`min_onsets=1`) with
+margin — going down to 0.004 buys more frames but no new triggers, so it
+risks lifting silence-floor frames over the gate for no detection gain.
+**0.006 is confirmed as the right operating point** for this corpus.
+
+**Gain** (`--sweep gain`, threshold 0.006):
+
+| gain | trig | total onsets | speak frames | mean %over |
+|------|------|--------------|--------------|------------|
+| 1.0 | 4/4 | 10 | 1156 | 8.5%  |
+| 1.5 | 4/4 | 12 | 1353 | 11.4% |
+| 2.0 | 4/4 | 16 | 1557 | 13.0% |
+| 3.0 | 4/4 | 18 | 2145 | 16.1% |
+
+Gain monotonically lifts onsets and speaking frames. Since the silence
+floor (~0.0003) is still ~3× below the 0.006 gate even at gain 2.0
+(0.0006), modest gain recovers more speech without raising `%over` into
+false-trigger territory. **A 1.5–2.0× gain is a safe, cheap recovery
+lever** that backlog item 4 proposed — the sweep now quantifies it.
+(Equivalent to lowering the threshold proportionally; gain is the knob
+the worklet can apply directly.)
+
+**Onset debounce** (`--sweep debounce_ms`, threshold 0.006):
+
+| debounce_ms | trig | total onsets | speak frames |
+|-------------|------|--------------|--------------|
+| 100 | 4/4 | 11 | 1322 |
+| 150 | 4/4 | 10 | 1201 |
+| 200 | 4/4 | 10 | 1156 |
+| 300 | 3/4 | 6  | 568  |
+
+100–200ms all keep `trig=4/4`; the current **200ms is safe and 100ms
+recovers slightly more speaking frames** (clips less utterance opening),
+consistent with the wide signal separation. **300ms is too aggressive** —
+it drops a recording. Backlog item 5's "100ms may be safe" hypothesis is
+supported by the data; a follow-up should validate onset *timing* (not
+just count) before changing the client.
+
 ## Findings & backlog (prioritized)
 
 1. **[latency] Pre-warm the capture pipeline.** The 3–5s `click_to_capture_ms`
@@ -78,20 +151,24 @@ Key observations:
    would recover clipped utterance openings. Testable via replay: assert the
    first segment's `onset_ms` moves earlier.
 3. **[threshold] Confirm 0.006 holds as the corpus grows.** The regression
-   test guards against silent regressions. Re-run `replay_vad.py` each lap
-   on any newly-synced recordings; if a new recording misses at 0.006,
-   investigate (gain stage? far-field? noise floor?) before lowering further.
-4. **[gain] Software gain experiment.** `replay_vad.py --gain N` models a
-   pre-amplification stage. Sweep gain vs. false-trigger rate on the silence
-   floor: a modest gain (1.5–2×) might let the threshold stay conservative
-   while recovering the quietest far-field frames. Pick the setting that
-   maximizes onset recovery across the corpus without lifting silence-floor
-   frames over the gate.
-5. **[debounce] Tune onset debounce against clipping.** The 200ms debounce
-   trades onset latency for false-trigger immunity. With the wide signal
-   separation observed, a shorter debounce (e.g. 100ms) may be safe and
-   would clip less of the utterance opening. Sweep via
-   `--debounce-ms` and measure onset timing + false triggers on silence.
+   test guards against silent regressions. Re-run `replay_vad.py --sweep
+   threshold ...` each lap on any newly-synced recordings; if a new
+   recording misses at 0.006, investigate (gain stage? far-field? noise
+   floor?) before lowering further. _iter-190: swept 0.004→0.020 on the
+   seed corpus — the detection cliff is between 0.010 and 0.015, so 0.006
+   sits with comfortable margin (`min_onsets=1`, `trig=4/4`)._
+4. **[gain] Software gain experiment.** _iter-190: swept gain 1.0→3.0 at
+   threshold 0.006. Onsets and speaking frames rise monotonically; even at
+   2.0× the lifted silence floor (~0.0006) stays ~3× under the gate, so a
+   1.5–2.0× gain recovers more speech without false triggers. Next: wire a
+   `gainNode` (or worklet multiply) into `ContinuousListener` so this is
+   tunable in the client, defaulting to 1.0._
+5. **[debounce] Tune onset debounce against clipping.** _iter-190: swept
+   100→300ms at threshold 0.006. 100–200ms all keep `trig=4/4`; 300ms drops
+   a recording. 100ms recovers slightly more speaking frames (less clipped
+   opening). Next: validate onset **timing** moves earlier (not just the
+   count) before lowering the client's hard-coded 200ms — this pairs
+   naturally with item 2 (pre-roll buffer)._
 6. **[silence] Right-size the silence timeout.** 800ms may over-split or
    over-merge turns. The seed corpus shows clean multi-segment splits;
    revisit if new recordings show truncated or run-on turns.

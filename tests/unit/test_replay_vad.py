@@ -26,6 +26,11 @@ from fixtures.replay_vad import (  # noqa: E402
     simulate_vad,
     load_wav_mono,
     replay_recording,
+    replay_all,
+    aggregate_results,
+    sweep_param,
+    _parse_value_list,
+    main,
 )
 
 
@@ -218,3 +223,187 @@ class TestReplayRecording:
         assert sr == SR
         assert samples.size == signal.size
         assert float(np.max(np.abs(samples))) == pytest.approx(0.5, abs=0.01)
+
+
+# ---------------------------------------------------------------------------
+# Helpers for the sweep tests — build a tiny synthetic corpus on disk.
+# ---------------------------------------------------------------------------
+
+
+def _make_corpus(tmp_path: Path) -> Path:
+    """A 2-recording corpus: one loud (clear speech), one quiet (far-field).
+
+    The quiet recording sits between the 0.006 and 0.015 thresholds so a
+    threshold sweep shows a real detection difference across values.
+    """
+    corpus = tmp_path / "rec"
+    corpus.mkdir()
+    loud = np.concatenate([_silence(SR), _tone(SR, 0.3), _silence(SR)])
+    _write_wav(corpus / "loud.wav", loud)
+    (corpus / "loud.json").write_text('{"peak_rms": 0.05}')
+    # ~0.0085 RMS sine: clears 0.006, misses 0.015.
+    quiet = np.concatenate([_silence(SR // 2), _tone(SR, 0.012), _silence(SR // 2)])
+    _write_wav(corpus / "quiet.wav", quiet)
+    (corpus / "quiet.json").write_text('{"peak_rms": 0.0085}')
+    return corpus
+
+
+# ---------------------------------------------------------------------------
+# aggregate_results
+# ---------------------------------------------------------------------------
+
+
+class TestAggregateResults:
+    def test_empty_corpus_aggregates_to_zeros(self):
+        point = aggregate_results(VadParams(), [])
+        assert point.recordings == 0
+        assert point.triggered == 0
+        assert point.total_onsets == 0
+        assert point.total_speaking_frames == 0
+        assert point.mean_pct_over == 0.0
+        assert point.min_onsets == 0
+
+    def test_aggregates_across_corpus(self, tmp_path):
+        corpus = _make_corpus(tmp_path)
+        results = replay_all(corpus, VadParams(threshold=0.006))
+        point = aggregate_results(VadParams(threshold=0.006), results)
+        assert point.recordings == 2
+        assert point.total_onsets == sum(r.onsets for r in results)
+        assert point.total_speaking_frames == sum(r.speaking_frames for r in results)
+        assert point.min_onsets == min(r.onsets for r in results)
+        # min_onsets is the worst single recording, never above the total.
+        assert point.min_onsets <= point.total_onsets
+
+
+# ---------------------------------------------------------------------------
+# sweep_param
+# ---------------------------------------------------------------------------
+
+
+class TestSweepParam:
+    def test_one_point_per_value_in_order(self, tmp_path):
+        corpus = _make_corpus(tmp_path)
+        points = sweep_param("threshold", [0.006, 0.015], recordings_dir=corpus)
+        assert len(points) == 2
+        assert points[0].params.threshold == 0.006
+        assert points[1].params.threshold == 0.015
+
+    def test_lower_threshold_detects_at_least_as_much(self, tmp_path):
+        corpus = _make_corpus(tmp_path)
+        points = sweep_param("threshold", [0.006, 0.015], recordings_dir=corpus)
+        low, high = points
+        # The quiet recording drops out at 0.015 → fewer total onsets and a
+        # lower trigger count at the higher threshold.
+        assert low.total_onsets >= high.total_onsets
+        assert low.triggered >= high.triggered
+
+    def test_base_params_are_held_fixed(self, tmp_path):
+        corpus = _make_corpus(tmp_path)
+        base = VadParams(threshold=0.006, gain=2.0)
+        points = sweep_param("debounce_ms", [100.0, 200.0], base=base, recordings_dir=corpus)
+        # Only debounce varies; the base's gain and threshold ride along.
+        for p in points:
+            assert p.params.gain == 2.0
+            assert p.params.threshold == 0.006
+        assert [p.params.debounce_ms for p in points] == [100.0, 200.0]
+
+    def test_gain_sweep_recovers_quiet_recording(self, tmp_path):
+        corpus = _make_corpus(tmp_path)
+        # At a strict threshold the quiet recording misses; enough gain lifts
+        # it over the gate. Sweep proves the recovery is monotone-ish.
+        points = sweep_param(
+            "gain", [1.0, 4.0], base=VadParams(threshold=0.02), recordings_dir=corpus
+        )
+        assert points[1].total_onsets >= points[0].total_onsets
+
+    def test_unknown_field_raises(self, tmp_path):
+        corpus = _make_corpus(tmp_path)
+        with pytest.raises(ValueError):
+            sweep_param("nonexistent", [1.0], recordings_dir=corpus)
+
+
+# ---------------------------------------------------------------------------
+# _parse_value_list
+# ---------------------------------------------------------------------------
+
+
+class TestParseValueList:
+    def test_parses_floats(self):
+        assert _parse_value_list("0.006,0.015,0.02", float) == [0.006, 0.015, 0.02]
+
+    def test_parses_ints(self):
+        assert _parse_value_list("512,1024,2048", int) == [512, 1024, 2048]
+
+    def test_strips_whitespace_and_skips_blanks(self):
+        assert _parse_value_list(" 1.0 , , 2.0 ,", float) == [1.0, 2.0]
+
+    def test_empty_raises(self):
+        with pytest.raises(ValueError):
+            _parse_value_list("   ,  ,", float)
+
+    def test_bad_token_raises(self):
+        with pytest.raises(ValueError):
+            _parse_value_list("1.0,notanumber", float)
+
+
+# ---------------------------------------------------------------------------
+# CLI — main() with --sweep
+# ---------------------------------------------------------------------------
+
+
+class TestSweepCli:
+    def test_sweep_human_table(self, tmp_path, capsys):
+        corpus = _make_corpus(tmp_path)
+        rc = main(["--sweep", "threshold", "--sweep-values", "0.006,0.015", "--dir", str(corpus)])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "VAD sweep" in out
+        assert "threshold=0.006" in out
+        assert "threshold=0.015" in out
+
+    def test_sweep_json(self, tmp_path, capsys):
+        corpus = _make_corpus(tmp_path)
+        rc = main(["--sweep", "gain", "--sweep-values", "1.0,2.0", "--dir", str(corpus), "--json"])
+        assert rc == 0
+        import json as _json
+
+        payload = _json.loads(capsys.readouterr().out)
+        assert len(payload) == 2
+        assert payload[0]["params"]["gain"] == 1.0
+        assert payload[1]["params"]["gain"] == 2.0
+        assert "min_onsets" in payload[0]
+
+    def test_sweep_unknown_field_errors(self, tmp_path, capsys):
+        corpus = _make_corpus(tmp_path)
+        rc = main(["--sweep", "bogus", "--sweep-values", "1", "--dir", str(corpus)])
+        assert rc == 2
+        assert "unknown --sweep field" in capsys.readouterr().out
+
+    def test_sweep_missing_values_errors(self, tmp_path, capsys):
+        corpus = _make_corpus(tmp_path)
+        rc = main(["--sweep", "threshold", "--dir", str(corpus)])
+        assert rc == 2
+        assert "requires --sweep-values" in capsys.readouterr().out
+
+    def test_sweep_bad_values_errors(self, tmp_path, capsys):
+        corpus = _make_corpus(tmp_path)
+        rc = main(["--sweep", "threshold", "--sweep-values", "0.006,bad", "--dir", str(corpus)])
+        assert rc == 2
+        assert "bad --sweep-values" in capsys.readouterr().out
+
+    def test_sweep_empty_corpus_reports_none(self, tmp_path, capsys):
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        rc = main(["--sweep", "threshold", "--sweep-values", "0.006", "--dir", str(empty)])
+        assert rc == 1
+        assert "No recordings found" in capsys.readouterr().out
+
+    def test_frame_size_sweep_casts_int(self, tmp_path, capsys):
+        corpus = _make_corpus(tmp_path)
+        rc = main(["--sweep", "frame_size", "--sweep-values", "512,1024", "--dir", str(corpus), "--json"])
+        assert rc == 0
+        import json as _json
+
+        payload = _json.loads(capsys.readouterr().out)
+        assert payload[0]["params"]["frame_size"] == 512
+        assert isinstance(payload[0]["params"]["frame_size"], int)
