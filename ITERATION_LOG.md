@@ -13465,3 +13465,102 @@ first step toward that head.
     (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still
     blocked on a committed `baseline.json`; diversity-check surface paused per
     iter-143/144.
+
+## iter-154 — organic-path naturalness metrics: false_endpoint + continuers_detected (backlog #8)
+
+**Branch:** `iter-154-organic-metrics` (merged ff to main, commit `1da7843`)
+**Date:** 2026-06-16
+
+**Goal:** iter-148/149/150/151/152/153 shipped the organic turn-taking
+*decision seams* (#1/#2/#3/#4/#5/#7) behind an off-by-default full-duplex gate.
+This lap ships backlog #8, the **naturalness metrics for the organic path** —
+the measurement surface that lets the track be *measured, not asserted* once
+those seams are wired into the live path.
+
+**Why:** the organic track has, to date, shipped pure decision primitives with
+no way to observe whether they actually improve the conversation. Backlog #8
+closes that gap: a false-endpoint rate (the headline metric the LiveKit
+turn-detector / pipecat smart-turn literature tracks) and a continuer-detection
+count (the win continuer-aware listening from #5 buys). With these in
+`TurnMetrics` + the session summary, a future lap that wires the seams in can
+read off whether false endpoints dropped and continuers were correctly held,
+rather than asserting the behavior is better.
+
+**What changed:**
+
+1. **`examples/_chat_metrics.py` — two additive `TurnMetrics` fields.**
+   - `false_endpoint: bool` (default `False`) — the EOU decision fired early
+     and the user actually had more to say. The decision-based pre-emption
+     signal; complements iter-056's `barge_in_regret` (the latency-based one).
+     Metric 3.22 in the perf-metrics taxonomy.
+   - `continuers_detected: int` (default `0`) — count of user continuers
+     ("mhmm") this turn recognized via iter-148's `classify_backchannel` and
+     held the agent's floor via iter-152's `decide_barge_action`
+     (CONTINUER ⇒ FINISH), instead of clipping the turn. Metric 3.23.
+   Both follow iter-105's `wer` pattern: a default-off measurement field that
+   future eval/organic runs populate without changing the dataclass shape.
+
+2. **`OrganicStats` + `_emit_organic_block` session-summary helper.** Renders a
+   "Organic turn-taking:" header, a "False endpoints: N/M turns (X%)" rate (with
+   an "EOU too eager; raise silence_duration" suggestion above a 20% threshold;
+   a count-only fallback when `n` is unknown), and a "Continuers held: N
+   (backchannels kept the floor)" positive line. Mirrors the iter-090
+   `BargeStats` / `_emit_barge_block` extraction shape.
+
+3. **Per-turn `TurnMetrics.print()` rendering.** A yellow "False endpoint: yes"
+   flag and a dim "Continuers: N" line — both gated on non-zero.
+
+4. **Purely additive — byte-for-byte unchanged half-duplex output.** Both
+   fields stay at their defaults on the proven half-duplex silence-VAD path (it
+   neither mis-decides an organic endpoint nor classifies continuers), so the
+   per-turn lines and the entire `_emit_organic_block` are suppressed and
+   today's summaries are identical to pre-iter-154. The block only appears once
+   the organic seams are wired in and start populating the fields — exactly the
+   "measured, not asserted" goal. The unchanged-summary guarantee is pinned by
+   a wiring test.
+
+5. **Why measurement now, live-population later.** Same discipline as the rest
+   of the track: ship the metric surface (default-off, fully tested) before the
+   code that feeds it. Wiring the live organic path to set the fields (on a
+   resumed-after-endpoint event, and when `decide_barge_action` returns
+   `FINISH`) is the follow-on lap.
+
+6. **`tests/unit/test_emit_organic_block.py` (new, +20 tests):** field defaults;
+   `OrganicStats` defaults; both-zero suppression (the half-duplex guarantee);
+   the false-endpoint header + rate + the 20%-exclusive suggestion boundary
+   (at-20% omits, just-above appends); the unknown-`n` count-only path;
+   continuers-alone (no false-endpoint line); both-signals-under-one-header;
+   and `print_session_summary` wiring (half-duplex summary has no organic block,
+   false-endpoint/continuer turns surface, per-turn `print()` emits/omits the
+   lines). Imports `examples._chat_metrics` directly (it's a clean leaf with no
+   `session/` or pyaudio dependency).
+
+7. **Discoverability:** marked backlog #8 **DONE iter-154** (metric surface;
+   live population noted as the follow-on) in
+   `docs/research/organic-turn-taking.md` with a findings-log entry; extended
+   the README Research section to name the two fields, the summary block, and
+   the byte-for-byte half-duplex guarantee.
+
+**Verification:**
+- `python -m pytest tests/unit/test_emit_organic_block.py -q` → **20 passed in 0.09s**.
+- Full unit suite (on main, post-merge): **2023 passed** (2003 prior + 20 new).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `python -m py_compile examples/_chat_metrics.py` → clean.
+
+**Notes:**
+- **No runtime behavior change.** The new fields default off; nothing in the
+  live `mic_chat`/`mic_talk`/`pipecat_server` path sets them yet, so every
+  rendered summary and per-turn block is byte-for-byte today's output.
+- Next directions:
+  - **Populate `false_endpoint` / `continuers_detected` from the live organic
+    path** (the direct follow-on): set `false_endpoint` when an EOU decision is
+    contradicted by resumed speech, and increment `continuers_detected` when
+    `decide_barge_action` returns `FINISH`.
+  - **Wire `should_abandon_turn`** (iter-152) into the `mic_chat` barge path,
+    and **`should_emit_backchannel`** (iter-153) into the live cue path —
+    both gated behind their full-duplex sub-flags; these are what would start
+    populating #8's metrics with real data.
+  - Carried over (off-track): the CI workflow
+    (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still
+    blocked on a committed `baseline.json`; diversity-check surface paused per
+    iter-143/144.
