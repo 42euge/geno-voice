@@ -260,8 +260,19 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   position (a new monologue continues the rotation rather than always
   replaying "mhmm"). Mirrors the `UtteranceBuffer` / `UtteranceAggregator`
   driver relationship to the merge seam; default (half-duplex) config ⇒
-  `emit=False` always and state never mutates; the live `pipecat_server`
-  cue-path wiring is the named follow-on. Also shipped: the **organic-path naturalness
+  `emit=False` always and state never mutates. The **silence-driven**
+  `PLAY_CUE` path is now wired to the same rotation too: `plan_cue_broadcast(decision,
+  *, trigger_fired)` (`session/turn_taking.py`,
+  `tests/unit/test_plan_cue_broadcast.py`) is the pure gate
+  `pipecat_server.py`'s `Broadcaster` consults after `TurnTakingEngine.decide`
+  — it returns the engine's **rotated** `decision.cue.cue_type` to broadcast,
+  or `None` when the action isn't `PLAY_CUE` / an NLP trigger fired / no cue is
+  attached. This fixed two live-path bugs (iter-172): the branch read
+  `Action.play_cue` (an `AttributeError` — the member is `PLAY_CUE`, so the cue
+  branch crashed on every transcript), and `broadcast_cue` re-picked a *random*
+  cue from a private `CUE_TYPES` list (dropping the rotation and risking cue
+  keys outside it). Now the live broadcast is indexed to the single
+  `CUE_ROTATION` source of truth. Also shipped: the **organic-path naturalness
   metrics** (`examples/_chat_metrics.py`,
   `tests/unit/test_emit_organic_block.py`) — two additive `TurnMetrics`
   fields, `false_endpoint` (the EOU decision fired early and the user

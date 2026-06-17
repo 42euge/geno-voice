@@ -39,7 +39,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.transports.local.audio import LocalAudioTransport, LocalAudioTransportParams
 
 from session.triggers import detect_triggers, filter_noise
-from session.turn_taking import TurnTakingEngine, Action
+from session.turn_taking import TurnTakingEngine, plan_cue_broadcast
 from session.text_eou import TextAwareTurnDecider
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
@@ -233,19 +233,27 @@ class Broadcaster(FrameProcessor):
             })
             asyncio.create_task(post_notes(text))
 
-            if decision.action == Action.play_cue and not trigger.triggered:
-                asyncio.create_task(broadcast_cue())
+            # Play the cue the engine *chose* (rotated through the shared
+            # CUE_ROTATION) — not a random pick. plan_cue_broadcast centralizes
+            # the gate (action == PLAY_CUE, no NLP trigger) and hands back the
+            # engine's rotated cue_type, so the live sidecar can't drift from
+            # the rotation TurnTakingEngine maintains.
+            cue_type = plan_cue_broadcast(decision, trigger_fired=trigger.triggered)
+            if cue_type is not None:
+                asyncio.create_task(broadcast_cue(cue_type))
 
         await self.push_frame(frame, direction)
 
 
-CUE_TYPES = ["mhmm", "hmm", "okay", "i_see", "right", "go_on"]
+async def broadcast_cue(cue_type: str):
+    """Fetch the named backchannel cue WAV and broadcast it as base64 audio.
 
-
-async def broadcast_cue():
-    """Fetch a random cue from the voice server and broadcast as base64 audio."""
-    import base64, random
-    cue_type = random.choice(CUE_TYPES)
+    ``cue_type`` is the rotated cue the engine selected
+    (``plan_cue_broadcast``); the ``/cue/{cue_type}`` endpoint still picks a
+    random *take* within that cue's bank, so the agent doesn't sound identical
+    each time it plays the same continuer.
+    """
+    import base64
     try:
         session = await get_http_session()
         import aiohttp

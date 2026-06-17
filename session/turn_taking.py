@@ -42,6 +42,44 @@ class TurnDecision:
     confidence: float = 0.0
 
 
+def plan_cue_broadcast(
+    decision: "TurnDecision",
+    *,
+    trigger_fired: bool = False,
+) -> str | None:
+    """Decide *which* backchannel cue (if any) a live cue path should broadcast.
+
+    The single gate the live sidecar (``pipecat_server.py``'s ``Broadcaster``)
+    consults after :meth:`TurnTakingEngine.decide`: returns the ``cue_type`` to
+    play, or ``None`` to stay silent. Pure, dependency-free, file-path-loadable
+    in tests like its sibling seams.
+
+    A cue is broadcast iff **all** hold:
+
+      - ``decision.action`` is :attr:`Action.PLAY_CUE` (the engine chose the
+        backchannel tier), and
+      - an NLP trigger did *not* fire (``trigger_fired`` is ``False``) — a
+        trigger means the user said something that warrants a real response, so
+        a continuer "mhmm" would step on it, and
+      - the decision actually carries a cue (``decision.cue`` is not ``None``).
+
+    Crucially the returned cue is the engine's **rotated** cue
+    (``decision.cue.cue_type``), advanced through the shared ``CUE_ROTATION``
+    (``session/cue_rotation.py``) by :meth:`TurnTakingEngine._next_cue`. The
+    live path must NOT re-pick a random cue from a private list: that both
+    drops the rotation (the agent repeats sounds) and risks playing a cue key
+    outside the shared rotation. This function is what keeps the live broadcast
+    indexed to the one source of truth.
+    """
+    if trigger_fired:
+        return None
+    if decision.action is not Action.PLAY_CUE:
+        return None
+    if decision.cue is None:
+        return None
+    return decision.cue.cue_type
+
+
 @dataclass
 class ConversationState:
     session_start: float = field(default_factory=time.time)
