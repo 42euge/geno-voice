@@ -248,7 +248,14 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
     # iter-020: optional VAD tuning. parse_vad_config defaults
     # match the _chat_recording module constants and tolerates
     # malformed user input.
-    vad_cfg = parse_vad_config(chat_cfg)
+    # iter-187: pass a warn adapter so a typo'd vad knob (wrong
+    # type, non-positive) surfaces a YELLOW one-liner instead of
+    # silently falling back to the default. ANSI styling stays at
+    # the caller per the inject-log convention; the parser emits
+    # plain text.
+    vad_cfg = parse_vad_config(
+        chat_cfg, warn=lambda line: print(f"  {YELLOW}{line}{RESET}")
+    )
     # iter-107: filler pre-rendering moved to examples/_chat_fillers
     # so the loop is testable without a real TTS engine. The
     # caller supplies a closure that wraps synthesize_with_alignment,

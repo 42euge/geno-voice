@@ -167,7 +167,7 @@ VAD_DEFAULTS = {
 }
 
 
-def parse_vad_config(chat_cfg: Any) -> dict:
+def parse_vad_config(chat_cfg: Any, warn: Any = None) -> dict:
     """Extract + validate the optional ``vad`` section of a parsed
     chat config (i.e. the dict returned by ``parse_chat_config``).
 
@@ -186,19 +186,53 @@ def parse_vad_config(chat_cfg: Any) -> dict:
     out-of-range values (e.g. ``silence_threshold=10.0``) is
     accepted as-is. The parser only sanity-checks types and
     positivity; semantic validity is up to the caller / runtime.
+
+    iter-187: optional ``warn`` seam. The fallback used to be
+    *silent* — a typo'd ``vad`` value (wrong type, ``<= 0``) just
+    vanished into the default, leaving the operator no clue why
+    their tuning had no effect (the iter-186 next-direction:
+    "surface a one-line warning when a vad config value is dropped
+    to its default"). When ``warn`` is supplied (a callable taking
+    one string, e.g. ``print`` or a styled log adapter), it is
+    invoked once per *present-but-rejected* entry, naming the key,
+    the offending value, and the default it fell back to. This
+    follows the conventions' inject-``log`` seam (the module emits
+    plain text; ANSI styling stays at the caller). Missing keys are
+    silent — backfilling an absent key is normal, not an error.
+    A ``vad`` section of the wrong type (present but not a mapping)
+    emits a single warning that the whole section was ignored. When
+    ``warn`` is ``None`` (the default) behavior is unchanged — the
+    parser stays a pure value-returner for the call sites and tests
+    that don't want the seam.
     """
     out = dict(VAD_DEFAULTS)
     if not isinstance(chat_cfg, Mapping):
         return out
     vad = chat_cfg.get("vad")
     if not isinstance(vad, Mapping):
+        if warn is not None and "vad" in chat_cfg:
+            warn(
+                f"vad config ignored: expected a mapping, got "
+                f"{type(vad).__name__} ({vad!r}); using defaults"
+            )
         return out
     for key, default in VAD_DEFAULTS.items():
+        # bool is an int subclass that would sail through as 1/0;
+        # treat it as a rejected value so True/False can't silently
+        # become 1.0/skip — matches the strict SilenceDetector guard
+        # (iter-186) on the reject side, just tolerantly here.
+        present = key in vad
         val = vad.get(key, default)
-        if isinstance(val, (int, float)) and val > 0:
+        if isinstance(val, (int, float)) and not isinstance(val, bool) and val > 0:
             out[key] = float(val)
-        # else fall through to default — bad type / non-positive
-        # number / missing key all hit the default.
+        elif present and warn is not None:
+            # else fall through to default — bad type / non-positive
+            # number / bool. Missing keys (present is False) stay
+            # silent: backfilling an absent key is normal.
+            warn(
+                f"vad.{key} ignored: expected a positive number, got "
+                f"{val!r}; using default {default}"
+            )
     return out
 
 

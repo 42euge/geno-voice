@@ -151,6 +151,114 @@ class TestParseVadConfig:
         again = parse_vad_config({"vad": {"silence_threshold": 0.1}})
         assert again["silence_threshold"] == 0.1
 
+    def test_bool_values_fall_back_to_defaults(self):
+        # iter-187: bool is an int subclass — True would otherwise
+        # sail through as 1.0 and False (==0) hit the non-positive
+        # branch. Both should be rejected as not-a-number, matching
+        # the strict SilenceDetector guard (iter-186).
+        out = parse_vad_config({
+            "vad": {
+                "silence_threshold": True,
+                "silence_duration": False,
+            }
+        })
+        assert out["silence_threshold"] == 0.02  # default
+        assert out["silence_duration"] == 0.8     # default
+
+
+# ---- parse_vad_config warn seam (iter-187) ----------------------------------
+
+
+class TestParseVadConfigWarn:
+    """The optional ``warn`` callable surfaces dropped values so a
+    typo'd VAD knob isn't silently swallowed by the default."""
+
+    def test_no_warn_by_default(self):
+        # Backwards compatible: omitting warn never raises and the
+        # return value is unchanged from the silent behavior.
+        out = parse_vad_config({"vad": {"silence_threshold": "loud"}})
+        assert out["silence_threshold"] == 0.02
+
+    def test_valid_config_emits_no_warnings(self):
+        warnings: list[str] = []
+        parse_vad_config(
+            {"vad": {"silence_threshold": 0.1, "silence_duration": 1.0}},
+            warn=warnings.append,
+        )
+        assert warnings == []
+
+    def test_missing_keys_are_silent(self):
+        # Backfilling an absent key is normal, not an error.
+        warnings: list[str] = []
+        parse_vad_config({"vad": {}}, warn=warnings.append)
+        assert warnings == []
+
+    def test_no_vad_section_is_silent(self):
+        warnings: list[str] = []
+        parse_vad_config({"chat": "stuff"}, warn=warnings.append)
+        assert warnings == []
+
+    def test_bad_value_warns_naming_key_value_and_default(self):
+        warnings: list[str] = []
+        parse_vad_config(
+            {"vad": {"silence_threshold": "loud"}}, warn=warnings.append
+        )
+        assert len(warnings) == 1
+        msg = warnings[0]
+        assert "silence_threshold" in msg
+        assert "loud" in msg
+        assert "0.02" in msg  # the default it fell back to
+
+    def test_non_positive_warns(self):
+        warnings: list[str] = []
+        parse_vad_config(
+            {"vad": {"silence_duration": -1.0}}, warn=warnings.append
+        )
+        assert len(warnings) == 1
+        assert "silence_duration" in warnings[0]
+        assert "-1.0" in warnings[0]
+
+    def test_bool_warns(self):
+        warnings: list[str] = []
+        parse_vad_config(
+            {"vad": {"silence_threshold": True}}, warn=warnings.append
+        )
+        assert len(warnings) == 1
+        assert "silence_threshold" in warnings[0]
+
+    def test_one_warning_per_bad_key(self):
+        warnings: list[str] = []
+        parse_vad_config(
+            {
+                "vad": {
+                    "silence_threshold": "bad",   # warns
+                    "silence_duration": 1.0,       # valid, silent
+                    "min_speech_duration": 0,      # warns
+                }
+            },
+            warn=warnings.append,
+        )
+        assert len(warnings) == 2
+        joined = " ".join(warnings)
+        assert "silence_threshold" in joined
+        assert "min_speech_duration" in joined
+        assert "silence_duration" not in joined
+
+    def test_non_mapping_vad_warns_once(self):
+        warnings: list[str] = []
+        out = parse_vad_config({"vad": "not-a-dict"}, warn=warnings.append)
+        assert out == VAD_DEFAULTS
+        assert len(warnings) == 1
+        assert "vad" in warnings[0]
+        assert "not-a-dict" in warnings[0]
+
+    def test_non_mapping_chat_with_warn_is_silent(self):
+        # A non-mapping chat config has no 'vad' key to drop, so
+        # nothing is warned — same as the silent return path.
+        warnings: list[str] = []
+        parse_vad_config(None, warn=warnings.append)
+        assert warnings == []
+
 
 # ---- record_utterance_streaming with overridden VAD --------------------------
 
