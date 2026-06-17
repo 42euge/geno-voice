@@ -45,17 +45,26 @@ class ResolvedTurn:
 
     ``respond`` is ``False`` when the aggregator held everything this cycle
     (nothing ready to feed the engine) — the loop should re-listen rather than
-    open an LLM stream. When ``True``, ``text`` is the (possibly merged) turn to
-    respond to and ``false_endpoint`` is ``True`` iff any released turn repaired
-    a false endpoint. ``held`` mirrors the aggregator's still-pending text
-    (informational — the loop does not act on it, but a test / live observer
-    can see what is being buffered).
+    open an LLM stream. When ``True``, ``text`` is the turn to respond to *now*
+    (the most-recently-released one) and ``false_endpoint`` is ``True`` iff that
+    responded turn repaired a false endpoint. ``held`` mirrors the aggregator's
+    still-pending text (informational — the loop does not act on it, but a test
+    / live observer can see what is being buffered).
+
+    ``displaced`` (iter-162) holds any *earlier* released turns from a
+    multi-turn release, in order — the mid-thought fragments the user abandoned
+    when a long silence proved they were *not* a false endpoint and a genuinely
+    new thought began. They are the **mid-session analog of iter-160's
+    shutdown** ``stranded_utterance``: captured fine, never completed, and *not*
+    part of the text the loop responds to. A single-turn release (the common
+    case) leaves it empty.
     """
 
     respond: bool
     text: str
     false_endpoint: bool = False
     held: str | None = None
+    displaced: tuple[str, ...] = ()
 
 
 def resolve_turn(result) -> ResolvedTurn:
@@ -68,9 +77,17 @@ def resolve_turn(result) -> ResolvedTurn:
 
     Rules:
       - No turns ⇒ ``respond=False`` (everything held; re-listen).
-      - One or more turns ⇒ join their non-empty texts with single spaces (a
-        multi-turn release glues a held pending onto the turn that displaced
-        it), ``false_endpoint`` is the OR across all released turns.
+      - **Respond to the LAST released turn.** A multi-turn release is *never* a
+        continuation to glue together: :class:`UtteranceBuffer` only ever emits
+        more than one turn when a measured silence forced a ``NEW`` boundary
+        (the held pending released as its own turn) *and then* a fresh utterance
+        was emitted. Those are semantically distinct turns — the earlier ones
+        are abandoned mid-thought fragments, the last is the new thing to answer
+        now. iter-162 fixes the pre-existing bug where these were space-glued
+        into one garbled LLM input (``"I was thinking about the What time is
+        it?"``). ``false_endpoint`` is the responded (last) turn's own flag.
+      - Earlier released turns become ``displaced`` — surfaced like iter-160's
+        ``stranded_utterance`` rather than fed to the engine.
       - A release of only blank turns collapses to ``respond=False`` — there is
         nothing to say.
     """
@@ -80,16 +97,23 @@ def resolve_turn(result) -> ResolvedTurn:
     if not turns:
         return ResolvedTurn(respond=False, text="", false_endpoint=False, held=held)
 
-    parts = [t.text.strip() for t in turns if t.text and t.text.strip()]
-    false_endpoint = any(t.false_endpoint for t in turns)
+    # Keep each turn paired with its own false-endpoint flag so the responded
+    # turn carries *its* flag (not an OR across abandoned fragments).
+    nonblank = [
+        (t.text.strip(), bool(t.false_endpoint))
+        for t in turns
+        if t.text and t.text.strip()
+    ]
 
-    if not parts:
+    if not nonblank:
         # Defensive: every released turn was blank — nothing to respond to.
         return ResolvedTurn(respond=False, text="", false_endpoint=False, held=held)
 
+    *earlier, (text, false_endpoint) = nonblank
     return ResolvedTurn(
         respond=True,
-        text=" ".join(parts),
+        text=text,
         false_endpoint=false_endpoint,
         held=held,
+        displaced=tuple(t for t, _ in earlier),
     )

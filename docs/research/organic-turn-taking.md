@@ -233,7 +233,7 @@ output discoverable from README" discipline. Local only.
 | 6 | **Adopt pipecat `smart-turn`** — replace #2's heuristic body with the smart-turn model inside `pipecat_server.py`'s pipeline; same `turn_decider` interface. Measure false-endpoint rate vs silence-only baseline on recorded sessions. | High | TODO (blocked on model + Apple Silicon) |
 | 7 | **Agent backchannel emission timing** — a learned/heuristic "good moment to backchannel" signal (Krisp-style) feeding the existing `PLAY_CUE` path, so the agent emits continuers *during* long user speech, not only on silence. | Medium | **DONE iter-153** (decision seam `decide_backchannel_timing`; cue-path wiring is the follow-on) |
 | 8 | **Naturalness metrics for the organic path** — extend `TurnMetrics` / session-summary with false-endpoint rate and continuer-detection counts so the track is measured, not asserted. | Medium | **DONE iter-154** (`false_endpoint` + `continuers_detected` `TurnMetrics` fields; `_emit_organic_block` summary block; populating them from the live organic path is the follow-on) |
-| 9 | **Utterance buffer-merge** (Section 4's second half) — a pure `decide_utterance_continuation(prev_text, next_text, gap_secs)` that, when a silence endpoint fires on *unfinished*-looking text and a continuation arrives within the pause window, returns `MERGE` (the endpoint was a false positive — user paused mid-thought) vs `NEW`. Composes #4's `utterance_completeness` + #3's gate. Repairs the false endpoints #8 measures. | Medium | **DONE iter-155** (decision seam `decide_utterance_continuation`) + **iter-156** (stateful `UtteranceBuffer` hold-and-merge driver) + **iter-157** (`max_merge_depth` starvation cap) + **iter-158** (`UtteranceAggregator` cross-turn gap-measuring driver) + **iter-159** (live `ChatLoop` wiring behind the off-by-default `aggregator` seam — held ⇒ re-listen, merged ⇒ respond to joined text + set `TurnMetrics.false_endpoint`) + **iter-160** (`run_session` flushes the aggregator on shutdown — a held mid-thought fragment the user never completed before Ctrl+C surfaces on `SessionState.stranded_utterance` + a session-summary line rather than vanishing inside the buffer) + **iter-161** (held utterances counted separately from VAD false triggers — `TurnResult.held` flag ⇒ `SessionState.utterances_held` + an "Utterances held" line in the organic summary block, fixing iter-159's silent inflation of the false-trigger rate) |
+| 9 | **Utterance buffer-merge** (Section 4's second half) — a pure `decide_utterance_continuation(prev_text, next_text, gap_secs)` that, when a silence endpoint fires on *unfinished*-looking text and a continuation arrives within the pause window, returns `MERGE` (the endpoint was a false positive — user paused mid-thought) vs `NEW`. Composes #4's `utterance_completeness` + #3's gate. Repairs the false endpoints #8 measures. | Medium | **DONE iter-155** (decision seam `decide_utterance_continuation`) + **iter-156** (stateful `UtteranceBuffer` hold-and-merge driver) + **iter-157** (`max_merge_depth` starvation cap) + **iter-158** (`UtteranceAggregator` cross-turn gap-measuring driver) + **iter-159** (live `ChatLoop` wiring behind the off-by-default `aggregator` seam — held ⇒ re-listen, merged ⇒ respond to joined text + set `TurnMetrics.false_endpoint`) + **iter-160** (`run_session` flushes the aggregator on shutdown — a held mid-thought fragment the user never completed before Ctrl+C surfaces on `SessionState.stranded_utterance` + a session-summary line rather than vanishing inside the buffer) + **iter-161** (held utterances counted separately from VAD false triggers — `TurnResult.held` flag ⇒ `SessionState.utterances_held` + an "Utterances held" line in the organic summary block, fixing iter-159's silent inflation of the false-trigger rate) + **iter-162** (a multi-turn release — an abandoned mid-thought fragment + a genuinely-new utterance, split by a long silence — no longer space-glued into one garbled LLM input; `resolve_turn` responds to the last turn and surfaces the abandoned fragment(s) on `TurnResult.displaced` ⇒ `SessionState.utterances_displaced` + a "Displaced uttr." summary line, the mid-session analog of iter-160's shutdown `stranded_utterance`) |
 
 ---
 
@@ -924,3 +924,72 @@ output discoverable from README" discipline. Local only.
   inter-turn clock read in `run_session`). Then wire the still-pending
   `should_abandon_turn` (iter-152) / `should_emit_backchannel` (iter-153) seams
   behind their sub-flags.
+
+### iter-162 (2026-06-17) — displaced fragments not glued onto the response (#9 correctness fix)
+
+- **Fixed a live correctness bug iter-159's wiring exposed.** In organic mode,
+  when the user trails off mid-thought ("I was thinking about the") and the
+  aggregator holds it, then — after a long silence (> `max_gap_secs`) that
+  proves the held text was *not* a false endpoint — speaks a genuinely new
+  utterance ("What time is it?"), `UtteranceBuffer.offer` releases **two**
+  distinct turns in a single call: the abandoned fragment (released as its own
+  `NEW` turn) *and* the new utterance. iter-159's `resolve_turn` space-glued the
+  whole `turns` list into one string and fed `"I was thinking about the What
+  time is it?"` to the LLM — a garbled, semantically-wrong prompt.
+- **Root cause:** `resolve_turn` treated *every* multi-turn release as a
+  continuation to join. But the buffer only ever emits >1 turn when a measured
+  silence forced a `NEW` boundary — i.e. precisely the case where the turns are
+  **distinct**, not a continuation. A genuine merge is a *single* released turn
+  (the running text glued internally, then emitted once it looks complete), so
+  joining at the `resolve_turn` layer was never correct.
+- **Fix (`examples/_chat_aggregation.py`):** respond to the **last** released
+  turn only; surface the earlier ones as `ResolvedTurn.displaced` (a tuple, in
+  order). `false_endpoint` now reflects the *responded* turn's own flag, not an
+  OR across the abandoned fragments (an abandoned merged fragment must not
+  falsely stamp a fresh, non-merged response). Single-turn releases (the common
+  case, and every half-duplex release) leave `displaced` empty — byte-for-byte
+  the prior behavior.
+- **Surfacing — the mid-session analog of iter-160's shutdown `stranded_utterance`:**
+  - `TurnResult.displaced: tuple[str, ...]` (`examples/_chat_loop.py`) carries
+    the abandoned fragments out of `run_one_turn`, on both the responded and the
+    LLM-error returns (the displaced text is real captured speech, independent
+    of whether the response then succeeded).
+  - `run_session` (`examples/_chat_session.py`) extends
+    `SessionState.utterances_displaced` (a list, in order) from every turn,
+    read defensively via `getattr` so a pre-iter-162 `TurnResult` shape
+    contributes nothing.
+  - Threads `SessionState.utterances_displaced` → `SessionMeta.utterances_displaced`
+    → a new "Displaced uttr." line via `_emit_displaced_utterances_line`
+    (`examples/_chat_metrics.py`), surfaced on both the normal and the
+    zero-completed-turns early-return paths. One fragment ⇒ a single quoted
+    line; multiple ⇒ a count header + one quoted line each. The line names
+    `iter-162` for `grep`.
+- **Half-duplex / no-aggregator unchanged.** The buffer never releases more than
+  one turn at a time there, so `displaced` is always empty, the new counter
+  stays empty, and the summary line is suppressed — byte-for-byte today's
+  output. `aggregator=None` (every existing call site) is untouched.
+- **+23 tests.** `tests/unit/test_chat_aggregation.py` (rewrote the multi-turn
+  block + defaults): respond-to-last-not-joined (the headline garble repro);
+  single-turn release has no displaced; `false_endpoint` is the responded turn's
+  own flag (both directions); three-turn release displaces all but the last;
+  blank-turn handling; all-blank collapse. `tests/unit/test_chat_loop_aggregator.py`
+  (+1 test, +3 assertions): the live long-silence-displaces-fragment path
+  (responds to the new utterance, not the glue; fragment rides out on
+  `displaced`); the genuine-merge path asserts `displaced == ()`; no-aggregator
+  and half-duplex assert empty. `tests/unit/test_chat_session.py` (+5):
+  collection from a successful turn, accumulation in order across turns,
+  collection even when the turn errored, back-compat default-empty, default-empty
+  clean session. `tests/unit/test_displaced_utterances_line.py` (new, +14):
+  helper suppression (None/empty/all-blank), single-fragment formatting (quoted,
+  stripped, names iter-162, explains abandoned-mid-thought), multi-fragment
+  (header + per-line, blanks dropped from count), and `print_session_summary`
+  integration on the normal + zero-turn paths.
+- **Verification:** full unit suite **2199 passed** (2176 prior + 23);
+  integration **30 passed, 1 skipped**; `py_compile` of the five touched modules
+  clean.
+- **Next:** the mid-session long-silence *flush* iter-160/161 named still stands
+  as the larger item (feed a trailed-off fragment to the engine as its own turn
+  via an inter-turn clock read in `run_session`, rather than only surfacing it
+  in the summary) — this lap makes the *displaced*-fragment half correct first.
+  Then wire the still-pending `should_abandon_turn` (iter-152) /
+  `should_emit_backchannel` (iter-153) seams behind their sub-flags.

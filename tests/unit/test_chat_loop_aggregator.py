@@ -182,6 +182,8 @@ class TestNoAggregator:
         assert result.metrics.false_endpoint is False
         # iter-161: a responded turn is never flagged held.
         assert result.held is False
+        # iter-162: no aggregator ⇒ nothing displaced.
+        assert result.displaced == ()
 
 
 # ---- Half-duplex aggregator: transparent passthrough ------------------------
@@ -201,6 +203,8 @@ class TestHalfDuplexPassthrough:
         assert agg.pending is None
         # iter-161: half-duplex never holds, so the turn is never flagged.
         assert result.held is False
+        # iter-162: half-duplex releases one turn at a time — never displaces.
+        assert result.displaced == ()
 
 
 # ---- Organic aggregator: hold + merge ---------------------------------------
@@ -269,6 +273,53 @@ class TestOrganicMerge:
         assert r2.metrics.false_endpoint is True
         # LLM saw the merged text.
         assert "I think that the sky is blue." in r2.metrics.response
+        assert agg.pending is None
+        # iter-162: a genuine merge releases a SINGLE turn — nothing displaced.
+        assert r2.displaced == ()
+
+    def test_long_silence_displaces_abandoned_fragment(self):
+        # iter-162: the user trails off mid-thought ("I was thinking about
+        # the"), held. Then — after a long silence (> max_gap_secs) that
+        # proves it was NOT a false endpoint — a genuinely new complete
+        # utterance arrives. The buffer releases the abandoned fragment as
+        # its own NEW turn AND the new utterance in one offer. We must
+        # respond to the NEW utterance only (not the glued garble) and carry
+        # the abandoned fragment forward as ``displaced``.
+        agg = _organic_aggregator()
+        clock = _ManualClock()
+        messages = [{"role": "system", "content": "x"}]
+
+        # Turn 1: mid-thought, held.
+        mic1 = VirtualMicStream(rate=RATE, chunk_size=CHUNK)
+        _push_utterance(mic1)
+        loop1 = _make_loop(
+            mic1, transcript="I was thinking about the",
+            aggregator=agg, clock=clock,
+        )
+        r1 = loop1.run_one_turn(messages)
+        assert r1.metrics is None
+        assert r1.displaced == ()
+        assert agg.pending == "I was thinking about the"
+
+        # Long gap (> max_gap_secs=2.0) → NOT a continuation.
+        clock.advance(5.0)
+
+        # Turn 2: a complete, genuinely-new thought.
+        mic2 = VirtualMicStream(rate=RATE, chunk_size=CHUNK)
+        _push_utterance(mic2)
+        loop2 = _make_loop(
+            mic2, transcript="What time is it?",
+            aggregator=agg, clock=clock,
+        )
+        r2 = loop2.run_one_turn(messages)
+        assert r2.metrics is not None
+        # Respond to the NEW utterance — NOT "I was thinking about the What
+        # time is it?" (the pre-iter-162 glued garble).
+        assert r2.metrics.transcript == "What time is it?"
+        assert r2.metrics.false_endpoint is False
+        # The abandoned fragment rides out as displaced, not in the response.
+        assert r2.displaced == ("I was thinking about the",)
+        assert "I was thinking about the" not in r2.metrics.response
         assert agg.pending is None
 
     def test_complete_utterance_emits_immediately_no_false_endpoint(self):

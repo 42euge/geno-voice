@@ -55,6 +55,16 @@ class SessionState:
     # false-trigger rate. 0 on the half-duplex / no-aggregator path
     # (nothing is ever held).
     utterances_held: int = 0
+    # iter-162: mid-thought fragments the organic UtteranceAggregator
+    # released *alongside* a responded turn — the user trailed off, a long
+    # silence proved the fragment was NOT a false endpoint, then a genuinely
+    # new thought arrived and displaced it. Each is captured-but-abandoned
+    # text (the mid-session analog of ``stranded_utterance``, which is the
+    # shutdown case). Collected in order across the session so the summary
+    # can surface them rather than the pre-iter-162 behavior of silently
+    # gluing them onto the response. Empty on the half-duplex / no-aggregator
+    # path (the buffer never releases more than one turn at a time there).
+    utterances_displaced: list[str] = field(default_factory=list)
     llm_errors: int = 0
     trim_events: int = 0
     trim_messages_evicted: int = 0
@@ -156,6 +166,13 @@ def run_session(
                 state.messages, primed_frames=state.primed_frames,
             )
             state.primed_frames = result.next_primed_frames
+            # iter-162: collect any displaced mid-thought fragments the
+            # aggregator released alongside this turn. Read defensively
+            # (getattr) so a pre-iter-162 TurnResult shape without the field
+            # is treated as "none displaced". Captured here — before the
+            # error / no-metrics branches — so a fragment surfaces even when
+            # the turn it rode in on then errored or was a held re-listen.
+            state.utterances_displaced.extend(getattr(result, "displaced", ()) or ())
             if result.had_error:
                 state.llm_errors += 1
                 continue

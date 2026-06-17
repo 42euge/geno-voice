@@ -1547,6 +1547,42 @@ def _emit_stranded_utterance_line(emit, stranded: Optional[str]) -> None:
         )
 
 
+def _emit_displaced_utterances_line(emit, displaced) -> None:
+    """iter-162: surface mid-thought fragments the organic
+    ``UtteranceAggregator`` released *alongside* a responded turn.
+
+    When a held mid-thought fragment ("I was thinking about the") is NOT
+    followed by a quick continuation but by a long silence and then a
+    genuinely new utterance ("What time is it?"), the buffer releases the
+    abandoned fragment as its own ``NEW`` turn *and* the new utterance in
+    one ``offer`` — two distinct turns. iter-159's ``resolve_turn`` used to
+    space-glue them into one garbled LLM input
+    (``"I was thinking about the What time is it?"``). iter-162 responds to
+    the new utterance only and routes the abandoned fragment(s) here — the
+    mid-session analog of iter-160's shutdown ``stranded_utterance``.
+
+    Suppressed (the overwhelmingly common case) when nothing was displaced:
+    no aggregator wired in, every release was a single turn, or half-duplex
+    mode (which never releases more than one turn at a time). A clean session
+    never sees it.
+    """
+    frags = [f.strip() for f in (displaced or []) if f and f.strip()]
+    if not frags:
+        return
+    if len(frags) == 1:
+        emit(
+            f"    Displaced uttr.:  {frags[0]!r} "
+            f"(abandoned mid-thought, displaced by a new turn — iter-162)"
+        )
+    else:
+        emit(
+            f"    Displaced uttr.:  {len(frags)} fragments abandoned "
+            f"mid-thought, displaced by new turns — iter-162:"
+        )
+        for frag in frags:
+            emit(f"                      {frag!r}")
+
+
 def _emit_wer_line(emit, wer_values: list[float]) -> None:
     """iter-105: report median + max WER across turns where a
     reference transcript was supplied. Suppressed when no turn
@@ -2374,6 +2410,13 @@ class SessionMeta:
     # surfaced in the organic-turn-taking summary block. 0 on the
     # half-duplex / no-aggregator path (nothing is ever held).
     utterances_held: int = 0
+    # iter-162: mid-thought fragments the organic aggregator released
+    # alongside a responded turn (the user trailed off, a long silence
+    # proved the fragment was NOT a false endpoint, then a genuinely new
+    # thought displaced it). Each is captured-but-abandoned text — the
+    # mid-session analog of ``stranded_utterance`` — surfaced rather than
+    # silently glued onto the response. Empty for the common case.
+    utterances_displaced: list[str] = field(default_factory=list)
 
 
 def print_session_summary(
@@ -2447,6 +2490,8 @@ def print_session_summary(
             stranded_utterance=meta.stranded_utterance,
             # iter-161: held-utterance count — SessionMeta-only.
             utterances_held=meta.utterances_held,
+            # iter-162: displaced mid-thought fragments — SessionMeta-only.
+            utterances_displaced=meta.utterances_displaced,
         )
     else:
         meta_eff = SessionMeta(
@@ -2466,6 +2511,8 @@ def print_session_summary(
     stranded_utterance = meta_eff.stranded_utterance
     # iter-161: count of mid-thought utterances buffered for a merge.
     utterances_held = meta_eff.utterances_held
+    # iter-162: mid-thought fragments displaced by a genuinely-new thought.
+    utterances_displaced = meta_eff.utterances_displaced
 
     def _emit(line: str = "") -> None:
         if file is None:
@@ -2489,6 +2536,10 @@ def print_session_summary(
         # mid-thought fragment — the user spoke one unfinished utterance,
         # it was held, then they quit. Surface it before the early return.
         _emit_stranded_utterance_line(_emit, stranded_utterance)
+        # iter-162: a session can also displace mid-thought fragments yet
+        # complete zero turns (each abandoned fragment rode in on a turn
+        # whose new utterance was itself then held). Surface them too.
+        _emit_displaced_utterances_line(_emit, utterances_displaced)
         _emit()
         return
 
@@ -2970,6 +3021,9 @@ def print_session_summary(
     # iter-160: surface a mid-thought fragment the organic aggregator was
     # holding at shutdown (suppressed unless one was actually stranded).
     _emit_stranded_utterance_line(_emit, stranded_utterance)
+    # iter-162: surface mid-thought fragments the aggregator released
+    # alongside a responded turn (suppressed unless any were displaced).
+    _emit_displaced_utterances_line(_emit, utterances_displaced)
     # iter-058: error rate per stage. LLM errors are session-level
     # (kill the turn outright); worker errors are per-turn (partial
     # turn — some sentences synthed, others raised). Show only when

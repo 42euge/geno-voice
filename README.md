@@ -321,6 +321,20 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   (as iter-159's wiring did) silently inflated the false-trigger rate whenever
   merging was on. The count surfaces on its own "Utterances held" line in the
   organic-turn-taking summary block (`OrganicStats.utterances_held`).
+  **Displaced fragments aren't glued onto the response** (`examples/_chat_aggregation.py`,
+  `examples/_chat_loop.py`, `examples/_chat_session.py`,
+  `tests/unit/test_chat_aggregation.py`, `tests/unit/test_displaced_utterances_line.py`,
+  iter-162): when a held mid-thought fragment ("I was thinking about the") is
+  followed not by a quick continuation but by a long silence and then a
+  genuinely new utterance ("What time is it?"), the buffer releases *two*
+  distinct turns in one `offer`. `resolve_turn` now responds to the **last**
+  turn only (the new thought) and surfaces the abandoned earlier fragment(s) on
+  `TurnResult.displaced` → `SessionState.utterances_displaced` → a "Displaced
+  uttr." summary line (`_emit_displaced_utterances_line`) — the mid-session
+  analog of iter-160's shutdown `stranded_utterance`. The pre-iter-162 code
+  space-glued them into one garbled LLM input ("I was thinking about the What
+  time is it?"); the responded turn's `false_endpoint` is now its own flag, not
+  an OR across the abandoned fragments.
 - **[Performance metrics taxonomy](docs/perf-metrics-taxonomy.md)** — a
   catalog of metrics worth instrumenting on a local-first voice agent.
 

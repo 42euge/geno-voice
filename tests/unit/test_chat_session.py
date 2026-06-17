@@ -34,6 +34,10 @@ class _StubResult:
     # (a successful capture being buffered for merge, NOT a VAD false
     # trigger). Defaults False so the legacy no-metrics path is unchanged.
     held: bool = False
+    # iter-162: mid-thought fragments displaced by a genuinely-new turn
+    # in this offer (abandoned, surfaced separately, not glued onto the
+    # response). Defaults empty so the legacy path is unchanged.
+    displaced: tuple = ()
 
 
 class _StubMetrics:
@@ -257,6 +261,74 @@ def test_utterances_held_defaults_zero():
         loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
     )
     assert state.utterances_held == 0
+
+
+# ---- iter-162: displaced-fragment collection ------------------------------
+
+
+def test_displaced_collected_from_successful_turn():
+    """A responded turn carrying ``displaced`` records the abandoned
+    fragment(s) on ``state.utterances_displaced`` while still counting the
+    turn as a normal success."""
+    loop = _StubChatLoop(queue=[
+        _StubResult(metrics=_StubMetrics(), displaced=("I was thinking about the",)),
+    ])
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+    )
+    assert state.utterances_displaced == ["I was thinking about the"]
+    assert len(state.all_metrics) == 1  # the turn still counts as a success
+    assert state.false_triggers == 0
+
+
+def test_displaced_accumulate_in_order_across_turns():
+    """Fragments displaced across multiple turns accumulate in order."""
+    loop = _StubChatLoop(queue=[
+        _StubResult(metrics=_StubMetrics(), displaced=("first frag",)),
+        _StubResult(metrics=_StubMetrics(), displaced=("second frag", "third frag")),
+        _StubResult(metrics=_StubMetrics()),  # no displacement
+    ])
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+    )
+    assert state.utterances_displaced == ["first frag", "second frag", "third frag"]
+
+
+def test_displaced_collected_even_when_turn_errored():
+    """A fragment the aggregator released rides out even if the turn it
+    arrived on then hit an LLM error — the displaced text is real captured
+    speech, independent of whether the response succeeded."""
+    loop = _StubChatLoop(queue=[
+        _StubResult(metrics=None, had_error=True, displaced=("stranded bit",)),
+        _StubResult(metrics=_StubMetrics()),
+    ])
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+    )
+    assert state.utterances_displaced == ["stranded bit"]
+    assert state.llm_errors == 1
+
+
+def test_displaced_without_attr_defaults_empty():
+    """Back-compat: a result lacking ``displaced`` (pre-iter-162 shape)
+    contributes nothing — read defensively via getattr."""
+    old_shape = SimpleNamespace(
+        metrics=_StubMetrics(), had_error=False, next_primed_frames=None,
+    )
+    loop = _StubChatLoop(queue=[old_shape])
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+    )
+    assert state.utterances_displaced == []
+
+
+def test_utterances_displaced_defaults_empty():
+    """A clean session leaves the list empty."""
+    loop = _StubChatLoop(queue=[_StubResult(metrics=_StubMetrics())])
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+    )
+    assert state.utterances_displaced == []
 
 
 # ---- primed_frames threading ---------------------------------------------

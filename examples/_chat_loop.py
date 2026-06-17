@@ -87,11 +87,21 @@ class TurnResult:
         conflating the two (iter-159 wired the held path to return
         ``metrics=None``, which the loop otherwise reads as a false
         trigger). Always False on the half-duplex / no-aggregator path.
+      ``displaced`` (iter-162) — mid-thought fragments the organic
+        aggregator released *alongside* the responded turn, in order,
+        because a long inter-utterance silence proved they were NOT a
+        false endpoint (the user trailed off and then started a genuinely
+        new thought). They are captured-but-abandoned text — the
+        mid-session analog of iter-160's shutdown ``stranded_utterance``
+        — surfaced rather than glued onto the response. Empty on the
+        single-turn-release common case and the half-duplex / no-aggregator
+        path.
     """
     metrics: Optional[TurnMetrics]
     next_primed_frames: Optional[list]
     had_error: bool = False
     held: bool = False
+    displaced: tuple[str, ...] = ()
 
 
 class ChatLoop:
@@ -348,6 +358,7 @@ class ChatLoop:
         # its buffer a transparent passthrough (always one turn, never held),
         # so respond is always True with the original text and false_endpoint
         # stays False — unchanged behavior until merging is explicitly on.
+        displaced: tuple[str, ...] = ()
         if self._aggregator is not None:
             # speech_start_at may be None on paths where the recorder didn't
             # latch a speech frame (it always does on DONE_OK, the only path
@@ -383,6 +394,20 @@ class ChatLoop:
                 self._print(
                     f"  {_DIM}merged false-endpoint continuation "
                     f"(gap {agg_result.gap_secs:.2f}s){_RESET}"
+                )
+            # iter-162: a multi-turn release means the aggregator emitted an
+            # abandoned mid-thought fragment (released as its own NEW turn
+            # because a long silence proved it was not a false endpoint) AND
+            # a genuinely-new utterance. We respond to the new one
+            # (resolved.text, the last turn) and carry the abandoned fragments
+            # forward as ``displaced`` so they surface in the session summary
+            # rather than being silently glued onto the response.
+            if resolved.displaced:
+                displaced = resolved.displaced
+                self._print(
+                    f"  {_DIM}displaced mid-thought fragment(s) "
+                    f"(abandoned after {agg_result.gap_secs:.2f}s silence): "
+                    f"{list(displaced)!r}{_RESET}"
                 )
         # iter-064: user speaking rate. Symmetric to iter-046's
         # bot_wpm. Whitespace-split word count is a decent proxy —
@@ -906,6 +931,7 @@ class ChatLoop:
                 metrics=None,
                 next_primed_frames=next_primed,
                 had_error=True,
+                displaced=displaced,
             )
 
         finally:
@@ -956,6 +982,7 @@ class ChatLoop:
             metrics=metrics,
             next_primed_frames=next_primed,
             had_error=False,
+            displaced=displaced,
         )
 
     @staticmethod

@@ -92,34 +92,77 @@ class TestSingleTurn:
 
 
 # ---- Multi-turn release (the corner) ----------------------------------------
+#
+# iter-162: a multi-turn release is NEVER a continuation to join. The buffer
+# only emits >1 turn when a measured silence forced a NEW boundary (the held
+# pending released as its own turn) *and then* a fresh utterance was emitted.
+# Those are semantically distinct turns — the earlier ones are abandoned
+# mid-thought fragments, the LAST is the new thing to answer now. The pre-
+# iter-162 behavior space-glued them into one garbled LLM input; the fix
+# responds to the last turn only and surfaces the earlier ones as ``displaced``.
 
 
 class TestMultiTurn:
-    def test_two_turns_join_with_single_space(self):
+    def test_two_turns_respond_to_last_not_joined(self):
+        # The headline fix: "I was thinking about the" was abandoned (a long
+        # silence proved it wasn't a false endpoint), then "What time is it?"
+        # is the genuinely-new turn. We must answer the new one, NOT the glued
+        # "I was thinking about the What time is it?".
         r = resolve_turn(
-            _Result(turns=[_Turn("I think that"), _Turn("the sky is blue.")])
+            _Result(turns=[_Turn("I was thinking about the"),
+                           _Turn("What time is it?")])
         )
         assert r.respond is True
-        assert r.text == "I think that the sky is blue."
+        assert r.text == "What time is it?"
+        assert r.displaced == ("I was thinking about the",)
 
-    def test_false_endpoint_is_or_of_all_turns(self):
+    def test_single_turn_release_has_no_displaced(self):
+        r = resolve_turn(_Result(turns=[_Turn("the sky is blue.")]))
+        assert r.respond is True
+        assert r.text == "the sky is blue."
+        assert r.displaced == ()
+
+    def test_false_endpoint_is_the_responded_turns_own_flag(self):
+        # iter-162: false_endpoint reflects the RESPONDED (last) turn, not an
+        # OR across the abandoned fragments. An abandoned merged fragment must
+        # not falsely stamp a fresh, non-merged response.
+        r = resolve_turn(
+            _Result(turns=[_Turn("a", True), _Turn("b", False)])
+        )
+        assert r.respond is True
+        assert r.text == "b"
+        assert r.false_endpoint is False
+        assert r.displaced == ("a",)
+
+    def test_responded_turn_keeps_its_own_false_endpoint(self):
         r = resolve_turn(
             _Result(turns=[_Turn("a", False), _Turn("b", True)])
         )
-        assert r.respond is True
+        assert r.text == "b"
         assert r.false_endpoint is True
+        assert r.displaced == ("a",)
 
-    def test_join_strips_and_drops_empty_turns(self):
+    def test_three_turns_displace_all_but_last(self):
+        r = resolve_turn(
+            _Result(turns=[_Turn("one"), _Turn("two"), _Turn("three.")])
+        )
+        assert r.text == "three."
+        assert r.displaced == ("one", "two")
+
+    def test_displaced_strips_and_drops_empty_turns(self):
         r = resolve_turn(
             _Result(turns=[_Turn("  one  "), _Turn(""), _Turn(" two ")])
         )
-        assert r.text == "one two"
+        # Blank middle turn dropped; last non-blank answered, rest displaced.
+        assert r.text == "two"
+        assert r.displaced == ("one",)
 
     def test_all_empty_turns_collapse_to_no_response(self):
         # Defensive: a release of only blank turns has nothing to say.
         r = resolve_turn(_Result(turns=[_Turn("   "), _Turn("")]))
         assert r.respond is False
         assert r.text == ""
+        assert r.displaced == ()
 
 
 # ---- ResolvedTurn contract --------------------------------------------------
@@ -139,3 +182,5 @@ class TestResolvedTurnContract:
         r = ResolvedTurn(respond=False, text="")
         assert r.false_endpoint is False
         assert r.held is None
+        # iter-162: displaced defaults to the empty tuple (single-turn case).
+        assert r.displaced == ()
