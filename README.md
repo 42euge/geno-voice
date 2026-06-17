@@ -278,7 +278,11 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   and iter-154's metric finally populates from the live path. With a default
   config the buffer is a **transparent zero-latency passthrough** — every
   `offer` emits immediately, nothing is ever held, `flush` is always empty —
-  so the proven half-duplex path is byte-for-byte unchanged.
+  so the proven half-duplex path is byte-for-byte unchanged. A
+  `max_merge_depth` cap (iter-157, default 8) bounds how many continuations a
+  held pending may absorb before it is force-emitted — a backstop so a
+  pathological unfinished-forever STT stream can't starve the engine; it sits
+  well above any realistic conversation, so it never fires in practice.
 - **[Performance metrics taxonomy](docs/perf-metrics-taxonomy.md)** — a
   catalog of metrics worth instrumenting on a local-first voice agent.
 

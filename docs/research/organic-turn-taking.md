@@ -233,7 +233,7 @@ output discoverable from README" discipline. Local only.
 | 6 | **Adopt pipecat `smart-turn`** — replace #2's heuristic body with the smart-turn model inside `pipecat_server.py`'s pipeline; same `turn_decider` interface. Measure false-endpoint rate vs silence-only baseline on recorded sessions. | High | TODO (blocked on model + Apple Silicon) |
 | 7 | **Agent backchannel emission timing** — a learned/heuristic "good moment to backchannel" signal (Krisp-style) feeding the existing `PLAY_CUE` path, so the agent emits continuers *during* long user speech, not only on silence. | Medium | **DONE iter-153** (decision seam `decide_backchannel_timing`; cue-path wiring is the follow-on) |
 | 8 | **Naturalness metrics for the organic path** — extend `TurnMetrics` / session-summary with false-endpoint rate and continuer-detection counts so the track is measured, not asserted. | Medium | **DONE iter-154** (`false_endpoint` + `continuers_detected` `TurnMetrics` fields; `_emit_organic_block` summary block; populating them from the live organic path is the follow-on) |
-| 9 | **Utterance buffer-merge** (Section 4's second half) — a pure `decide_utterance_continuation(prev_text, next_text, gap_secs)` that, when a silence endpoint fires on *unfinished*-looking text and a continuation arrives within the pause window, returns `MERGE` (the endpoint was a false positive — user paused mid-thought) vs `NEW`. Composes #4's `utterance_completeness` + #3's gate. Repairs the false endpoints #8 measures. | Medium | **DONE iter-155** (decision seam `decide_utterance_continuation`) + **iter-156** (stateful `UtteranceBuffer` hold-and-merge driver; STT-loop wiring is the remaining follow-on) |
+| 9 | **Utterance buffer-merge** (Section 4's second half) — a pure `decide_utterance_continuation(prev_text, next_text, gap_secs)` that, when a silence endpoint fires on *unfinished*-looking text and a continuation arrives within the pause window, returns `MERGE` (the endpoint was a false positive — user paused mid-thought) vs `NEW`. Composes #4's `utterance_completeness` + #3's gate. Repairs the false endpoints #8 measures. | Medium | **DONE iter-155** (decision seam `decide_utterance_continuation`) + **iter-156** (stateful `UtteranceBuffer` hold-and-merge driver) + **iter-157** (`max_merge_depth` starvation cap; STT-loop wiring is the remaining follow-on) |
 
 ---
 
@@ -651,3 +651,48 @@ output discoverable from README" discipline. Local only.
   first lap that actually changes a live entrypoint's behavior (still behind the
   off-by-default flag). Or wire the still-pending `should_abandon_turn`
   (iter-152) / `should_emit_backchannel` (iter-153) seams.
+
+### iter-157 (2026-06-16) — merge-depth safety cap on `UtteranceBuffer` (#9 hardening)
+
+- **Hardened the iter-156 driver before live wiring** — added a bounded
+  `max_merge_depth` (default `DEFAULT_MAX_MERGE_DEPTH = 8`) to `UtteranceBuffer`.
+  iter-156's buffer holds an unfinished pending and lets *chained merges
+  accumulate with no upper bound*: a held candidate that keeps looking
+  unfinished is re-held on every continuation. In a live loop that's a
+  starvation hole — a pathological STT stream that never finalizes a
+  complete-looking sentence (or noise the completeness scorer reads as trailing
+  off) would let the buffer hold-and-merge *forever*, and the turn engine would
+  **never receive the utterance**. This is exactly the kind of unbounded-hold
+  that must close *before* the buffer touches a live entrypoint, not after.
+- **The cap converts starvation into a bounded, observable delay.** After a
+  pending has absorbed `max_merge_depth` continuations, the next merge
+  force-emits the running text as a turn (keeping its `false_endpoint=True` flag
+  — it repaired real false endpoints on the way up) instead of holding again,
+  and the buffer starts fresh. Same role iter-085's `max_token_gap` watch and
+  iter-014's rms-empty guard play on their own paths: a backstop for the
+  degenerate stream.
+- **Zero behavior change in practice.** The default (8) sits well above any
+  realistic conversation — a genuine mid-thought pause produces one, occasionally
+  two false endpoints per turn, never eight — so the cap never fires and the
+  merge behavior is byte-for-byte iter-156's. Pinned by
+  `test_below_cap_behaves_like_iter156`. Half-duplex passthrough is entirely
+  unaffected (it never holds), pinned by
+  `test_cap_irrelevant_in_half_duplex_passthrough`.
+- **New observability:** `merge_count` read-only property exposes how many
+  continuations the held pending has absorbed (0 when idle), so a live loop /
+  test can watch it approach the cap. Resets on every release (NEW arrival,
+  flush, or force-emit). A `max_merge_depth < 1` is rejected with `ValueError`
+  (a cap below 1 would defeat holding entirely — that's what half-duplex already
+  does).
+- **+12 unit tests** (44 total in `tests/unit/test_utterance_buffer.py`): default
+  value; `merge_count` start/track/reset-on-new/reset-on-flush; force-emit at the
+  cap (cap=2 and the cap=1 first-merge corner); force-emitted turn keeps
+  `false_endpoint`; below-cap == iter-156; fresh budget after force-emit;
+  `ValueError` on cap < 1; half-duplex no-op.
+- **Next:** the live wiring is now safe to do — `UtteranceBuffer` self-limits.
+  Wire it into the live `mic_chat` / `pipecat_server` STT loop
+  (instantiate from `full_duplex_config_from_env`, route finalized transcripts
+  through `offer`, feed `turns`, `flush()` on long-silence / shutdown, set
+  `TurnMetrics.false_endpoint` from `EmittedTurn.false_endpoint`). Or wire the
+  still-pending `should_abandon_turn` (iter-152) / `should_emit_backchannel`
+  (iter-153) seams.

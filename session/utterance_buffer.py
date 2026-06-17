@@ -62,7 +62,27 @@ __all__ = [
     "EmittedTurn",
     "BufferResult",
     "UtteranceBuffer",
+    "DEFAULT_MAX_MERGE_DEPTH",
 ]
+
+#: Safety cap on how many continuations a single held pending may absorb
+#: before the buffer force-releases it, *even if its text still looks
+#: unfinished*. Without a cap, a pathological stream of unfinished-looking
+#: chunks (an STT that keeps finalizing fragments, a user who never lands a
+#: complete-looking sentence, or simply noise that the completeness scorer
+#: reads as trailing-off) would let the buffer hold-and-merge forever — the
+#: turn engine would *never* receive the utterance. The cap converts that
+#: starvation into a bounded, observable delay: after this many merges the
+#: running text is emitted as a (false-endpoint) turn and the buffer starts
+#: fresh.
+#:
+#: The default (8) is deliberately well above any realistic conversation: a
+#: genuine mid-thought pause produces one — occasionally two — false endpoints
+#: per turn, never eight. So in practice the cap never fires and the merge
+#: behavior is byte-for-byte iter-156's; it exists purely as a backstop for the
+#: degenerate live stream, the same role iter-085's ``max_token_gap`` watch and
+#: iter-014's rms-empty guard play on their own paths.
+DEFAULT_MAX_MERGE_DEPTH: int = 8
 
 
 @dataclass(frozen=True)
@@ -124,6 +144,13 @@ class UtteranceBuffer:
     half-duplex ``FullDuplexConfig()`` ⇒ transparent passthrough); ``eou_config``
     tunes the completeness scorer; ``max_gap_secs`` / ``incomplete_ceiling``
     thread through to :func:`decide_utterance_continuation` unchanged.
+
+    ``max_merge_depth`` is a safety cap: a held pending may absorb at most this
+    many continuations before the buffer force-emits it (even still-unfinished),
+    so a pathological unfinished-forever stream can't hold a turn back from the
+    engine indefinitely. The default (``DEFAULT_MAX_MERGE_DEPTH``) sits well
+    above any realistic conversation, so it never fires in practice and the
+    merge behavior is byte-for-byte iter-156's.
     """
 
     def __init__(
@@ -133,22 +160,48 @@ class UtteranceBuffer:
         eou_config: TextEOUConfig | None = None,
         max_gap_secs: float = DEFAULT_MAX_GAP_SECS,
         incomplete_ceiling: float = DEFAULT_INCOMPLETE_CEILING,
+        max_merge_depth: int = DEFAULT_MAX_MERGE_DEPTH,
     ) -> None:
+        if max_merge_depth < 1:
+            # A cap below 1 would force-emit a freshly-held candidate before it
+            # could ever absorb a continuation — i.e. it would disable holding
+            # entirely, which is what half-duplex mode already does. Reject it
+            # loudly rather than silently defeating the organic path.
+            raise ValueError(
+                f"max_merge_depth must be >= 1, got {max_merge_depth}"
+            )
         self._config = config if config is not None else FullDuplexConfig()
         self._eou_config = eou_config
         self._max_gap_secs = max_gap_secs
         self._incomplete_ceiling = incomplete_ceiling
+        self._max_merge_depth = max_merge_depth
         #: The utterance currently held back (None when nothing pending).
         self._pending: str | None = None
         #: Did the current pending result from at least one merge? Travels with
         #: the pending so the eventual EmittedTurn carries the right flag even
         #: when the turn is released laps later (via flush or a NEW arrival).
         self._pending_merged: bool = False
+        #: How many continuations the current pending has already absorbed.
+        #: Bounded by ``max_merge_depth`` — when a merge would push it to the
+        #: cap, the running text is force-emitted instead of held again, so a
+        #: pathological unfinished-forever stream can't starve the engine.
+        #: Resets to 0 whenever the pending is released and a fresh candidate
+        #: begins.
+        self._merge_count: int = 0
 
     @property
     def pending(self) -> str | None:
         """The text currently held back, or ``None``. Read-only view."""
         return self._pending
+
+    @property
+    def merge_count(self) -> int:
+        """How many continuations the held pending has absorbed (0 when idle).
+
+        Read-only observability — a live loop / test can watch this approach
+        ``max_merge_depth`` to see the cap about to fire.
+        """
+        return self._merge_count
 
     @property
     def active(self) -> bool:
@@ -178,6 +231,7 @@ class UtteranceBuffer:
         if self._pending is None:
             candidate = text
             candidate_merged = False
+            candidate_merges = 0
         else:
             action = decide_utterance_continuation(
                 self._pending,
@@ -191,15 +245,20 @@ class UtteranceBuffer:
             if action is UtteranceAction.MERGE:
                 # The prior endpoint was a false positive — glue on the
                 # continuation and keep the running text as the new candidate.
+                # This candidate has now absorbed one more continuation than
+                # the pending it replaces.
                 candidate = _join(self._pending, text)
                 candidate_merged = True
+                candidate_merges = self._merge_count + 1
             else:
                 # A genuine new turn — release the pending, start fresh.
                 turns.append(EmittedTurn(self._pending, self._pending_merged))
                 candidate = text
                 candidate_merged = False
+                candidate_merges = 0
             self._pending = None
             self._pending_merged = False
+            self._merge_count = 0
 
         # Decide whether to hold the candidate (might still get a continuation)
         # or emit it now (a complete thought has nothing to wait for).
@@ -210,8 +269,18 @@ class UtteranceBuffer:
 
         completeness = utterance_completeness(candidate, self._eou_config)
         if completeness <= self._incomplete_ceiling:
+            # The candidate still looks unfinished — we'd normally hold it for
+            # another continuation. But if it has already absorbed the maximum
+            # number of merges, force-emit it now: holding again would risk
+            # never feeding the engine on a pathological unfinished-forever
+            # stream. The emitted turn keeps its ``false_endpoint`` flag (it
+            # repaired real false endpoints on the way up to the cap).
+            if candidate_merges >= self._max_merge_depth:
+                turns.append(EmittedTurn(candidate, candidate_merged))
+                return BufferResult(turns=turns, held=None)
             self._pending = candidate
             self._pending_merged = candidate_merged
+            self._merge_count = candidate_merges
             return BufferResult(turns=turns, held=self._pending)
 
         turns.append(EmittedTurn(candidate, candidate_merged))
@@ -229,4 +298,5 @@ class UtteranceBuffer:
         turn = EmittedTurn(self._pending, self._pending_merged)
         self._pending = None
         self._pending_merged = False
+        self._merge_count = 0
         return BufferResult(turns=[turn], held=None)

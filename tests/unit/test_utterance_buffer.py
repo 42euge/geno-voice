@@ -61,6 +61,7 @@ _eou = sys.modules["session.text_eou"]
 UtteranceBuffer = _ub.UtteranceBuffer
 EmittedTurn = _ub.EmittedTurn
 BufferResult = _ub.BufferResult
+DEFAULT_MAX_MERGE_DEPTH = _ub.DEFAULT_MAX_MERGE_DEPTH
 FullDuplexConfig = _fd.FullDuplexConfig
 TextEOUConfig = _eou.TextEOUConfig
 
@@ -372,3 +373,146 @@ def test_active_property_reflects_config():
     assert UtteranceBuffer(
         config=FullDuplexConfig(enabled=True, utterance_merging=False)
     ).active is False
+
+
+# ---- iter-157: merge-depth safety cap ----------------------------------------
+
+# A continuation that, when glued onto an unfinished prior, still ends in a
+# trailing function word (here "the"), so the running text stays *incomplete*
+# and keeps being held — the exact pathological shape the cap guards against.
+CONT_FRAG = "and the"
+
+
+def test_default_max_merge_depth_is_eight():
+    # The documented default — high above any realistic conversation, so the
+    # cap is a backstop that never fires in practice.
+    assert DEFAULT_MAX_MERGE_DEPTH == 8
+
+
+def test_merge_count_starts_at_zero():
+    buf = UtteranceBuffer(config=ORGANIC)
+    assert buf.merge_count == 0
+
+
+def test_merge_count_tracks_each_merge():
+    buf = UtteranceBuffer(config=ORGANIC, max_merge_depth=8)
+    buf.offer(INCOMPLETE, gap_secs=0.2)                 # held, no merge yet
+    assert buf.merge_count == 0
+    buf.offer(CONT_FRAG, gap_secs=0.3)                  # 1st merge, still held
+    assert buf.merge_count == 1
+    buf.offer(CONT_FRAG, gap_secs=0.3)                  # 2nd merge, still held
+    assert buf.merge_count == 2
+
+
+def test_cap_force_emits_after_max_merges():
+    # cap=2 ⇒ the 2nd merge force-emits the still-unfinished running text
+    # instead of holding it a third time.
+    buf = UtteranceBuffer(config=ORGANIC, max_merge_depth=2)
+    r1 = buf.offer(INCOMPLETE, gap_secs=0.2)            # held
+    assert r1.turns == [] and r1.held is not None
+    r2 = buf.offer(CONT_FRAG, gap_secs=0.3)             # 1st merge → held again
+    assert r2.turns == [] and r2.held is not None
+    r3 = buf.offer(CONT_FRAG, gap_secs=0.3)             # 2nd merge → cap → emit
+    assert len(r3.turns) == 1
+    assert r3.held is None
+    assert buf.pending is None
+    assert buf.merge_count == 0                         # reset after release
+
+
+def test_force_emitted_turn_keeps_false_endpoint_flag():
+    # The force-emitted turn absorbed real merges on the way up, so it must
+    # still report the repaired false endpoint.
+    buf = UtteranceBuffer(config=ORGANIC, max_merge_depth=2)
+    buf.offer(INCOMPLETE, gap_secs=0.2)
+    buf.offer(CONT_FRAG, gap_secs=0.3)
+    res = buf.offer(CONT_FRAG, gap_secs=0.3)
+    assert res.turns[0].false_endpoint is True
+    assert res.merged is True
+    assert res.turns[0].text == (
+        "I was thinking about the and the and the"
+    )
+
+
+def test_cap_of_one_force_emits_on_first_merge():
+    # cap=1 ⇒ the initial unfinished utterance is still held (holding is not a
+    # merge), but the very first merge force-emits rather than holding again.
+    buf = UtteranceBuffer(config=ORGANIC, max_merge_depth=1)
+    r1 = buf.offer(INCOMPLETE, gap_secs=0.2)            # held (no merge)
+    assert r1.turns == [] and r1.held == INCOMPLETE
+    r2 = buf.offer(CONT_FRAG, gap_secs=0.3)             # 1st merge → cap → emit
+    assert len(r2.turns) == 1
+    assert r2.turns[0].false_endpoint is True
+    assert r2.turns[0].text == "I was thinking about the and the"
+    assert r2.held is None
+    assert buf.pending is None
+
+
+def test_below_cap_behaves_like_iter156():
+    # With a generous cap, a realistic 2-merge chain ending in a complete
+    # sentence behaves byte-for-byte as iter-156 (no force-emit).
+    buf = UtteranceBuffer(config=ORGANIC, max_merge_depth=8)
+    buf.offer(INCOMPLETE, gap_secs=0.2)
+    buf.offer(CONT_FRAG, gap_secs=0.3)
+    res = buf.offer("launch date.", gap_secs=0.3)       # completes ⇒ natural emit
+    assert len(res.turns) == 1
+    assert res.held is None
+    assert res.turns[0].false_endpoint is True
+    assert res.turns[0].text == (
+        "I was thinking about the and the launch date."
+    )
+
+
+def test_merge_count_resets_on_new_turn():
+    # A genuine NEW release (long gap) resets the merge counter so the next
+    # candidate starts its own cap budget.
+    buf = UtteranceBuffer(config=ORGANIC, max_merge_depth=4)
+    buf.offer(INCOMPLETE, gap_secs=0.2)
+    buf.offer(CONT_FRAG, gap_secs=0.3)                  # merge_count → 1
+    assert buf.merge_count == 1
+    res = buf.offer(INCOMPLETE, gap_secs=5.0)           # long gap ⇒ NEW release
+    assert res.turns[0].text == "I was thinking about the and the"
+    assert res.turns[0].false_endpoint is True          # released pending merged
+    assert buf.merge_count == 0                          # fresh candidate
+    assert buf.pending == INCOMPLETE
+
+
+def test_merge_count_resets_on_flush():
+    buf = UtteranceBuffer(config=ORGANIC, max_merge_depth=4)
+    buf.offer(INCOMPLETE, gap_secs=0.2)
+    buf.offer(CONT_FRAG, gap_secs=0.3)
+    assert buf.merge_count == 1
+    buf.flush()
+    assert buf.merge_count == 0
+    assert buf.pending is None
+
+
+def test_continued_offers_after_force_emit_start_fresh():
+    # After a force-emit, the buffer is empty and a new unfinished utterance is
+    # held under a fresh cap budget — the cap doesn't permanently disable
+    # holding.
+    buf = UtteranceBuffer(config=ORGANIC, max_merge_depth=1)
+    buf.offer(INCOMPLETE, gap_secs=0.2)
+    buf.offer(CONT_FRAG, gap_secs=0.3)                  # force-emit
+    assert buf.pending is None
+    r = buf.offer(CONJ, gap_secs=0.2)                   # new unfinished ⇒ held
+    assert r.turns == []
+    assert r.held == CONJ
+    assert buf.merge_count == 0
+
+
+def test_max_merge_depth_below_one_raises():
+    with pytest.raises(ValueError, match="max_merge_depth"):
+        UtteranceBuffer(config=ORGANIC, max_merge_depth=0)
+    with pytest.raises(ValueError, match="max_merge_depth"):
+        UtteranceBuffer(max_merge_depth=-1)
+
+
+def test_cap_irrelevant_in_half_duplex_passthrough():
+    # The cap only governs the hold-and-merge path; half-duplex never holds, so
+    # even a tiny cap is a no-op there.
+    buf = UtteranceBuffer(max_merge_depth=1)            # default half-duplex
+    r1 = buf.offer(INCOMPLETE, gap_secs=0.2)
+    r2 = buf.offer(CONT_FRAG, gap_secs=0.3)
+    assert r1.turns == [EmittedTurn(INCOMPLETE, False)]
+    assert r2.turns == [EmittedTurn(CONT_FRAG, False)]
+    assert buf.merge_count == 0
