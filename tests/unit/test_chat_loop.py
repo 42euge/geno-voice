@@ -147,6 +147,7 @@ def _make_chat_loop(
     play_fn=_instant_play,
     fillers=None,
     idle_threshold: float = 0.0,
+    idle_timeout=None,
 ):
     engine, transcribe = _stt_engine_stub(transcript=transcript)
     if llm_stream_fn is None:
@@ -164,6 +165,7 @@ def _make_chat_loop(
         play_fn=play_fn,
         fillers=fillers,
         idle_threshold=idle_threshold,
+        idle_timeout=idle_timeout,
     )
 
 
@@ -621,3 +623,116 @@ def _mic_with_utterance():
     mic = VirtualMicStream(rate=RATE, chunk_size=CHUNK)
     mic.push(_utterance_audio())
     return mic
+
+
+class TestIdleTimeoutWiring:
+    """iter-166 — wire iter-165's recorder ``idle_timeout`` through ChatLoop.
+
+    iter-165 added the pre-speech ``idle_timeout`` mechanism to
+    ``record_utterance_streaming`` but no call site passed it. This lap
+    threads it through ``ChatLoop.__init__`` and surfaces the recorder's
+    ``idle_timed_out`` side-band flag on ``TurnResult`` so the still-pending
+    ``run_session`` consumer (the iter-164 ``decide_silence_flush`` driver)
+    can tell a deliberate inter-turn idle timeout apart from a VAD false
+    trigger.
+
+    The timeout fires off the recorder's frame-aligned virtual clock
+    (``now = t_origin + frame_idx * frame_dt``), so it is deterministic
+    under the default ``time.monotonic`` clock too — a mic that only ever
+    yields silence (VirtualMicStream pads with silence forever once drained)
+    elapses ``idle_timeout`` virtual seconds within a bounded number of
+    frame reads.
+    """
+
+    def test_default_no_idle_timeout_waits_for_speech(self):
+        # idle_timeout defaults to None ⇒ the loop waits for speech and
+        # records normally; idle_timed_out is never set. Byte-for-byte the
+        # pre-iter-166 path.
+        mic = VirtualMicStream(rate=RATE, chunk_size=CHUNK)
+        mic.push(
+            concat(
+                make_silence(2.0, rate=RATE),  # long lead silence
+                make_tone_burst(1.0, rate=RATE, amp=0.3),
+                make_silence(1.2, rate=RATE),
+            )
+        )
+        loop = _make_chat_loop(
+            mic=mic,
+            speaker_factory=lambda: VirtualSpeakerStream(rate=24000),
+            transcript="how are you",
+            llm_text="I am well.",
+        )
+        result = loop.run_one_turn([])
+        assert result.metrics is not None
+        assert result.idle_timed_out is False
+
+    def test_idle_timeout_fires_and_flags_turn_result(self):
+        # Only silence on the mic ⇒ without a timeout the recorder would
+        # block forever. With idle_timeout set, run_one_turn returns a
+        # no-metrics TurnResult flagged idle_timed_out — and the LLM is
+        # never reached (no transcript).
+        mic = VirtualMicStream(rate=RATE, chunk_size=CHUNK)
+        mic.push(make_silence(0.5, rate=RATE))  # then padded silence forever
+        spk_holder = {"spk": None}
+
+        def factory():
+            spk_holder["spk"] = VirtualSpeakerStream(rate=24000)
+            return spk_holder["spk"]
+
+        loop = _make_chat_loop(
+            mic=mic,
+            speaker_factory=factory,
+            transcript="should not be used",
+            idle_timeout=1.0,
+        )
+        messages = [{"role": "system", "content": "be nice"}]
+        result = loop.run_one_turn(messages)
+
+        assert result.metrics is None
+        assert result.had_error is False
+        assert result.held is False
+        assert result.idle_timed_out is True
+        assert result.next_primed_frames is None
+        # No utterance ⇒ no user message appended, speaker never opened.
+        assert messages == [{"role": "system", "content": "be nice"}]
+        assert spk_holder["spk"] is None
+
+    def test_speech_before_timeout_records_and_does_not_flag(self):
+        # Speech starts within the timeout window ⇒ a normal turn with
+        # metrics; idle_timed_out stays False because the recorder saw a
+        # speech frame before the pre-speech window elapsed.
+        mic = VirtualMicStream(rate=RATE, chunk_size=CHUNK)
+        mic.push(_utterance_audio())  # 0.3s lead silence, well under 5s
+        loop = _make_chat_loop(
+            mic=mic,
+            speaker_factory=lambda: VirtualSpeakerStream(rate=24000),
+            transcript="hi",
+            llm_text="Hello.",
+            idle_timeout=5.0,
+        )
+        result = loop.run_one_turn([])
+        assert result.metrics is not None
+        assert result.metrics.transcript == "hi"
+        assert result.idle_timed_out is False
+
+    def test_false_trigger_without_idle_timeout_is_not_flagged(self):
+        # A genuine VAD false trigger / too-short utterance (no idle_timeout
+        # configured) returns no metrics but idle_timed_out is False — the
+        # flag is reserved for the deliberate pre-speech timeout, so
+        # run_session can distinguish the two no-metrics causes.
+        mic = VirtualMicStream(rate=RATE, chunk_size=CHUNK)
+        mic.push(
+            concat(
+                make_silence(0.3, rate=RATE),
+                make_tone_burst(0.05, rate=RATE, amp=0.3),  # < min_speech
+                make_silence(1.5, rate=RATE),
+            )
+        )
+        loop = _make_chat_loop(
+            mic=mic,
+            speaker_factory=lambda: VirtualSpeakerStream(rate=24000),
+            transcript="x",
+        )
+        result = loop.run_one_turn([])
+        assert result.metrics is None
+        assert result.idle_timed_out is False

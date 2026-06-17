@@ -373,8 +373,19 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   can never trip it — `silence_duration` still owns end-of-turn), and flags
   `out_metrics["idle_timed_out"] = True` so the caller can tell a timeout from a
   VAD false trigger. `None` (default) preserves the wait-forever behavior
-  byte-for-byte. Wiring it through `ChatLoop` → `run_session` to drive the
-  `should_flush_held_utterance` check is the named follow-on.
+  byte-for-byte.
+  **`ChatLoop` idle-timeout wiring** (`ChatLoop`'s `idle_timeout` ctor arg +
+  `TurnResult.idle_timed_out`, `examples/_chat_loop.py`,
+  `tests/unit/test_chat_loop.py`, iter-166): threads iter-165's recorder
+  `idle_timeout` through `ChatLoop.__init__` to `record_utterance_streaming` and
+  surfaces the recorder's `idle_timed_out` side-band flag on `TurnResult` (the
+  empty-wav path now reads `rec_metrics["idle_timed_out"]`). A no-metrics turn is
+  therefore one of three distinguishable causes — a held mid-thought fragment
+  (`held`), a deliberate pre-speech idle timeout (`idle_timed_out`), or a VAD
+  false trigger (neither flag). `None` (default) keeps the wait-forever path
+  byte-for-byte. The last wiring hop — `run_session` reading `idle_timed_out`,
+  measuring the inter-turn silence, and driving `should_flush_held_utterance`
+  (iter-164) to flush a held fragment mid-session — is the named follow-on.
 - **[Performance metrics taxonomy](docs/perf-metrics-taxonomy.md)** — a
   catalog of metrics worth instrumenting on a local-first voice agent.
 

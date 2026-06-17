@@ -96,12 +96,26 @@ class TurnResult:
         — surfaced rather than glued onto the response. Empty on the
         single-turn-release common case and the half-duplex / no-aggregator
         path.
+      ``idle_timed_out`` (iter-166) — True when this turn produced no
+        metrics because the recorder's pre-speech ``idle_timeout``
+        (iter-165) fired: the loop waited ``idle_timeout`` seconds of
+        unbroken inter-turn silence without the user starting to speak,
+        and gave up to return control. Distinct from both a VAD false
+        trigger (``held`` / neither flag) and a held mid-thought fragment
+        — it is the deliberate inter-turn-silence signal the
+        ``decide_silence_flush`` seam (iter-164) consumes: when the
+        recorder times out *and* the aggregator is holding a fragment,
+        the live loop can flush that fragment as its own turn rather than
+        leaving it held until shutdown. Always False when no
+        ``idle_timeout`` is configured (the default), so the proven
+        wait-forever path is unchanged.
     """
     metrics: Optional[TurnMetrics]
     next_primed_frames: Optional[list]
     had_error: bool = False
     held: bool = False
     displaced: tuple[str, ...] = ()
+    idle_timed_out: bool = False
 
 
 class ChatLoop:
@@ -173,6 +187,17 @@ class ChatLoop:
         # its buffer a transparent passthrough), so even an injected aggregator
         # is a no-op until GENO_FULL_DUPLEX_UTTERANCE_MERGING is on.
         aggregator=None,
+        # iter-166: pre-speech idle timeout, threaded down to
+        # record_utterance_streaming (iter-165). When None (default), the
+        # recorder waits forever for speech to start — byte-for-byte the
+        # pre-iter-165 path. When set (seconds), a turn that elapses that
+        # much pre-speech silence with no speech frame returns a no-metrics
+        # TurnResult flagged ``idle_timed_out`` so run_session can measure
+        # the inter-turn pause and flush a held fragment (the iter-164
+        # ``decide_silence_flush`` consumer). Only meaningful alongside an
+        # injected aggregator with merging on; harmless otherwise (it just
+        # lets the loop re-prompt instead of blocking).
+        idle_timeout: Optional[float] = None,
         # Tunables / I/O
         clock: Callable[[], float] = time.monotonic,
         output=None,
@@ -223,6 +248,9 @@ class ChatLoop:
         # hold-and-merge organic path (itself a passthrough unless its config
         # has utterance_merging on).
         self._aggregator = aggregator
+
+        # iter-166: pre-speech idle timeout passed to the recorder.
+        self._idle_timeout = idle_timeout
 
         self._clock = clock
         self._output = output  # passed to record_utterance_streaming
@@ -279,10 +307,24 @@ class ChatLoop:
             silence_threshold=self._silence_threshold,
             silence_duration=self._silence_duration,
             min_speech_duration=self._min_speech_duration,
+            idle_timeout=self._idle_timeout,
             out_metrics=rec_metrics,
         )
         if not wav_bytes:
-            return TurnResult(metrics=None, next_primed_frames=None)
+            # iter-166: an empty wav is either a VAD false trigger / too-short
+            # utterance (the long-standing case) or — when an ``idle_timeout``
+            # is configured (iter-165) — a deliberate pre-speech idle timeout:
+            # the user stayed silent for the whole inter-turn window. Surface
+            # the cause distinctly so run_session can tell a timeout (the
+            # inter-turn-flush trigger for a held fragment, via the iter-164
+            # ``decide_silence_flush`` seam) apart from a false trigger. The
+            # recorder sets ``idle_timed_out`` in its side-band dict on the
+            # timeout path only; default False otherwise.
+            return TurnResult(
+                metrics=None,
+                next_primed_frames=None,
+                idle_timed_out=bool(rec_metrics.get("idle_timed_out", False)),
+            )
 
         text = getattr(self._stt_engine, "_last_text", None)
         if not text or len(text.strip()) < 2:
