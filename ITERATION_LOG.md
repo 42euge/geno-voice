@@ -14388,3 +14388,102 @@ joining at the `resolve_turn` layer was never correct.
     (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
     on a committed `baseline.json`; diversity-check surface paused per
     iter-143/144.
+
+## iter-163 — merge-depth cap force-emit is a distinct signal (backlog #9 observability fix)
+
+**Branch:** `iter-163-merge-cap` (merged ff to main, commit `b3ad52c`)
+**Date:** 2026-06-17
+
+**Goal:** Make the iter-157 `max_merge_depth` starvation backstop *observable*
+instead of silent. When the cap force-emits a still-mid-thought utterance, that
+turn now carries a distinct `merge_capped` flag and surfaces on its own "Merges
+capped" line in the session summary — rather than being counted indistinguishably
+from a genuine clean merge.
+
+**Why:** The `max_merge_depth` cap (default 8) is the backstop that stops a
+pathological "unfinished forever" stream from holding an utterance indefinitely:
+once a held pending has absorbed N continuations and the running text *still*
+looks mid-thought, the buffer force-emits it (flagged `false_endpoint=True`)
+rather than holding again. Before this lap that force-emit was
+indistinguishable from a clean false-endpoint repair — same flag, same summary
+line. An operator had no way to see the backstop fire, which violates the
+"no silent caps" discipline this track keeps enforcing (iter-160/161/162). The
+cap firing is a *tuning signal* (the merge window / EOU threshold needs
+retuning), so it must be visible.
+
+**What changed:** a distinct `merge_capped` flag threaded the full data-flow
+chain `EmittedTurn → BufferResult → AggregatedResult → ResolvedTurn →
+TurnMetrics → OrganicStats → summary line`:
+
+1. **`session/utterance_buffer.py`.** `EmittedTurn.merge_capped: bool = False`,
+   set `True` *only* at the cap force-emit site in `offer()`. Always paired with
+   `false_endpoint=True` but semantically distinct (a backstop firing, not a
+   clean repair). `BufferResult.capped` is the any-over-released-turns roll-up.
+2. **`session/utterance_aggregator.py`.** `AggregatedResult.capped` mirrors
+   `BufferResult.capped` end-to-end.
+3. **`examples/_chat_aggregation.py`.** `ResolvedTurn.merge_capped` carries the
+   **responded** (last) turn's own flag — mirroring iter-162's `false_endpoint`
+   rule, so a capped *displaced* fragment never stamps a fresh, uncapped
+   response. Read via `getattr` so a pre-iter-163 turn double defaults `False`.
+4. **`examples/_chat_metrics.py`.** `TurnMetrics.merge_capped`,
+   `OrganicStats.merges_capped`, and a new "Merges capped" line in
+   `_emit_organic_block` (zero-suppressed like every sibling signal, names
+   `iter-157`). The per-turn `TurnMetrics.print` "False endpoint: yes" line now
+   annotates *merge-depth cap hit — force-emitted mid-thought* when capped, vs
+   *user wasn't done* otherwise. `print_session_summary` sums per-turn flags into
+   `merges_capped`.
+5. **`examples/_chat_loop.py`.** `run_one_turn` stamps
+   `metrics.merge_capped = resolved.merge_capped` and prints a distinct runtime
+   `merge-depth cap hit — force-emitting still-unfinished utterance` status line
+   (vs the natural-merge line).
+
+**Half-duplex / no-aggregator unchanged.** A passthrough buffer never holds, so
+the cap can never fire: `merge_capped` is always `False`, `merges_capped` stays
+zero, the line is suppressed — byte-for-byte today's output. `aggregator=None`
+(every existing call site) is untouched.
+
+**Tests (+26 net new functions):**
+- `tests/unit/test_utterance_buffer.py` (+8): cap sets `merge_capped`; natural
+  merge doesn't; `BufferResult.capped` roll-up; `EmittedTurn` defaults.
+- `tests/unit/test_utterance_aggregator.py` (+5, +1 fixed): `AggregatedResult.capped`
+  default/reflect; cap path surfaces `capped=True` end-to-end; natural release
+  not capped; half-duplex never capped. Fixed `test_max_merge_depth_threads_through`
+  to expect `EmittedTurn(..., merge_capped=True)`.
+- `tests/unit/test_chat_aggregation.py` (+6): responded-turn's-own-flag (both
+  directions); a capped *displaced* fragment doesn't stamp the response;
+  back-compat `getattr` default via an `_OldTurn` double; defaults.
+- `tests/unit/test_chat_loop_aggregator.py` (+1 class, +3 assertions): the live
+  cap force-emit stamps `TurnMetrics.merge_capped` (`max_merge_depth=1`
+  aggregator); no-aggregator / half-duplex / natural-merge assert `False`.
+- `tests/unit/test_emit_organic_block.py` (+8): the "Merges capped" line (alone,
+  zero-suppressed, with other signals under one header); `TurnMetrics` /
+  `OrganicStats` defaults; `print_session_summary` wiring (a capped turn surfaces
+  both the false-endpoint rate and the capped line; an uncapped false endpoint
+  omits the capped line).
+
+**Discoverability:** iter-163 findings-log entry + backlog #9 row update in
+`docs/research/organic-turn-taking.md`; README Research section names the
+`merge_capped` flag, the `capped` property, and the "Merges capped" line.
+
+**Verification:**
+- Full unit suite (in worktree, pre-merge): **2225 passed** (2199 prior + 26).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `py_compile` of `utterance_buffer.py` / `utterance_aggregator.py` /
+  `_chat_aggregation.py` / `_chat_metrics.py` / `_chat_loop.py` clean.
+
+**Notes:**
+- **No runtime behavior change for today's sessions.** The cap can only fire in
+  organic mode (merging on, off by default) on a pathological unfinished stream;
+  half-duplex never holds, so the path is unreachable and all output is
+  byte-for-byte unchanged.
+- Next directions:
+  - **Mid-session long-silence flush** (the larger item iter-160/161/162 named):
+    feed a trailed-off fragment to the engine as its own turn via an inter-turn
+    clock read in `run_session`, rather than only surfacing it in the summary.
+  - Wire the still-pending `should_abandon_turn` (iter-152) into the `mic_chat`
+    barge path and `should_emit_backchannel` (iter-153) into the live cue path,
+    both behind their full-duplex sub-flags.
+  - Carried over (off-track): the CI workflow
+    (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
+    on a committed `baseline.json`; diversity-check surface paused per
+    iter-143/144.
