@@ -15145,3 +15145,91 @@ through.
     (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
     on a committed `baseline.json`; diversity-check surface paused per
     iter-143/144.
+
+## iter-171 — shared cue rotation: the BackchannelMonitor picks *which* cue (backlog #7)
+
+**Branch:** `iter-171-backchannel-cue-rotation` (merged ff to main, commit `192bf10`)
+**Date:** 2026-06-17
+
+**Goal:** Give the iter-170 `BackchannelMonitor` the **second** piece of
+cross-event state the pure `decide_backchannel_timing` seam can't carry: *which*
+cue to play. iter-170 taught the monitor *when* to emit (record the emit
+timestamp so the `min_between_cues_secs` rate limit engages across calls), but
+`observe` returned no cue at all — a live cue path would know it's a good moment
+to backchannel yet not what to play. The cue rotation (`CUE_ROTATION` + a
+rotating index) is that second scalar of state, and it already existed, buried
+inside `TurnTakingEngine` as a module-level list and a `_cue_index`.
+
+**Why:** The named #7 follow-on — live cue-path wiring from `pipecat_server.py`'s
+`Broadcaster` — stays blocked on the absent pipecat dep on the x86_64 runner (the
+same wall #6 hits). Rather than fake that dependency, this lap completes the
+driver's contract so that when the wiring lap can happen, `observe` returns a
+fully actionable decision (`emit` + `cue_type`), not a half-answer. It also kills
+a latent drift bug: the rotation lived in `turn_taking.py` while the monitor had
+none, so the silence-driven `PLAY_CUE` path and the mid-speech path would have
+evolved separate cue lists. Now they index one source.
+
+**What changed:**
+
+1. **`session/cue_rotation.py`** — new dependency-free module, the single source
+   of truth: `CUE_ROTATION = ["mhmm", "i_see", "right", "go_on", "mhmm",
+   "tell_me_more"]` ("mhmm" twice on purpose — the neutral continuer recurs more
+   than the pointed cues) and a pure total `cue_for_index(i)` that wraps modulo
+   length (negatives included, so a monotonic counter never bounds-checks).
+
+2. **`BackchannelMonitor`** grows a `_cue_index` advanced *only on a real emit*.
+   `observe` returns `BackchannelDecision.cue_type` — the next cue on an emit,
+   `None` on a hold (no cue to play). A held frame never burns a rotation slot,
+   so the rotation tracks *backchannels emitted*, not *frames observed*.
+   `reset()` clears the rate-limit clock but **keeps** the rotation position, so
+   a fresh monologue continues the rotation rather than always replaying "mhmm"
+   (a human doesn't open every lull with the identical sound). New read-only
+   `cue_index` property for observability.
+
+3. **`turn_taking.py`** imports `CUE_ROTATION` + `cue_for_index` from the shared
+   module (re-exporting `CUE_ROTATION` for back-compat with existing importers)
+   and routes `_next_cue` through `cue_for_index` — byte-for-byte the same
+   rotation, now from one source.
+
+4. **Half-duplex invariant intact:** a default (half-duplex) monitor returns
+   `cue_type=None` for every input and never advances the index — the cue
+   machinery, like the emit machinery, engages only behind the off-by-default
+   `agent_backchannels` flag.
+
+**+10 tests:** `tests/unit/test_cue_rotation.py` (5 — non-empty/known-cues,
+in-order walk, modulo wrap, negative indices, mhmm-most-frequent) and 5 net-new
+in `tests/unit/test_backchannel_monitor.py` (emit carries first cue / hold
+carries None; consecutive emits rotate and wrap; held frames don't burn slots;
+reset keeps the rotation position; half-duplex never advances the cue).
+
+**Discoverability:** iter-171 findings-log entry + backlog #7 row update in
+`docs/research/organic-turn-taking.md`; README Research section names
+`session/cue_rotation.py`, `BackchannelDecision.cue_type`, the held-frame /
+reset-keeps-position semantics, and the single-source-of-truth share with
+`TurnTakingEngine`.
+
+**Verification:**
+- `python -m pytest tests/unit/test_backchannel_monitor.py
+  tests/unit/test_cue_rotation.py -q` → **26 passed**.
+- Full unit suite (in worktree, pre-merge): **2329 passed** (2319 prior + 10).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `python -W error::SyntaxWarning -m py_compile session/cue_rotation.py
+  session/backchannel_monitor.py session/turn_taking.py` clean.
+- (`tests/test_session.py` errors on collection — `ModuleNotFoundError: pipecat`
+  — a pre-existing condition on main, not a regression; that suite needs the
+  absent x86_64 dep.)
+
+**Notes:**
+- Next directions:
+  - **Live cue-path wiring for #7** — the monitor now answers both *when* and
+    *which*, so the wiring is a clean `if d.emit: broadcast_cue(d.cue_type)`.
+    Feed `BackchannelMonitor.observe` from `pipecat_server.py`'s `Broadcaster`
+    (which owns the monologue clock and the `broadcast_cue` path). Still blocked
+    on the absent pipecat dep on the x86_64 runner — a wiring lap needs a stubbed
+    pipecat surface or a transport-agnostic seam in `Broadcaster`.
+  - **Live barge-path wiring for #5** — `should_abandon_turn` (iter-152) into
+    the `mic_chat` barge path; blocked on no transcript at VAD-trigger time.
+  - Carried over (off-track): the CI workflow
+    (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
+    on a committed `baseline.json`; diversity-check surface paused per
+    iter-143/144.
