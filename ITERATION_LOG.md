@@ -16458,3 +16458,84 @@ existing behavior; now that the behavior is pinned, adding the guard is safe.
     — both still blocked only on the absent pipecat dep on the x86_64 runner.
   - Carried over (off-track): the CI workflow still blocked on a committed
     `baseline.json`; diversity-check surface paused per iter-143/144.
+
+## iter-187 — surface warnings when `parse_vad_config` drops a value to default
+
+**Branch:** `iter-187-vad-warn` (merged ff to main)
+**Commit:** `bc88db7`
+**Date:** 2026-06-17
+
+**Goal:** Implement the iter-186 next-direction — "surface a one-line warning
+when a `vad` config value is dropped to its default (today the fallback is
+silent), so operators see the typo without reading source." `parse_vad_config`
+(iter-020/033) is *tolerant* by design: a malformed `vad` section (wrong type,
+non-positive number) silently falls back to `VAD_DEFAULTS` so a typo can't take
+down the chat loop. The downside: a user who typos `silence_threshold: "loud"`
+or `silence_duration: -1` gets the default with **zero feedback** — their tuning
+just has no effect and they have no clue why.
+
+**Why:** This is the operator-visibility complement to the iter-186 strict
+`SilenceDetector` constructor guard. The constructor is for callers building a
+detector directly in code (no defaults → fail fast, raise). The config parser is
+for user-supplied YAML (defaults exist → stay tolerant, never raise). But
+"tolerant" shouldn't mean "silent" — the parser now *warns* on the values it
+drops while still returning the safe default. This closes the gap between
+silently-broken and crash-on-startup with the right middle ground for a config
+layer. Picked over the carried-forward `rms_amplitude` hypothesis test because it
+directly discharges the most recent next-direction and improves a real
+operator-facing path (a typo'd VAD knob is a plausible support case).
+
+**What changed:**
+
+1. **`examples/_chat_config.py`** — `parse_vad_config` gains an optional
+   `warn: Any = None` parameter (a callable taking one string, e.g. `print` or a
+   styled log adapter). Follows the conventions' inject-`log` seam: the parser
+   emits **plain text**, ANSI styling stays at the caller. Behavior:
+   - `warn=None` (default) → unchanged, fully backwards compatible; the parser
+     stays a pure value-returner for existing call sites / tests.
+   - Present-but-rejected key (bad type, non-positive, bool) → one warning naming
+     the key, the offending value, and the default it fell back to.
+   - Missing key → **silent** (backfilling an absent key is normal, not an error).
+   - Non-mapping `vad` section that is *present* → one warning that the whole
+     section was ignored; absent `vad` (or non-mapping chat) → silent.
+   - Also now **rejects `bool`** values: `True`/`False` are `int` subclasses that
+     previously sailed through (`True` → `1.0`; `False` hit the non-positive
+     branch). Now both fall back to default, matching the strict
+     `SilenceDetector` guard (iter-186) on the reject side.
+
+2. **`examples/mic_chat.py`** — wires a YELLOW log adapter into the
+   `parse_vad_config` call so a typo'd VAD knob surfaces a styled one-liner at
+   startup instead of vanishing.
+
+3. **`tests/unit/test_vad_config.py`** — new `TestParseVadConfigWarn` class
+   (10 tests) covering: no-warn-by-default backwards compat; valid config emits
+   nothing; missing keys silent; no-vad-section silent; bad value warns with
+   key+value+default; non-positive warns; bool warns; one warning per bad key
+   (valid keys stay silent); non-mapping `vad` warns once; non-mapping chat
+   silent. Plus `test_bool_values_fall_back_to_defaults` in `TestParseVadConfig`
+   pinning the new bool-rejection behavior independent of the warn seam.
+
+**Verification:**
+- `python -m pytest tests/unit/test_vad_config.py -q` → **27 passed**
+  (16 prior + 11 new).
+- Full unit suite (in worktree, pre-merge): **2577 passed** (2566 prior + 11).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `python -W error::SyntaxWarning -m py_compile examples/_chat_config.py
+  examples/mic_chat.py tests/unit/test_vad_config.py` clean.
+- (`tests/test_session.py` still errors on collection — `ModuleNotFoundError:
+  pipecat` — pre-existing on main, not a regression.)
+
+**Notes:**
+- The VAD config layer now spans the full malformed-input spectrum: tolerant
+  fallback (iter-020/033) + operator-visible warning (iter-187) for YAML, strict
+  fail-fast (iter-186) for direct construction. Next directions:
+  - **Mirror the warn seam into `parse_stt_config` / `parse_filler_config`** —
+    both are tolerant parsers with the same silent-fallback gap; the iter-187
+    `warn` seam is a clean template to lift across them.
+  - **Property/fuzz coverage for `rms_amplitude`** — a hypothesis test that the
+    RMS of any constant-amplitude signal equals `|level|/32768` (carried from
+    iter-185/186).
+  - **Live mid-speech cue wiring for #7** and **live barge-path wiring for #5**
+    — both still blocked only on the absent pipecat dep on the x86_64 runner.
+  - Carried over (off-track): the CI workflow still blocked on a committed
+    `baseline.json`; diversity-check surface paused per iter-143/144.
