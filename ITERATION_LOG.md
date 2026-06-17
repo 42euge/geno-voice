@@ -16072,3 +16072,73 @@ test.
     the `mic_chat` barge path; blocked on no transcript at VAD-trigger time.
   - Carried over (off-track): the CI workflow still blocked on a committed
     `baseline.json`; diversity-check surface paused per iter-143/144.
+
+## iter-182 — bound `gv --speed` to `[0.5, 2.0]` via a `speed_type` validator (gv CLI hardening)
+
+**Branch:** `iter-182-speed-validation` (merged ff to main)
+**Date:** 2026-06-17
+
+**Goal:** Close a silent garbage-in path on the primary user-facing surface, the
+`gv` CLI. `gv talk` / `gv chat` both accept `--speed` with `type=float`, which
+parses *any* float — `0`, `-1`, `1e9` — and forwards it straight to the kokoro
+TTS engine (`run_talk`/`run_chat` → `synthesize_with_alignment(..., speed)`).
+Zero or negative speed is nonsensical (zero/negative-rate synthesis) and absurd
+multipliers produce unintelligible output; neither is caught until it reaches
+the engine. This lap adds a bounded `speed_type` argparse validator so the
+parser rejects out-of-range speeds with the usual `SystemExit(2)` instead of
+handing the engine a value it was never meant to receive.
+
+**Why:** The CLI is the one surface every user touches, and `--speed` was its
+only numeric knob with no validation. The pre-existing `test_bad_speed_exits_2`
+only covered the *non-numeric* case (`--speed fast`); a numeric-but-insane value
+like `--speed 0` sailed through `type=float` and became the engine's problem.
+The accepted window `[0.5, 2.0]` matches kokoro's documented practical range.
+Bounding it at the parser keeps the failure where the user can see and fix it
+(a clear `error: argument --speed: speed must be between 0.5 and 2.0, got 0.0`)
+rather than deep in synthesis.
+
+**What changed:**
+
+1. **`examples/gv.py`** — new `SPEED_MIN`/`SPEED_MAX` constants (0.5 / 2.0) and a
+   pure `speed_type(raw)` argparse `type` callable: parses to float, rejects
+   non-numbers and NaN (explicitly — NaN is unordered, so a bare range check
+   would mislabel it) and anything outside `[SPEED_MIN, SPEED_MAX]`, all via
+   `argparse.ArgumentTypeError` (→ `SystemExit(2)`). Both `talk` and `chat`
+   `--speed` args switch from `type=float` to `type=speed_type` and their help
+   text now states the accepted window. `bench`/`stream` are STT-only and
+   unaffected.
+
+2. **`tests/unit/test_gv_cli.py`** — 9 new tests (the `argparse` import added):
+   `speed_type` accepts inclusive endpoints + midrange + integer-string→float;
+   rejects non-numbers, zero/negative, out-of-range, and NaN (message names
+   nan); and two end-to-end parser checks per command — out-of-range exits 2,
+   in-range parses. Existing `test_speed_is_float` (`--speed 2` → 2.0) and
+   `test_bad_speed_exits_2` still hold (2.0 is in range; "fast" still rejected).
+
+**Verification:**
+- `python -m pytest tests/unit/test_gv_cli.py -q` → **40 passed** (23 prior + 17
+  new test cases incl. parametrize expansion).
+- Full unit suite (in worktree, pre-merge): **2429 passed** (2411 prior + 18).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `python -W error::SyntaxWarning -m py_compile examples/gv.py
+  tests/unit/test_gv_cli.py` clean.
+- Manual CLI check: `gv chat --speed 0` → exit 2 with
+  `error: argument --speed: speed must be between 0.5 and 2.0, got 0.0`;
+  `gv talk --speed 1.5` accepted; `--help` shows the `[0.5, 2.0]` window.
+- (`tests/test_session.py` still errors on collection — `ModuleNotFoundError:
+  pipecat` — pre-existing on main, not a regression.)
+
+**Notes:**
+- Next directions:
+  - **Voice-name validation for `gv`** — `--voice` accepts any string and
+    likewise forwards it raw to kokoro; a known-voice check (or at least a
+    non-empty guard) would close the sibling gap to this lap.
+  - **Live mid-speech cue wiring for #7** — feed the VAD frames to a
+    `BackchannelDriver` in `pipecat_server.py`'s `Broadcaster`, `broadcast_cue`
+    on emit, surface `driver.emit_count` into the
+    `SessionMeta.backchannels_emitted` slot (iter-175). Still blocked only on
+    the absent pipecat dep on the x86_64 runner.
+  - **Live barge-path wiring for #5** — `should_abandon_turn` (iter-152) into
+    the `mic_chat` barge path; blocked on no transcript at VAD-trigger time.
+  - Carried over (off-track): the CI workflow still blocked on a committed
+    `baseline.json`; diversity-check surface paused per iter-143/144.
