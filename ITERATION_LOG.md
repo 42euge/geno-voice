@@ -16800,3 +16800,84 @@ What changed:
    the pre-roll buffer (backlog item 2).
 4. **[sweep] Extend to a 2-D grid** (e.g. threshold × gain) if a single-
    axis sweep proves too coarse for picking the joint operating point.
+
+---
+
+## iter-191 — pre-roll buffer in the VAD replay harness (recovers clipped utterance openings)
+
+**Branch:** `iter-191-preroll` (merged ff to main, commit `8012494`)
+**Date:** 2026-06-17
+
+**Improvement (research-doc backlog item 2):** The live `ContinuousListener`
+discards every sub-threshold frame before a speech onset, so the committed
+segment starts at the debounce-committed frame and clips the quiet ramp-up
+(soft attack) of every utterance. `docs/research/voice-capture-tuning.md`
+flagged a *rolling pre-roll buffer* as item 2 and explicitly called it
+replay-testable ("assert the first segment's `onset_ms` moves earlier"). This
+lap models the pre-roll in the harness so the recovery can be quantified
+against the real corpus before touching the client.
+
+What changed:
+- **`fixtures/replay_vad.py`** — new `VadParams.preroll_ms` field (default
+  `0.0` = today's clip-the-opening behaviour, a no-op). `simulate_vad` now
+  pulls an accepted segment's emitted onset back by `round(preroll_ms /
+  frame_dur_ms)` frames, **clamped** to the recording start and the previous
+  segment's `end_frame` (segments never overlap). The `min_speech_ms` gate
+  still measures *committed* speech, not pre-roll padding — pre-roll cannot
+  rescue a too-short segment. CLI `--preroll-ms` flag wired through `main`
+  (reported in the run header); the existing `--sweep` already accepts
+  `preroll_ms` as a `VadParams` field for free.
+- **`tests/unit/test_replay_vad.py`** — `TestPrerollBuffer` (5 tests):
+  zero-preroll leaves onset unchanged (parity), preroll moves onset earlier +
+  extends segment frames, clamp-to-recording-start, clamp-to-previous-segment
+  -end (no overlap), too-short segment still dropped despite huge preroll.
+  Plus 2 CLI tests (`--preroll-ms` reported in header; `--sweep preroll_ms`
+  table).
+- **`tests/integration/test_vad_recordings.py`** — `TestPrerollRecoversOpening`
+  (3 tests × corpus): first onset moves earlier-or-equal and segment frames
+  grow; segments never overlap under pre-roll; onset count unchanged (pre-roll
+  is a timing recovery, not a detection change). Skips cleanly without the
+  corpus.
+- **`docs/research/voice-capture-tuning.md`** — documented `--preroll-ms`
+  usage, a per-recording first-`onset_ms` table (preroll 0 / 256 / 512ms),
+  and the finding; marked backlog item 2 done with the client-wiring plan.
+
+**Empirical findings (real seed corpus, 4 recordings, threshold 0.006):**
+- A 256–512ms pre-roll pulls every recording's first `onset_ms` earlier by
+  ~250–510ms (e.g. `voice-20260617-131451` 1370.0ms → 859.1ms at 512ms;
+  `voice-20260617-122716` 232.2ms → 0.0ms, clamped to recording start). The
+  committed segment's frame count rises correspondingly, so the prepended
+  audio is real recovered speech, not silence padding.
+- Onset *count* is unchanged across all pre-roll values (aggregate sweep
+  totals are flat by design) — pre-roll recovers the opening of an
+  already-detected segment, it cannot create or drop onsets. This is the
+  cheap, replay-validated half of the latency story; pre-warming (item 1)
+  recovers the cold-start dead window on top.
+
+**Verification:**
+- `python -m pytest tests/unit/test_replay_vad.py` → **46 passed** (39 prior +
+  7 new).
+- Full unit suite: `python -m pytest tests/unit/` → **2642 passed** (2635
+  prior + 7 new).
+- Integration: `python -m pytest tests/unit/ tests/integration/` → **2672
+  passed, 10 skipped** (VAD-recording tests skip without the gitignored
+  corpus). Validated against the real corpus via temp symlink:
+  `tests/integration/test_vad_recordings.py` → **33 passed** (21 prior + 12
+  new).
+- `python -m py_compile fixtures/replay_vad.py tests/unit/test_replay_vad.py
+  tests/integration/test_vad_recordings.py` clean.
+- (`tests/test_session.py` still errors on collection — pre-existing missing
+  `pipecat` dep, not a regression.)
+
+**Next planned items (from the research-doc backlog):**
+1. **[latency, highest value] Pre-warm the capture pipeline** — still the top
+   user-facing bug (3–5s `click_to_capture_ms`). Needs an on-device timing
+   harness; cannot be replayed.
+2. **[latency] Wire the pre-roll ring buffer into `ContinuousListener`** —
+   keep the last `preroll_ms` of `_handleFrame` input around while listening,
+   prepend to `this.chunks` at the commit point. Default `preroll_ms = 0` for
+   parity. This lap proved the recovery; the client change is now low-risk.
+3. **[debounce] Validate onset *timing* moves earlier at 100ms** — pairs with
+   the pre-roll buffer now that both are replay-modelled.
+4. **[sweep] Extend to a 2-D grid** (threshold × gain, or debounce × preroll)
+   if single-axis sweeps prove too coarse for the joint operating point.
