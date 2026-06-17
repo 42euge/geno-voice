@@ -229,7 +229,7 @@ output discoverable from README" discipline. Local only.
 | 2 | **`turn_decider` seam** — pure function wrapping today's silence→confidence heuristic behind the same interface a smart-turn model would use, so `smart_turn_confidence` stops being hardcoded `0.5` and the model swaps in later without touching `TurnTakingEngine`. | High | **DONE iter-149** |
 | 3 | **Full-duplex config flag scaffolding** — a `TurnTakingConfig` / env flag (`GENO_FULL_DUPLEX`) that gates organic behaviors (continuer-aware listening, agent backchannels) off by default, so the half-duplex path is never regressed while the track matures. | Medium | **DONE iter-151** |
 | 4 | **Rule-based text EOU precursor** — `is_utterance_complete(text)` that lowers end-of-turn likelihood when the transcript ends in a conjunction / filler / trailing-off marker (mirrors LiveKit turn-detector's linguistic signal; reuses `_TRAILING_PATTERNS`). Feeds #2's confidence. | Medium | **DONE iter-150** |
-| 5 | **Continuer-aware barge-in** — wire #1 into `BargeInCoordinator` so a *continuer* utterance ("mhmm") during agent speech does NOT abandon the turn (finish), while a substantive interruption does (abandon). Measure: false-abandon rate. | High | TODO |
+| 5 | **Continuer-aware barge-in** — wire #1 into `BargeInCoordinator` so a *continuer* utterance ("mhmm") during agent speech does NOT abandon the turn (finish), while a substantive interruption does (abandon). Measure: false-abandon rate. | High | **DONE iter-152** (decision seam `decide_barge_action`; coordinator wiring is the follow-on) |
 | 6 | **Adopt pipecat `smart-turn`** — replace #2's heuristic body with the smart-turn model inside `pipecat_server.py`'s pipeline; same `turn_decider` interface. Measure false-endpoint rate vs silence-only baseline on recorded sessions. | High | TODO (blocked on model + Apple Silicon) |
 | 7 | **Agent backchannel emission timing** — a learned/heuristic "good moment to backchannel" signal (Krisp-style) feeding the existing `PLAY_CUE` path, so the agent emits continuers *during* long user speech, not only on silence. | Medium | TODO |
 | 8 | **Naturalness metrics for the organic path** — extend `TurnMetrics` / session-summary with false-endpoint rate and continuer-detection counts so the track is measured, not asserted. | Medium | TODO |
@@ -375,3 +375,51 @@ output discoverable from README" discipline. Local only.
   `classify_backchannel` into `BargeInCoordinator`, gated behind
   `continuer_aware_listening_active()`); or backlog #8 (naturalness metrics:
   false-endpoint rate + continuer counts in `TurnMetrics`/session-summary).
+
+### iter-152 (2026-06-16) — continuer-aware barge-in decision (#5)
+
+- **Shipped backlog #5 (the decision seam):** `session/barge_decision.py` —
+  `decide_barge_action(transcript, energy=None, *, config) -> BargeAction`
+  (`ABANDON` / `FINISH`), the pure composition of two earlier seams: the
+  backchannel classifier (#1, iter-148) and the full-duplex gate (#3,
+  iter-151). A user "mhmm" / "yeah" / "right" during agent speech is a
+  *continuer* — *keep going, I'm listening* — not a turn-grab; abandoning the
+  agent's turn on it clips its own sentence for nothing. The seam decides
+  abandon-vs-finish from the barge transcript so a later lap can gate
+  `BargeInCoordinator.trigger()` behind it.
+- **The half-duplex invariant is the whole point.** Rule 1 short-circuits on
+  `config.continuer_aware_listening_active()`: with a default
+  `FullDuplexConfig()` (the switch off), the function returns `ABANDON` for
+  *every* transcript — byte-for-byte today's "any barge cancels" behavior, and
+  the transcript isn't even classified. Only with continuer-aware listening
+  explicitly on does Rule 2 run: a confirmed `CONTINUER` ⇒ `FINISH`, while
+  `SUBSTANTIVE` real speech *and* `NOT_SPEECH` empty/noise both ⇒ `ABANDON`.
+  Rule 2 is deliberately conservative toward `ABANDON` — only a *confirmed*
+  continuer holds the floor, so a misclassification errs on responsiveness
+  (the user who really interrupted is never left talking over a droning agent).
+- **Why a decision seam, not coordinator wiring, this lap.** Same discipline as
+  the rest of the track: ship the pure, fully-tested primitive behind the
+  off-by-default gate first; wire it into the live `mic_chat` barge path
+  (`should_abandon_turn(text, ...)` guarding `coord.trigger()`) as a separate,
+  reviewable lap. `should_abandon_turn` is the call-site-shaped boolean
+  convenience — with a default config it's always `True`, so the existing
+  unconditional `coord.trigger()` is unchanged when wired.
+- **`energy` / `max_words` / `energy_ceiling` thread through to the
+  classifier** so the audio-aware emphatic-"YEAH!"-takes-the-floor gate
+  (iter-148) works here too: a loud short continuer above the ceiling
+  classifies SUBSTANTIVE ⇒ ABANDON even under organic mode.
+- 40 unit tests (`tests/unit/test_barge_decision.py`): the half-duplex
+  invariant (every transcript abandons under default / explicit-default /
+  master-on-but-held-back configs; continuer isn't even classified when
+  gated); organic mode (continuer FINISHes, substantive/empty ABANDON,
+  sub-flag-true overrides master-off); the energy gate (loud continuer
+  abandons, quiet finishes, custom ceiling); `max_words` threading;
+  `should_abandon_turn` boolean + decide-match; and purity/interface
+  (config keyword-only, no config mutation, distinct enum values). Loaded by
+  file path under a stub `session` namespace — the same `session/__init__`
+  pipecat-bypass trick the text_eou / turn_decider tests use.
+- **Next:** wire `should_abandon_turn` into the `mic_chat` barge path (the
+  follow-on to this lap — gate `coord.trigger()` behind it, threading the
+  barge transcript + RMS energy in) and measure false-abandon rate; or
+  backlog #8 (naturalness metrics: false-endpoint rate + continuer counts in
+  `TurnMetrics` / session-summary), or #7 (agent backchannel emission timing).

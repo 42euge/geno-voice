@@ -216,7 +216,17 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   gate (`GENO_FULL_DUPLEX` master flag + per-behavior overrides) so future
   organic behaviors (continuer-aware barge-in, agent backchannels) land
   behind a switch and the proven half-duplex path is never regressed; a
-  default config is byte-for-byte today's behavior.
+  default config is byte-for-byte today's behavior. Also shipped: the
+  **continuer-aware barge-in decision** (`session/barge_decision.py`,
+  `tests/unit/test_barge_decision.py`) — `decide_barge_action(transcript,
+  energy, *, config)` composes the backchannel classifier and the
+  full-duplex gate into an `ABANDON` (true interruption) / `FINISH` (user
+  only backchanneled) verdict, so a "mhmm" during agent speech keeps the
+  agent talking instead of clipping its own sentence. With a default
+  (half-duplex) config it returns `ABANDON` for every transcript —
+  byte-for-byte today's "any barge cancels" behavior; only with
+  `continuer_aware_listening_active()` does a recognized continuer
+  `FINISH`.
 - **[Performance metrics taxonomy](docs/perf-metrics-taxonomy.md)** — a
   catalog of metrics worth instrumenting on a local-first voice agent.
 
