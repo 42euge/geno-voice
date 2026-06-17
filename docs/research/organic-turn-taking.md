@@ -232,7 +232,7 @@ output discoverable from README" discipline. Local only.
 | 5 | **Continuer-aware barge-in** — wire #1 into `BargeInCoordinator` so a *continuer* utterance ("mhmm") during agent speech does NOT abandon the turn (finish), while a substantive interruption does (abandon). Measure: false-abandon rate. | High | **DONE iter-152** (decision seam `decide_barge_action`; coordinator wiring is the follow-on) |
 | 6 | **Adopt pipecat `smart-turn`** — replace #2's heuristic body with the smart-turn model inside `pipecat_server.py`'s pipeline; same `turn_decider` interface. Measure false-endpoint rate vs silence-only baseline on recorded sessions. | High | TODO (blocked on model + Apple Silicon) |
 | 7 | **Agent backchannel emission timing** — a learned/heuristic "good moment to backchannel" signal (Krisp-style) feeding the existing `PLAY_CUE` path, so the agent emits continuers *during* long user speech, not only on silence. | Medium | **DONE iter-153** (decision seam `decide_backchannel_timing`; cue-path wiring is the follow-on) |
-| 8 | **Naturalness metrics for the organic path** — extend `TurnMetrics` / session-summary with false-endpoint rate and continuer-detection counts so the track is measured, not asserted. | Medium | TODO |
+| 8 | **Naturalness metrics for the organic path** — extend `TurnMetrics` / session-summary with false-endpoint rate and continuer-detection counts so the track is measured, not asserted. | Medium | **DONE iter-154** (`false_endpoint` + `continuers_detected` `TurnMetrics` fields; `_emit_organic_block` summary block; populating them from the live organic path is the follow-on) |
 
 ---
 
@@ -483,3 +483,52 @@ output discoverable from README" discipline. Local only.
   behind `agent_backchannels_active()`); or backlog #8 (naturalness metrics:
   false-endpoint rate + continuer counts in `TurnMetrics` / session-summary, so
   the track is measured not asserted).
+
+### iter-154 (2026-06-16) — naturalness metrics for the organic path (#8)
+
+- **Shipped backlog #8 (the measurement surface):** the organic track shipped
+  its decision seams (#1/#5/#7) behind an off-by-default gate but had no way to
+  *measure* whether they help. This lap adds that surface in
+  `examples/_chat_metrics.py`:
+  - Two additive `TurnMetrics` fields: `false_endpoint: bool` (the headline
+    metric the LiveKit turn-detector / pipecat smart-turn literature tracks —
+    the EOU decision fired early and the user actually had more to say) and
+    `continuers_detected: int` (user backchannels recognized via iter-148's
+    `classify_backchannel` and held the agent's floor via iter-152's
+    `decide_barge_action`, instead of clipping the turn). Metrics 3.22 / 3.23
+    in the perf-metrics taxonomy.
+  - An `OrganicStats` dataclass + `_emit_organic_block` session-summary helper
+    rendering a "False endpoints: N/M turns (X%)" rate (with an "EOU too eager;
+    raise silence_duration" suggestion above a 20% threshold) and a
+    "Continuers held: N" positive line.
+  - Per-turn `TurnMetrics.print()` renders a yellow "False endpoint: yes" flag
+    and a dim "Continuers: N" line.
+- **Purely additive — byte-for-byte unchanged half-duplex output.** Both fields
+  default off and stay zero on the proven half-duplex silence-VAD path (it
+  neither mis-decides an organic endpoint nor classifies continuers), so the
+  per-turn lines and the whole `_emit_organic_block` are suppressed and today's
+  summaries are identical to pre-iter-154. The block only appears once the
+  organic seams are wired into the live path and start populating the fields —
+  exactly the "measured, not asserted" goal.
+- **`false_endpoint` complements iter-056's `barge_in_regret`.** Regret is the
+  *latency*-based pre-emption signal (user barged within 200ms of bot audio);
+  `false_endpoint` is the *decision*-based one (the agent declared end-of-turn
+  and the user resumed). Two angles on the same "the agent cut the user off"
+  failure.
+- **Why measurement now, live-population later.** Same discipline as the rest
+  of the track: ship the metric surface (default-off, fully tested) before the
+  code that feeds it. Wiring the live organic path to set `false_endpoint` (on
+  a resumed-after-endpoint event) and `continuers_detected` (from
+  `decide_barge_action` returning `FINISH`) is the follow-on lap.
+- 20 unit tests (`tests/unit/test_emit_organic_block.py`): field defaults;
+  `OrganicStats` defaults; both-zero suppression (the half-duplex guarantee);
+  the false-endpoint rate + the 20%-exclusive suggestion boundary; the
+  unknown-`n` count-only path; continuers-alone; both-signals-under-one-header;
+  and `print_session_summary` wiring (half-duplex summary has no organic block,
+  false-endpoint/continuer turns surface, per-turn `print()` emits/omits the
+  lines).
+- **Next:** populate `false_endpoint` / `continuers_detected` from the live
+  organic path (the follow-on — set them when an EOU decision is contradicted
+  by resumed speech, and when `decide_barge_action` returns `FINISH`); or wire
+  the still-pending `should_abandon_turn` (iter-152) / `should_emit_backchannel`
+  (iter-153) seams into `mic_chat`.

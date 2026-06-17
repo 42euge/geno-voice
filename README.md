@@ -239,7 +239,17 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   silence-driven `PLAY_CUE` window partition the silence axis with no
   overlap. Gated behind `agent_backchannels_active()`: with a default
   config it always `HOLD`s, byte-for-byte today's "agent stays silent
-  during user speech."
+  during user speech." Also shipped: the **organic-path naturalness
+  metrics** (`examples/_chat_metrics.py`,
+  `tests/unit/test_emit_organic_block.py`) — two additive `TurnMetrics`
+  fields, `false_endpoint` (the EOU decision fired early and the user
+  had more to say) and `continuers_detected` (user backchannels that
+  correctly held the agent's floor), surfaced per-turn and as a session
+  summary "Organic turn-taking" block (false-endpoint rate + continuers
+  held). Both default off and stay zero on the half-duplex path, so the
+  block is fully suppressed and today's summaries are byte-for-byte
+  unchanged; the track becomes *measured, not asserted* once the seams
+  are wired in.
 - **[Performance metrics taxonomy](docs/perf-metrics-taxonomy.md)** — a
   catalog of metrics worth instrumenting on a local-first voice agent.
 

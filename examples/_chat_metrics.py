@@ -371,6 +371,33 @@ class TurnMetrics:
     # ("Novel/speculative") — the simpler "max gap" cousin of the
     # full stall-recoverability calculation.
     max_token_gap: float = 0.0
+    # iter-154: organic-turn-taking naturalness metric (backlog #8 in
+    # docs/research/organic-turn-taking.md). True when this turn's
+    # end-of-utterance decision was a *false endpoint*: the agent
+    # declared the user done and started responding, but the user
+    # actually had more to say (the EOU model / silence VAD fired too
+    # early and the user resumed). This is the headline quality metric
+    # the LiveKit turn-detector / pipecat smart-turn literature tracks
+    # ("false-endpoint rate"). Defaults False and is only populated by
+    # the organic path — the proven half-duplex silence-VAD path leaves
+    # it at its default, so the metric is purely additive. Pairs with
+    # iter-056's barge_in_regret (a *latency*-based pre-emption signal)
+    # as the *decision*-based pre-emption signal. Metric 3.22 in the
+    # perf-metrics taxonomy ("Novel/speculative").
+    false_endpoint: bool = False
+    # iter-154: organic-turn-taking naturalness metric (backlog #8).
+    # Count of user *continuer* utterances ("mhmm" / "yeah" / "right")
+    # detected during this turn's agent speech and correctly NOT
+    # treated as a turn-grab — recognized via iter-148's
+    # classify_backchannel and acted on by iter-152's
+    # decide_barge_action (CONTINUER ⇒ FINISH, hold the agent's floor).
+    # 0 on the half-duplex path (continuers aren't classified there; a
+    # barge always abandons). A non-zero count means continuer-aware
+    # listening (backlog #5) recognized active-listening signals and
+    # preserved the agent's turn instead of clipping it — the thing #5
+    # buys, now measured rather than asserted. Metric 3.23 in the
+    # perf-metrics taxonomy ("Novel/speculative").
+    continuers_detected: int = 0
     transcript: str = ""
     response: str = ""
     model: str = ""
@@ -734,6 +761,24 @@ class TurnMetrics:
                 f"  {_DIM}│{_RESET}  {color}Mic stale:     "
                 f"{self.mic_stale_frames:>5} frames ({stale_seconds:.1f}s){_RESET}"
             )
+        # iter-154: organic-turn-taking signals (backlog #8). Only
+        # emit when non-zero — the half-duplex default leaves both at
+        # their defaults, so a half-duplex turn spends no pixels here.
+        # A false endpoint is a yellow flag (the agent cut the user
+        # off by mis-deciding end-of-turn); continuers are a positive
+        # signal (the agent correctly held its floor), shown dim.
+        if self.false_endpoint:
+            print(
+                f"  {_DIM}│{_RESET}  {_YELLOW}False endpoint:"
+                f" yes{_RESET}  "
+                f"({_DIM}user wasn't done — EOU fired early{_RESET})"
+            )
+        if self.continuers_detected > 0:
+            print(
+                f"  {_DIM}│{_RESET}  {_DIM}Continuers:    "
+                f"{self.continuers_detected:>5}{_RESET}  "
+                f"({_DIM}backchannels held the floor{_RESET})"
+            )
         print(f"  {_DIM}│{_RESET}")
         ttfs_color = _GREEN if self.ttfs < 3.0 else _YELLOW
         # iter-053: append naturalness bucket as a parenthetical
@@ -981,6 +1026,84 @@ def _emit_barge_block(emit, stats: BargeStats) -> None:
             f"{stats.preempted_total} total "
             f"({stats.barge_turns_with_loss}/{stats.barges_total} barges, "
             f"{avg:.0f} avg/loss)"
+        )
+
+
+@dataclass
+class OrganicStats:
+    """iter-154: aggregated organic-turn-taking naturalness counters
+    consumed by ``_emit_organic_block`` (backlog #8 in
+    ``docs/research/organic-turn-taking.md``).
+
+    The organic track (backlog #1/#5/#7) shipped its decision seams
+    behind an off-by-default full-duplex gate; this is the measurement
+    surface that lets the track be *measured, not asserted* once the
+    seams are wired in. Each new organic-side metric extends the
+    dataclass instead of growing ``_emit_organic_block``'s signature.
+
+    Fields mirror the names in ``print_session_summary``'s body:
+      ``false_endpoints`` (iter-154): turns where the EOU decision
+        fired early and the user actually had more to say — the
+        headline false-endpoint count the turn-detector literature
+        tracks.
+      ``continuers_total`` (iter-154): cumulative user continuers
+        ("mhmm") recognized across the session and correctly NOT
+        treated as turn-grabs (iter-148 classifier + iter-152
+        decision). Validates continuer-aware listening (#5) is
+        actually buying floor-holds.
+      ``n`` (iter-154): total completed turns — denominator for the
+        false-endpoint rate.
+    """
+
+    false_endpoints: int = 0
+    continuers_total: int = 0
+    n: int = 0
+
+
+def _emit_organic_block(emit, stats: OrganicStats) -> None:
+    """iter-154: render the organic-turn-taking naturalness lines
+    (backlog #8).
+
+    Renders, when there is anything to show:
+      - False-endpoint rate: false_endpoints/turns (the EOU
+        mis-decision rate — the agent declared the user done early).
+      - Continuers held: total continuers recognized and not treated
+        as turn-grabs (the win continuer-aware listening buys).
+
+    **Fully suppressed when both counters are zero** — which is the
+    half-duplex default, so existing sessions print byte-for-byte the
+    same summary they did before iter-154. The block only appears once
+    the organic path is wired in and starts populating the per-turn
+    ``false_endpoint`` / ``continuers_detected`` fields.
+    """
+    if stats.false_endpoints <= 0 and stats.continuers_total <= 0:
+        return
+
+    emit(f"    {_BOLD}Organic turn-taking:{_RESET}")
+    # False-endpoint rate — the EOU mis-decision rate. Yellow framing
+    # via the suggestion text; a high rate means the endpoint signal
+    # is too eager (the agent keeps cutting the user off).
+    if stats.false_endpoints > 0 and stats.n > 0:
+        pct = (stats.false_endpoints / stats.n) * 100
+        line = (
+            f"    False endpoints:  "
+            f"{stats.false_endpoints}/{stats.n} turns ({pct:.0f}%)"
+        )
+        # >20% of turns mis-ending is a real problem — the endpoint
+        # heuristic is firing before the user is done.
+        if pct > 20:
+            line += " — EOU too eager; raise silence_duration"
+        emit(line)
+    elif stats.false_endpoints > 0:
+        # n unknown (shouldn't happen from the live path, but keep the
+        # count visible rather than dropping it silently).
+        emit(f"    False endpoints:  {stats.false_endpoints}")
+    # Continuers held — the positive signal: active-listening
+    # backchannels that correctly did NOT abandon the agent's turn.
+    if stats.continuers_total > 0:
+        emit(
+            f"    Continuers held:  {stats.continuers_total} "
+            f"(backchannels kept the floor)"
         )
 
 
@@ -2372,6 +2495,14 @@ def print_session_summary(
     barge_turns_with_loss = sum(
         1 for m in metrics_list if m.preempted_words > 0
     )
+    # iter-154: organic-turn-taking naturalness aggregates (backlog
+    # #8). Both stay 0 on the half-duplex path (the per-turn fields
+    # are only populated once the organic seams are wired in), so the
+    # organic block is fully suppressed for today's sessions.
+    false_endpoints_total = sum(
+        1 for m in metrics_list if m.false_endpoint
+    )
+    continuers_total = sum(m.continuers_detected for m in metrics_list)
     # iter-057: total seconds of audio carried over via primed frames.
     # iter-058: total worker errors across the session (sum of
     # per-turn worker_errors counts).
@@ -2729,6 +2860,17 @@ def print_session_summary(
             regret_barges=regret_barges,
             preempted_total=preempted_total,
             barge_turns_with_loss=barge_turns_with_loss,
+        ),
+    )
+    # iter-154: organic-turn-taking naturalness block (backlog #8).
+    # Fully suppressed when both counters are zero — the half-duplex
+    # default — so today's summaries are byte-for-byte unchanged.
+    _emit_organic_block(
+        _emit,
+        OrganicStats(
+            false_endpoints=false_endpoints_total,
+            continuers_total=continuers_total,
+            n=n,
         ),
     )
     # iter-057: total seconds of audio carried over by the watcher
