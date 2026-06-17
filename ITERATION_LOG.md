@@ -14681,3 +14681,83 @@ flag, and the `ChatLoop`→`run_session` wiring follow-on.
     (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
     on a committed `baseline.json`; diversity-check surface paused per
     iter-143/144.
+
+## iter-166 — wire iter-165's idle_timeout through ChatLoop (backlog #9, wiring hop 1)
+
+**Branch:** `iter-166-idle-wiring` (merged ff to main, commit `683be28`)
+**Date:** 2026-06-17
+
+**Goal:** Take the first of the two named wiring hops from iter-165 — thread the
+recorder's pre-speech `idle_timeout` mechanism through `ChatLoop.__init__` and
+surface the recorder's `idle_timed_out` side-band flag on `TurnResult`, so the
+still-pending `run_session` consumer can tell a deliberate inter-turn idle
+timeout apart from a VAD false trigger.
+
+**Why:** iter-165 added `idle_timeout` to `record_utterance_streaming` but left
+it inert — *no call site passed it*, so the recorder still blocked forever
+waiting for speech. The decision (`decide_silence_flush`, iter-164) and the
+mechanism (`idle_timeout`, iter-165) both exist, but nothing connects them to
+the live loop yet. The wiring is two hops: (1) `ChatLoop` passes the timeout to
+the recorder and exposes whether it fired; (2) `run_session` reads that signal,
+measures the inter-turn silence, and flushes a held fragment. This lap ships hop
+1 — the smaller, fully-testable increment — leaving hop 2 as the explicit
+follow-on, the same decision-seam/mechanism-first rhythm as iter-152/153/164/165.
+
+**What changed:** `examples/_chat_loop.py`:
+
+1. **`ChatLoop.__init__(..., idle_timeout: Optional[float] = None, ...)`** —
+   stored as `self._idle_timeout` and passed straight into the
+   `record_utterance_streaming(...)` call in `run_one_turn`. `None` (default) is
+   the wait-forever path, byte-for-byte the pre-iter-166 behavior.
+
+2. **`TurnResult.idle_timed_out: bool = False`** — the empty-wav return path now
+   reads `rec_metrics.get("idle_timed_out", False)` and stamps it onto the
+   `TurnResult`. So a no-metrics turn is now one of THREE distinguishable
+   causes: a held mid-thought fragment (`held=True`, iter-161), a deliberate
+   pre-speech idle timeout (`idle_timed_out=True`, this lap), or a genuine VAD
+   false trigger (neither flag). `run_session` (hop 2) needs exactly this
+   distinction: only the idle-timeout cause should drive a mid-session flush;
+   a false trigger should just re-listen.
+
+3. **No runtime behavior change.** No production call site passes `idle_timeout`,
+   so the recorder still waits forever and `idle_timed_out` is always `False`.
+   The new behavior is entirely opt-in and only meaningful alongside an injected
+   aggregator with merging on.
+
+**+4 tests** (`tests/unit/test_chat_loop.py`, `TestIdleTimeoutWiring`):
+default-None waits for speech and never flags; `idle_timeout` set fires on pure
+pre-speech silence (no-metrics TurnResult flagged, LLM never reached, speaker
+never opened, no user message appended); speech-before-timeout records normally
+and stays unflagged; a real VAD false trigger (no `idle_timeout`) returns no
+metrics with `idle_timed_out=False` — pinning the false-trigger-vs-timeout
+distinction. The timeout fires off the recorder's frame-aligned virtual clock,
+so it is deterministic under the default `time.monotonic` (a silence-padding
+`VirtualMicStream` elapses the virtual window within a bounded read count, no
+clock injection needed).
+
+**Discoverability:** iter-166 findings-log entry + backlog #9 row update in
+`docs/research/organic-turn-taking.md`; README Research section names the
+`ChatLoop` `idle_timeout` ctor arg, `TurnResult.idle_timed_out`, the
+three-distinguishable-causes framing, and the `run_session` follow-on.
+
+**Verification:**
+- `python -m pytest tests/unit/test_chat_loop.py -q` → **16 passed**
+  (12 prior + 4 net new).
+- Full unit suite (in worktree, pre-merge): **2256 passed** (2252 prior + 4).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `python -W error::SyntaxWarning -m py_compile examples/_chat_loop.py` clean.
+
+**Notes:**
+- Next directions:
+  - **Hop 2 — wire `TurnResult.idle_timed_out` into `run_session`** (the live
+    half): on an idle-timeout turn, measure the inter-turn silence since the
+    buffer last held, feed it to `should_flush_held_utterance` (iter-164), and
+    respond to the flushed fragment as its own turn before the next
+    `[N] waiting...`. That closes backlog #9's mid-session flush end-to-end.
+  - Wire the still-pending `should_abandon_turn` (iter-152) into the `mic_chat`
+    barge path and `should_emit_backchannel` (iter-153) into the live cue path,
+    both behind their full-duplex sub-flags.
+  - Carried over (off-track): the CI workflow
+    (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
+    on a committed `baseline.json`; diversity-check surface paused per
+    iter-143/144.
