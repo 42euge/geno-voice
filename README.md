@@ -266,7 +266,19 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   `GENO_FULL_DUPLEX_UTTERANCE_MERGING`): with a default config it returns
   `NEW` for every input, byte-for-byte today's "each endpoint is its own
   turn" behavior. This is the decision that *avoids* the false endpoints
-  the iter-154 `false_endpoint` metric *counts*.
+  the iter-154 `false_endpoint` metric *counts*. Also shipped: the
+  **stateful utterance buffer** (`session/utterance_buffer.py`,
+  `tests/unit/test_utterance_buffer.py`) — the live-loop driver that wraps
+  the stateless merge decision in the hold-and-merge *state* an STT loop
+  needs. `UtteranceBuffer.offer(text, gap_secs)` holds an
+  unfinished-looking utterance, merges a quick continuation onto it, and
+  emits finished turns as `EmittedTurn(text, false_endpoint)`; `flush()`
+  releases a held pending when no continuation arrives. Each merged turn
+  carries `false_endpoint=True` so the caller sets `TurnMetrics.false_endpoint`
+  and iter-154's metric finally populates from the live path. With a default
+  config the buffer is a **transparent zero-latency passthrough** — every
+  `offer` emits immediately, nothing is ever held, `flush` is always empty —
+  so the proven half-duplex path is byte-for-byte unchanged.
 - **[Performance metrics taxonomy](docs/perf-metrics-taxonomy.md)** — a
   catalog of metrics worth instrumenting on a local-first voice agent.
 
