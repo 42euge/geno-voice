@@ -14090,3 +14090,97 @@ logic the track keeps pure and tested. So this lap isolates that fold in
     (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
     on a committed `baseline.json`; diversity-check surface paused per
     iter-143/144.
+
+## iter-160 — flush UtteranceAggregator on shutdown (backlog #9 follow-on)
+
+**Branch:** `iter-160-flush` (merged ff to main, commit `51bed4d`)
+**Date:** 2026-06-16
+
+**Goal:** iter-159 wired `UtteranceAggregator` into the live `ChatLoop` and named
+the exact next direction — *call `aggregator.flush()` on long inter-turn silence
+/ shutdown so a held mid-thought fragment isn't stranded.* This lap implements
+the shutdown half of that hook.
+
+**Why:** iter-159 made the aggregator live in `run_one_turn`, but a *held*
+mid-thought fragment only ever surfaces when the **next** utterance arrives — its
+measured silence gap forces a `NEW` release inside `offer`. The one path `offer`
+can never reach is **session shutdown**: the user trails off after an
+unfinished-looking fragment, never speaks again, and hits Ctrl+C. That text sits
+in the buffer's `_pending` and is silently lost. The inter-turn / shutdown
+boundary is owned by `run_session` (not `run_one_turn`, which only sees one
+utterance), so the flush hook belongs there — exactly as iter-159 predicted.
+
+**What changed:**
+
+1. **`examples/_chat_session.py` — flush-on-exit hook.** `run_session` gains an
+   off-by-default `aggregator=None` param. After the `KeyboardInterrupt` exit
+   path, if an aggregator was passed it calls `aggregator.flush()`, folds the
+   released turns through the existing `resolve_turn` helper, and records the
+   joined text on the new `SessionState.stranded_utterance` field. A misbehaving
+   aggregator's `flush()` exception is swallowed so it can never mask the summary
+   the operator is about to read. None / nothing-held / half-duplex (never holds)
+   all leave `stranded_utterance` at `None`.
+
+2. **`SessionState.stranded_utterance: Optional[str]`** (new field, default
+   `None`) — the held fragment surfaced at shutdown, or `None` for the common
+   case.
+
+3. **`examples/mic_chat.py` — wiring.** `run_chat` passes the same `aggregator`
+   it already builds (from `full_duplex_config_from_env()`) to `run_session`, and
+   threads `state.stranded_utterance` into `SessionMeta.stranded_utterance`.
+
+4. **`examples/_chat_metrics.py` — surfacing.** `SessionMeta` gains a
+   `stranded_utterance` field (SessionMeta-only, no legacy kwarg path).
+   `print_session_summary` emits via the new `_emit_stranded_utterance_line`
+   helper — suppressed (the common case) unless a fragment was actually held, and
+   surfaced on **both** the normal path and the no-completed-turns early return (a
+   user can strand a fragment without completing any turn). The line names
+   `iter-160` for `grep` and quotes the text, mirroring the iter-114+ session-
+   summary line conventions.
+
+5. **Half-duplex / `aggregator=None` unchanged.** A default `FullDuplexConfig`
+   never holds, so `flush` releases nothing and `stranded_utterance` stays `None`
+   — byte-for-byte today's behavior. Every existing `run_session` call site that
+   passes no aggregator is untouched.
+
+6. **+19 tests.**
+   - `tests/unit/test_chat_session.py` (+8): no-aggregator-leaves-None,
+     flush-always-called-even-with-nothing-held, held-fragment-recorded,
+     blank-turn-collapses-to-None, flush-exception-swallowed (+ completed turn
+     still lands), recorded-after-completed-turns; plus two **real**
+     `UtteranceAggregator` integrations — organic mode strands a held fragment on
+     exit (and flush resets `pending`), half-duplex never strands.
+   - `tests/unit/test_stranded_utterance_line.py` (new, +11): helper suppression
+     (None/empty/whitespace), emission + formatting (quoted, stripped, names
+     iter-160, explains mid-thought), and `print_session_summary` integration on
+     both the normal and zero-turn early-return paths.
+
+7. **Discoverability:** iter-160 findings-log entry + backlog #9 row update in
+   `docs/research/organic-turn-taking.md`; README Research section names the
+   shutdown flush, `SessionState.stranded_utterance`, and
+   `_emit_stranded_utterance_line`.
+
+**Verification:**
+- `python -m pytest tests/unit/test_chat_session.py tests/unit/test_stranded_utterance_line.py -q` → **33 passed** (re-run on main post-merge).
+- Full unit suite (in worktree, pre-merge): **2164 passed** (2145 prior + 8 + 11).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `py_compile` of `_chat_session.py` / `_chat_metrics.py` / `mic_chat.py` clean.
+
+**Notes:**
+- **No runtime behavior change for today's sessions.** The flush only releases
+  text in organic mode (merging on), which is off by default; in half-duplex the
+  buffer never holds, so flush is always empty. The summary line is suppressed
+  unless a fragment was genuinely stranded.
+- Next directions:
+  - **Mid-session long-silence flush:** also flush on a long *inter-turn* silence
+    (not just shutdown) so a trailed-off fragment is fed to the engine as its own
+    turn before the user starts a genuinely new thought. Needs `run_session` to
+    measure the inter-turn gap (today it reads no clock between turns) — a natural
+    follow-on now that the shutdown flush exists.
+  - Wire the still-pending `should_abandon_turn` (iter-152) into the `mic_chat`
+    barge path and `should_emit_backchannel` (iter-153) into the live cue path,
+    both behind their full-duplex sub-flags.
+  - Carried over (off-track): the CI workflow
+    (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
+    on a committed `baseline.json`; diversity-check surface paused per
+    iter-143/144.
