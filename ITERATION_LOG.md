@@ -16628,3 +16628,89 @@ silently-broken → operator-visible-warning → crash-on-bad-construction spect
     — both still blocked only on the absent pipecat dep on the x86_64 runner.
   - Carried over (off-track): the CI workflow still blocked on a committed
     `baseline.json`; diversity-check surface paused per iter-143/144.
+
+---
+
+## iter-189 — headless VAD replay harness over the real recording corpus
+
+**Branch:** `iter-189-vad-replay` (merged ff to main, commit `1adf824`)
+**Date:** 2026-06-17
+
+**Operator steering (recording-driven voice-capture improvement):** This
+lap bootstraps the pivot to improving the capture/VAD/latency system using
+the growing corpus of REAL desktop-app recordings in
+`fixtures/recordings/*.wav` (+ sibling `.json` metadata). STEER.md deleted
+at end of lap (bootstrap complete; backlog seeded below for subsequent laps).
+
+What changed:
+- **`fixtures/replay_vad.py`** — headless ground-truth harness. Loads each
+  recording WAV, frames it like `ContinuousListener` (1024-sample frames),
+  computes per-frame RMS, and simulates the JS VAD state machine (onset
+  debounce + silence timeout + min-speech drop) for a given parameter set
+  (`VadParams`: threshold, debounce_ms, silence_ms, min_speech_ms, gain,
+  frame_size). Per recording it reports onsets, speaking-frames,
+  %-over-threshold, peak/mean/median RMS, detected segments, and whether the
+  known speech (`.json` peak_rms) would have triggered. CLI (`--threshold`,
+  `--gain`, `--json`, …) + library API (`replay_recording`, `replay_all`).
+- **`tests/unit/test_replay_vad.py`** — 20 fast, deterministic tests over
+  synthetic WAVs (no corpus needed): `frame_rms` (empty, silence, constant
+  amplitude, trailing partial frame, gain scaling, invalid frame size); the
+  state machine (all-silence, sustained commit, sub-debounce blip, committed-
+  but-too-short drop, long-silence split, short-silence no-split, EOF close,
+  low-threshold catches quiet speech); and `replay_recording` end-to-end
+  (trigger, silence no-trigger, meta-driven verdict, missing/corrupt meta
+  tolerance, mono roundtrip).
+- **`tests/integration/test_vad_recordings.py`** — turns every real recording
+  into a regression test at production threshold 0.006: ≥1 onset, ≥30
+  speaking frames, known-speech-would-trigger, frames-clear-the-gate, plus a
+  `TestThresholdRegression` guard (0.006 must never detect fewer onsets than
+  the old 0.015 default) and a non-trivial-corpus sanity check. **Skips
+  cleanly** when the corpus is absent (recordings are rsync'd onto the loop
+  host, not committed — large binaries). Harness logic stays covered by the
+  unit tests regardless.
+- **`docs/research/voice-capture-tuning.md`** — living doc: per-recording RMS
+  table, the latency finding, threshold justification, prioritized backlog.
+  Added to mkdocs nav.
+
+**Ground-truth findings (seed corpus, 4 recordings):**
+- Huge signal/silence separation: median RMS ~0.0003 (silence floor), speech
+  peaks 0.04–0.08. The 0.006 gate sits an order of magnitude above the floor.
+- **Threshold 0.006 recovers all 4 recordings; 0.015 misses one.** The long
+  far-field session `voice-20260617-135015` (mean RMS 0.00047, 18.6 min)
+  detects 0 onsets at 0.015 (0.1% frames over) but 5 onsets / 546 speaking
+  frames at 0.006. Empirical justification for the client's lowered threshold,
+  now pinned by `TestThresholdRegression`.
+- **Latency is the dominant remaining bug:** `click_to_capture_ms` is 3.1–5.1s
+  across the corpus. The replay sees healthy speech (it replays the whole
+  recording); the live client only captures after getUserMedia + AudioWorklet
+  cold-start, forfeiting the opening of every utterance.
+
+**Verification:**
+- Replay against the REAL corpus via temp symlink: `tests/integration/
+  test_vad_recordings.py` → **21 passed in 3.19s**.
+- Committed state (no corpus present): **6 skipped** (clean skip).
+- `python -m pytest tests/unit/` → **2616 passed** (2596 prior + 20 new).
+- `python -m pytest tests/integration/` → **30 passed, 7 skipped**.
+- (`tests/test_session.py` still errors on collection — pre-existing missing
+  `pipecat` dep, not a regression.)
+
+**Next planned items (seeded backlog from the research doc — subsequent laps
+need no re-steer):**
+1. **[latency, highest value] Pre-warm the capture pipeline** — create the
+   AudioContext + `addModule()` the worklet at app load / first gesture so
+   `ContinuousListener.start()` only flips the active flag. Needs an on-device
+   timing harness (cold-start cost can't be replayed); measure new
+   `click_to_capture_ms` against the corpus baseline.
+2. **[latency] Rolling pre-roll buffer** — keep a 1–2s ring buffer of
+   pre-onset audio so the committed segment includes speech that arrived
+   during the debounce window (today `_speechCandidate` discards it).
+   Replay-testable: assert first segment `onset_ms` moves earlier.
+3. **[threshold] Re-run `replay_vad.py` on newly-synced recordings each lap;**
+   if any new recording misses at 0.006, investigate before lowering further.
+4. **[gain] Sweep `--gain` vs. false-trigger rate** on the silence floor —
+   modest gain (1.5–2×) may recover quietest far-field frames while keeping
+   the threshold conservative.
+5. **[debounce] Sweep `--debounce-ms`** (200→100ms) — wide signal separation
+   suggests a shorter debounce is safe and clips less utterance opening.
+6. **[silence] Revisit the 800ms silence timeout** if new recordings show
+   truncated or run-on turns.
