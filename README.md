@@ -302,10 +302,13 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   had more to say) and `continuers_detected` (user backchannels that
   correctly held the agent's floor), surfaced per-turn and as a session
   summary "Organic turn-taking" block (false-endpoint rate + continuers
-  held). Both default off and stay zero on the half-duplex path, so the
-  block is fully suppressed and today's summaries are byte-for-byte
-  unchanged; the track becomes *measured, not asserted* once the seams
-  are wired in. Also shipped: the **utterance buffer-merge decision**
+  held + utterances held/capped + **agent backchannels emitted**, iter-175
+  — the agent-side mirror of the user-continuer count, the lifetime
+  `emit_count` off the `BackchannelDriver`/`BackchannelMonitor` so #7's
+  emission is *measured, not asserted*). All counters default off and stay
+  zero on the half-duplex path, so the block is fully suppressed and
+  today's summaries are byte-for-byte unchanged; the track becomes
+  *measured, not asserted* once the seams are wired in. Also shipped: the **utterance buffer-merge decision**
   (`session/utterance_merging.py`,
   `tests/unit/test_utterance_merging.py`) — the *user*-side half of
   utterance queueing that complements the agent-side abandon-vs-finish

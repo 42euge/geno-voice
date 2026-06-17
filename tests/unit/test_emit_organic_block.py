@@ -70,6 +70,7 @@ class TestOrganicStatsDefaults:
         assert s.n == 0
         assert s.utterances_held == 0
         assert s.merges_capped == 0
+        assert s.backchannels_emitted == 0
 
 
 # ---- Utterances held (iter-161) ---------------------------------
@@ -157,6 +158,58 @@ class TestMergesCapped:
         assert any("Continuers held:  1" in ln for ln in lines)
         assert any("Utterances held:  3" in ln for ln in lines)
         assert any("Merges capped:    1" in ln for ln in lines)
+
+
+# ---- Backchannels emitted (iter-175) ----------------------------
+
+
+class TestBackchannelsEmitted:
+    def test_emitted_alone_emits_block_and_line(self):
+        # A session that only emitted agent backchannels (no false
+        # endpoints, no continuers, no holds/caps) still surfaces the
+        # count under the header.
+        emit, lines = _capture()
+        _emit_organic_block(emit, OrganicStats(backchannels_emitted=4, n=5))
+        assert any("Organic turn-taking:" in ln for ln in lines)
+        assert any(
+            "Backchannels:     4 (agent mid-speech cues — active listening)"
+            in ln
+            for ln in lines
+        )
+
+    def test_emitted_zero_omits_line(self):
+        emit, lines = _capture()
+        _emit_organic_block(emit, OrganicStats(false_endpoints=1, n=5))
+        assert not any("Backchannels:" in ln for ln in lines)
+
+    def test_emitted_alone_does_not_emit_other_lines(self):
+        emit, lines = _capture()
+        _emit_organic_block(emit, OrganicStats(backchannels_emitted=2))
+        assert not any("False endpoints" in ln for ln in lines)
+        assert not any("Continuers held" in ln for ln in lines)
+        assert not any("Utterances held" in ln for ln in lines)
+        assert not any("Merges capped" in ln for ln in lines)
+
+    def test_emitted_with_other_signals_under_one_header(self):
+        emit, lines = _capture()
+        _emit_organic_block(
+            emit,
+            OrganicStats(
+                false_endpoints=1,
+                continuers_total=2,
+                utterances_held=3,
+                merges_capped=1,
+                backchannels_emitted=5,
+                n=10,
+            ),
+        )
+        headers = [ln for ln in lines if "Organic turn-taking:" in ln]
+        assert len(headers) == 1
+        assert any("False endpoints:  1/10 turns" in ln for ln in lines)
+        assert any("Continuers held:  2" in ln for ln in lines)
+        assert any("Utterances held:  3" in ln for ln in lines)
+        assert any("Merges capped:    1" in ln for ln in lines)
+        assert any("Backchannels:     5" in ln for ln in lines)
 
 
 # ---- No-data path (the half-duplex default) ---------------------
@@ -388,3 +441,44 @@ class TestHeldSummaryWiring:
         )
         assert "VAD false-trig" not in out
         assert "Utterances held:  2" in out
+
+
+# ---- print_session_summary wiring of backchannels (iter-175) ----
+
+
+class TestBackchannelsSummaryWiring:
+    def test_default_meta_omits_backchannel_line(self):
+        # SessionMeta() defaults backchannels_emitted=0 → no line, no block.
+        out = _summary_meta(
+            [TurnMetrics(ttfs=0.5, transcript="hi")],
+            SessionMeta(),
+        )
+        assert "Backchannels:" not in out
+        assert "Organic turn-taking" not in out
+
+    def test_backchannels_via_meta_surfaces_in_summary(self):
+        out = _summary_meta(
+            [TurnMetrics(ttfs=0.5, transcript="hi")],
+            SessionMeta(backchannels_emitted=3),
+        )
+        assert "Organic turn-taking:" in out
+        assert "Backchannels:     3 (agent mid-speech cues — active listening)" in out
+
+    def test_backchannels_surface_on_zero_turn_early_return(self):
+        # A session that emitted agent backchannels but completed zero
+        # turns still shows the count on the no-completed-turns path.
+        out = _summary_meta([], SessionMeta(backchannels_emitted=2))
+        assert "Session ended (no completed turns)" in out
+        assert "Backchannels:     2" in out
+
+    def test_backchannels_alongside_continuers_both_surface(self):
+        # The agent-side count and the user-side continuer count are
+        # distinct lines under one header (mirror signals).
+        out = _summary_meta(
+            [TurnMetrics(ttfs=0.5, continuers_detected=4)],
+            SessionMeta(backchannels_emitted=3),
+        )
+        headers = [ln for ln in out.splitlines() if "Organic turn-taking:" in ln]
+        assert len(headers) == 1
+        assert "Continuers held:  4" in out
+        assert "Backchannels:     3" in out

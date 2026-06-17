@@ -15510,3 +15510,78 @@ shim.
     (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
     on a committed `baseline.json`; diversity-check surface paused per
     iter-143/144.
+
+## iter-175 — agent-backchannel emission count in the session summary (backlog #8)
+
+**Branch:** `iter-175-backchannel-emit-metric` (merged ff to main)
+**Date:** 2026-06-17
+
+**Goal:** Give the #8 measurement surface (the "Organic turn-taking" session-
+summary block) a line for the *agent's own* mid-speech backchannels — the
+lifetime `emit_count` the #7 `BackchannelDriver` / `BackchannelMonitor` already
+track but that nothing surfaced.
+
+**Why:** Backlog #7's pure stack is complete and composed
+(iter-153/170/171/172/173/174) and the live `pipecat_server.py` `Broadcaster`
+wiring is pipecat-blocked on the x86_64 runner. But the #8 measurement surface
+(`_emit_organic_block`, iter-154) had **no presence for the agent's
+backchannels**. It measured the false-endpoint rate + the *user's* continuers
+held (iter-154), held/displaced utterances (iter-161), and merge caps
+(iter-163) — but the *agent's* mid-speech "mhmm"s, the entire point of #7, were
+invisible. So the moment the live path lights up, #7's emission would be
+*asserted, not measured*. The metric is the natural agent-side mirror of the
+existing user-side "Continuers held" line, and adding it now (a) follows the
+iter-154/161/163 "extend `OrganicStats`, add a guarded line" rhythm, (b) is
+fully unblocked (pure summary code, no pipecat), and (c) gives the future live
+wiring a ready slot (`SessionMeta.backchannels_emitted`) to populate from
+`driver.emit_count`.
+
+**What changed (`examples/_chat_metrics.py`):**
+
+1. **`OrganicStats.backchannels_emitted: int = 0`** — new counter, documented as
+   the lifetime `emit_count` off the organic driver and the agent-side mirror of
+   `continuers_total`.
+2. **`_emit_organic_block`** — the all-zero suppression guard now also checks
+   `backchannels_emitted`, and a new guarded line renders
+   `Backchannels:     N (agent mid-speech cues — active listening)` when N > 0.
+   The block stays fully suppressed (byte-for-byte unchanged summary) on the
+   half-duplex / no-driver path where every counter is zero.
+3. **`SessionMeta.backchannels_emitted: int = 0`** — SessionMeta-only (no legacy
+   kwarg path), threaded through the `meta_eff` resolution and the local rebind.
+4. **`print_session_summary`** wires it to both the main `_emit_organic_block`
+   call and the **zero-completed-turns early return** (a session can backchannel
+   a long user monologue then hit Ctrl+C before any turn completes, so the count
+   must survive that path too).
+
+**+8 tests** (`tests/unit/test_emit_organic_block.py`): the `OrganicStats`
+default; emitted-alone emits block + exact line; zero omits the line;
+emitted-alone suppresses the other lines; all five signals under one header;
+default-meta omits the block; meta surfaces the line; surfaces on the zero-turn
+early return; alongside continuers both lines appear under one header.
+
+**Discoverability:** iter-175 findings-log entry + backlog #8 row update in
+`docs/research/organic-turn-taking.md`; README Research section now names the
+agent-backchannel "Backchannels" line as the agent-side mirror of the
+user-continuer count.
+
+**Verification:**
+- `python -m pytest tests/unit/test_emit_organic_block.py -q` → **43 passed**
+  (35 prior + 8).
+- Full unit suite (in worktree, pre-merge): **2382 passed** (2374 prior + 8).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `python -W error::SyntaxWarning -m py_compile examples/_chat_metrics.py`
+  clean.
+- (`tests/test_session.py` still errors on collection — `ModuleNotFoundError:
+  pipecat` — pre-existing on main, not a regression.)
+
+**Notes:**
+- Next directions:
+  - **Live mid-speech cue wiring for #7** — feed the VAD frames to a
+    `BackchannelDriver` in `pipecat_server.py`'s `Broadcaster`, `broadcast_cue`
+    on emit, and surface `driver.emit_count` into the
+    `SessionMeta.backchannels_emitted` slot this lap added. Still blocked only on
+    the absent pipecat dep on the x86_64 runner.
+  - **Live barge-path wiring for #5** — `should_abandon_turn` (iter-152) into
+    the `mic_chat` barge path; blocked on no transcript at VAD-trigger time.
+  - Carried over (off-track): the CI workflow still blocked on a committed
+    `baseline.json`; diversity-check surface paused per iter-143/144.

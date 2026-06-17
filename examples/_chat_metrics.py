@@ -1094,6 +1094,17 @@ class OrganicStats:
         so iter-157's promised "bounded, OBSERVABLE delay" is visible
         rather than silent. A recurring count means the merge window /
         completeness scorer is mistuned for this speaker.
+      ``backchannels_emitted`` (iter-175): how many mid-speech *agent*
+        backchannels ("mhmm" / "i see" / "right" ...) the organic
+        ``BackchannelMonitor`` / ``BackchannelDriver`` (#7, iter-170+)
+        emitted during the session — the lifetime ``emit_count`` off the
+        driver. The mirror of ``continuers_total``: that counts the
+        *user's* continuers we held the floor through; this counts the
+        *agent's* active-listening cues emitted *during* the user's
+        speech. #7 shipped the whole pure stack (when/which/inputs/
+        composition) but had no presence in the measurement surface, so
+        the agent's backchannelling was invisible in the summary. 0 on
+        the half-duplex / no-driver path (the driver never emits).
     """
 
     false_endpoints: int = 0
@@ -1101,6 +1112,7 @@ class OrganicStats:
     n: int = 0
     utterances_held: int = 0
     merges_capped: int = 0
+    backchannels_emitted: int = 0
 
 
 def _emit_organic_block(emit, stats: OrganicStats) -> None:
@@ -1118,19 +1130,24 @@ def _emit_organic_block(emit, stats: OrganicStats) -> None:
       - Merges capped (iter-163): turns the max_merge_depth backstop
         force-emitted while still mid-thought — iter-157's cap firing,
         now observable rather than silent.
+      - Backchannels emitted (iter-175): mid-speech agent backchannels
+        the organic driver emitted — the agent's active-listening
+        signal, mirror of the user's "Continuers held" line.
 
     **Fully suppressed when all counters are zero** — which is the
     half-duplex default, so existing sessions print byte-for-byte the
     same summary they did before iter-154. The block only appears once
     the organic path is wired in and starts populating the per-turn
     ``false_endpoint`` / ``continuers_detected`` fields (or holds a
-    mid-thought utterance, iter-161; or hits the merge cap, iter-163).
+    mid-thought utterance, iter-161; or hits the merge cap, iter-163;
+    or the agent emits a backchannel, iter-175).
     """
     if (
         stats.false_endpoints <= 0
         and stats.continuers_total <= 0
         and stats.utterances_held <= 0
         and stats.merges_capped <= 0
+        and stats.backchannels_emitted <= 0
     ):
         return
 
@@ -1183,6 +1200,18 @@ def _emit_organic_block(emit, stats: OrganicStats) -> None:
             f"    Merges capped:    {stats.merges_capped} "
             f"(hit max_merge_depth still mid-thought — retune merge "
             f"window/EOU; iter-157 cap)"
+        )
+    # iter-175: mid-speech agent backchannels emitted by the organic
+    # BackchannelMonitor/BackchannelDriver (#7). The agent's
+    # active-listening signal — the mirror of "Continuers held" above
+    # (the user's continuers). Surfaced so #7's emission is measured,
+    # not asserted: a session running organic agent-backchannels can now
+    # see how many "mhmm"s the agent actually placed during user speech.
+    # 0 (no line) on the half-duplex / no-driver path.
+    if stats.backchannels_emitted > 0:
+        emit(
+            f"    Backchannels:     {stats.backchannels_emitted} "
+            f"(agent mid-speech cues — active listening)"
         )
 
 
@@ -2514,6 +2543,14 @@ class SessionMeta:
     # ``utterances_displaced`` (new-thought displacement). Empty for the common
     # case — no idle timeout wired, no flush decider, or half-duplex.
     flushed_utterances: list[str] = field(default_factory=list)
+    # iter-175: lifetime count of mid-speech agent backchannels the organic
+    # BackchannelMonitor / BackchannelDriver (#7, iter-170+) emitted during
+    # the session — the driver's ``emit_count``. The agent-side mirror of
+    # ``utterances_held`` / the user-continuer count: surfaced in the
+    # organic-turn-taking summary block so #7's emission is measured, not
+    # asserted. 0 on the half-duplex / no-driver path (the driver never
+    # emits). SessionMeta-only — no legacy kwarg path.
+    backchannels_emitted: int = 0
 
 
 def print_session_summary(
@@ -2591,6 +2628,8 @@ def print_session_summary(
             utterances_displaced=meta.utterances_displaced,
             # iter-167: mid-session idle-flushed fragments — SessionMeta-only.
             flushed_utterances=meta.flushed_utterances,
+            # iter-175: agent backchannel emit count — SessionMeta-only.
+            backchannels_emitted=meta.backchannels_emitted,
         )
     else:
         meta_eff = SessionMeta(
@@ -2614,6 +2653,8 @@ def print_session_summary(
     utterances_displaced = meta_eff.utterances_displaced
     # iter-167: mid-thought fragments flushed mid-session on idle silence.
     flushed_utterances = meta_eff.flushed_utterances
+    # iter-175: lifetime agent-backchannel emit count from the organic driver.
+    backchannels_emitted = meta_eff.backchannels_emitted
 
     def _emit(line: str = "") -> None:
         if file is None:
@@ -2632,7 +2673,17 @@ def print_session_summary(
         # held count here too so it isn't dropped on the early return —
         # false_endpoints/continuers are necessarily 0 with no turns, so
         # the block only shows the held line.
-        _emit_organic_block(_emit, OrganicStats(utterances_held=utterances_held))
+        # iter-175: a zero-turn session can still have emitted agent
+        # backchannels (the user spoke a long monologue the agent nodded
+        # along to, then quit before finishing a turn), so surface that
+        # count on the early return too rather than dropping it.
+        _emit_organic_block(
+            _emit,
+            OrganicStats(
+                utterances_held=utterances_held,
+                backchannels_emitted=backchannels_emitted,
+            ),
+        )
         # iter-160: even a session with zero completed turns can strand a
         # mid-thought fragment — the user spoke one unfinished utterance,
         # it was held, then they quit. Surface it before the early return.
@@ -3124,6 +3175,9 @@ def print_session_summary(
             # iter-163: merge-cap force-emits, derived from the per-turn
             # TurnMetrics.merge_capped flags.
             merges_capped=merges_capped_total,
+            # iter-175: lifetime agent-backchannel emit count from the
+            # organic driver, threaded through SessionMeta.
+            backchannels_emitted=backchannels_emitted,
         ),
     )
     # iter-057: total seconds of audio carried over by the watcher
