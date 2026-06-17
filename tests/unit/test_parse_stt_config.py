@@ -236,3 +236,78 @@ def test_irrelevant_keys_ignored():
     assert out["engine"] == "faster_whisper"
     # Defaults preserved for unrelated keys.
     assert out["model"] == ""
+
+
+class TestParseSttConfigWarn:
+    """iter-188: the optional ``warn`` callable surfaces dropped STT
+    config so a typo isn't silently swallowed by the default.
+    Mirrors the iter-187 ``parse_vad_config`` warn seam."""
+
+    def test_no_warn_by_default(self):
+        # Backwards compatible: omitting warn never raises and the
+        # return value is unchanged from the silent behavior.
+        out = parse_stt_config({"stt_engine": 5})
+        assert out["engine"] == "whisper"
+
+    def test_valid_config_emits_no_warnings(self):
+        warnings: list[str] = []
+        parse_stt_config(
+            {
+                "stt_engine": "faster_whisper",
+                "stt_model": "tiny",
+                "stt_device": "cpu",
+                "stt_compute": "int8",
+            },
+            warn=warnings.append,
+        )
+        assert warnings == []
+
+    def test_missing_keys_are_silent(self):
+        warnings: list[str] = []
+        parse_stt_config({}, warn=warnings.append)
+        assert warnings == []
+
+    def test_non_mapping_chat_is_silent(self):
+        warnings: list[str] = []
+        parse_stt_config(None, warn=warnings.append)
+        assert warnings == []
+
+    def test_wrong_type_warns(self):
+        warnings: list[str] = []
+        out = parse_stt_config({"stt_engine": 5}, warn=warnings.append)
+        assert out["engine"] == "whisper"
+        assert len(warnings) == 1
+        assert "stt_engine" in warnings[0]
+        assert "5" in warnings[0]
+        assert "whisper" in warnings[0]  # the default
+
+    def test_empty_string_warns(self):
+        warnings: list[str] = []
+        parse_stt_config({"stt_model": "   "}, warn=warnings.append)
+        assert len(warnings) == 1
+        assert "stt_model" in warnings[0]
+
+    def test_one_warning_per_bad_key(self):
+        warnings: list[str] = []
+        parse_stt_config(
+            {
+                "stt_engine": "whisper",  # valid, silent
+                "stt_model": 42,           # warns
+                "stt_device": None,        # warns
+                "stt_compute": "int8",    # valid, silent
+            },
+            warn=warnings.append,
+        )
+        assert len(warnings) == 2
+        joined = " ".join(warnings)
+        assert "stt_model" in joined
+        assert "stt_device" in joined
+        assert "stt_engine" not in joined
+        assert "stt_compute" not in joined
+
+    def test_warns_name_the_right_default(self):
+        warnings: list[str] = []
+        parse_stt_config({"stt_compute": 1.5}, warn=warnings.append)
+        assert len(warnings) == 1
+        assert "stt_compute" in warnings[0]
+        assert "int8" in warnings[0]  # STT_DEFAULTS["compute_type"]

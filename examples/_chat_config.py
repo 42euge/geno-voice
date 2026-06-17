@@ -254,7 +254,7 @@ FILLER_DEFAULTS = {
 }
 
 
-def parse_filler_config(chat_cfg: Any) -> dict:
+def parse_filler_config(chat_cfg: Any, warn: Any = None) -> dict:
     """Extract the optional filler config from a parsed chat config.
 
     Returns a dict with two keys:
@@ -273,6 +273,22 @@ def parse_filler_config(chat_cfg: Any) -> dict:
         default 0.6.
 
     Mirrors the iter-020 parse_vad_config pattern.
+
+    iter-188: optional ``warn`` seam, mirroring the iter-187
+    ``parse_vad_config`` template. The tolerant fallbacks used to be
+    *silent* — a ``fillers: "hmm"`` typo (string instead of list)
+    yielded no fillers with no feedback, and a dropped non-string
+    item or a bad ``fillers_idle_threshold`` vanished into the
+    default. When ``warn`` is supplied (a callable taking one string,
+    e.g. ``print`` or a styled log adapter) it is invoked once per
+    *present-but-rejected* entry, naming what was dropped and why.
+    Follows the conventions' inject-``log`` seam (the module emits
+    plain text; ANSI styling stays at the caller). When ``warn`` is
+    ``None`` (the default) behavior is unchanged — the parser stays a
+    pure value-returner for the call sites and tests that don't want
+    the seam. Note ``fillers_idle_threshold`` now also rejects
+    ``bool`` (an int subclass that would otherwise let ``True``
+    become ``1.0``), matching the iter-186/187 reject side.
     """
     out = {
         "texts": list(FILLER_DEFAULTS["texts"]),
@@ -281,20 +297,48 @@ def parse_filler_config(chat_cfg: Any) -> dict:
     if not isinstance(chat_cfg, Mapping):
         return out
 
-    raw_texts = chat_cfg.get("fillers")
-    if isinstance(raw_texts, list):
-        # Drop non-strings and empty / whitespace-only strings.
-        cleaned = []
-        for item in raw_texts:
-            if isinstance(item, str):
-                stripped = item.strip()
-                if stripped:
-                    cleaned.append(stripped)
-        out["texts"] = cleaned
+    if "fillers" in chat_cfg:
+        raw_texts = chat_cfg.get("fillers")
+        if isinstance(raw_texts, list):
+            # Drop non-strings and empty / whitespace-only strings.
+            cleaned = []
+            for item in raw_texts:
+                if isinstance(item, str):
+                    stripped = item.strip()
+                    if stripped:
+                        cleaned.append(stripped)
+                    elif warn is not None:
+                        warn(
+                            "filler dropped: empty / whitespace-only "
+                            "string ignored"
+                        )
+                elif warn is not None:
+                    warn(
+                        f"filler dropped: expected a string, got "
+                        f"{type(item).__name__} ({item!r})"
+                    )
+            out["texts"] = cleaned
+        elif warn is not None:
+            warn(
+                f"fillers config ignored: expected a list, got "
+                f"{type(raw_texts).__name__} ({raw_texts!r}); using "
+                f"no fillers"
+            )
 
-    raw_threshold = chat_cfg.get("fillers_idle_threshold")
-    if isinstance(raw_threshold, (int, float)) and raw_threshold > 0:
-        out["idle_threshold"] = float(raw_threshold)
+    if "fillers_idle_threshold" in chat_cfg:
+        raw_threshold = chat_cfg.get("fillers_idle_threshold")
+        if (
+            isinstance(raw_threshold, (int, float))
+            and not isinstance(raw_threshold, bool)
+            and raw_threshold > 0
+        ):
+            out["idle_threshold"] = float(raw_threshold)
+        elif warn is not None:
+            warn(
+                f"fillers_idle_threshold ignored: expected a positive "
+                f"number, got {raw_threshold!r}; using default "
+                f"{FILLER_DEFAULTS['idle_threshold']}"
+            )
 
     return out
 
@@ -326,7 +370,7 @@ STT_DEFAULTS = {
 }
 
 
-def parse_stt_config(chat_cfg: Any) -> dict:
+def parse_stt_config(chat_cfg: Any, warn: Any = None) -> dict:
     """Extract the optional STT config from a parsed chat config.
 
     Returns a dict with always-present keys
@@ -348,26 +392,44 @@ def parse_stt_config(chat_cfg: Any) -> dict:
     for the ``faster_whisper`` engine. They're always returned
     regardless of engine — callers decide which to use based on
     the chosen engine.
+
+    iter-188: optional ``warn`` seam, mirroring the iter-187
+    ``parse_vad_config`` template. The tolerant fallbacks used to be
+    *silent* — a ``stt_engine: 5`` typo (wrong type) or a
+    whitespace-only string just vanished into the default with no
+    operator feedback. When ``warn`` is supplied (a callable taking
+    one string, e.g. ``print`` or a styled log adapter) it is invoked
+    once per *present-but-rejected* yaml key, naming the key, the
+    offending value, and the default it fell back to. Follows the
+    conventions' inject-``log`` seam (the module emits plain text;
+    ANSI styling stays at the caller). Missing keys are silent —
+    backfilling an absent key is normal. When ``warn`` is ``None``
+    (the default) behavior is unchanged.
     """
     out = dict(STT_DEFAULTS)
     if not isinstance(chat_cfg, Mapping):
         return out
 
-    raw_engine = chat_cfg.get("stt_engine")
-    if isinstance(raw_engine, str) and raw_engine.strip():
-        out["engine"] = raw_engine.strip()
-
-    raw_model = chat_cfg.get("stt_model")
-    if isinstance(raw_model, str) and raw_model.strip():
-        out["model"] = raw_model.strip()
-
-    raw_device = chat_cfg.get("stt_device")
-    if isinstance(raw_device, str) and raw_device.strip():
-        out["device"] = raw_device.strip()
-
-    raw_compute = chat_cfg.get("stt_compute")
-    if isinstance(raw_compute, str) and raw_compute.strip():
-        out["compute_type"] = raw_compute.strip()
+    # (yaml key, output key, default) — each is an optional string
+    # value that must be a non-empty, non-whitespace string to take
+    # effect. A present-but-rejected key warns once.
+    string_keys = (
+        ("stt_engine", "engine", STT_DEFAULTS["engine"]),
+        ("stt_model", "model", STT_DEFAULTS["model"]),
+        ("stt_device", "device", STT_DEFAULTS["device"]),
+        ("stt_compute", "compute_type", STT_DEFAULTS["compute_type"]),
+    )
+    for yaml_key, out_key, default in string_keys:
+        if yaml_key not in chat_cfg:
+            continue
+        raw = chat_cfg.get(yaml_key)
+        if isinstance(raw, str) and raw.strip():
+            out[out_key] = raw.strip()
+        elif warn is not None:
+            warn(
+                f"{yaml_key} ignored: expected a non-empty string, got "
+                f"{raw!r}; using default {default!r}"
+            )
 
     return out
 

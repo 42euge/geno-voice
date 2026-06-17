@@ -146,14 +146,17 @@ class TestIdleThresholdInputForms:
         assert out["idle_threshold"] == 0.6
 
     def test_bool_threshold_uses_default(self):
-        # Python ``bool`` is an ``int`` subclass — "True" would
-        # otherwise sneak through. The "> 0" check accepts True (==1)
-        # so this test documents the actual behavior: it IS accepted
-        # as 1.0. If we wanted to reject bools specifically, we'd
-        # need an explicit type check. For now, this is fine because
-        # YAML doesn't typically produce ``True`` for a numeric field.
-        out = parse_filler_config({"fillers_idle_threshold": True})
-        assert out["idle_threshold"] == 1.0
+        # Python ``bool`` is an ``int`` subclass — without the guard
+        # "True" would sneak through the "> 0" check and become 1.0.
+        # iter-188 added an explicit ``not isinstance(_, bool)`` guard
+        # (matching the iter-186/187 reject side), so a typo'd
+        # ``True``/``False`` now falls back to the default instead.
+        assert parse_filler_config(
+            {"fillers_idle_threshold": True}
+        )["idle_threshold"] == 0.6
+        assert parse_filler_config(
+            {"fillers_idle_threshold": False}
+        )["idle_threshold"] == 0.6
 
 
 class TestPartialConfig:
@@ -177,3 +180,100 @@ class TestPartialConfig:
         })
         assert out["texts"] == ["hi"]
         assert out["idle_threshold"] == 0.3
+
+
+class TestParseFillerConfigWarn:
+    """iter-188: the optional ``warn`` callable surfaces dropped
+    filler config so a typo isn't silently swallowed by the default.
+    Mirrors the iter-187 ``parse_vad_config`` warn seam."""
+
+    def test_no_warn_by_default(self):
+        # Backwards compatible: omitting warn never raises and the
+        # return value is unchanged from the silent behavior.
+        out = parse_filler_config({"fillers": "hmm"})
+        assert out["texts"] == []
+
+    def test_valid_config_emits_no_warnings(self):
+        warnings: list[str] = []
+        parse_filler_config(
+            {"fillers": ["hmm", "well"], "fillers_idle_threshold": 0.5},
+            warn=warnings.append,
+        )
+        assert warnings == []
+
+    def test_missing_keys_are_silent(self):
+        warnings: list[str] = []
+        parse_filler_config({}, warn=warnings.append)
+        assert warnings == []
+
+    def test_non_mapping_chat_is_silent(self):
+        warnings: list[str] = []
+        parse_filler_config(None, warn=warnings.append)
+        assert warnings == []
+
+    def test_fillers_not_a_list_warns(self):
+        warnings: list[str] = []
+        out = parse_filler_config({"fillers": "hmm"}, warn=warnings.append)
+        assert out["texts"] == []
+        assert len(warnings) == 1
+        assert "fillers" in warnings[0]
+        assert "list" in warnings[0]
+
+    def test_non_string_item_warns(self):
+        warnings: list[str] = []
+        out = parse_filler_config(
+            {"fillers": ["ok", 5, {"x": 1}]}, warn=warnings.append
+        )
+        assert out["texts"] == ["ok"]
+        # 5 and the dict each warn once.
+        assert len(warnings) == 2
+        joined = " ".join(warnings)
+        assert "int" in joined
+        assert "dict" in joined
+
+    def test_empty_string_item_warns(self):
+        warnings: list[str] = []
+        out = parse_filler_config(
+            {"fillers": ["ok", "   ", ""]}, warn=warnings.append
+        )
+        assert out["texts"] == ["ok"]
+        assert len(warnings) == 2  # whitespace-only + empty
+        assert all("empty" in w or "whitespace" in w for w in warnings)
+
+    def test_bad_threshold_warns(self):
+        warnings: list[str] = []
+        out = parse_filler_config(
+            {"fillers_idle_threshold": "abc"}, warn=warnings.append
+        )
+        assert out["idle_threshold"] == 0.6
+        assert len(warnings) == 1
+        assert "fillers_idle_threshold" in warnings[0]
+        assert "abc" in warnings[0]
+        assert "0.6" in warnings[0]
+
+    def test_non_positive_threshold_warns(self):
+        warnings: list[str] = []
+        parse_filler_config(
+            {"fillers_idle_threshold": -1.0}, warn=warnings.append
+        )
+        assert len(warnings) == 1
+        assert "-1.0" in warnings[0]
+
+    def test_bool_threshold_warns(self):
+        warnings: list[str] = []
+        parse_filler_config(
+            {"fillers_idle_threshold": True}, warn=warnings.append
+        )
+        assert len(warnings) == 1
+        assert "fillers_idle_threshold" in warnings[0]
+
+    def test_valid_fillers_with_bad_threshold_warns_once(self):
+        # Only the rejected key warns; valid keys stay silent.
+        warnings: list[str] = []
+        out = parse_filler_config(
+            {"fillers": ["hmm"], "fillers_idle_threshold": 0},
+            warn=warnings.append,
+        )
+        assert out["texts"] == ["hmm"]
+        assert len(warnings) == 1
+        assert "fillers_idle_threshold" in warnings[0]

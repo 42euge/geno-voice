@@ -195,7 +195,12 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
         parse_filler_config, parse_stt_config, parse_vad_config,
     )
     chat_cfg = load_chat_config()
-    stt_cfg = parse_stt_config(chat_cfg)
+    # iter-188: warn adapter so a typo'd stt knob (wrong type, empty
+    # string) surfaces a YELLOW one-liner instead of silently falling
+    # back to the default. Mirrors the iter-187 vad wiring.
+    stt_cfg = parse_stt_config(
+        chat_cfg, warn=lambda line: print(f"  {YELLOW}{line}{RESET}")
+    )
     # Empty `stt_model` → use the function-arg `model_repo` so
     # legacy callers without yaml-set models keep working.
     stt_model = stt_cfg["model"] or model_repo
@@ -242,7 +247,13 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
     #     fillers_idle_threshold: 0.6
     # iter-119: chat_cfg + parse_*_config imports moved up to
     # support stt_cfg. Reused here.
-    filler_cfg = parse_filler_config(chat_cfg)
+    # iter-188: warn adapter (mirrors stt/vad) so a typo'd filler
+    # knob — fillers not a list, a non-string item, a bad
+    # idle_threshold — surfaces a YELLOW one-liner instead of
+    # silently dropping.
+    filler_cfg = parse_filler_config(
+        chat_cfg, warn=lambda line: print(f"  {YELLOW}{line}{RESET}")
+    )
     filler_texts: list[str] = filler_cfg["texts"]
     filler_idle_threshold: float = filler_cfg["idle_threshold"]
     # iter-020: optional VAD tuning. parse_vad_config defaults
