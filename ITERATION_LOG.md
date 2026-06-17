@@ -13358,3 +13358,110 @@ discrimination is exactly where iter-148's classifier pays off a second time
     (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still
     blocked on a committed `baseline.json`; diversity-check surface paused per
     iter-143/144.
+
+## iter-153 — agent backchannel emission timing: decide_backchannel_timing (backlog #7)
+
+**Branch:** `iter-153-backchannel-timing` (merged ff to main)
+**Date:** 2026-06-16
+
+**Goal:** iter-152 shipped the continuer-aware barge-in *decision* seam
+(backlog #5). This lap ships backlog #7, the **agent backchannel emission
+timing** decision — the pure seam that decides when the *agent* should emit a
+short backchannel ("mhmm" / "right") *during* the user's speech, the human
+nod-along that signals active listening.
+
+**Why:** backchanneling has two halves. iter-148's `classify_backchannel`
+covers *recognizing* a user continuer; this lap covers *emitting* one. The
+`TurnTakingEngine` already emits cues (`PLAY_CUE` → `broadcast_cue`), but only
+on **trailing silence** ≥ `silence_backchannel_min` (4.0s) — a turn-end-ish
+cue, not the human "mm-hmm while you keep talking." Krisp's tiny turn-taking
+model calls out a dedicated *backchannel-opportunity* head ("is now a good
+moment for the agent to backchannel?") as the signal most EOU models lack
+(research doc §3 / SOTA Krisp entry). This is the rule-based, dependency-free
+first step toward that head.
+
+**What changed:**
+
+1. **`session/backchannel_timing.py` (new) — backlog #7 decision seam.** Pure,
+   dependency-free, GENO.md-conventional:
+   - `decide_backchannel_timing(*, user_speaking_secs, pause_secs,
+     secs_since_last_backchannel=None, config=None, timing=None) ->
+     BackchannelTiming` (`EMIT` / `HOLD`).
+   - **Rule 1 — the half-duplex invariant.** If
+     `config.agent_backchannels_active()` is False (the default), return `HOLD`
+     for *every* input — the agent never speaks during user speech, byte-for-
+     byte today's behavior, and no other signal is consulted. `config` defaults
+     to a fresh `FullDuplexConfig()` (off).
+   - **Rules 2–4 — organic mode** (gate on), first `HOLD` wins: warm-up
+     (`user_speaking_secs` ≥ `min_speaking_before_first_cue_secs`, 15.0); rate
+     limit (a known `secs_since_last_backchannel` ≥ `min_between_cues_secs`,
+     20.0; `None` = never-yet passes); pause window (`EMIT` iff
+     `min_pause_secs <= pause_secs < max_pause_secs`).
+   - **The pause window partitions the silence axis cleanly.** The default
+     `max_pause_secs` is **2.0s — exactly `turn_decider.py`'s
+     `silence_floor_secs`** ("a pause, not a turn-end"), so the mid-speech
+     backchannel window `[0.3, 2.0)` and the silence-driven `PLAY_CUE` window
+     `≥ 4.0s` don't overlap: a short pause is a nod-along, a long one is a
+     turn-end cue, and neither path claims the other's gap.
+   - `BackchannelTimingConfig` (frozen) carries the thresholds, with
+     `__post_init__` validation (`max_pause > min_pause`, non-negative knobs).
+     Defaults mirror `TurnTakingConfig`'s analogous rate limits so the two cue
+     paths feel consistent.
+   - `should_emit_backchannel(...)` — the call-site-shaped boolean. With a
+     default config it's always `False`, so the eventual wiring
+     (`if should_emit_backchannel(...): broadcast_cue(...)`) leaves the live
+     cue path unchanged under half-duplex.
+
+2. **Why a decision seam, not cue-path wiring, this lap.** Same discipline as
+   the rest of the track (iter-148/149/150/151/152): ship the pure, fully-
+   tested primitive *behind the off-by-default gate first*; wire it into the
+   live `PLAY_CUE` / `broadcast_cue` path as a separate, reviewable lap. That
+   keeps the proven half-duplex path un-regressed and never introduces behavior
+   + guard in one step.
+
+3. **`tests/unit/test_backchannel_timing.py` (new, +44 tests):** the half-
+   duplex invariant (every input HOLDs under default / explicit-default /
+   master-on-but-held-back configs); organic-mode EMIT (master-on, sub-flag-
+   overrides-master-off); the warm-up gate (below/at-boundary/custom); the
+   rate-limit gate (too-soon/at-boundary/`None`-passes/custom); the pause
+   window (below-min, at-min inclusive, just-below-max, at-max exclusive,
+   above-max, zero, custom window); rule precedence (gate > warm-up >
+   rate-limit > pause); the `should_emit_backchannel` boolean (default-always-
+   False, organic split, decide-match across a grid); and config validation/
+   purity/interface (defaults, frozen, `max > min_pause` invariant, negative
+   guards, keyword-only, no config/timing mutation, distinct enum values).
+   Loaded by file path under a stub `session` namespace — the same
+   `session/__init__` pipecat-bypass trick the barge_decision / text_eou /
+   full_duplex tests use (pipecat is absent on the x86_64 runner).
+
+4. **Discoverability:** marked backlog #7 **DONE iter-153** (decision seam;
+   cue-path wiring noted as the follow-on) in
+   `docs/research/organic-turn-taking.md` with a findings-log entry; extended
+   the README Research section to name the seam, its `EMIT`/`HOLD` semantics,
+   the silence-axis partition, the half-duplex invariant, and its guarding test.
+
+**Verification:**
+- `python -m pytest tests/unit/test_backchannel_timing.py -q` → **44 passed in 0.10s**.
+- Full unit suite: **2003 passed** (1959 prior + 44 new).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `python -m py_compile session/backchannel_timing.py` → clean.
+
+**Notes:**
+- **No runtime behavior change.** `backchannel_timing.py` is a new, as-yet-
+  unwired pure module; nothing imports it from the live path yet. The
+  `mic_chat`/`mic_talk` and `pipecat_server` paths are untouched (intentional —
+  the decision seam ships before the cue-path wiring that consumes it).
+- Next directions:
+  - **Wire `should_emit_backchannel` into the live cue path** (the direct
+    follow-on): gate a mid-speech `broadcast_cue` behind it, feeding the
+    user-speaking duration + within-speech pause from the VAD/STT loop, gated
+    behind `agent_backchannels_active()`.
+  - **#8 naturalness metrics** — false-endpoint rate + continuer counts in
+    `TurnMetrics`/session-summary, so this track is measured not asserted.
+  - **Wire `should_abandon_turn` into the `mic_chat` barge path** (iter-152's
+    follow-on): gate `coord.trigger()` behind it, threading the barge
+    transcript + RMS energy from `BargeInWatcher` in.
+  - Carried over (off-track): the CI workflow
+    (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still
+    blocked on a committed `baseline.json`; diversity-check surface paused per
+    iter-143/144.

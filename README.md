@@ -226,7 +226,20 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   (half-duplex) config it returns `ABANDON` for every transcript —
   byte-for-byte today's "any barge cancels" behavior; only with
   `continuer_aware_listening_active()` does a recognized continuer
-  `FINISH`.
+  `FINISH`. Also shipped: the **agent backchannel emission timing**
+  decision (`session/backchannel_timing.py`,
+  `tests/unit/test_backchannel_timing.py`) — the *emit* half of
+  backchanneling that complements the classifier's *recognize* half.
+  `decide_backchannel_timing(*, user_speaking_secs, pause_secs,
+  secs_since_last_backchannel, config, timing)` returns `EMIT` / `HOLD`,
+  deciding when the agent should "mhmm" *during* a user monologue (a
+  clause-boundary pause `[0.3, 2.0)s`, past a warm-up, not rate-limited),
+  not only on trailing silence. Its `max_pause` of 2.0s is exactly
+  `turn_decider`'s `silence_floor`, so the mid-speech window and the
+  silence-driven `PLAY_CUE` window partition the silence axis with no
+  overlap. Gated behind `agent_backchannels_active()`: with a default
+  config it always `HOLD`s, byte-for-byte today's "agent stays silent
+  during user speech."
 - **[Performance metrics taxonomy](docs/perf-metrics-taxonomy.md)** — a
   catalog of metrics worth instrumenting on a local-first voice agent.
 

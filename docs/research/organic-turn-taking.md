@@ -231,7 +231,7 @@ output discoverable from README" discipline. Local only.
 | 4 | **Rule-based text EOU precursor** — `is_utterance_complete(text)` that lowers end-of-turn likelihood when the transcript ends in a conjunction / filler / trailing-off marker (mirrors LiveKit turn-detector's linguistic signal; reuses `_TRAILING_PATTERNS`). Feeds #2's confidence. | Medium | **DONE iter-150** |
 | 5 | **Continuer-aware barge-in** — wire #1 into `BargeInCoordinator` so a *continuer* utterance ("mhmm") during agent speech does NOT abandon the turn (finish), while a substantive interruption does (abandon). Measure: false-abandon rate. | High | **DONE iter-152** (decision seam `decide_barge_action`; coordinator wiring is the follow-on) |
 | 6 | **Adopt pipecat `smart-turn`** — replace #2's heuristic body with the smart-turn model inside `pipecat_server.py`'s pipeline; same `turn_decider` interface. Measure false-endpoint rate vs silence-only baseline on recorded sessions. | High | TODO (blocked on model + Apple Silicon) |
-| 7 | **Agent backchannel emission timing** — a learned/heuristic "good moment to backchannel" signal (Krisp-style) feeding the existing `PLAY_CUE` path, so the agent emits continuers *during* long user speech, not only on silence. | Medium | TODO |
+| 7 | **Agent backchannel emission timing** — a learned/heuristic "good moment to backchannel" signal (Krisp-style) feeding the existing `PLAY_CUE` path, so the agent emits continuers *during* long user speech, not only on silence. | Medium | **DONE iter-153** (decision seam `decide_backchannel_timing`; cue-path wiring is the follow-on) |
 | 8 | **Naturalness metrics for the organic path** — extend `TurnMetrics` / session-summary with false-endpoint rate and continuer-detection counts so the track is measured, not asserted. | Medium | TODO |
 
 ---
@@ -423,3 +423,63 @@ output discoverable from README" discipline. Local only.
   barge transcript + RMS energy in) and measure false-abandon rate; or
   backlog #8 (naturalness metrics: false-endpoint rate + continuer counts in
   `TurnMetrics` / session-summary), or #7 (agent backchannel emission timing).
+
+### iter-153 (2026-06-16) — agent backchannel emission timing (#7)
+
+- **Shipped backlog #7 (the decision seam):** `session/backchannel_timing.py` —
+  `decide_backchannel_timing(*, user_speaking_secs, pause_secs,
+  secs_since_last_backchannel, config, timing) -> BackchannelTiming`
+  (`EMIT` / `HOLD`), the *emit* half of backchanneling that complements the
+  *recognize* half in `session/backchannel.py` (#1, iter-148). Where the
+  `TurnTakingEngine` already emits cues only on **trailing silence** ≥
+  `silence_backchannel_min` (4.0s) — a turn-end-ish cue — this seam decides
+  when the agent should "mhmm" *during* the user's monologue, the human
+  nod-along. Krisp's tiny turn-taking model calls out exactly this
+  backchannel-opportunity head as the signal most EOU models lack; this is the
+  rule-based, dependency-free first step toward it.
+- **The half-duplex invariant is the whole point.** Rule 1 short-circuits on
+  `config.agent_backchannels_active()`: with a default `FullDuplexConfig()`
+  (the switch off), the function returns `HOLD` for *every* input — the agent
+  never speaks during user speech, byte-for-byte today's behavior, and no other
+  signal is even consulted. Only with agent backchannels explicitly on do rules
+  2–4 run.
+- **The signal partitions the silence axis cleanly.** A good mid-speech moment
+  is a brief **clause-boundary pause**: `min_pause_secs <= pause_secs <
+  max_pause_secs`. The default `max_pause_secs` is **2.0s — exactly
+  `turn_decider.py`'s `silence_floor_secs`** ("a pause, not a turn-end"), so
+  the mid-speech backchannel window `[0.3, 2.0)` and the silence-driven
+  `PLAY_CUE` window `≥ silence_backchannel_min` (4.0s) do not overlap: a short
+  pause is a nod-along, a long one is a turn-end cue, and neither path claims
+  the other's gap. A test pins `max_pause == 2.0` so a future edit that breaks
+  the partition fails loudly.
+- **Same rate limits as the engine.** `min_speaking_before_first_cue_secs`
+  (15.0) and `min_between_cues_secs` (20.0) mirror `TurnTakingConfig`, so the
+  agent doesn't backchannel over a one-word reply (rule 2 warm-up) or chatter
+  "mhmm mhmm mhmm" (rule 3 rate limit). `secs_since_last_backchannel=None`
+  (never backchanneled yet) passes the rate gate.
+- **Why a decision seam, not cue-path wiring, this lap.** Same discipline as
+  the rest of the track (iter-148/149/150/151/152): ship the pure, fully-tested
+  primitive behind the off-by-default gate first; wire it into the live
+  `PLAY_CUE` / `broadcast_cue` path (`if should_emit_backchannel(...):
+  broadcast_cue(...)`) as a separate, reviewable lap. With a default config
+  `should_emit_backchannel` is always False, so the live cue path is unchanged
+  until agent backchannels are explicitly enabled.
+- 44 unit tests (`tests/unit/test_backchannel_timing.py`): the half-duplex
+  invariant (every input HOLDs under default / explicit-default / master-on-
+  but-held-back configs); organic-mode EMIT (master-on and sub-flag-overrides-
+  master-off); the warm-up gate (below/at/custom); the rate-limit gate
+  (too-soon/at-boundary/`None`-passes/custom); the pause window (below-min,
+  at-min inclusive, just-below-max, at-max exclusive, above-max, zero, custom
+  window); rule precedence (gate > warm-up > rate-limit > pause); the
+  `should_emit_backchannel` boolean (default-always-False, organic split,
+  decide-match across a grid); and config validation/purity/interface
+  (defaults, frozen, `max > min_pause` invariant, negative-value guards,
+  keyword-only, no config/timing mutation, distinct enum values). Loaded by
+  file path under a stub `session` namespace — the same `session/__init__`
+  pipecat-bypass trick the barge_decision / text_eou tests use.
+- **Next:** wire `should_emit_backchannel` into the live cue path (the follow-on
+  to this lap — gate a mid-speech `broadcast_cue` behind it, feeding the
+  user-speaking duration + within-speech pause from the VAD/STT loop, gated
+  behind `agent_backchannels_active()`); or backlog #8 (naturalness metrics:
+  false-endpoint rate + continuer counts in `TurnMetrics` / session-summary, so
+  the track is measured not asserted).
