@@ -16714,3 +16714,89 @@ need no re-steer):**
    suggests a shorter debounce is safe and clips less utterance opening.
 6. **[silence] Revisit the 800ms silence timeout** if new recordings show
    truncated or run-on turns.
+
+---
+
+## iter-190 — parameter-sweep capability for the VAD replay harness
+
+**Branch:** `iter-190-vad-sweep` (merged ff to main, commit `a303d61`)
+**Date:** 2026-06-17
+
+**Improvement:** The iter-189 replay harness (`fixtures/replay_vad.py`)
+runs exactly one parameter set per invocation, but the research doc's
+backlog (items 3–6 of `docs/research/voice-capture-tuning.md`) repeatedly
+asks to *sweep* threshold / gain / debounce across the corpus and compare.
+That meant N hand-run single-param invocations and eyeballing the tables.
+This lap adds a first-class single-parameter sweep that replays the whole
+corpus once per value and folds detection into one comparison table.
+
+What changed:
+- **`fixtures/replay_vad.py`** — new sweep layer on top of the existing
+  per-recording harness:
+  - `SweepPoint` dataclass — corpus-aggregate detection for one parameter
+    set: `recordings`, `triggered`, `total_onsets`,
+    `total_speaking_frames`, `mean_pct_over`, and `min_onsets` (the worst
+    single recording — the floor a sweep should *maximize*, since one
+    missed recording is a real miss even when totals look healthy).
+  - `aggregate_results(params, results)` — folds a `List[ReplayResult]`
+    into one `SweepPoint` (pure, testable in isolation).
+  - `sweep_param(param_name, values, base=None, recordings_dir=...)` —
+    substitutes each value into a copy of `base` via `dataclasses.replace`,
+    replays the corpus, returns one `SweepPoint` per value in input order.
+    Rejects unknown `VadParams` fields with `ValueError`.
+  - `_parse_value_list(raw, cast)` — parses a comma-separated CLI value
+    list, casting each entry (skips blanks, raises on empty/bad token).
+  - CLI `--sweep PARAM --sweep-values V1,V2,...` (+ `--json`) — wired
+    through a `_run_sweep` helper with rc=2 on bad field / missing values /
+    bad value list, rc=1 on empty corpus, rc=0 + table/json otherwise.
+    `frame_size` casts to int; the rest to float.
+- **`tests/unit/test_replay_vad.py`** — 19 new tests over a synthetic
+  2-recording corpus (one loud, one quiet far-field between 0.006/0.015):
+  `aggregate_results` (empty + populated), `sweep_param` (one-point-per-
+  value/order, lower-threshold-detects-more, base-held-fixed, gain
+  recovers quiet recording, unknown-field-raises), `_parse_value_list`
+  (floats, ints, whitespace/blanks, empty-raises, bad-token-raises), and
+  the `--sweep` CLI (human table, json, unknown-field rc=2, missing-values
+  rc=2, bad-values rc=2, empty-corpus rc=1, frame_size int-cast).
+- **`docs/research/voice-capture-tuning.md`** — documented the `--sweep`
+  usage and added a "Parameter sweeps over the seed corpus (iter-190)"
+  section with the empirical results below; updated backlog items 3/4/5 to
+  mark the sweeps done and point at the findings.
+
+**Empirical findings (real seed corpus, 4 recordings, via `--dir`):**
+- **Threshold** 0.004→0.020: detection cliff between **0.010 and 0.015**.
+  At 0.015 the far-field `voice-20260617-135015` drops to `min_onsets=0`
+  and `trig` falls to 3/4. 0.006 holds `trig=4/4, min_onsets=1` with
+  margin; 0.004 adds frames but no new triggers → **0.006 confirmed**.
+- **Gain** 1.0→3.0 (thr 0.006): monotone onset/speaking-frame lift; the
+  lifted silence floor (~0.0006 at 2.0×) stays ~3× under the gate, so a
+  **1.5–2.0× gain is a safe recovery lever** (quantifies backlog item 4).
+- **Debounce** 100→300ms (thr 0.006): 100–200ms keep `trig=4/4`; **300ms
+  drops a recording**; 100ms recovers slightly more speaking frames.
+
+**Verification:**
+- `python -m pytest tests/unit/test_replay_vad.py` → **39 passed** (20
+  prior + 19 new).
+- Full unit suite: `python -m pytest tests/unit/` → **2635 passed** (2616
+  prior + 19 new).
+- Integration: `python -m pytest tests/integration/` → **30 passed, 7
+  skipped** (VAD-recording tests skip in a fresh checkout without the
+  gitignored corpus; sweep validated directly against the real corpus in
+  the main checkout via `--dir`).
+- `python -m py_compile fixtures/replay_vad.py
+  tests/unit/test_replay_vad.py` clean.
+- (`tests/test_session.py` still errors on collection — pre-existing
+  missing `pipecat` dep, not a regression.)
+
+**Next planned items (from the research-doc backlog):**
+1. **[latency, highest value] Pre-warm the capture pipeline** — still the
+   top user-facing bug (3–5s `click_to_capture_ms`). Needs an on-device
+   timing harness; cannot be replayed.
+2. **[gain] Wire a `gainNode` (or worklet multiply) into
+   `ContinuousListener`** so the 1.5–2.0× recovery lever this lap
+   quantified is tunable in the client (default 1.0).
+3. **[debounce] Validate onset *timing* moves earlier at 100ms** (not just
+   the count) before lowering the client's hard-coded 200ms — pairs with
+   the pre-roll buffer (backlog item 2).
+4. **[sweep] Extend to a 2-D grid** (e.g. threshold × gain) if a single-
+   axis sweep proves too coarse for picking the joint operating point.
