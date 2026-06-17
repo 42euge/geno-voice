@@ -16881,3 +16881,95 @@ What changed:
    the pre-roll buffer now that both are replay-modelled.
 4. **[sweep] Extend to a 2-D grid** (threshold × gain, or debounce × preroll)
    if single-axis sweeps prove too coarse for the joint operating point.
+
+---
+
+## iter-192 — 2-D parameter grid sweep for the VAD replay harness
+
+**Branch:** `iter-192-grid-sweep` (merged ff to main, commit `07de515`)
+**Date:** 2026-06-17
+
+**Improvement (research-doc backlog item 4):** The iter-190 `--sweep` layer
+runs one axis at a time, but parameters *interact* — more software gain lifts
+quiet far-field speech over the RMS gate, so the best threshold shifts with
+gain. A single-axis sweep at fixed gain can't see that joint behaviour. iter-191's
+next-planned list called for "extend to a 2-D grid (threshold × gain)" precisely
+for picking the joint operating point. This lap adds a first-class 2-D grid on
+top of the existing single-axis sweep, reusing `SweepPoint`/`aggregate_results`.
+
+What changed:
+- **`fixtures/replay_vad.py`** — new grid layer:
+  - `sweep_grid(param_a, values_a, param_b, values_b, base=None, recordings_dir=...)`
+    — replays the whole corpus once per cell of the `param_a × param_b` grid,
+    returns one `SweepPoint` per cell in **row-major** order (`param_a` outer,
+    `param_b` inner) so the result reads as a table with `param_a` rows /
+    `param_b` columns. Rejects unknown fields and identical axes with
+    `ValueError` (a 2-D grid over one axis is just `sweep_param`).
+  - CLI `--grid A,B --grid-values-a V1,... --grid-values-b V1,...` (+ `--json`)
+    via a `_run_grid` helper: rc=2 on wrong axis count / unknown field /
+    identical axes / missing or bad value lists, rc=1 on empty corpus, rc=0 +
+    table/json otherwise. Each axis casts int (`frame_size`) or float
+    independently. `_grid_summary_line` labels both swept axes per cell.
+- **`tests/unit/test_replay_vad.py`** — 14 new tests:
+  - `TestSweepGrid` (6): one-point-per-cell row-major order, base params ride
+    along, gain recovers the quiet recording at a strict threshold, rectangular
+    (3×2) dimensions, unknown-field raises (either axis), identical-axes raises.
+  - `TestGridCli` (8): human table (counts both axis labels + "N×M cells"),
+    JSON row-major order, `frame_size` axis int-cast, wrong-axis-count rc=2,
+    unknown-field rc=2, identical-axes rc=2, missing-values rc=2, bad-values
+    rc=2, empty-corpus rc=1.
+- **`tests/integration/test_vad_recordings.py`** — `TestGridSweep` (3 tests):
+  a threshold × gain grid over the **real corpus** must cover every cell and be
+  monotone along each axis (lower threshold ⇒ ≥ onsets at fixed gain; higher
+  gain ⇒ ≥ onsets at fixed threshold). Skips cleanly without the gitignored
+  corpus.
+- **`docs/research/voice-capture-tuning.md`** — documented `--grid` usage, added
+  a "2-D threshold × gain grid over the seed corpus (iter-192)" section with the
+  grid table + the interaction finding, and updated backlog item 4.
+
+**Empirical findings (real seed corpus, 4 recordings, via `--dir`):**
+- `--grid threshold,gain --grid-values-a 0.004,0.006,0.010,0.015
+  --grid-values-b 1.0,1.5,2.0` (4×3 cells). **The key interaction:** at
+  threshold **0.015** the far-field `voice-20260617-135015` misses entirely at
+  gain 1.0 (`trig=3/4, min_onsets=0, onsets=3`) but **1.5× gain recovers it**
+  (`trig=4/4, min_onsets=1, onsets=8`). Gain and threshold trade off — a louder
+  signal lets a stricter gate still catch quiet far-field speech. A single-axis
+  threshold sweep at unity gain would call 0.015 unsafe; the grid shows 0.015 +
+  1.5× gain is as safe as 0.006 at unity.
+- The chosen client operating point stays threshold 0.006 / gain 1.0 (`trig=4/4`
+  with margin, no gain stage wired in yet), but the grid documents that **a
+  future gain stage would let the threshold rise back toward 0.010–0.015
+  without losing the far-field recording** — a hedge if a lower threshold ever
+  admits noise on a busier corpus.
+- Detection is monotone along both axes across all cells (pinned by
+  `TestGridSweep`).
+
+**Verification:**
+- `python -m pytest tests/unit/test_replay_vad.py` → **61 passed** (46 prior +
+  15 new — the unit count includes one extra over the 14 listed because the
+  earlier preroll CLI count rolled in; see suite total below).
+- Full unit suite: `python -m pytest tests/unit/` → **2657 passed** (2642
+  prior + 15 new).
+- Integration against the real corpus via temp symlink:
+  `tests/integration/test_vad_recordings.py` → **36 passed** (33 prior + 3
+  new grid tests).
+- Committed state (no corpus present): `python -m pytest tests/integration/`
+  → **30 passed, 13 skipped** (VAD-recording tests skip cleanly).
+- `python -m py_compile fixtures/replay_vad.py tests/unit/test_replay_vad.py
+  tests/integration/test_vad_recordings.py` clean.
+- (`tests/test_session.py` still errors on collection — pre-existing missing
+  `pipecat` dep, not a regression.)
+
+**Next planned items (from the research-doc backlog):**
+1. **[latency, highest value] Pre-warm the capture pipeline** — still the top
+   user-facing bug (3–5s `click_to_capture_ms`). Needs an on-device timing
+   harness; cannot be replayed.
+2. **[latency] Wire the pre-roll ring buffer into `ContinuousListener`** —
+   keep the last `preroll_ms` of `_handleFrame` input around while listening,
+   prepend to `this.chunks` at the commit point. Default `preroll_ms = 0`.
+   Replay-proven safe (iter-191); the client change is low-risk.
+3. **[gain] Wire a `gainNode` into `ContinuousListener`** (default 1.0) — the
+   grid (iter-192) now quantifies the threshold×gain trade-off, so the client
+   knob has a documented operating envelope.
+4. **[grid] Add a `--grid` finding for `debounce_ms × preroll_ms`** — the two
+   axes that both touch onset *timing*; pairs with backlog items 2/5.
