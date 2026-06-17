@@ -42,11 +42,55 @@ CUE_ROTATION = _cr.CUE_ROTATION
 cue_for_index = _cr.cue_for_index
 
 
-def test_rotation_is_non_empty_and_known_cues():
-    """The rotation lists real cue-bank keys (see generate_cues.py CUE_BANK)."""
-    assert CUE_ROTATION  # non-empty
-    known = {"mhmm", "i_see", "right", "go_on", "tell_me_more", "okay", "hmm"}
-    assert set(CUE_ROTATION) <= known
+def _load_cue_bank():
+    """Load ``generate_cues.py``'s ``CUE_BANK`` — the *real* source of truth for
+    which cue types get audio synthesized into ``session/cues/<type>/``.
+
+    ``generate_cues.py`` imports ``requests`` at module scope (it POSTs to the
+    voice server), so skip if it's absent rather than failing on an env quirk;
+    the cue-rotation/bank drift this test guards is unrelated to whether the
+    HTTP client happens to be installed on the runner.
+    """
+    import pytest
+
+    pytest.importorskip("requests")
+    mod = _load_by_path("session._generate_cues_under_test", "generate_cues.py")
+    return mod.CUE_BANK
+
+
+def test_rotation_cues_all_exist_in_the_synthesis_bank():
+    """Every rotation cue must be a key in ``generate_cues.py``'s ``CUE_BANK``.
+
+    This is the invariant that keeps the live cue path from silently 404ing: the
+    rotation only plays cue types that ``generate_cues.py`` actually synthesizes
+    into ``session/cues/<type>/`` and that ``server.py``'s ``/cue/{cue_type}``
+    can therefore serve. The earlier ``<= known`` check mirrored the bank's keys
+    by hand — a hardcoded set that could itself drift; this derives the allowed
+    set straight from the bank so a cue renamed/removed from the bank fails here
+    instead of at runtime.
+    """
+    bank = _load_cue_bank()
+    missing = sorted(set(CUE_ROTATION) - set(bank))
+    assert not missing, (
+        f"CUE_ROTATION references cue types absent from generate_cues.py's "
+        f"CUE_BANK (no audio would be synthesized → /cue/ 404s): {missing}"
+    )
+
+
+def test_rotation_cues_each_have_at_least_one_variant():
+    """A bank key with an empty variant list synthesizes nothing — ``/cue/``
+    would then 404 with 'no cues available'. Guard that every rotation cue has
+    at least one ``(text, speed)`` variant to render."""
+    bank = _load_cue_bank()
+    empty = sorted(c for c in set(CUE_ROTATION) if not bank.get(c))
+    assert not empty, (
+        f"CUE_ROTATION cues with no synthesis variants in CUE_BANK: {empty}"
+    )
+
+
+def test_rotation_is_non_empty():
+    """The rotation must list at least one cue (else nothing ever plays)."""
+    assert CUE_ROTATION
 
 
 def test_cue_for_index_walks_the_rotation_in_order():

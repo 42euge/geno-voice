@@ -15745,3 +15745,76 @@ clock's `user_speaking_secs(now)` — the one derived quantity a clock can't own
     the `mic_chat` barge path; blocked on no transcript at VAD-trigger time.
   - Carried over (off-track): the CI workflow still blocked on a committed
     `baseline.json`; diversity-check surface paused per iter-143/144.
+
+## iter-178 — `CUE_ROTATION ⊆ CUE_BANK`: guard the live cue path against bank drift (#7 hardening)
+
+**Branch:** `iter-178-cue-rotation-bank` (merged ff to main)
+**Date:** 2026-06-17
+
+**Goal:** Pin the invariant that keeps the live backchannel-cue path from
+silently 404ing — every cue in `CUE_ROTATION` must be a key in
+`generate_cues.py`'s `CUE_BANK` (the dict that actually synthesizes the audio)
+— against the **bank itself**, replacing the hand-maintained `known` mirror set
+that could drift just as easily as the thing it was guarding.
+
+**Why:** `CUE_ROTATION` (`session/cue_rotation.py`) is what the live cue path
+*plays*: the silence-driven `plan_cue_broadcast` → `broadcast_cue` path
+(iter-172) and the mid-speech monitor's `BackchannelDecision.cue_type`
+(iter-171) both index it. Each entry is a `cue_type` key that must exist in
+`generate_cues.py`'s `CUE_BANK` — the only thing that renders
+`session/cues/<cue_type>/` and therefore the only thing `server.py`'s
+`/cue/{cue_type}` endpoint can serve. **Nothing tested that the rotation keys
+actually live in the bank.** The only existing check
+(`test_rotation_is_non_empty_and_known_cues`) asserted `set(CUE_ROTATION) <=
+known` against a *hardcoded* `{"mhmm", "i_see", …}` set — itself a
+hand-maintained mirror that can drift from the bank. So a cue renamed/removed
+from `CUE_BANK` would render no `session/cues/<key>/` dir, `/cue/{cue_type}`
+would 404, and `pipecat_server.broadcast_cue` (which swallows non-200 responses)
+would *silently* drop the cue at runtime — the agent goes quiet on that rotation
+slot with no signal anywhere. This lap makes that drift a red test instead.
+
+**What changed:**
+
+1. **`tests/unit/test_cue_rotation.py`** — replaced
+   `test_rotation_is_non_empty_and_known_cues` (the `<= known` hardcoded-set
+   check) with three tests derived from the bank itself:
+   - `test_rotation_cues_all_exist_in_the_synthesis_bank` — `set(CUE_ROTATION) ⊆
+     set(CUE_BANK)`, loading `generate_cues.py`'s `CUE_BANK` by file path. Uses
+     `pytest.importorskip("requests")` because that module imports `requests` at
+     module scope (it POSTs to the voice server) — the drift this guards is
+     unrelated to whether the HTTP client is installed on the runner.
+   - `test_rotation_cues_each_have_at_least_one_variant` — every rotation cue's
+     bank entry has ≥1 `(text, speed)` variant (an empty variant list
+     synthesizes nothing → `/cue/` 404s "no cues available").
+   - `test_rotation_is_non_empty` — kept the non-empty assertion as its own
+     focused test.
+
+2. **`session/cue_rotation.py`** — `CUE_ROTATION` docstring now states the
+   rotation⊆bank invariant explicitly and names the guarding test.
+
+3. **`README.md`** (Research section) + **`docs/research/organic-turn-taking.md`**
+   (iter-178 findings entry) — document the bank-drift guard.
+
+**Verification:**
+- `python -m pytest tests/unit/test_cue_rotation.py -q` → **7 passed**.
+- Full unit suite (in worktree, pre-merge): **2397 passed** (2395 prior + 2 net;
+  3 new tests replaced 1 hardcoded-set test).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `python -W error::SyntaxWarning -m py_compile session/cue_rotation.py
+  tests/unit/test_cue_rotation.py` clean.
+- Confirmed the invariant catches drift: injecting a bogus rotation entry
+  (`['nonexistent_cue']`) reports it as missing from the bank.
+- (`tests/test_session.py` still errors on collection — `ModuleNotFoundError:
+  pipecat` — pre-existing on main, not a regression.)
+
+**Notes:**
+- Next directions:
+  - **Live mid-speech cue wiring for #7** — feed the VAD frames to a
+    `BackchannelDriver` in `pipecat_server.py`'s `Broadcaster`, `broadcast_cue`
+    on emit, surface `driver.emit_count` into `SessionMeta.backchannels_emitted`
+    (iter-175). Still blocked only on the absent pipecat dep on the x86_64
+    runner.
+  - **Live barge-path wiring for #5** — `should_abandon_turn` (iter-152) into
+    the `mic_chat` barge path; blocked on no transcript at VAD-trigger time.
+  - Carried over (off-track): the CI workflow still blocked on a committed
+    `baseline.json`; diversity-check surface paused per iter-143/144.

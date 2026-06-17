@@ -1730,3 +1730,46 @@ frames to a `BackchannelDriver`, `broadcast_cue` on emit, surface `emit_count`)
 remains the headline follow-on, blocked only on the absent pipecat dep. The
 `should_abandon_turn` (iter-152) → `mic_chat` barge-path wiring remains, blocked
 on no transcript at VAD-trigger time.
+
+### iter-178 (2026-06-17) — `CUE_ROTATION ⊆ CUE_BANK`: guard the live cue path against bank drift (#7 hardening)
+
+- **The gap:** `CUE_ROTATION` (`session/cue_rotation.py`) is what the live cue
+  path *plays* — both the silence-driven `plan_cue_broadcast` → `broadcast_cue`
+  path (iter-172) and the mid-speech monitor's `BackchannelDecision.cue_type`
+  (iter-171). Each entry is a `cue_type` key that must exist in
+  `generate_cues.py`'s `CUE_BANK` — the dict that actually synthesizes the audio
+  into `session/cues/<cue_type>/`, the only thing `server.py`'s
+  `/cue/{cue_type}` endpoint can serve. **Nothing tested that the rotation keys
+  actually live in the bank.** The one existing check
+  (`test_rotation_is_non_empty_and_known_cues`) asserted `set(CUE_ROTATION) <=
+  known` against a **hardcoded** `{"mhmm", "i_see", …}` set — itself a
+  hand-maintained mirror that can drift from the bank just as easily. So a cue
+  renamed or dropped from `CUE_BANK` would render no `session/cues/<key>/`
+  directory, `/cue/{cue_type}` would 404, and `pipecat_server.broadcast_cue`
+  (which swallows non-200s) would *silently* drop the cue at runtime — the agent
+  goes quiet on that rotation slot with no signal anywhere.
+- **Shipped:** replaced the hardcoded-set test with the real invariant, derived
+  from the bank itself:
+  - `test_rotation_cues_all_exist_in_the_synthesis_bank` — `set(CUE_ROTATION) ⊆
+    set(CUE_BANK)`, loading `generate_cues.py`'s `CUE_BANK` by file path
+    (`pytest.importorskip("requests")` since that module imports `requests` at
+    module scope; the drift this guards is unrelated to whether the HTTP client
+    is installed).
+  - `test_rotation_cues_each_have_at_least_one_variant` — every rotation cue's
+    bank entry has ≥1 `(text, speed)` variant (an empty list synthesizes
+    nothing → `/cue/` 404s "no cues available").
+  - `test_rotation_is_non_empty` — kept the non-empty assertion as its own test.
+- **Doc note** added in `cue_rotation.py`'s `CUE_ROTATION` docstring + README
+  Research section pointing at the bank-drift guard.
+- **Verification:** `test_cue_rotation.py` → 7 passed. Full unit suite 2397
+  passed (2395 + 2 net: 3 new tests replaced 1 hardcoded-set test). Integration
+  30 passed, 1 skipped. `py_compile session/cue_rotation.py
+  tests/unit/test_cue_rotation.py` clean. Confirmed the invariant catches drift
+  by injecting a bogus rotation entry (`['nonexistent_cue']`) and seeing it
+  reported.
+
+**Next:** the live `pipecat_server.py` `Broadcaster` wiring for #7 (feed the VAD
+frames to a `BackchannelDriver`, `broadcast_cue` on emit, surface `emit_count`)
+remains the headline follow-on, blocked only on the absent pipecat dep. The
+`should_abandon_turn` (iter-152) → `mic_chat` barge-path wiring remains, blocked
+on no transcript at VAD-trigger time.

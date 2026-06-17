@@ -35,6 +35,14 @@ __all__ = [
 #: ``generate_cues.py``). ``mhmm`` appears twice on purpose — it is the most
 #: neutral continuer, so it should recur more often than the more pointed
 #: cues ("tell me more") that would feel pushy if repeated.
+#:
+#: Every key here MUST be a key in ``generate_cues.py``'s ``CUE_BANK`` (the dict
+#: that actually synthesizes the audio): a cue absent from the bank renders no
+#: ``session/cues/<cue_type>/`` directory, so ``server.py``'s ``/cue/{cue_type}``
+#: 404s and ``pipecat_server.broadcast_cue`` silently drops it. That
+#: rotation⊆bank invariant is enforced by ``tests/unit/test_cue_rotation.py``
+#: (iter-178) against the bank itself, not a hand-maintained mirror set, so a
+#: cue renamed/removed from the bank fails the test instead of 404ing at runtime.
 CUE_ROTATION = ["mhmm", "i_see", "right", "go_on", "mhmm", "tell_me_more"]
 
 

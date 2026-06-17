@@ -255,7 +255,11 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   backchannels don't repeat one sound; a held frame never burns a rotation
   slot. `CUE_ROTATION` is now the single source of truth shared with
   `TurnTakingEngine`'s silence-driven `PLAY_CUE` path (it used to live in
-  `turn_taking.py`), so the two cue paths can't drift apart. `reset()`
+  `turn_taking.py`), so the two cue paths can't drift apart. A test
+  (iter-178) also pins `set(CUE_ROTATION) ⊆ generate_cues.py`'s `CUE_BANK`
+  keys (each with ≥1 synthesis variant) against the bank *itself* rather than
+  a hand-maintained mirror set, so a cue renamed/removed from the bank fails
+  the test instead of silently 404ing the live `/cue/{cue_type}` path. `reset()`
   clears the rate limit for a fresh session but **keeps** the rotation
   position (a new monologue continues the rotation rather than always
   replaying "mhmm"). Mirrors the `UtteranceBuffer` / `UtteranceAggregator`
