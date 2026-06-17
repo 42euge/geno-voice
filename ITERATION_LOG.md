@@ -13874,3 +13874,119 @@ conversation).
     (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
     on a committed `baseline.json`; diversity-check surface paused per
     iter-143/144.
+
+## iter-158 — cross-turn UtteranceAggregator (backlog #9 live-loop, second pure half)
+
+**Branch:** `iter-158-aggregator` (merged ff to main, commit `9050872`)
+**Date:** 2026-06-16
+
+**Goal:** every lap since iter-155 named the same next direction — *wire
+`UtteranceBuffer` into the live STT loop* — and every lap deferred it. The real
+blocker was never the entrypoint refactor itself; it was a missing **pure
+piece**. The buffer's `offer(text, gap_secs)` requires the inter-utterance
+silence gap, but the buffer (like the `decide_utterance_continuation` seam
+beneath it) deliberately reads no clock and holds no timestamp — so the gap must
+be measured and injected. Measuring it requires the *one* scalar of cross-turn
+state the buffer can't carry: the previous utterance's endpoint timestamp. This
+lap ships that piece (`session/utterance_aggregator.py`), so the eventual
+entrypoint wiring stays a thin driver rather than a piece that has to invent the
+gap math inline.
+
+**Why:** the track's rhythm is to harden each pure primitive in isolation behind
+the off-by-default gate, keeping the entrypoint wiring a separate reviewable lap.
+The gap-measuring state is genuinely a distinct concern from the hold-and-merge
+state (iter-156) — separating them means the entrypoint lap is just "hand the
+aggregator two timestamps the recorder already surfaces, feed the returned
+turns." Both pure pieces (`UtteranceBuffer` + `UtteranceAggregator`) now exist;
+the live wiring is fully unblocked. Zero runtime behavior change today (the
+module is unwired, and even wired the default config is a transparent
+passthrough).
+
+**What changed:**
+
+1. **`session/utterance_aggregator.py` — `UtteranceAggregator`.** Owns a
+   `UtteranceBuffer` plus `prev_end_at` (the previous utterance's speech-end
+   timestamp, `None` when idle). `offer(text, speech_start_at, speech_end_at)`
+   computes `gap_secs = max(0.0, speech_start_at - prev_end_at)`, routes
+   `(text, gap_secs)` through the buffer, records `speech_end_at` as the new
+   `prev_end_at`, and returns an `AggregatedResult`. `flush()` releases any held
+   pending and clears `prev_end_at` so the next utterance starts a fresh
+   conversation.
+
+2. **`AggregatedResult` (frozen dataclass):** `turns` / `held` mirror
+   `BufferResult`, plus `gap_secs` — the inter-utterance silence the aggregator
+   measured for *this* offer (so call sites / tests see exactly what drove the
+   buffer's decision). First utterance / post-flush gap is `float('inf')` (no
+   prior endpoint to measure against). `.merged` property: True iff any released
+   turn repaired a false endpoint.
+
+3. **Subtracts the *endpoint*, not the start.** Silence is measured from when
+   the prior utterance's speech *stopped*. The two timestamps are already on the
+   recorder: `record_utterance_streaming` surfaces `speech_start_at` via
+   `out_metrics` (iter-082), and `_chat_loop` computes `speech_ended_at` (the
+   last-speech frame). The aggregator does the subtraction — the one stateful
+   step the buffer can't, because it has to remember the prior endpoint.
+
+4. **Negative raw gap clamped to `0.0`** — clock-skew across the recorder's
+   frame clock can stamp the next utterance's start slightly before the prior
+   end. Mirrors `_chat_loop`'s defensive clamps (TTC, eot_overhead). A
+   clamped-to-zero gap reads as "quick", which is correct: zero/negative silence
+   is the strongest possible mid-thought-pause signal.
+
+5. **Half-duplex invariant flows through end-to-end.** With a default
+   `FullDuplexConfig()` the underlying buffer is a transparent passthrough, so
+   the aggregator emits every utterance immediately with `false_endpoint=False`
+   and never holds — the gap is measured and reported but never changes the
+   output. Byte-for-byte today's behavior, zero added latency.
+
+6. **Injected-buffer seam** (mutually exclusive with the construction tuning
+   args — the ambiguous combination raises `ValueError` rather than silently
+   ignoring one). Otherwise `config` / `eou_config` / `max_gap_secs` /
+   `incomplete_ceiling` / `max_merge_depth` thread through to a freshly-built
+   buffer.
+
+7. **`tests/unit/test_utterance_aggregator.py` (new, +27 tests):** half-duplex
+   passthrough (emit-immediately, never-hold-even-in-the-merge-corner, empty
+   flush, explicit-default); gap computation (first-offer `inf`, start−prev_end,
+   uses-prev-*end*-not-start, negative clamp, `prev_end_at` updates each offer);
+   organic merge driven by the measured gap (quick-merges, long-gap-releases-
+   both, complete-prior-emits, flush-releases-held, flush-resets-to-inf,
+   flush-gap-inf); chained accumulation; tuning threading (`max_gap_secs`,
+   `max_merge_depth`, `incomplete_ceiling`); injected buffer (used / rejected
+   with config / rejected with eou_config); `AggregatedResult` contract
+   (defaults, frozen, `.merged`); purity (independent aggregators isolated);
+   empty-text handling. Loads by file path under a stub `session` namespace —
+   the same pipecat-bypass trick the sibling seams use.
+
+8. **Discoverability:** iter-158 findings-log entry + backlog #9 row update in
+   `docs/research/organic-turn-taking.md`; README Research section names
+   `UtteranceAggregator`, its `offer`/`flush` API, the `AggregatedResult.gap_secs`
+   field, and the thin-driver wiring it enables.
+
+**Verification:**
+- `python -m pytest tests/unit/test_utterance_aggregator.py -q` → **27 passed in 0.10s**.
+- Full unit suite (in worktree, pre-merge): **2129 passed** (2102 prior + 27).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `py_compile session/utterance_aggregator.py` clean.
+- Re-ran on main post-merge: **27 passed**.
+
+**Notes:**
+- **No runtime behavior change.** The module is unwired; nothing in the live
+  `mic_chat` / `mic_talk` / `pipecat_server` path imports `utterance_aggregator`
+  yet, and even when wired the default config makes it a transparent passthrough.
+- Next directions:
+  - **The live STT-loop wiring is now fully unblocked** — both pure pieces
+    (`UtteranceBuffer` + `UtteranceAggregator`) exist. Wire `UtteranceAggregator`
+    into `_chat_loop` / `pipecat_server`: instantiate from
+    `full_duplex_config_from_env`, call `offer(transcript, speech_start_at,
+    speech_ended_at)` per finalized utterance, feed `result.turns` to the engine,
+    call `flush()` on long-silence / shutdown, and set
+    `TurnMetrics.false_endpoint` from each turn's flag — closing iter-154's
+    metric live-population loop on the user side.
+  - **Wire `should_abandon_turn`** (iter-152) into the `mic_chat` barge path, and
+    **`should_emit_backchannel`** (iter-153) into the live cue path — both gated
+    behind their full-duplex sub-flags.
+  - Carried over (off-track): the CI workflow
+    (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
+    on a committed `baseline.json`; diversity-check surface paused per
+    iter-143/144.
