@@ -49,6 +49,8 @@ if "session" not in sys.modules:
     sys.modules["session"] = _pkg
 if "session.full_duplex" not in sys.modules:
     _load_by_path("session.full_duplex", "full_duplex.py", package="session")
+if "session.cue_rotation" not in sys.modules:
+    _load_by_path("session.cue_rotation", "cue_rotation.py", package="session")
 if "session.backchannel_timing" not in sys.modules:
     _load_by_path(
         "session.backchannel_timing",
@@ -62,6 +64,8 @@ _bm = _load_by_path(
 
 BackchannelMonitor = _bm.BackchannelMonitor
 BackchannelDecision = _bm.BackchannelDecision
+
+CUE_ROTATION = sys.modules["session.cue_rotation"].CUE_ROTATION
 
 FullDuplexConfig = sys.modules["session.full_duplex"].FullDuplexConfig
 BackchannelTimingConfig = sys.modules[
@@ -274,6 +278,75 @@ def test_decision_is_frozen():
     d = m.observe(now=12.0, monologue_start_at=0.0, pause_secs=0.5)
     with pytest.raises(Exception):
         d.emit = False  # frozen dataclass
+
+
+# ---- cue selection / rotation (the second piece of cross-event state) ------
+
+def test_emit_carries_first_cue_hold_carries_none():
+    """An emit names a cue from the rotation; a hold carries cue_type=None."""
+    m = _mon()
+    # Warm-up hold: no cue to play.
+    held = m.observe(now=2.0, monologue_start_at=0.0, pause_secs=0.5)
+    assert held.emit is False
+    assert held.cue_type is None
+    # First emit ⇒ first cue in the rotation.
+    d = m.observe(now=12.0, monologue_start_at=0.0, pause_secs=0.5)
+    assert d.emit is True
+    assert d.cue_type == CUE_ROTATION[0]
+
+
+def test_consecutive_emits_rotate_through_the_bank():
+    """Each emit advances the rotation so consecutive cues differ."""
+    m = _mon()
+    cues = []
+    # Emits spaced beyond the 5s rate limit so each fires.
+    for t in (12.0, 18.0, 24.0, 30.0, 36.0, 42.0, 48.0):
+        d = m.observe(now=t, monologue_start_at=0.0, pause_secs=0.5)
+        assert d.emit is True
+        cues.append(d.cue_type)
+    # First six cues exhaust the rotation in order; the seventh wraps to [0].
+    assert cues == list(CUE_ROTATION) + [CUE_ROTATION[0]]
+
+
+def test_held_frames_do_not_burn_rotation_slots():
+    """Rate-limited / warm-up holds between emits don't advance the cue."""
+    m = _mon()
+    first = m.observe(now=12.0, monologue_start_at=0.0, pause_secs=0.5)
+    assert first.cue_type == CUE_ROTATION[0]
+    # A flurry of rate-limited holds (below the 5s gap) — none should rotate.
+    for t in (13.0, 14.0, 15.0):
+        held = m.observe(now=t, monologue_start_at=0.0, pause_secs=0.5)
+        assert held.emit is False
+        assert held.cue_type is None
+    # Next real emit picks the SECOND cue, not skipping ahead past the holds.
+    second = m.observe(now=18.0, monologue_start_at=0.0, pause_secs=0.5)
+    assert second.emit is True
+    assert second.cue_type == CUE_ROTATION[1]
+    assert m.cue_index == 2
+
+
+def test_reset_keeps_cue_rotation_position():
+    """reset() clears the rate limit but the rotation continues (no replay)."""
+    m = _mon()
+    first = m.observe(now=12.0, monologue_start_at=0.0, pause_secs=0.5)
+    assert first.cue_type == CUE_ROTATION[0]
+    assert m.cue_index == 1
+    m.reset()
+    assert m.cue_index == 1  # rotation position survives reset
+    # A fresh long monologue emits immediately (rate limit cleared) but the
+    # cue is the SECOND, not a replay of the first.
+    after = m.observe(now=25.0, monologue_start_at=12.0, pause_secs=0.5)
+    assert after.emit is True
+    assert after.cue_type == CUE_ROTATION[1]
+
+
+def test_half_duplex_never_advances_cue():
+    """Inert (half-duplex) monitor never picks a cue or advances the index."""
+    m = BackchannelMonitor()  # default half-duplex
+    d = m.observe(now=100.0, monologue_start_at=0.0, pause_secs=0.5)
+    assert d.emit is False
+    assert d.cue_type is None
+    assert m.cue_index == 0
 
 
 # ---- default timing config (sanity that real defaults compose) -------------

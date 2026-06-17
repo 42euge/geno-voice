@@ -17,6 +17,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 
+from session.cue_rotation import CUE_ROTATION, cue_for_index
 from session.triggers import TriggerResult, TriggerType, ResponseHint, detect_triggers
 
 
@@ -93,7 +94,9 @@ class TurnTakingConfig:
     long_monologue_secs: float = 60.0
 
 
-CUE_ROTATION = ["mhmm", "i_see", "right", "go_on", "mhmm", "tell_me_more"]
+# ``CUE_ROTATION`` now lives in ``session/cue_rotation.py`` (the single source
+# of truth shared with the mid-speech ``BackchannelMonitor``); it is re-exported
+# here for backward compatibility with existing importers.
 
 
 class TurnTakingEngine:
@@ -262,6 +265,6 @@ class TurnTakingEngine:
         return True
 
     def _next_cue(self) -> CueSelection:
-        cue = CUE_ROTATION[self._cue_index % len(CUE_ROTATION)]
+        cue = cue_for_index(self._cue_index)
         self._cue_index += 1
         return CueSelection(cue_type=cue)

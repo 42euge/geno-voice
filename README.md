@@ -247,11 +247,21 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   decision is `EMIT` so the `min_between_cues_secs` rate limit engages
   across calls — the one piece of cross-event state the pure seam can't
   carry (without it the agent would re-emit "mhmm" on every qualifying
-  pause frame). `reset()` clears the rate limit for a fresh session.
-  Mirrors the `UtteranceBuffer` / `UtteranceAggregator` driver relationship
-  to the merge seam; default (half-duplex) config ⇒ `emit=False` always and
-  state never mutates; the live `pipecat_server` cue-path wiring is the
-  named follow-on. Also shipped: the **organic-path naturalness
+  pause frame). It also owns the **second** piece of cross-event state the
+  seam can't carry: its position in the shared cue rotation
+  (`session/cue_rotation.py`, `tests/unit/test_cue_rotation.py`) — on an
+  emit `observe` returns `BackchannelDecision.cue_type`, advancing through
+  `CUE_ROTATION` ("mhmm" → "i see" → "right" → ...) so consecutive
+  backchannels don't repeat one sound; a held frame never burns a rotation
+  slot. `CUE_ROTATION` is now the single source of truth shared with
+  `TurnTakingEngine`'s silence-driven `PLAY_CUE` path (it used to live in
+  `turn_taking.py`), so the two cue paths can't drift apart. `reset()`
+  clears the rate limit for a fresh session but **keeps** the rotation
+  position (a new monologue continues the rotation rather than always
+  replaying "mhmm"). Mirrors the `UtteranceBuffer` / `UtteranceAggregator`
+  driver relationship to the merge seam; default (half-duplex) config ⇒
+  `emit=False` always and state never mutates; the live `pipecat_server`
+  cue-path wiring is the named follow-on. Also shipped: the **organic-path naturalness
   metrics** (`examples/_chat_metrics.py`,
   `tests/unit/test_emit_organic_block.py`) — two additive `TurnMetrics`
   fields, `false_endpoint` (the EOU decision fired early and the user

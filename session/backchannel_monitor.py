@@ -22,16 +22,20 @@ chatter "mhmm mhmm mhmm" on every qualifying pause frame. The monitor records
 the emit timestamp the moment it decides ``EMIT``, so the *next* ``observe``
 sees a real ``secs_since_last_backchannel`` and the rate limit finally bites.
 
-  - ``BackchannelMonitor`` owns a single scalar of cross-event state: the
-    timestamp of the most recent backchannel it emitted (``None`` until the
-    first emit).
+  - ``BackchannelMonitor`` owns two scalars of cross-event state the pure seam
+    can't carry: the timestamp of the most recent backchannel it emitted
+    (``None`` until the first emit), and its position in the shared
+    ``CUE_ROTATION`` (``session/cue_rotation.py``) so consecutive cues rotate
+    ("mhmm" → "i see" → "right" → ...) instead of repeating one sound.
   - ``observe(*, now, monologue_start_at, pause_secs)`` computes
     ``user_speaking_secs = now - monologue_start_at`` and
     ``secs_since_last_backchannel = now - last_emit`` (``None`` if never),
     routes them through ``decide_backchannel_timing``, and — *iff* the decision
-    is ``EMIT`` — records ``now`` as the new last-emit timestamp before
-    returning. Returns a small frozen :class:`BackchannelDecision` so call
-    sites read clearly and tests can assert on the derived quantities.
+    is ``EMIT`` — records ``now`` as the new last-emit timestamp and picks the
+    next cue from the rotation before returning. Returns a small frozen
+    :class:`BackchannelDecision` (carrying the actionable ``cue_type`` on an
+    emit) so call sites read clearly and tests can assert on the derived
+    quantities.
   - ``reset()`` clears the last-emit timestamp so a fresh session (or a long
     lull) starts the rate limit over.
 
@@ -68,6 +72,7 @@ from session.backchannel_timing import (
     BackchannelTimingConfig,
     decide_backchannel_timing,
 )
+from session.cue_rotation import cue_for_index
 from session.full_duplex import FullDuplexConfig
 
 __all__ = [
@@ -93,12 +98,19 @@ class BackchannelDecision:
       - ``secs_since_last_backchannel`` — seconds since the monitor last
         emitted, or ``None`` if it never has this session (the value that the
         stateless seam could not compute on its own).
+      - ``cue_type`` — *which* cue to play, advanced through the shared
+        ``CUE_ROTATION`` on each emit so consecutive backchannels don't repeat
+        ("mhmm" then "i see" then "right" ...). ``None`` when ``emit`` is False
+        (no cue to play). This is the second piece of cross-event state the
+        pure seam can't carry — where we are in the rotation — so the monitor
+        owns it alongside the last-emit timestamp.
     """
 
     emit: bool
     user_speaking_secs: float
     pause_secs: float
     secs_since_last_backchannel: float | None
+    cue_type: str | None = None
 
 
 class BackchannelMonitor:
@@ -134,6 +146,15 @@ class BackchannelMonitor:
         self._last_backchannel_at: float | None = None
         #: How many backchannels the monitor has emitted (observability).
         self._emit_count: int = 0
+        #: Position in the shared ``CUE_ROTATION``. Advanced only on an actual
+        #: emit, so consecutive backchannels rotate through the cue bank
+        #: ("mhmm" → "i see" → "right" → ...) instead of repeating one cue. The
+        #: second piece of cross-event state the pure seam can't carry (the
+        #: first being ``_last_backchannel_at``). Mirrors ``_cue_index`` in
+        #: ``TurnTakingEngine``; unlike the rate-limit clock it survives
+        #: ``reset`` so a new monologue continues the rotation rather than
+        #: replaying "mhmm" every time.
+        self._cue_index: int = 0
 
     @property
     def active(self) -> bool:
@@ -149,6 +170,11 @@ class BackchannelMonitor:
     def emit_count(self) -> int:
         """How many backchannels this monitor has emitted (0 until the first)."""
         return self._emit_count
+
+    @property
+    def cue_index(self) -> int:
+        """Current position in the shared ``CUE_ROTATION`` (advances per emit)."""
+        return self._cue_index
 
     def observe(
         self,
@@ -192,6 +218,7 @@ class BackchannelMonitor:
             timing=self._timing,
         )
         emit = timing is BackchannelTiming.EMIT
+        cue_type: str | None = None
         if emit:
             # The one stateful step the seam can't do: remember this emit so the
             # next observe sees a real ``secs_since_last_backchannel`` and the
@@ -199,12 +226,18 @@ class BackchannelMonitor:
             # qualifying pause frame.
             self._last_backchannel_at = now
             self._emit_count += 1
+            # Pick *which* cue and advance the rotation — the other piece of
+            # cross-event state. Only on a real emit, so a held frame never
+            # burns a rotation slot.
+            cue_type = cue_for_index(self._cue_index)
+            self._cue_index += 1
 
         return BackchannelDecision(
             emit=emit,
             user_speaking_secs=user_speaking_secs,
             pause_secs=pause_secs,
             secs_since_last_backchannel=secs_since,
+            cue_type=cue_type,
         )
 
     def reset(self) -> None:
@@ -215,6 +248,9 @@ class BackchannelMonitor:
         ``secs_since_last_backchannel=None`` and the warm-up / rate-limit gates
         evaluate as if the monitor had never emitted. The ``emit_count`` is a
         lifetime tally and is intentionally *not* reset, so a session summary
-        can still report the total.
+        can still report the total. The cue-rotation position is likewise *not*
+        reset, so a fresh monologue continues the rotation rather than always
+        replaying the first cue ("mhmm") — the same way a person wouldn't open
+        every new lull with the identical sound.
         """
         self._last_backchannel_at = None
