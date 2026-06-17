@@ -474,7 +474,54 @@ class ChatLoop:
             if n_words > 0:
                 metrics.user_wpm = (n_words / speech_dur) * 60.0
 
-        # ---- Phase 2: LLM stream + worker + watcher ----
+        # ---- Phase 2: LLM stream + synth/play + barge-in watcher ----
+        # iter-168: extracted to _stream_response so the same response
+        # machinery can be driven by respond_to_text (a flushed mid-thought
+        # fragment answered as its own turn — backlog #9's spoken-response hop),
+        # not only by a mic recording. run_one_turn owns Phase 1 (record +
+        # STT + aggregate); the response half is now shared.
+        return self._stream_response(
+            messages,
+            metrics,
+            speech_ended_at=speech_ended_at,
+            stt_time=stt_time,
+            turn_start=turn_start,
+            displaced=displaced,
+        )
+
+    def _stream_response(
+        self,
+        messages: list[dict],
+        metrics: TurnMetrics,
+        *,
+        speech_ended_at: float,
+        stt_time: float,
+        turn_start: float,
+        displaced: tuple[str, ...] = (),
+    ) -> TurnResult:
+        """The LLM-stream → synth/play → barge-in-watcher half of a turn.
+
+        iter-168: extracted from ``run_one_turn`` so two callers can share it:
+          - ``run_one_turn`` — after recording + STT + organic aggregation,
+            with ``metrics`` carrying the measured STT timings.
+          - ``respond_to_text`` — a flushed mid-thought fragment (backlog #9's
+            mid-session flush, iter-167) answered as its own turn, with no
+            recording: ``metrics`` carries only the transcript and synthetic
+            anchors (``stt_time=0``, ``speech_ended_at``/``turn_start`` = now).
+
+        The method appends the user message, opens the LLM stream, runs the
+        synth/play worker and the barge-in watcher, fills the remaining
+        TurnMetrics fields, appends the assistant message on success, and
+        returns the ``TurnResult``. Behavior on the run_one_turn path is
+        byte-for-byte the pre-iter-168 inline Phase 2 — the body below is moved,
+        not changed.
+
+        ``displaced`` is the mid-thought fragments the aggregator released
+        alongside this turn (iter-162); it is carried straight onto the result.
+        ``respond_to_text`` passes the default empty tuple (a flushed fragment
+        IS the turn — nothing was displaced by it).
+        """
+        # ---- LLM stream + worker + watcher ----
         messages.append({"role": "user", "content": metrics.transcript})
         # iter-077: count approximate context tokens being sent to
         # the LLM. Whitespace-split is a rough but consistent
@@ -1038,6 +1085,56 @@ class ChatLoop:
             next_primed_frames=next_primed,
             had_error=False,
             displaced=displaced,
+        )
+
+    def respond_to_text(self, messages: list[dict], text: str) -> TurnResult:
+        """Answer a piece of text as its own turn — no mic recording.
+
+        iter-168: the spoken-response hop for backlog #9's mid-session flush.
+        iter-167 wired ``run_session`` to *flush* a held mid-thought fragment on
+        a long inter-turn idle silence and record it on
+        ``SessionState.flushed_utterances`` — but it could only record the
+        fragment, never *answer* it, because ``run_one_turn`` always records
+        from the mic first. This entrypoint gives the flushed text a path
+        straight into the LLM→TTS half of a turn.
+
+        It builds a TurnMetrics around ``text`` with synthetic anchors — no STT
+        happened, so ``stt_time`` is 0 and the speech/turn-start clocks are
+        sampled now — then delegates to the shared ``_stream_response``. The
+        user message is appended and the assistant message is appended on
+        success, exactly as a recorded turn would, so the conversation history
+        stays consistent and the response is spoken through the same worker.
+
+        Mutates ``messages`` in place (same contract as ``run_one_turn``):
+        appends the user message, appends the assistant message on success, and
+        pops the user message on LLM error.
+
+        A blank / whitespace-only ``text`` produces no turn — returns a
+        no-metrics ``TurnResult`` without touching ``messages`` (the same shape
+        ``run_one_turn`` returns for a too-short transcript), so a caller that
+        flushes an empty fragment is a harmless no-op.
+
+        Returns the ``TurnResult`` from ``_stream_response`` (metrics populated
+        on success, ``had_error`` on an LLM failure). ``displaced`` is always
+        empty — a flushed fragment IS the turn; nothing was displaced by it.
+        """
+        stripped = text.strip()
+        if not stripped:
+            return TurnResult(metrics=None, next_primed_frames=None)
+        metrics = TurnMetrics(
+            speech_duration=0.0,
+            model=self._llm_config.get("model", ""),
+        )
+        metrics.transcript = stripped
+        # No recording happened — anchor the response-half clocks at "now" so
+        # TTFS / total_e2e are measured from the moment we start answering.
+        now = self._clock()
+        return self._stream_response(
+            messages,
+            metrics,
+            speech_ended_at=now,
+            stt_time=0.0,
+            turn_start=now,
         )
 
     @staticmethod

@@ -404,6 +404,22 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   Records but does not yet *respond* to the fragment — a `ChatLoop` text-only
   response entrypoint (`run_one_turn` always records from the mic first) is the
   named follow-on.
+  **`ChatLoop.respond_to_text` — the spoken-response entrypoint**
+  (`ChatLoop.respond_to_text(messages, text)` + the extracted
+  `ChatLoop._stream_response` half, `examples/_chat_loop.py`,
+  `tests/unit/test_chat_loop.py`, iter-168): the named follow-on. The LLM-stream
+  → synth/play → barge-in-watcher half of `run_one_turn` is pulled into a shared
+  `_stream_response`, leaving `run_one_turn` to own only Phase 1 (record + STT +
+  organic aggregation). `respond_to_text` drives that shared half on a piece of
+  text with **no mic recording** — building a `TurnMetrics` with synthetic
+  anchors (`stt_time=0`, speech/turn clocks sampled now) and answering the text
+  as its own turn (user + assistant appended, response spoken through the same
+  worker). This is the path a flushed mid-thought fragment (iter-167) needs to be
+  *answered* rather than only recorded; blank text is a no-op, and the
+  `run_one_turn` path stays byte-for-byte unchanged (the Phase 2 body is moved,
+  not modified). Wiring `run_session`'s `_maybe_flush_on_idle` to call it (so a
+  flushed fragment is spoken, not just listed in `flushed_utterances`) is the
+  remaining hop.
 - **[Performance metrics taxonomy](docs/perf-metrics-taxonomy.md)** — a
   catalog of metrics worth instrumenting on a local-first voice agent.
 

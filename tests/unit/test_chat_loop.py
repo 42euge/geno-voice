@@ -736,3 +736,117 @@ class TestIdleTimeoutWiring:
         result = loop.run_one_turn([])
         assert result.metrics is None
         assert result.idle_timed_out is False
+
+
+class TestRespondToText:
+    """iter-168: respond_to_text — answer a flushed mid-thought fragment
+    (backlog #9's spoken-response hop) as its own turn, with NO mic recording.
+
+    These tests never push mic audio: respond_to_text bypasses Phase 1
+    (record + STT) entirely and drives only the shared _stream_response half.
+    """
+
+    def _loop(self, *, speaker_factory, llm_text="Sure thing. Here you go."):
+        # mic is never read by respond_to_text, but ChatLoop requires one.
+        mic = VirtualMicStream(rate=RATE, chunk_size=CHUNK)
+        return _make_chat_loop(
+            mic=mic,
+            speaker_factory=speaker_factory,
+            llm_text=llm_text,
+        )
+
+    def test_answers_text_and_updates_history(self):
+        spk_holder = {"spk": None}
+
+        def factory():
+            spk_holder["spk"] = VirtualSpeakerStream(rate=24000)
+            return spk_holder["spk"]
+
+        loop = self._loop(
+            speaker_factory=factory,
+            llm_text="I am well. Thanks for asking.",
+        )
+        messages = [{"role": "system", "content": "be nice"}]
+        result = loop.respond_to_text(messages, "how are you")
+
+        assert result.metrics is not None
+        assert result.had_error is False
+        m = result.metrics
+        # The flushed fragment IS the turn's transcript.
+        assert m.transcript == "how are you"
+        assert m.response.startswith("I am well")
+        assert "Thanks for asking" in m.response
+        assert m.sentences_spoken >= 1
+        assert m.llm_total > 0
+        # No recording happened, so STT timings are zeroed.
+        assert m.stt_time == 0.0
+        assert m.speech_duration == 0.0
+        # History updated exactly like a recorded turn: user + assistant.
+        assert len(messages) == 3
+        assert messages[1] == {"role": "user", "content": "how are you"}
+        assert messages[2]["role"] == "assistant"
+        # Audio was actually spoken through the worker.
+        assert len(spk_holder["spk"].captured) > 0
+
+    def test_strips_whitespace_from_text(self):
+        loop = self._loop(speaker_factory=lambda: VirtualSpeakerStream(rate=24000))
+        messages = [{"role": "system", "content": "x"}]
+        result = loop.respond_to_text(messages, "  the deadline is  ")
+        assert result.metrics is not None
+        assert result.metrics.transcript == "the deadline is"
+        assert messages[1]["content"] == "the deadline is"
+
+    def test_blank_text_is_a_no_op(self):
+        spk_holder = {"spk": None}
+
+        def factory():
+            spk_holder["spk"] = VirtualSpeakerStream(rate=24000)
+            return spk_holder["spk"]
+
+        loop = self._loop(speaker_factory=factory)
+        messages = [{"role": "system", "content": "x"}]
+        result = loop.respond_to_text(messages, "   ")
+        # No turn produced, no history mutation, no speaker opened.
+        assert result.metrics is None
+        assert result.next_primed_frames is None
+        assert messages == [{"role": "system", "content": "x"}]
+        assert spk_holder["spk"] is None
+
+    def test_empty_text_is_a_no_op(self):
+        loop = self._loop(speaker_factory=lambda: VirtualSpeakerStream(rate=24000))
+        messages = []
+        result = loop.respond_to_text(messages, "")
+        assert result.metrics is None
+        assert messages == []
+
+    def test_displaced_is_always_empty(self):
+        loop = self._loop(speaker_factory=lambda: VirtualSpeakerStream(rate=24000))
+        result = loop.respond_to_text([], "answer this")
+        # A flushed fragment IS the turn — nothing was displaced by it.
+        assert result.displaced == ()
+
+    def test_llm_error_pops_user_message(self):
+        loop = ChatLoop(
+            mic=VirtualMicStream(rate=RATE, chunk_size=CHUNK),
+            speaker_factory=lambda: VirtualSpeakerStream(rate=24000),
+            rate=RATE,
+            chunk=CHUNK,
+            stt_engine=SimpleNamespace(_last_text=None, model_repo="stub"),
+            transcribe_fn=lambda w: "unused",
+            llm_stream_fn=_llm_stream_raising(),
+            llm_config={"model": "stub-model"},
+            synth_fn=_const_synth(),
+            play_fn=_instant_play,
+        )
+        messages = [{"role": "system", "content": "x"}]
+        result = loop.respond_to_text(messages, "trigger the error")
+        assert result.metrics is None
+        assert result.had_error is True
+        # The user message we appended was popped on error — history clean.
+        assert messages == [{"role": "system", "content": "x"}]
+
+    def test_model_stamped_from_config(self):
+        loop = self._loop(speaker_factory=lambda: VirtualSpeakerStream(rate=24000))
+        result = loop.respond_to_text([], "hello there")
+        assert result.metrics is not None
+        assert result.metrics.model == "stub-model"
