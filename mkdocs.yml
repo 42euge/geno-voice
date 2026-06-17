@@ -42,6 +42,7 @@ nav:
   - Getting Started: getting-started.md
   - Research:
       - Organic / full-duplex turn-taking: research/organic-turn-taking.md
+      - Voice-capture tuning: research/voice-capture-tuning.md
       - Performance metrics taxonomy: perf-metrics-taxonomy.md
 
 extra_css:
