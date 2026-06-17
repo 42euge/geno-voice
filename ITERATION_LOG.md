@@ -13564,3 +13564,112 @@ rather than asserting the behavior is better.
     (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still
     blocked on a committed `baseline.json`; diversity-check surface paused per
     iter-143/144.
+
+## iter-155 — utterance buffer-merge decision: decide_utterance_continuation (backlog #9)
+
+**Branch:** `iter-155-utterance-merge` (merged ff to main, commit `dcf16dc`)
+**Date:** 2026-06-16
+
+**Goal:** the organic turn-taking track has shipped a string of *pure decision
+seams* (#1 classifier, #2 turn-decider, #3 config gate, #4 text-EOU, #5
+barge-decision, #7 backchannel-timing) plus #8's measurement surface. Research
+Section 4 ("Utterance queueing / interruption") names **two** halves: the
+agent-side abandon-vs-finish decision (shipped #5, iter-152) and a still-unbuilt
+**user-side buffer/merge of partial utterances**. This lap ships that second
+half as backlog **#9**: `session/utterance_merging.py`.
+
+**Why:** the classic silence-only false endpoint. VAD closes a window on
+trailing silence, STT finalizes "I was thinking about the", the engine treats
+it as a finished turn — but the user only paused mid-thought ("…the deadline"
+lands a beat later). Today those become two turns and the first fires a
+premature response. A human hears "about the" and *knows* more is coming,
+because the syntax is unfinished — exactly the signal `text_eou.py` (#4) already
+computes. This is the decision that would *avoid* the `false_endpoint` events
+iter-154's metric *counts*; measure and repair shipped one lap apart.
+
+**What changed:**
+
+1. **`session/utterance_merging.py` (new) — the pure seam.**
+   `decide_utterance_continuation(prev_text, next_text, gap_secs, *, config,
+   eou_config, max_gap_secs, incomplete_ceiling)` returns `UtteranceAction.MERGE`
+   (the prior endpoint was a false positive — glue the two into one turn) or
+   `NEW` (a genuine new turn). Convenience boolean `should_merge_utterance`.
+   Pure — no I/O, no clock reads; the caller injects the measured `gap_secs`.
+   Composes `text_eou.utterance_completeness` (#4, iter-150) for the text gate
+   and `FullDuplexConfig` (#3, iter-151) for the off-by-default gate.
+
+2. **Two gates, both required (organic mode only).** A `MERGE` needs (1) a
+   *quick* gap (`gap_secs <= max_gap_secs`, default 2.0s — the `turn_decider`
+   silence-floor "a pause, not a turn-end") **and** (2) an *unfinished* prior
+   (`utterance_completeness(prev) <= incomplete_ceiling`, default 0.6 — the
+   `text_eou` complete-threshold, so a prior the boolean `is_utterance_complete`
+   calls incomplete is exactly a merge candidate). Only the unfinished-AND-quick
+   corner is a false endpoint to repair: a quick gap after a complete sentence
+   is a new thought; an unfinished prior after a long gap is an abandoned one.
+   Both stay `NEW`.
+
+3. **Fourth `FullDuplexConfig` sub-flag `utterance_merging`** (+ env var
+   `GENO_FULL_DUPLEX_UTTERANCE_MERGING`, `utterance_merging_active()` resolver,
+   folded into `any_active()` and `full_duplex_config_from_env`). Follows the
+   exact three-state `bool | None` inherit pattern of the existing sub-flags.
+
+4. **The half-duplex invariant is the whole point.** With a default
+   `FullDuplexConfig()` (`utterance_merging` inactive), the function returns
+   `NEW` for *every* input — byte-for-byte today's "each endpoint is its own
+   turn" behavior; the prior text isn't even scored on that path. So wiring this
+   into the live STT loop (the follow-on) can never regress the proven
+   half-duplex path; the new behavior lives entirely behind the off-by-default
+   switch.
+
+5. **Asymmetry vs `barge_decision` is deliberate.** There the conservative
+   default is `ABANDON` (stay responsive — never trap a user talking over a
+   droning agent); here it is `NEW` (never glue two genuinely separate turns
+   together). Both err toward today's behavior on ambiguity, but the "safe"
+   direction differs by which failure is worse for each path. Documented in the
+   module docstring.
+
+6. **`tests/unit/test_utterance_merging.py` (new, +29 tests):** the half-duplex
+   invariant (default/explicit-default config ⇒ `NEW` across a grid, boolean
+   False); the two organic gates (unfinished+quick merges; conjunction/filler
+   endings merge; complete-prior, long-gap, and complete+long all `NEW`);
+   boundaries (gap at-max inclusive, just-above exclusive, zero; completeness
+   at-ceiling inclusive via comma=0.6, above-ceiling `NEW`); empty/blank/
+   empty-prior continuation; sub-flag resolution (master-off+sub-on,
+   master-on+sub-off); custom `max_gap_secs`/`incomplete_ceiling`/`eou_config`;
+   purity (no input/config mutation, keyword-only config, distinct enum values,
+   defaults match sibling seams, boolean matches decide). Loads by file path
+   under a stub `session` namespace — the same pipecat-bypass trick the
+   barge_decision/text_eou tests use. Plus **+8** `test_full_duplex.py` cases
+   for the fourth sub-flag (defaults, inherit, hold-back, env on/off/bad-value).
+
+7. **Discoverability:** added backlog **#9 DONE iter-155** (decision seam;
+   STT-loop wiring noted as the follow-on) in `docs/research/organic-turn-
+   taking.md` with a findings-log entry; extended the README Research section to
+   name the seam, its `MERGE`/`NEW` semantics, the two gates, the half-duplex
+   guarantee, and its link to the iter-154 `false_endpoint` metric.
+
+**Verification:**
+- `python -m pytest tests/unit/test_utterance_merging.py tests/unit/test_full_duplex.py -q` → **73 passed in 0.11s**.
+- Full unit suite (on main, post-merge): **2058 passed** (2023 prior + 29 + ~8 new − overlap; net +35).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `python -m py_compile session/utterance_merging.py session/full_duplex.py` → clean.
+
+**Notes:**
+- **No runtime behavior change.** The new module is unwired; the new sub-flag
+  defaults to inherit-off. Nothing in the live `mic_chat`/`mic_talk`/
+  `pipecat_server` path imports `utterance_merging` yet, so behavior is
+  byte-for-byte today's.
+- Next directions:
+  - **Wire `should_merge_utterance` into the live STT loop** (the direct
+    follow-on): hold the just-finalized text + its silence gap, merge the next
+    chunk before feeding the turn engine, and set `TurnMetrics.false_endpoint`
+    when a merge fires — closing iter-154's metric live-population loop on the
+    user side, just as `decide_barge_action`⇒`FINISH` would close it on the
+    continuer side.
+  - **Wire `should_abandon_turn`** (iter-152) into the `mic_chat` barge path,
+    and **`should_emit_backchannel`** (iter-153) into the live cue path — both
+    gated behind their full-duplex sub-flags.
+  - Carried over (off-track): the CI workflow
+    (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still
+    blocked on a committed `baseline.json`; diversity-check surface paused per
+    iter-143/144.
