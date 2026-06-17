@@ -22,8 +22,12 @@ boundary* pause — long enough to be a real gap (not mid-word), but clearly
 ``turn_decider.py``'s ``silence_floor_secs`` (2.0s, "a pause, not a turn-end"),
 so the two paths partition the silence axis cleanly: ``[min_pause, max_pause)``
 is the mid-speech backchannel window; ``≥ silence_backchannel_min`` is the
-turn-end cue window. Plus the same rate limits the engine already uses (a
-minimum monologue length before the first cue, a minimum gap between cues), so
+turn-end cue window. That no-overlap partition requires ``max_pause_secs <=
+silence_backchannel_min`` (2.0 ≤ 4.0), pinned by
+``tests/unit/test_cue_window_partition_invariant.py`` (iter-180) against
+``turn_taking.py`` itself, not a literal. Plus the same rate limits the engine
+already uses (a minimum monologue length before the first cue, a minimum gap
+between cues), so
 the agent doesn't backchannel over a one-word reply or chatter "mhmm mhmm mhmm."
 
 **The half-duplex invariant is the whole point.** With a default
@@ -88,7 +92,11 @@ class BackchannelTimingConfig:
         backchannel paths partition the silence axis with no overlap. That
         cross-module equality is pinned by
         ``tests/unit/test_shared_silence_floor_invariant.py`` (iter-179) against
-        the sibling modules themselves, not a hardcoded ``2.0``.
+        the sibling modules themselves, not a hardcoded ``2.0``. And it must
+        stay ``<=`` ``turn_taking.py``'s ``silence_backchannel_min`` (4.0s,
+        where the turn-end cue window opens) so this mid-speech window and that
+        turn-end window don't overlap — pinned by
+        ``tests/unit/test_cue_window_partition_invariant.py`` (iter-180).
     """
 
     min_speaking_before_first_cue_secs: float = 15.0

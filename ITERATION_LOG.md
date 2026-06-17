@@ -15900,3 +15900,86 @@ looks at a sibling. This lap makes that drift a red test.
     the `mic_chat` barge path; blocked on no transcript at VAD-trigger time.
   - Carried over (off-track): the CI workflow still blocked on a committed
     `baseline.json`; diversity-check surface paused per iter-143/144.
+
+## iter-180 — the cue-window partition invariant: pin `max_pause_secs <= silence_backchannel_min` cross-module (#7 hardening)
+
+**Branch:** `iter-180-cue-window-partition` (merged ff to main)
+**Date:** 2026-06-17
+
+**Goal:** Pin the *other* edge of the silence axis that the organic stack's
+docstrings assert but no test enforced — the **no-overlap inequality** between
+the two backchannel-cue paths. The direct sibling of iter-179: that lap pinned
+the three scalars that are deliberately *equal* (`reset_gap_secs ==
+max_pause_secs == silence_floor_secs` = 2.0); this lap pins the inequality
+between the two scalars that are deliberately *not* equal — the upper edge of
+the mid-speech backchannel window (`backchannel_timing.py`'s `max_pause_secs`,
+2.0s) and the lower edge of the silence-driven turn-end cue window
+(`turn_taking.py`'s `silence_backchannel_min`, 4.0s) — against the sibling
+module itself, not a hardcoded literal.
+
+**Why:** geno-voice has two distinct backchannel-cue paths designed to own
+disjoint stretches of the trailing-silence axis. The **mid-speech backchannel**
+path (`backchannel_timing.py`, iter-153) emits a short "mhmm" during a brief
+clause-boundary pause — window `[min_pause_secs, max_pause_secs)` = `[0.3, 2.0)`.
+The **turn-end cue** path (`turn_taking.py`'s `TurnTakingEngine`) fires a
+silence-driven `PLAY_CUE` once trailing silence reaches `silence_backchannel_min`
+= 4.0s — a "are you done?" cue, not a mid-speech nod. `backchannel_timing.py`'s
+module docstring states the contract: "the two paths partition the silence axis
+cleanly: `[min_pause, max_pause)` is the mid-speech backchannel window;
+`≥ silence_backchannel_min` is the turn-end cue window." For that to hold with
+no overlap, the mid-speech window must *close* at or before the turn-end window
+*opens*: `max_pause_secs <= silence_backchannel_min`. **But nothing tested it.**
+`test_backchannel_timing` only asserts `max_pause_secs == 2.0`;
+`test_turn_decider` never reads `silence_backchannel_min` at all. So retuning
+`silence_backchannel_min` down to 1.5 (a plausible "fire the turn-end cue
+sooner" tweak) would **silently** reopen the [1.5, 2.0) band where *both* cue
+paths fire — a mid-speech "mhmm" *and* a turn-end cue on the same gap — and
+every per-module test would stay green because none looks at the sibling. This
+lap makes that drift a red test.
+
+**What changed:**
+
+1. **`tests/unit/test_cue_window_partition_invariant.py`** (new) — 4 tests
+   derived from both modules themselves (loaded by file path into a stub
+   `session` namespace, like the siblings), not from literals:
+   - `test_midspeech_window_closes_at_or_before_turnend_window_opens` —
+     the headline `max_pause_secs <= silence_backchannel_min`.
+   - `test_no_silence_value_triggers_both_cue_paths` — disjointness spot-check
+     at the `max_pause` boundary (excluded from the half-open mid-speech window,
+     still below the turn-end open).
+   - `test_midspeech_window_is_well_formed` — `min_pause < max_pause` so
+     "partition" is meaningful.
+   - `test_current_window_edges_are_two_and_four_seconds` — records the present
+     edges (2.0s / 4.0s, with the 2.0s pure-silence gap between) so an
+     *intentional* retune is a deliberate edit to this test, not a silent change.
+
+2. **Docstring cross-references** added in `session/turn_taking.py`
+   (`silence_backchannel_min`), `session/backchannel_timing.py` (module docstring
+   + `max_pause_secs`), and the **README** Research section, each naming the
+   iter-180 guard so the "partition cleanly" claim points at its enforcing test.
+
+**Verification:**
+- `python -m pytest tests/unit/test_cue_window_partition_invariant.py -q` →
+  **4 passed**.
+- Confirmed the invariant catches drift: setting `silence_backchannel_min = 1.5`
+  turns **3 of the 4 red** (the well-formed-window test correctly stays green —
+  the mid-speech window itself didn't move), then restored.
+- Full unit suite (in worktree, pre-merge): **2406 passed** (2402 prior + 4).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `python -W error::SyntaxWarning -m py_compile session/turn_taking.py
+  session/backchannel_timing.py tests/unit/test_cue_window_partition_invariant.py`
+  clean.
+- (`tests/test_session.py` still errors on collection — `ModuleNotFoundError:
+  pipecat` — pre-existing on main, not a regression.)
+
+**Notes:**
+- Next directions:
+  - **Live mid-speech cue wiring for #7** — feed the VAD frames to a
+    `BackchannelDriver` in `pipecat_server.py`'s `Broadcaster`, `broadcast_cue`
+    on emit, surface `driver.emit_count` into the
+    `SessionMeta.backchannels_emitted` slot (iter-175). Still blocked only on
+    the absent pipecat dep on the x86_64 runner.
+  - **Live barge-path wiring for #5** — `should_abandon_turn` (iter-152) into
+    the `mic_chat` barge path; blocked on no transcript at VAD-trigger time.
+  - Carried over (off-track): the CI workflow still blocked on a committed
+    `baseline.json`; diversity-check surface paused per iter-143/144.

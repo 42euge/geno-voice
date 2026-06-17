@@ -287,7 +287,12 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   = `turn_decider.py`'s `silence_floor_secs`, one shared scalar — pinned by
   `tests/unit/test_shared_silence_floor_invariant.py` (iter-179) against the
   sibling modules themselves so retuning one default without the others fails
-  the test instead of silently reopening the clause-pause/turn-end overlap) and
+  the test instead of silently reopening the clause-pause/turn-end overlap;
+  and the *other* edge — that this mid-speech window closes at/before the
+  silence-driven turn-end cue window opens, `max_pause_secs` (2.0s) ≤
+  `turn_taking.py`'s `silence_backchannel_min` (4.0s) — is pinned by
+  `tests/unit/test_cue_window_partition_invariant.py` (iter-180) so the two cue
+  paths can't overlap and double-fire on one gap) and
   `pause_secs(now)` (the live within-speech gap, zero while speaking). So a
   long monologue accumulates `user_speaking_secs` across its clause pauses (the
   warm-up gate eventually clears) and the monitor emits exactly in the

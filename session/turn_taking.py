@@ -110,6 +110,14 @@ class ConversationState:
 @dataclass
 class TurnTakingConfig:
     # Silence thresholds (seconds)
+    # ``silence_backchannel_min`` is the lower edge of the silence-driven
+    # turn-end cue window: a ``PLAY_CUE`` fires once trailing silence reaches
+    # this. It must sit at/above ``backchannel_timing.py``'s ``max_pause_secs``
+    # (2.0s, where the mid-speech backchannel window closes) so the two cue
+    # paths partition the silence axis with no overlap — no gap fires both a
+    # mid-speech "mhmm" and a turn-end cue. That inequality is pinned by
+    # ``tests/unit/test_cue_window_partition_invariant.py`` (iter-180) against
+    # the sibling module, not a hardcoded ``2.0``.
     silence_backchannel_min: float = 4.0
     silence_response_min: float = 6.0
     silence_gentle_prompt: float = 45.0
