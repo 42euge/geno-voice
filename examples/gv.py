@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -49,6 +50,36 @@ def speed_type(raw):
             f"speed must be between {SPEED_MIN} and {SPEED_MAX}, got {value}"
         )
     return value
+
+
+# Kokoro voice-id grammar: a single-letter language code, a one-letter gender
+# (`f`/`m`), an underscore, then a lowercase a-z name. The curated American set
+# lives in `tts/kokoro_engine.py:VOICES` (af_*/am_*), but kokoro also ships
+# other-language packs (e.g. `bf_emma`, British female), so a strict membership
+# check would wrongly reject legitimate voices. We validate the *format*
+# instead — the same "close the garbage-in path at the parser" goal as
+# `speed_type` (iter-182) — rejecting empty/whitespace/malformed ids before
+# they reach the TTS engine, while staying permissive about the name itself.
+VOICE_RE = re.compile(r"^[a-z][fm]_[a-z]+$")
+
+
+def voice_type(raw):
+    """Argparse ``type`` for ``--voice``: validate the kokoro id format.
+
+    Pure and side-effect-free so it can be unit-tested directly. Raises
+    :class:`argparse.ArgumentTypeError` (rendered by argparse as
+    ``SystemExit(2)``) when ``raw`` does not match the kokoro voice-id
+    grammar ``<lang><gender>_<name>`` (e.g. ``af_heart``, ``bf_emma``). This
+    catches empty strings, leading/trailing whitespace, and obvious typos
+    before they reach the engine, without pinning to the American-only
+    curated list.
+    """
+    if not isinstance(raw, str) or not VOICE_RE.match(raw):
+        raise argparse.ArgumentTypeError(
+            "voice must look like '<lang><gender>_<name>' "
+            f"(e.g. af_heart, bf_emma), got {raw!r}"
+        )
+    return raw
 
 
 def cmd_bench(args):
@@ -105,7 +136,12 @@ def build_parser():
 
     talk = sub.add_parser("talk", help="Talk mode — STT → NLP → canned response → TTS")
     talk.add_argument("--model", default=DEFAULT_MODEL)
-    talk.add_argument("--voice", default="af_heart", help="TTS voice (default: af_heart)")
+    talk.add_argument(
+        "--voice",
+        type=voice_type,
+        default="af_heart",
+        help="TTS voice id, e.g. af_heart / bf_emma (default: af_heart)",
+    )
     talk.add_argument(
         "--speed",
         type=speed_type,
@@ -115,7 +151,12 @@ def build_parser():
 
     chat = sub.add_parser("chat", help="Chat mode — STT → LLM (litellm) → TTS")
     chat.add_argument("--model", default=DEFAULT_MODEL)
-    chat.add_argument("--voice", default="af_heart", help="TTS voice (default: af_heart)")
+    chat.add_argument(
+        "--voice",
+        type=voice_type,
+        default="af_heart",
+        help="TTS voice id, e.g. af_heart / bf_emma (default: af_heart)",
+    )
     chat.add_argument(
         "--speed",
         type=speed_type,

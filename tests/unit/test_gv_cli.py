@@ -156,6 +156,80 @@ def test_parser_accepts_in_range_speed(cmd):
     assert args.speed == 1.5
 
 
+# ---- voice_type: format validator (iter-183) ---------------------------
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "af_heart",   # default / curated American female
+        "am_adam",    # curated American male
+        "bf_emma",    # British female — valid kokoro, NOT in curated VOICES
+        "bm_george",  # British male
+        "af_bella",
+    ],
+)
+def test_voice_type_accepts_well_formed_ids(raw):
+    # Membership in the American-only VOICES list is NOT required — only the
+    # <lang><gender>_<name> format. bf_emma is the canonical "valid but not
+    # curated" case the strict-whitelist approach would have wrongly rejected.
+    assert gv.voice_type(raw) == raw
+
+
+def test_voice_type_accepts_every_curated_voice():
+    # Every id the engine actually ships must pass the format gate.
+    from tts.kokoro_engine import VOICES
+
+    for v in VOICES:
+        assert gv.voice_type(v["id"]) == v["id"]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "",            # empty
+        " ",           # whitespace
+        "af_heart ",   # trailing whitespace
+        " af_heart",   # leading whitespace
+        "heart",       # no lang/gender prefix
+        "af-heart",    # wrong separator
+        "afheart",     # missing underscore
+        "AF_HEART",    # uppercase
+        "af_",         # empty name
+        "a_heart",     # missing gender letter
+        "ax_heart",    # gender not f/m
+        "af_heart2",   # digit in name
+        "af heart",    # space in id
+    ],
+)
+def test_voice_type_rejects_malformed_ids(raw):
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.voice_type(raw)
+
+
+def test_voice_type_message_names_the_value():
+    with pytest.raises(argparse.ArgumentTypeError) as exc:
+        gv.voice_type("bogus voice")
+    msg = str(exc.value)
+    assert "bogus voice" in msg
+    assert "lang" in msg  # the grammar hint is surfaced
+
+
+@pytest.mark.parametrize("cmd", ["talk", "chat"])
+def test_parser_rejects_malformed_voice_via_systemexit(cmd):
+    # End-to-end through argparse: a malformed --voice exits 2.
+    with pytest.raises(SystemExit) as exc:
+        gv.build_parser().parse_args([cmd, "--voice", "nope!"])
+    assert exc.value.code == 2
+
+
+@pytest.mark.parametrize("cmd", ["talk", "chat"])
+def test_parser_accepts_noncurated_voice(cmd):
+    # A valid-format voice outside the curated American set still parses.
+    args = gv.build_parser().parse_args([cmd, "--voice", "bf_emma"])
+    assert args.voice == "bf_emma"
+
+
 # ---- dispatch: routing with stub handlers ------------------------------
 
 
