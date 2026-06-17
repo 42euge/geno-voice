@@ -14487,3 +14487,102 @@ zero, the line is suppressed — byte-for-byte today's output. `aggregator=None`
     (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
     on a committed `baseline.json`; diversity-check surface paused per
     iter-143/144.
+
+## iter-164 — mid-session long-silence flush decision seam (backlog #9, the deferred half)
+
+**Branch:** `iter-164-silence-flush` (merged ff to main, commit `79cc2d7`)
+**Date:** 2026-06-17
+
+**Goal:** Ship the pure decision seam every lap since iter-160 has named as the
+next direction — the **mid-session long-silence flush**: a held mid-thought
+fragment should be fed to the engine as its own turn once the merge window
+elapses with no continuation, rather than sitting held until a genuinely-new
+thought displaces it (iter-162) or shutdown flushes it (iter-160).
+
+**Why:** The `UtteranceBuffer` has a blind spot the live loop keeps tripping
+over. It only ever *releases* a held pending when the **next utterance arrives**
+— its `offer` measures the gap that preceded that next utterance and, if long,
+releases the held fragment as a displaced `NEW` turn (iter-162). The one case
+`offer` can never reach is the user who trails off mid-thought ("I was thinking
+about the") and then says **nothing at all** for a long beat. There is no next
+utterance to drive a release, so the fragment sits held — answered only when a
+new thought finally arrives and displaces it, or at shutdown. Both are too late:
+the user paused, waited, and the agent stayed mute on a fragment it could have
+answered. This lap ships the decision that the eventual `run_session` inter-turn
+clock read will consume.
+
+**What changed:**
+
+1. **`session/silence_flush.py` (new).** `decide_silence_flush(*, held_text,
+   silence_secs, config=None, max_gap_secs=DEFAULT_MAX_GAP_SECS)` →
+   `SilenceFlushAction.FLUSH` / `HOLD`, plus the `should_flush_held_utterance(...)`
+   boolean mirror (the natural `if should_flush_held_utterance(...): flushed =
+   aggregator.flush()` call-site shape). Rules, first match wins:
+   - **Gate first.** `config.utterance_merging_active()` False (the default) ⇒
+     `HOLD` unconditionally — half-duplex never holds a fragment, so there is
+     nothing to flush. The half-duplex invariant; no other input consulted.
+   - **Nothing held ⇒ HOLD.** Blank/None `held_text` ⇒ the buffer is idle.
+   - **Window gate.** `FLUSH` iff `silence_secs > max_gap_secs` — the merge
+     window *elapsed* and no continuation came. At or below the window
+     (`silence_secs <= max_gap_secs`) a continuation could still `MERGE`, so
+     `HOLD`.
+
+2. **The boundary mirrors the merge window exactly.** `max_gap_secs` is imported
+   from `utterance_merging` (`DEFAULT_MAX_GAP_SECS`, 2.0s) — the *same scalar*
+   `decide_utterance_continuation` uses for its "quick gap" gate. At exactly
+   `max_gap_secs` a continuation would still `MERGE` (that seam's rule 3 is `gap
+   <= max_gap_secs`), so the flush must still `HOLD` at the boundary; only
+   strictly beyond it is the window provably closed. The two seams read the same
+   scalar so the flush deadline and the merge window can never drift apart.
+
+3. **Decision-seam-first rhythm.** Like iter-152 (`decide_barge_action` →
+   coordinator wiring) and iter-153 (`decide_backchannel_timing` → cue-path
+   wiring), this lap ships the pure, exhaustively-tested decision and leaves the
+   live wiring as the explicit follow-on. `run_session` reads no clock between
+   turns today; the follow-on adds an inter-turn `silence_secs` measurement, a
+   `should_flush_held_utterance` check, and a respond-to-the-flushed-fragment
+   path before the next `[N] waiting...`.
+
+4. **+20 tests** (`tests/unit/test_silence_flush.py`, loaded by file path to
+   dodge `session/__init__`'s eager pipecat import, same trick as
+   test_utterance_merging.py): the half-duplex invariant (default never flushes
+   — grid + boolean + explicit-default-same-as-None); the organic window gate
+   (long flushes, just-over flushes, at-boundary holds, just-under holds, zero
+   holds, custom `max_gap_secs` tracks); the nothing-held gate
+   (empty/whitespace/None all hold); sub-flag resolution (merging sub-flag on
+   with master off flushes; sub-flag explicitly off holds); the boolean mirror;
+   and `test_flush_boundary_is_exactly_the_merge_window` — a cross-check pinning
+   `decide_silence_flush` and `decide_utterance_continuation` to agree on the
+   `max_gap_secs` boundary so a future edit to one can't silently desync them.
+
+5. **Discoverability:** iter-164 findings-log entry + backlog #9 row update in
+   `docs/research/organic-turn-taking.md`; README Research section names
+   `session/silence_flush.py`, `decide_silence_flush`, the
+   `silence_secs > max_gap_secs` boundary, and the decision-seam-first follow-on.
+
+**Verification:**
+- `python -m pytest tests/unit/test_silence_flush.py -q` → **20 passed**.
+- Full unit suite (in worktree, pre-merge): **2245 passed** (2225 prior + 20).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `python -W error::SyntaxWarning -m py_compile session/silence_flush.py` clean
+  (no escape-sequence warnings).
+
+**Notes:**
+- **No runtime behavior change.** This is a pure, as-yet-unconsumed decision
+  seam (nothing imports `silence_flush` outside its test). With a default
+  `FullDuplexConfig()` it returns `HOLD` for every input, and the buffer never
+  holds a fragment in half-duplex anyway — byte-for-byte today's behavior. The
+  behavior only engages once the live wiring lands *and* merging is explicitly
+  enabled.
+- Next directions:
+  - **Wire `should_flush_held_utterance` into `run_session`** (the live half of
+    this seam): measure the inter-turn silence since the buffer last held, flush
+    + respond to the fragment as its own turn before re-listening. The named
+    `run_session`-needs-a-clock follow-on, now unblocked on the decision side.
+  - Wire the still-pending `should_abandon_turn` (iter-152) into the `mic_chat`
+    barge path and `should_emit_backchannel` (iter-153) into the live cue path,
+    both behind their full-duplex sub-flags.
+  - Carried over (off-track): the CI workflow
+    (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
+    on a committed `baseline.json`; diversity-check surface paused per
+    iter-143/144.
