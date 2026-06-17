@@ -14761,3 +14761,113 @@ three-distinguishable-causes framing, and the `run_session` follow-on.
     (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
     on a committed `baseline.json`; diversity-check surface paused per
     iter-143/144.
+
+## iter-167 — flush a held fragment mid-session on idle silence (backlog #9, wiring hop 2)
+
+**Branch:** `iter-167-silence-flush-wiring` (merged ff to main, commit `7cfd9ab`)
+**Date:** 2026-06-17
+
+**Goal:** Take the second of the two named wiring hops from iter-166 — make
+`run_session` consume the `TurnResult.idle_timed_out` flag and actually flush a
+held mid-thought fragment mid-session when a long inter-turn idle silence proves
+no continuation is coming. This closes backlog #9's mid-session flush
+end-to-end (decision iter-164 → mechanism iter-165 → ChatLoop wiring iter-166 →
+run_session wiring this lap), short of *responding* to the flushed fragment.
+
+**Why:** iter-166 made a no-metrics turn distinguishable as held / idle-timeout
+/ false trigger but left the idle-timeout case as just another re-listen — the
+flag was surfaced and then ignored. A held fragment could still only be released
+by the next utterance arriving (iter-162) or by shutdown (iter-160); the exact
+case the iter-164 `decide_silence_flush` seam was built for — user trails off,
+then says nothing for a long beat — had a decision, a mechanism, and a flag, but
+nothing wired them to the buffer. This lap connects them.
+
+**What changed:**
+
+1. **`examples/_chat_session.py` — `run_session` grows two injected params.**
+   `idle_timeout: Optional[float]` (the recorder's pre-speech window, used ONLY
+   as the `silence_secs` fed to the decider — `run_session` reads no clock
+   itself) and `flush_decider: Optional[Callable[[str, float], bool]]`. On an
+   `idle_timed_out` turn it increments a new `SessionState.idle_timeouts` counter
+   (separate from `false_triggers`, so enabling an idle timeout never inflates
+   the false-trigger rate) and calls a new module-level `_maybe_flush_on_idle`
+   helper.
+
+2. **`_maybe_flush_on_idle(state, aggregator, flush_decider, idle_timeout)`** —
+   the mid-session flush. Guards, first-to-bail wins: no aggregator → nothing
+   held; no `flush_decider` → caller opted out; `aggregator.pending` blank →
+   nothing to flush; `flush_decider(held, silence)` says HOLD → merge window
+   hasn't closed (e.g. an `idle_timeout` shorter than `max_gap_secs`). Otherwise
+   `aggregator.flush()` → `resolve_turn` → append the released text to a new
+   `SessionState.flushed_utterances` list. Both the decider call and the flush
+   are wrapped in `try/except` — a misbehaving injected callable must not break
+   the live loop. `idle_timeout=None` falls back to `inf` silence (the timeout
+   demonstrably fired, so let the decider's own `> max_gap_secs` gate decide).
+
+3. **`examples/_chat_metrics.py` — `_emit_flushed_utterances_line`** (mirroring
+   iter-162's displaced-utterances line) + `SessionMeta.flushed_utterances`.
+   Prints a `Flushed uttr.:` line — single fragment quoted inline, multiple
+   under an `N fragments flushed on idle silence mid-session — iter-167:` header
+   — on both the normal and the no-completed-turns early-return paths.
+
+4. **`examples/mic_chat.py` — production wiring, organic mode only.** Binds
+   `flush_decider` to `session.silence_flush.should_flush_held_utterance` against
+   the *same* `full_duplex_config` the aggregator runs with (so the half-duplex
+   gate + `max_gap_secs` window agree with the buffer), sources `idle_timeout`
+   from `chat.idle_timeout` (default `DEFAULT_MAX_GAP_SECS`, coerced + floored at
+   `>0`), and passes both into `ChatLoop` (iter-166) and `run_session`. Wired
+   ONLY when `full_duplex_config.utterance_merging_active()` — half-duplex wires
+   neither param (both `None`), keeping the proven wait-forever path
+   byte-for-byte unchanged.
+
+**Scope — records, doesn't yet respond.** This lap *records* the flushed
+fragment (`flushed_utterances` + summary line) so it is visible and the buffer is
+unblocked; producing a *spoken* response to it needs a `ChatLoop` text-only
+response entrypoint (`run_one_turn` always records from the mic first), which is
+the explicit next hop. Documented in code comments and the doc/README "next".
+
+**+31 tests:**
+- `tests/unit/test_chat_session.py` (+17): three-way no-metrics counting;
+  back-compat getattr default; defaults zero/empty; no-decider strands at
+  shutdown instead of flushing; decider-says-flush records the fragment (and
+  sees `(held, silence)`); decider-says-hold; nothing-held; blank-pending;
+  `None` idle_timeout → `inf` silence; no-aggregator; flush-releasing-blank;
+  decider-exception-swallowed; flush-exception-swallowed; multiple-flushes
+  accumulate; and two end-to-end cases driving the real `session.silence_flush`
+  (flushes mid-session when silence exceeds the window; strands at shutdown when
+  under it). The always-present iter-160 shutdown flush is modeled with an
+  idempotent stub aggregator so a mid-session flush (→ `flushed_utterances`) is
+  distinguished from a shutdown strand (→ `stranded_utterance`).
+- `tests/unit/test_flushed_utterances_line.py` (+14, new file):
+  suppression (None/empty/all-blank), single-fragment (quoted, stripped,
+  "iter-167" grep tag, "idle"/"flushed" wording), multi-fragment ("N fragments"
+  header, blank dropped from count), and integration through
+  `print_session_summary` on both the normal and no-completed-turns paths.
+
+**Discoverability:** iter-167 findings-log entry + backlog #9 row update in
+`docs/research/organic-turn-taking.md`; README Research section names the
+`run_session` `idle_timeout`/`flush_decider` params,
+`SessionState.idle_timeouts`/`.flushed_utterances`, the "Flushed uttr." summary
+line, and the spoken-response follow-on.
+
+**Verification:**
+- `python -m pytest tests/unit/test_flushed_utterances_line.py -q` → **14 passed**.
+- Full unit suite (in worktree, pre-merge): **2287 passed** (2256 prior + 31 net new).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `python -W error::SyntaxWarning -m py_compile examples/_chat_session.py
+  examples/_chat_metrics.py examples/mic_chat.py` clean.
+
+**Notes:**
+- Next directions:
+  - **Spoken-response hop** — a `ChatLoop` text-only response entrypoint so a
+    flushed fragment is *answered* as its own turn, not merely recorded. That is
+    the last piece of backlog #9's mid-session flush. The blocker is that
+    `run_one_turn` always records from the mic first; the flushed text needs a
+    path straight into the LLM→TTS half of the turn.
+  - Wire the still-pending `should_abandon_turn` (iter-152) into the `mic_chat`
+    barge path and `should_emit_backchannel` (iter-153) into the live cue path,
+    both behind their full-duplex sub-flags.
+  - Carried over (off-track): the CI workflow
+    (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
+    on a committed `baseline.json`; diversity-check surface paused per
+    iter-143/144.
