@@ -201,7 +201,16 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   `pipecat_server.py`'s `smart_turn_confidence` (the old literal `0.5`
   sat below the engine's backchannel threshold, leaving the
   silence-driven turn tiers dead) and is the drop-in interface a future
-  audio `smart-turn` model implements.
+  audio `smart-turn` model implements. Also shipped: the **rule-based
+  text EOU precursor** (`session/text_eou.py`,
+  `tests/unit/test_text_eou.py`) — `utterance_completeness(text)` returns
+  a (0.0, 1.0] multiplier that *dampens* the silence confidence when the
+  transcript trails off on a conjunction / dangling preposition / filler
+  / ellipsis, so the engine stays silent through a mid-thought pause it
+  would otherwise treat as a turn-end. `TextAwareTurnDecider` folds it
+  into the silence seam behind the identical `confidence(...)` interface
+  (a complete utterance multiplies by 1.0 — a conservative, monotone
+  refinement), and `pipecat_server.py` now uses it.
 - **[Performance metrics taxonomy](docs/perf-metrics-taxonomy.md)** — a
   catalog of metrics worth instrumenting on a local-first voice agent.
 

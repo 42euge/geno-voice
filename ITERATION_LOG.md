@@ -13059,3 +13059,117 @@ Feeding a real silence-derived confidence makes those tiers reachable.
     (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still
     blocked on a committed `baseline.json`; diversity-check surface paused per
     iter-143/144.
+
+## iter-150 — rule-based text EOU precursor: is_utterance_complete (backlog #4)
+
+**Branch:** `iter-150-text-eou` (merged ff to main)
+**Date:** 2026-06-16
+
+**Goal:** iter-149 shipped the `turn_decider` seam (backlog #2) and left
+`transcript_chunk` flowing into it but ignored. This lap ships backlog #4: a
+pure, rule-based **text end-of-turn (EOU) precursor** that consumes that
+transcript and *dampens* the silence-derived turn-end confidence when the text
+looks unfinished — the cheap, dependency-free stand-in for a learned text
+turn-detector (LiveKit `turn-detector` style).
+
+**Why:** silence-only endpointing can't distinguish "I was thinking… [pause]
+…about the deadline" from a finished turn — both are just trailing silence to a
+VAD. Linguistic context disambiguates: an utterance ending on a conjunction
+("…and"), a dangling preposition/article ("…to", "…the"), a hesitation filler
+("…um"), or an ellipsis ("…") is almost certainly incomplete regardless of how
+long the silence after it.
+
+**What changed:**
+
+1. **`session/text_eou.py` (new) — backlog #4 seam.** Pure, dependency-free,
+   GENO.md-conventional:
+   - `utterance_completeness(text, config=None) -> float` — returns a
+     completeness **multiplier** in (0.0, 1.0]: `1.0` when the transcript shows
+     no sign of being unfinished, lower when it trails off. Rules in strength
+     order (strongest dampening wins): ellipsis (×0.5) → conjunction (×0.2,
+     strongest word signal) → dangling preposition/article/possessive (×0.3) →
+     filler (×0.35) → comma (×0.6) → else 1.0. Empty/whitespace ⇒ 1.0 (no text
+     evidence; silence alone decides).
+   - `is_utterance_complete(text, config=None) -> bool` — convenience: True iff
+     completeness ≥ `complete_threshold` (default 0.6).
+   - `TextEOUConfig` (frozen dataclass) carries the per-class multipliers +
+     threshold, validating each is in [0.0, 1.0].
+   - `TextAwareTurnDecider` — implements the **identical**
+     `confidence(*, silence_duration_secs, transcript_chunk=None)` interface as
+     iter-149's `SilenceTurnDecider`, combining the two as
+     `silence_confidence(silence) * utterance_completeness(text)`. A complete
+     utterance (or no transcript) multiplies by 1.0 ⇒ behaviour identical to
+     the silence-only decider. **Monotone and conservative: it can only lower
+     confidence on textual evidence of incompleteness, never raise it.**
+
+2. **`pipecat_server.py` — wire the seam.** `Broadcaster._turn_decider` is now a
+   `TextAwareTurnDecider` instead of a `SilenceTurnDecider`. No call-site
+   signature change — both `decide(...)` sites already passed
+   `transcript_chunk=text` since iter-149, so the text signal now actually feeds
+   the confidence (live transcription path + offline replay path).
+
+3. **`tests/unit/test_text_eou.py` (new, +49 tests):** complete utterances → 1.0
+   (plain sentence, question, exclamation, empty/whitespace, noun-after-article,
+   substring guard so "android" ≠ "…id"); every marker class (all conjunctions,
+   all dangling words, fillers, ellipsis variants incl. unicode "…", comma);
+   precedence (conjunction beats filler for "so"; ellipsis beats trailing word;
+   word marker beats comma); `is_utterance_complete` boolean incl. the comma ==
+   threshold boundary and a custom threshold; `TextEOUConfig` validation/frozen/
+   custom/strength-ordering; and the `TextAwareTurnDecider` matrix (complete
+   text == silence-only, no/empty transcript == silence-only, incomplete dampens
+   below & never exceeds silence, 0-silence stays 0, keyword-only, injected
+   silence+text configs, interface-match with `SilenceTurnDecider`). Plus an
+   **engine integration test** (real `TurnTakingEngine` loaded by file path):
+   at silence 4.5s a complete "that's my whole point." ⇒ `PLAY_CUE`, but the
+   same silence after "…that and" (conjunction) dampens below
+   `smart_turn_backchannel_min` ⇒ `STAY_SILENT`.
+
+4. **Design note — `_TRAILING_PATTERNS` reuse.** The backlog framed #4 as
+   "reuse `session/triggers.py:_TRAILING_PATTERNS`", but importing
+   `session.triggers` runs `session/__init__` which eagerly pulls pipecat
+   (absent on the x86_64 runner). `text_eou.py` stays pure stdlib (loads by file
+   path in tests, like `backchannel.py`/`turn_decider.py`), so it re-expresses
+   the trailing-off idea as an EOU-framed superset rather than importing the
+   emotional PLAY_CUE patterns — same concept, decoupled module.
+
+5. **Subtle bug avoided:** demonstratives/quantifiers
+   (this/that/these/those/some/any) were initially in the dangling set but are
+   frequently *complete* sentence-final pronouns ("I did this", "I want some")
+   — including them dampened finished turns (two tests caught it). Excluded;
+   only true must-have-an-object function words (prepositions, articles,
+   possessives) remain. ("that" stays a relative pronoun in the conjunction
+   set, a separate stronger signal.)
+
+6. **Discoverability:** marked backlog #4 **DONE iter-150** in
+   `docs/research/organic-turn-taking.md` with a findings-log entry; extended
+   the README Research section to name the precursor, its multiplier semantics,
+   and its guarding test.
+
+**Verification:**
+- `python -m pytest tests/unit/test_text_eou.py -q` → **49 passed in 0.10s**.
+- Full unit suite: **1881 passed** (1832 prior + 49 new).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `python -m py_compile pipecat_server.py session/text_eou.py` → clean (pipecat
+  isn't installable on this x86_64 Linux runner, so the server is
+  syntax-checked, not imported; the unit test loads `text_eou` + its
+  `turn_decider` import by file path under a stub `session` namespace to dodge
+  `session/__init__`'s pipecat imports — same trick the turn_decider/backchannel
+  tests use).
+
+**Notes:**
+- **Runtime behavior change is conservative.** The only difference vs iter-149
+  is that an *incomplete* transcript at a given silence now yields lower
+  confidence; a complete one is byte-identical. The `mic_chat`/`mic_talk`
+  half-duplex paths don't use `TurnTakingEngine` and are untouched.
+- Next directions:
+  - **#3 full-duplex config flag** — `GENO_FULL_DUPLEX` / `TurnTakingConfig`
+    scaffolding to gate organic behaviors off by default.
+  - **#5 continuer-aware barge-in** — wire iter-148's `classify_backchannel`
+    into `BargeInCoordinator` (continuer ⇒ finish, substantive ⇒ abandon);
+    measure false-abandon rate.
+  - **#8 naturalness metrics** — false-endpoint rate + continuer counts in
+    `TurnMetrics`/session-summary, so this track is measured not asserted.
+  - Carried over (off-track): the CI workflow
+    (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still
+    blocked on a committed `baseline.json`; diversity-check surface paused per
+    iter-143/144.

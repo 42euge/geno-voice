@@ -40,7 +40,7 @@ from pipecat.transports.local.audio import LocalAudioTransport, LocalAudioTransp
 
 from session.triggers import detect_triggers, filter_noise
 from session.turn_taking import TurnTakingEngine, Action
-from session.turn_decider import SilenceTurnDecider
+from session.text_eou import TextAwareTurnDecider
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 log = logging.getLogger("sidecar")
@@ -191,10 +191,13 @@ class Broadcaster(FrameProcessor):
         self._last_stop = time.time()
         # Source smart-turn confidence from a swappable decider instead of a
         # hardcoded 0.5 (which sat below the engine's backchannel threshold,
-        # leaving the silence-driven tiers dead). Today this is the silence
-        # heuristic; a later lap swaps in pipecat smart-turn behind the same
-        # interface. See session/turn_decider.py + organic-turn-taking.md #2.
-        self._turn_decider = SilenceTurnDecider()
+        # leaving the silence-driven tiers dead). The decider now also folds in
+        # a rule-based text EOU signal: a transcript trailing off on a
+        # conjunction / preposition / filler / ellipsis dampens the
+        # silence-derived confidence, so the engine stays silent through a
+        # mid-thought pause. A later lap swaps in pipecat smart-turn behind the
+        # same interface. See session/text_eou.py + organic-turn-taking.md #2/#4.
+        self._turn_decider = TextAwareTurnDecider()
 
     async def process_frame(self, frame, direction):
         await super().process_frame(frame, direction)

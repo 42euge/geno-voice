@@ -228,7 +228,7 @@ output discoverable from README" discipline. Local only.
 | 1 | **Rule-based backchannel/continuer classifier** — pure `classify_backchannel(text, energy=…)` in `session/backchannel.py`: short-token + closed-lexicon + optional low-energy gate ⇒ `CONTINUER` / `SUBSTANTIVE` / `NOT_SPEECH`. Dependency-free, fully testable. Foundation for #5. | High | **DONE iter-148** |
 | 2 | **`turn_decider` seam** — pure function wrapping today's silence→confidence heuristic behind the same interface a smart-turn model would use, so `smart_turn_confidence` stops being hardcoded `0.5` and the model swaps in later without touching `TurnTakingEngine`. | High | **DONE iter-149** |
 | 3 | **Full-duplex config flag scaffolding** — a `TurnTakingConfig` / env flag (`GENO_FULL_DUPLEX`) that gates organic behaviors (continuer-aware listening, agent backchannels) off by default, so the half-duplex path is never regressed while the track matures. | Medium | TODO |
-| 4 | **Rule-based text EOU precursor** — `is_utterance_complete(text)` that lowers end-of-turn likelihood when the transcript ends in a conjunction / filler / trailing-off marker (mirrors LiveKit turn-detector's linguistic signal; reuses `_TRAILING_PATTERNS`). Feeds #2's confidence. | Medium | TODO |
+| 4 | **Rule-based text EOU precursor** — `is_utterance_complete(text)` that lowers end-of-turn likelihood when the transcript ends in a conjunction / filler / trailing-off marker (mirrors LiveKit turn-detector's linguistic signal; reuses `_TRAILING_PATTERNS`). Feeds #2's confidence. | Medium | **DONE iter-150** |
 | 5 | **Continuer-aware barge-in** — wire #1 into `BargeInCoordinator` so a *continuer* utterance ("mhmm") during agent speech does NOT abandon the turn (finish), while a substantive interruption does (abandon). Measure: false-abandon rate. | High | TODO |
 | 6 | **Adopt pipecat `smart-turn`** — replace #2's heuristic body with the smart-turn model inside `pipecat_server.py`'s pipeline; same `turn_decider` interface. Measure false-endpoint rate vs silence-only baseline on recorded sessions. | High | TODO (blocked on model + Apple Silicon) |
 | 7 | **Agent backchannel emission timing** — a learned/heuristic "good moment to backchannel" signal (Krisp-style) feeding the existing `PLAY_CUE` path, so the agent emits continuers *during* long user speech, not only on silence. | Medium | TODO |
@@ -284,3 +284,57 @@ output discoverable from README" discipline. Local only.
   reusing `_TRAILING_PATTERNS`) — its output feeds this seam's confidence via
   the already-present `transcript_chunk` argument; or backlog #3 (full-duplex
   config flag scaffolding) to gate organic behaviors off by default.
+
+### iter-150 (2026-06-16) — rule-based text EOU precursor (#4)
+
+- **Shipped backlog #4:** `session/text_eou.py` — a pure, dependency-free
+  `utterance_completeness(text) -> float` (and boolean `is_utterance_complete`)
+  that returns a completeness **multiplier** in (0.0, 1.0]: `1.0` when the
+  transcript shows no sign of being unfinished, lower when it trails off on a
+  **conjunction** ("…and/because/but" → 0.2, strongest), a **dangling
+  preposition/article/possessive** ("…to/the/my" → 0.3), a **hesitation filler**
+  ("…um/like" → 0.35), an **ellipsis** ("…/..." → 0.5), or a **comma** (0.6).
+  This is the cheap precursor to LiveKit's learned text turn-detector; a model
+  can later replace the body behind the same interface.
+- **Design choice — multiplier, not a replacement signal.** The output
+  *dampens* the iter-149 silence-derived confidence rather than overriding it:
+  `confidence = silence_confidence(silence) * utterance_completeness(text)`. So
+  the change is **monotone and conservative** — it can only *lower* confidence on
+  textual evidence of incompleteness, never raise it. A complete utterance (or
+  no transcript) multiplies by 1.0, leaving the silence-only behaviour exactly
+  intact. The combined `TextAwareTurnDecider` implements the **identical**
+  `confidence(*, silence_duration_secs, transcript_chunk=None)` interface as
+  `SilenceTurnDecider`, so `pipecat_server.py` swaps it in with no call-site
+  signature change (it already passed `transcript_chunk=text` since iter-149).
+- **Why it matters:** silence-only endpointing can't tell "I was thinking…
+  [pause] …about the deadline" from a finished turn. Feeding completeness in
+  means a 4.5s pause after "…that and" (conjunction, ×0.2) drops below the
+  engine's `smart_turn_backchannel_min`, so the engine STAYS_SILENT instead of
+  barging into a mid-thought — while the same pause after "that's my whole
+  point." still fires `PLAY_CUE`. An engine integration test (loaded by file
+  path) pins exactly this contrast.
+- **Subtle bug avoided in design:** demonstratives/quantifiers
+  (this/that/these/those/some/any) were initially in the dangling set but are
+  frequently *complete* sentence-final pronouns ("I did this", "I want some") —
+  including them dampened finished turns. They're excluded; only true
+  must-have-an-object function words (prepositions, articles, possessives)
+  remain. ("that" stays in the conjunction set as a relative pronoun, a
+  separate, stronger signal.)
+- **Note on `_TRAILING_PATTERNS` reuse:** the backlog framed this as "reuse
+  `session/triggers.py:_TRAILING_PATTERNS`", but importing `session.triggers`
+  runs `session/__init__` which eagerly pulls pipecat (absent on the x86_64
+  runner). `text_eou.py` stays pure stdlib (loads by file path in tests, like
+  its siblings), so it re-expresses the trailing-off idea as an EOU-framed
+  superset (incomplete ⇒ more coming) rather than importing the emotional
+  PLAY_CUE patterns. Same concept, decoupled module.
+- 49 unit tests (`tests/unit/test_text_eou.py`): complete utterances → 1.0,
+  every marker class, precedence (conjunction > ellipsis-position > comma; "so"
+  resolves as conjunction not filler), substring guard ("android" ≠ marker),
+  config validation/frozen/custom values, the `TextAwareTurnDecider` (complete
+  text == silence-only, no/empty transcript == silence-only, incomplete dampens
+  & never exceeds silence, 0-silence stays 0, keyword-only, injected configs,
+  interface-match with `SilenceTurnDecider`), and the engine integration
+  contrast.
+- **Next:** backlog #3 (full-duplex config flag scaffolding, `GENO_FULL_DUPLEX`)
+  to gate organic behaviors off by default; or backlog #5 (continuer-aware
+  barge-in — wire iter-148's `classify_backchannel` into `BargeInCoordinator`).
