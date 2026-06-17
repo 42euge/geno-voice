@@ -14184,3 +14184,97 @@ utterance), so the flush hook belongs there — exactly as iter-159 predicted.
     (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
     on a committed `baseline.json`; diversity-check surface paused per
     iter-143/144.
+
+## iter-161 — held utterances counted separately from VAD false triggers (backlog #9 metric fix)
+
+**Branch:** `iter-161-held` (merged ff to main, commit `3d3d0ce`)
+**Date:** 2026-06-16
+
+**Goal:** Fix a metric-correctness bug iter-159's live wiring introduced — a
+mid-thought utterance the organic `UtteranceAggregator` *holds* (returns a
+no-metrics `TurnResult`, so `run_session` re-listens) was being counted as a
+**VAD false trigger**, silently inflating the iter-048 false-trigger rate
+whenever utterance-merging was on.
+
+**Why:** iter-159 made the held path return `TurnResult(metrics=None)` so the
+single-turn loop re-listens for the continuation. But `run_session` counted
+*every* no-metrics, no-error turn as a VAD false trigger (`state.false_triggers
++= 1`). A held utterance is the **opposite** of a false trigger: the transcript
+was captured fine and is being deliberately buffered for a merge. Conflating
+the two made the VAD look noisier than it is and buried the organic buffer's
+real activity inside an unrelated metric. The fix attributes each no-metrics
+turn to the right bucket.
+
+**What changed:**
+
+1. **`examples/_chat_loop.py` — `TurnResult.held: bool = False`.** The held-
+   branch return in `run_one_turn` now sets `held=True`; every other no-metrics
+   return (no-transcription, too-short-utterance) leaves it `False`. The
+   responded / errored paths never set it.
+
+2. **`examples/_chat_session.py` — split the no-metrics path.** `run_session`
+   reads `getattr(result, "held", False)` (defensive — a pre-iter-161
+   `TurnResult` shape with no field still counts as a false trigger) and routes
+   a held turn to a new `SessionState.utterances_held` counter instead of
+   `false_triggers`. Both paths still re-listen without consuming the turn
+   counter — only the *attribution* changes.
+
+3. **`examples/_chat_metrics.py` — surfacing.** The count threads
+   `SessionState.utterances_held` → `SessionMeta.utterances_held` →
+   `OrganicStats.utterances_held` → a new "Utterances held" line in
+   `_emit_organic_block`, labeled "buffered for merge — not VAD false triggers"
+   so the distinction is explicit. Surfaced on **both** the normal path and the
+   zero-completed-turns early-return path (a session can hold a fragment yet
+   complete no turns). The organic block's suppression check now also gates on
+   `utterances_held`.
+
+4. **`examples/mic_chat.py` — wiring.** `run_chat` passes
+   `state.utterances_held` into `SessionMeta`.
+
+5. **Half-duplex / `aggregator=None` unchanged.** A default `FullDuplexConfig`
+   never holds, so `held` is always `False`, `utterances_held` stays 0, and the
+   organic block is suppressed — byte-for-byte today's summary.
+
+6. **+12 tests.**
+   - `tests/unit/test_chat_session.py` (+4): held bumps `utterances_held` not
+     `false_triggers` (same prompt cadence as a false trigger); held + a genuine
+     false trigger counted separately; a result object lacking `held` defaults
+     to false-trigger (back-compat via getattr); `utterances_held` defaults 0.
+   - `tests/unit/test_chat_loop_aggregator.py` (+3 assertions): held path sets
+     `held=True`; no-aggregator and half-duplex paths leave `held=False`.
+   - `tests/unit/test_emit_organic_block.py` (+8): `OrganicStats.utterances_held`
+     default; held-alone emits the block + line; held=0 omits; held doesn't emit
+     the false-endpoint/continuer lines; held + other signals share one header;
+     `print_session_summary`/`SessionMeta` wiring on the normal + zero-turn
+     paths; and the headline guarantee — a held utterance does **not** appear in
+     the VAD false-trigger line.
+
+7. **Discoverability:** iter-161 findings-log entry + backlog #9 row update in
+   `docs/research/organic-turn-taking.md`; README Research section names the
+   `TurnResult.held` flag, `SessionState.utterances_held`, and the new summary
+   line.
+
+**Verification:**
+- `python -m pytest tests/unit/test_chat_session.py tests/unit/test_chat_loop_aggregator.py tests/unit/test_emit_organic_block.py -q` → **59 passed**.
+- Full unit suite (in worktree, pre-merge): **2176 passed** (2164 prior + 12).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `py_compile` of `_chat_loop.py` / `_chat_session.py` / `_chat_metrics.py` / `mic_chat.py` clean.
+
+**Notes:**
+- **No runtime behavior change for today's sessions.** Only the *attribution*
+  of a held turn changes, and held turns only occur in organic mode (merging on,
+  off by default). In half-duplex the buffer never holds, so the new counter
+  stays 0 and the summary is unchanged.
+- Next directions:
+  - **Mid-session long-silence flush** (the direction iter-160 named): also flush
+    on a long *inter-turn* silence so a trailed-off fragment is fed to the engine
+    as its own turn before the user starts a genuinely new thought. Needs
+    `run_session` to measure the inter-turn gap (today it reads no clock between
+    turns).
+  - Wire the still-pending `should_abandon_turn` (iter-152) into the `mic_chat`
+    barge path and `should_emit_backchannel` (iter-153) into the live cue path,
+    both behind their full-duplex sub-flags.
+  - Carried over (off-track): the CI workflow
+    (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
+    on a committed `baseline.json`; diversity-check surface paused per
+    iter-143/144.
