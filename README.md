@@ -239,7 +239,19 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   silence-driven `PLAY_CUE` window partition the silence axis with no
   overlap. Gated behind `agent_backchannels_active()`: with a default
   config it always `HOLD`s, byte-for-byte today's "agent stays silent
-  during user speech." Also shipped: the **organic-path naturalness
+  during user speech." Its **stateful driver** is
+  `session/backchannel_monitor.py` (`tests/unit/test_backchannel_monitor.py`):
+  `BackchannelMonitor.observe(*, now, monologue_start_at, pause_secs)`
+  derives `user_speaking_secs` and `secs_since_last_backchannel` and
+  routes them through the seam, recording the emit timestamp *iff* the
+  decision is `EMIT` so the `min_between_cues_secs` rate limit engages
+  across calls — the one piece of cross-event state the pure seam can't
+  carry (without it the agent would re-emit "mhmm" on every qualifying
+  pause frame). `reset()` clears the rate limit for a fresh session.
+  Mirrors the `UtteranceBuffer` / `UtteranceAggregator` driver relationship
+  to the merge seam; default (half-duplex) config ⇒ `emit=False` always and
+  state never mutates; the live `pipecat_server` cue-path wiring is the
+  named follow-on. Also shipped: the **organic-path naturalness
   metrics** (`examples/_chat_metrics.py`,
   `tests/unit/test_emit_organic_block.py`) — two additive `TurnMetrics`
   fields, `false_endpoint` (the EOU decision fired early and the user
