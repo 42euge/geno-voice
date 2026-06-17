@@ -346,6 +346,21 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   summary line — instead of being silently counted as a clean merge. The cap
   firing is a tuning signal (retune the merge window/EOU), so surfacing it
   honors the "no silent caps" discipline.
+  **Mid-session long-silence flush decision** (`session/silence_flush.py`,
+  `tests/unit/test_silence_flush.py`, iter-164): the pure seam for the
+  still-deferred half of the merge story. The `UtteranceBuffer` only releases a
+  held fragment when the *next utterance* arrives — a user who trails off
+  mid-thought and then says nothing leaves the fragment held until a new thought
+  displaces it (iter-162) or shutdown flushes it (iter-160).
+  `decide_silence_flush(held_text, silence_secs, …)` answers *should the loop
+  give up waiting and `FLUSH` the held fragment to the engine now?* — `FLUSH`
+  iff the inter-turn silence has **exceeded** the merge window
+  (`silence_secs > max_gap_secs`), the same scalar `decide_utterance_continuation`
+  uses, so the flush deadline and the merge window can't drift apart. With a
+  default `FullDuplexConfig()` it returns `HOLD` for every input (and the buffer
+  never holds anyway) — byte-for-byte today's behavior. Wiring it into
+  `run_session`'s inter-turn clock read is the named follow-on, mirroring the
+  decision-seam-first rhythm of iter-152/153.
 - **[Performance metrics taxonomy](docs/perf-metrics-taxonomy.md)** — a
   catalog of metrics worth instrumenting on a local-first voice agent.
 
