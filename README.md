@@ -361,6 +361,20 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   never holds anyway) — byte-for-byte today's behavior. Wiring it into
   `run_session`'s inter-turn clock read is the named follow-on, mirroring the
   decision-seam-first rhythm of iter-152/153.
+  **Pre-speech idle timeout** (`record_utterance_streaming`'s `idle_timeout`
+  arg, `examples/_chat_recording.py`, `tests/unit/test_chat_recording.py`,
+  iter-165): the recorder *mechanism* the iter-164 flush decision needs.
+  `record_utterance_streaming` blocks forever waiting for speech to start, so
+  the live loop can never regain control during a long inter-turn pause to flush
+  a held fragment — the blocker every lap since iter-160 named ("`run_session`
+  reads no clock between turns"). With `idle_timeout=N` set, the recorder returns
+  the empty-utterance `(b"", 0.0, 0.0)` tuple after `N` seconds of *pre-speech*
+  silence (gated on `first_speech_at is None`, so a mid-utterance trailing pause
+  can never trip it — `silence_duration` still owns end-of-turn), and flags
+  `out_metrics["idle_timed_out"] = True` so the caller can tell a timeout from a
+  VAD false trigger. `None` (default) preserves the wait-forever behavior
+  byte-for-byte. Wiring it through `ChatLoop` → `run_session` to drive the
+  `should_flush_held_utterance` check is the named follow-on.
 - **[Performance metrics taxonomy](docs/perf-metrics-taxonomy.md)** — a
   catalog of metrics worth instrumenting on a local-first voice agent.
 

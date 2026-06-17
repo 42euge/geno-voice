@@ -233,7 +233,7 @@ output discoverable from README" discipline. Local only.
 | 6 | **Adopt pipecat `smart-turn`** — replace #2's heuristic body with the smart-turn model inside `pipecat_server.py`'s pipeline; same `turn_decider` interface. Measure false-endpoint rate vs silence-only baseline on recorded sessions. | High | TODO (blocked on model + Apple Silicon) |
 | 7 | **Agent backchannel emission timing** — a learned/heuristic "good moment to backchannel" signal (Krisp-style) feeding the existing `PLAY_CUE` path, so the agent emits continuers *during* long user speech, not only on silence. | Medium | **DONE iter-153** (decision seam `decide_backchannel_timing`; cue-path wiring is the follow-on) |
 | 8 | **Naturalness metrics for the organic path** — extend `TurnMetrics` / session-summary with false-endpoint rate and continuer-detection counts so the track is measured, not asserted. | Medium | **DONE iter-154** (`false_endpoint` + `continuers_detected` `TurnMetrics` fields; `_emit_organic_block` summary block; populating them from the live organic path is the follow-on) |
-| 9 | **Utterance buffer-merge** (Section 4's second half) — a pure `decide_utterance_continuation(prev_text, next_text, gap_secs)` that, when a silence endpoint fires on *unfinished*-looking text and a continuation arrives within the pause window, returns `MERGE` (the endpoint was a false positive — user paused mid-thought) vs `NEW`. Composes #4's `utterance_completeness` + #3's gate. Repairs the false endpoints #8 measures. | Medium | **DONE iter-155** (decision seam `decide_utterance_continuation`) + **iter-156** (stateful `UtteranceBuffer` hold-and-merge driver) + **iter-157** (`max_merge_depth` starvation cap) + **iter-158** (`UtteranceAggregator` cross-turn gap-measuring driver) + **iter-159** (live `ChatLoop` wiring behind the off-by-default `aggregator` seam — held ⇒ re-listen, merged ⇒ respond to joined text + set `TurnMetrics.false_endpoint`) + **iter-160** (`run_session` flushes the aggregator on shutdown — a held mid-thought fragment the user never completed before Ctrl+C surfaces on `SessionState.stranded_utterance` + a session-summary line rather than vanishing inside the buffer) + **iter-161** (held utterances counted separately from VAD false triggers — `TurnResult.held` flag ⇒ `SessionState.utterances_held` + an "Utterances held" line in the organic summary block, fixing iter-159's silent inflation of the false-trigger rate) + **iter-162** (a multi-turn release — an abandoned mid-thought fragment + a genuinely-new utterance, split by a long silence — no longer space-glued into one garbled LLM input; `resolve_turn` responds to the last turn and surfaces the abandoned fragment(s) on `TurnResult.displaced` ⇒ `SessionState.utterances_displaced` + a "Displaced uttr." summary line, the mid-session analog of iter-160's shutdown `stranded_utterance`) + **iter-163** (the iter-157 `max_merge_depth` cap force-emit is now a distinct `merge_capped` signal — threaded `EmittedTurn`/`BufferResult.capped` → `AggregatedResult.capped` → `ResolvedTurn.merge_capped` → `TurnMetrics.merge_capped` → `OrganicStats.merges_capped` + a "Merges capped" summary line — instead of being silently counted as a clean merge, honoring the "no silent caps" discipline) + **iter-164** (`session/silence_flush.py` — the pure `decide_silence_flush(held_text, silence_secs, …)` decision for the still-deferred mid-session long-silence flush: `FLUSH` a held mid-thought fragment iff the inter-turn silence *exceeds* `max_gap_secs` (the same merge-window scalar, so the flush deadline and merge window can't drift apart), else `HOLD`. Closes the buffer's blind spot — a fragment held when the user trails off and then says nothing was only released by the next utterance (iter-162) or shutdown (iter-160). Decision-seam-first per the iter-152/153 rhythm; `run_session` inter-turn clock wiring is the follow-on) |
+| 9 | **Utterance buffer-merge** (Section 4's second half) — a pure `decide_utterance_continuation(prev_text, next_text, gap_secs)` that, when a silence endpoint fires on *unfinished*-looking text and a continuation arrives within the pause window, returns `MERGE` (the endpoint was a false positive — user paused mid-thought) vs `NEW`. Composes #4's `utterance_completeness` + #3's gate. Repairs the false endpoints #8 measures. | Medium | **DONE iter-155** (decision seam `decide_utterance_continuation`) + **iter-156** (stateful `UtteranceBuffer` hold-and-merge driver) + **iter-157** (`max_merge_depth` starvation cap) + **iter-158** (`UtteranceAggregator` cross-turn gap-measuring driver) + **iter-159** (live `ChatLoop` wiring behind the off-by-default `aggregator` seam — held ⇒ re-listen, merged ⇒ respond to joined text + set `TurnMetrics.false_endpoint`) + **iter-160** (`run_session` flushes the aggregator on shutdown — a held mid-thought fragment the user never completed before Ctrl+C surfaces on `SessionState.stranded_utterance` + a session-summary line rather than vanishing inside the buffer) + **iter-161** (held utterances counted separately from VAD false triggers — `TurnResult.held` flag ⇒ `SessionState.utterances_held` + an "Utterances held" line in the organic summary block, fixing iter-159's silent inflation of the false-trigger rate) + **iter-162** (a multi-turn release — an abandoned mid-thought fragment + a genuinely-new utterance, split by a long silence — no longer space-glued into one garbled LLM input; `resolve_turn` responds to the last turn and surfaces the abandoned fragment(s) on `TurnResult.displaced` ⇒ `SessionState.utterances_displaced` + a "Displaced uttr." summary line, the mid-session analog of iter-160's shutdown `stranded_utterance`) + **iter-163** (the iter-157 `max_merge_depth` cap force-emit is now a distinct `merge_capped` signal — threaded `EmittedTurn`/`BufferResult.capped` → `AggregatedResult.capped` → `ResolvedTurn.merge_capped` → `TurnMetrics.merge_capped` → `OrganicStats.merges_capped` + a "Merges capped" summary line — instead of being silently counted as a clean merge, honoring the "no silent caps" discipline) + **iter-164** (`session/silence_flush.py` — the pure `decide_silence_flush(held_text, silence_secs, …)` decision for the still-deferred mid-session long-silence flush: `FLUSH` a held mid-thought fragment iff the inter-turn silence *exceeds* `max_gap_secs` (the same merge-window scalar, so the flush deadline and merge window can't drift apart), else `HOLD`. Closes the buffer's blind spot — a fragment held when the user trails off and then says nothing was only released by the next utterance (iter-162) or shutdown (iter-160). Decision-seam-first per the iter-152/153 rhythm; `run_session` inter-turn clock wiring is the follow-on) + **iter-165** (`record_utterance_streaming` grows an optional `idle_timeout` arg — the recorder *mechanism* the iter-164 flush decision needs. The recorder blocked forever waiting for speech to start, so the loop could never regain control during a long inter-turn pause to flush a held fragment; with `idle_timeout=N` it returns the empty-utterance tuple after `N` seconds of *pre-speech* silence — gated on `first_speech_at is None` so a mid-utterance trailing pause can't trip it — and flags `out_metrics["idle_timed_out"]=True` so a timeout is distinguishable from a VAD false trigger. `None` (default) preserves wait-forever behavior byte-for-byte; wiring it through `ChatLoop`→`run_session` to drive `should_flush_held_utterance` is the follow-on) |
 
 ---
 
@@ -1104,4 +1104,53 @@ output discoverable from README" discipline. Local only.
   path (the live half of this seam — measure the silence since the buffer last
   held, flush + respond to the fragment as its own turn before the next
   `[N] waiting...`). Then the still-pending `should_abandon_turn` (iter-152) /
+  `should_emit_backchannel` (iter-153) coordinator/cue wirings.
+
+### iter-165 (2026-06-17) — pre-speech idle timeout on the recorder (#9, the flush mechanism)
+
+- **Shipped the recorder mechanism** the iter-164 flush decision needs:
+  `record_utterance_streaming` grows an optional `idle_timeout` arg. The blocker
+  every lap since iter-160 named was *"`run_session` reads no clock between
+  turns"* — but the deeper cause is that `record_utterance_streaming` **blocks
+  forever waiting for speech to start**. There is no point at which the loop
+  regains control during a long inter-turn pause, so a held mid-thought fragment
+  (iter-156) can only ever surface when the *next* utterance arrives (iter-162)
+  or at shutdown (iter-160). iter-164 shipped the pure *decision*
+  (`decide_silence_flush`); this lap ships the *mechanism* that lets the loop
+  reach that decision mid-session.
+- **What it does.** With `idle_timeout=N` set, the recorder returns the
+  empty-utterance `(b"", 0.0, 0.0)` tuple — the same shape a VAD false trigger /
+  too-short utterance returns — after `N` seconds of unbroken *pre-speech*
+  silence, instead of blocking. The timeout is measured off the same
+  frame-aligned virtual clock (`now - t_origin`) as everything else, so it is
+  deterministic under the test `FrameClock` and tracks wall time in production.
+- **Gated on `first_speech_at is None`.** The timeout only governs the
+  *pre-speech* wait. Once a speech frame is seen, the normal `silence_duration`
+  end-of-turn logic owns the rest of the utterance and the idle timeout no
+  longer applies — so a long mid-utterance trailing pause can never be
+  misread as an idle timeout (a dedicated test pins this: 2.0s trailing silence
+  with `idle_timeout=0.5` still produces a real transcript via DONE_OK).
+- **Distinct cause flag.** On a timeout the recorder sets
+  `out_metrics["idle_timed_out"] = True` so the live loop can tell a deliberate
+  idle timeout (the inter-turn-flush trigger) apart from a genuine VAD false
+  trigger — both return the same empty tuple, but only one should drive a flush.
+- **`None` (default) preserves wait-forever behavior byte-for-byte.** No call
+  site passes `idle_timeout` yet, so the recorder waits for speech exactly as
+  before. The new path is entirely opt-in.
+- **+7 tests** (`tests/unit/test_chat_recording.py`,
+  `TestRecordUtterancePreSpeechIdleTimeout`): default-None records normally (no
+  flag); timeout fires on pure pre-speech silence (empty tuple + flag set);
+  transcribe_fn never called on timeout; speech-before-timeout records normally;
+  the mid-utterance-trailing-pause gate; the timeout fires near the configured
+  window (`mic.reads` count); and `idle_timeout=0.0` fires on the first frame
+  (distinct from `None`).
+- **Verification:** `test_chat_recording.py` **21 passed** (14 prior + 7 net
+  new); full unit suite **2252 passed** (2245 prior + 7); integration **30
+  passed, 1 skipped**; `py_compile -W error::SyntaxWarning` of
+  `examples/_chat_recording.py` clean.
+- **Next:** wire `idle_timeout` through `ChatLoop` and `run_session`'s
+  inter-turn path so a held fragment's silence is measured and
+  `should_flush_held_utterance` (iter-164) drives a real mid-session flush —
+  the live half of backlog #9's still-deferred flush, now unblocked on the
+  recorder side. Then the still-pending `should_abandon_turn` (iter-152) /
   `should_emit_backchannel` (iter-153) coordinator/cue wirings.

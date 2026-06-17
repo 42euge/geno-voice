@@ -115,6 +115,7 @@ def record_utterance_streaming(
     silence_threshold: float = SILENCE_THRESHOLD,
     silence_duration: float = SILENCE_DURATION,
     min_speech_duration: float = MIN_SPEECH_DURATION,
+    idle_timeout: float | None = None,
     out_metrics: dict | None = None,
 ) -> tuple[bytes, float, float]:
     """Record one utterance with live STT preview.
@@ -152,6 +153,27 @@ def record_utterance_streaming(
         constants. Override per-call to handle noisy environments
         (raise threshold), faster turn-taking (shorten silence_duration),
         or stricter speech detection (raise min_speech_duration).
+      ``idle_timeout`` (iter-165) — optional seconds of *pre-speech*
+        silence after which the recorder gives up waiting and returns
+        control to the caller instead of blocking until speech starts.
+        ``None`` (the default) preserves the original behavior exactly:
+        the loop waits forever for speech, so an injected aggregator's
+        held mid-thought fragment can only ever surface when the NEXT
+        utterance arrives (iter-162) or at shutdown (iter-160). With a
+        timeout set, the recorder returns the ``(b"", 0.0, 0.0)``
+        empty-utterance tuple — the same shape a VAD false trigger / a
+        too-short utterance returns — once ``idle_timeout`` seconds of
+        unbroken silence elapse *before any speech frame is seen*. This
+        is the recorder mechanism the iter-164 ``decide_silence_flush``
+        seam needs: it lets the live loop regain control during a long
+        inter-turn pause and measure the silence so a held fragment can
+        be flushed (backlog #9's still-deferred mid-session flush). The
+        timeout only governs the *pre-speech* wait — once a speech frame
+        is seen, the normal ``silence_duration`` end-of-turn logic owns
+        the rest of the utterance and the idle timeout no longer applies.
+        When the timeout fires, ``out_metrics`` (if provided) gets
+        ``"idle_timed_out": True`` so the caller can distinguish a
+        timeout from a genuine false trigger.
       ``out_metrics`` — optional dict that, if provided, is populated
         with extra measurements that don't fit the return tuple
         (iter-063). Keys:
@@ -183,6 +205,7 @@ def record_utterance_streaming(
         min_speech_duration=min_speech_duration,
     )
     too_short = False
+    idle_timed_out = False
 
     primed = list(primed_frames or [])
     primed_idx = 0
@@ -246,6 +269,27 @@ def record_utterance_streaming(
         event = vad.feed(level, now)
 
         if event is VadEvent.IDLE:
+            # iter-165: pre-speech idle timeout. The recorder is still
+            # waiting for the user to start speaking (no speech frame
+            # seen yet — ``first_speech_at`` is None). When an
+            # ``idle_timeout`` is configured and that-many seconds of
+            # unbroken silence have elapsed since the loop started, give
+            # up waiting and return control to the caller. Measured off
+            # the same frame-aligned virtual clock as everything else
+            # (``now - t_origin``) so it is deterministic under the test
+            # FrameClock and tracks wall time in production. ``None``
+            # (default) disables the check entirely — the loop waits
+            # forever, byte-for-byte the pre-iter-165 behavior. The
+            # check is gated on ``first_speech_at is None`` so a mid-
+            # utterance trailing pause can never trip it: once speech
+            # starts, ``silence_duration`` owns end-of-turn.
+            if (
+                idle_timeout is not None
+                and first_speech_at is None
+                and (now - t_origin) >= idle_timeout
+            ):
+                idle_timed_out = True
+                break
             continue
 
         # ACTIVE / DONE_OK / DONE_TOO_SHORT all include this frame in the
@@ -288,6 +332,20 @@ def record_utterance_streaming(
                     prefix="  You: ",
                     file=output,
                 )
+
+    if idle_timed_out:
+        # iter-165: pre-speech idle timeout fired — no speech ever
+        # started within ``idle_timeout`` seconds. Return the same
+        # empty-utterance shape a too-short utterance returns (so the
+        # existing no-transcript caller path is unchanged) but signal
+        # the cause distinctly via ``out_metrics`` so the live loop can
+        # tell a timeout (the inter-turn-flush trigger) apart from a VAD
+        # false trigger. No preview was rendered (we never saw speech),
+        # so there is no line to clear.
+        if out_metrics is not None:
+            out_metrics["idle_timed_out"] = True
+        stt_engine._last_text = None
+        return b"", 0.0, 0.0
 
     if too_short:
         output.write(f"\r{CLEAR_LINE}")

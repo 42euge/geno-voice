@@ -447,3 +447,205 @@ class TestRecordUtteranceWithPrimedFrames:
         # The minimum is len(primed_audio); upper bound is loose.
         assert n_frames >= len(primed_audio) - CHUNK
         assert n_frames <= len(primed_audio) + int(2.0 * RATE)
+
+
+class TestRecordUtterancePreSpeechIdleTimeout:
+    """iter-165 — optional pre-speech idle timeout (backlog #9 mechanism).
+
+    ``record_utterance_streaming`` blocks forever waiting for speech to
+    start. That is the reason every lap since iter-160 named the same
+    blocker: the live loop can never regain control during a long
+    inter-turn pause to flush a held mid-thought fragment (iter-164's
+    ``decide_silence_flush`` decision). The ``idle_timeout`` knob lets
+    the recorder give up waiting and return the empty-utterance tuple,
+    flagging the cause distinctly so the loop can tell a timeout from a
+    VAD false trigger.
+
+    Default (``None``) preserves the original wait-forever behavior
+    byte-for-byte.
+    """
+
+    def test_default_none_waits_for_speech_and_records(self):
+        # No idle_timeout: the loop waits for speech and records the
+        # utterance exactly as before — byte-for-byte the pre-iter-165
+        # path.
+        mic = VirtualMicStream(rate=RATE, chunk_size=CHUNK)
+        # 2s of lead silence (would trip a 1s timeout if it were on)
+        # then a real utterance.
+        mic.push(
+            concat(
+                make_silence(2.0, rate=RATE),
+                make_tone_burst(1.0, rate=RATE, amp=0.3),
+                make_silence(1.2, rate=RATE),
+            )
+        )
+        engine = _stub_engine()
+        out: dict = {}
+
+        wav, dur, _ = record_utterance_streaming(
+            mic,
+            engine,
+            transcribe_fn=lambda w: "recorded",
+            clock=FrameClock(),
+            output=io.StringIO(),
+            out_metrics=out,
+        )
+        assert len(wav) > 0
+        assert 0.5 < dur < 2.0
+        assert engine._last_text == "recorded"
+        assert "idle_timed_out" not in out
+
+    def test_idle_timeout_fires_on_pure_pre_speech_silence(self):
+        # Only silence on the mic (VirtualMicStream pads with silence
+        # forever once drained), so without a timeout this would loop
+        # forever. The idle timeout returns the empty-utterance tuple.
+        mic = VirtualMicStream(rate=RATE, chunk_size=CHUNK)
+        mic.push(make_silence(0.5, rate=RATE))  # then padded silence
+        engine = _stub_engine()
+        out: dict = {}
+
+        wav, dur, stt_time = record_utterance_streaming(
+            mic,
+            engine,
+            transcribe_fn=lambda w: "should not be called",
+            clock=FrameClock(),
+            output=io.StringIO(),
+            idle_timeout=1.0,
+            out_metrics=out,
+        )
+        assert wav == b""
+        assert dur == 0.0
+        assert stt_time == 0.0
+        # Distinct cause flag so the loop can tell timeout from a false
+        # trigger.
+        assert out.get("idle_timed_out") is True
+        # No speech ⇒ no final transcript stashed.
+        assert engine._last_text is None
+
+    def test_idle_timeout_does_not_call_transcribe_fn(self):
+        # The recorder never reaches the final-transcribe step on a
+        # timeout (no speech was ever buffered).
+        calls: list = []
+        mic = VirtualMicStream(rate=RATE, chunk_size=CHUNK)
+        mic.push(make_silence(0.5, rate=RATE))
+        engine = _stub_engine()
+
+        def transcribe(wav_bytes):
+            calls.append(wav_bytes)
+            return "nope"
+
+        record_utterance_streaming(
+            mic,
+            engine,
+            transcribe_fn=transcribe,
+            clock=FrameClock(),
+            output=io.StringIO(),
+            idle_timeout=1.0,
+        )
+        assert calls == []
+
+    def test_speech_before_timeout_records_normally(self):
+        # Speech starts well within the timeout window ⇒ the utterance
+        # records normally and no timeout fires.
+        mic = VirtualMicStream(rate=RATE, chunk_size=CHUNK)
+        mic.push(
+            concat(
+                make_silence(0.3, rate=RATE),
+                make_tone_burst(1.0, rate=RATE, amp=0.3),
+                make_silence(1.2, rate=RATE),
+            )
+        )
+        engine = _stub_engine()
+        out: dict = {}
+
+        wav, dur, _ = record_utterance_streaming(
+            mic,
+            engine,
+            transcribe_fn=lambda w: "recorded",
+            clock=FrameClock(),
+            output=io.StringIO(),
+            idle_timeout=5.0,
+            out_metrics=out,
+        )
+        assert len(wav) > 0
+        assert 0.5 < dur < 2.0
+        assert "idle_timed_out" not in out
+
+    def test_timeout_does_not_trip_on_mid_utterance_trailing_pause(self):
+        # The crucial gate: once speech has STARTED, a long trailing
+        # pause must NOT be read as an idle timeout — ``silence_duration``
+        # owns end-of-turn. Here the trailing silence (2.0s) exceeds the
+        # idle_timeout (0.5s), but because speech already started the
+        # normal DONE_OK path fires and we get a real transcript.
+        mic = VirtualMicStream(rate=RATE, chunk_size=CHUNK)
+        mic.push(
+            concat(
+                make_silence(0.2, rate=RATE),
+                make_tone_burst(1.0, rate=RATE, amp=0.3),
+                make_silence(2.0, rate=RATE),
+            )
+        )
+        engine = _stub_engine()
+        out: dict = {}
+
+        wav, dur, _ = record_utterance_streaming(
+            mic,
+            engine,
+            transcribe_fn=lambda w: "recorded",
+            clock=FrameClock(),
+            output=io.StringIO(),
+            idle_timeout=0.5,
+            out_metrics=out,
+        )
+        assert len(wav) > 0
+        assert 0.5 < dur < 2.0
+        assert engine._last_text == "recorded"
+        assert "idle_timed_out" not in out
+
+    def test_timeout_fires_near_configured_window(self):
+        # The timeout should fire at roughly idle_timeout seconds of
+        # virtual time, not much sooner or later. FrameClock advances
+        # CHUNK/RATE (~0.064s) per frame; with idle_timeout=1.0 the loop
+        # runs ~16 frames before the check trips.
+        mic = VirtualMicStream(rate=RATE, chunk_size=CHUNK)
+        mic.push(make_silence(0.5, rate=RATE))
+        engine = _stub_engine()
+        # A clock that also records how far it advanced.
+        clock = FrameClock()
+
+        record_utterance_streaming(
+            mic,
+            engine,
+            transcribe_fn=lambda w: None,
+            clock=clock,
+            output=io.StringIO(),
+            idle_timeout=1.0,
+        )
+        # The internal frame clock is virtual; the recorder used
+        # ``mic.reads`` once per live frame. ~16 frames to reach 1.0s of
+        # silence (1024/16000 ≈ 0.064s each), plus a couple for
+        # boundary rounding. Bound it loosely but meaningfully.
+        assert 14 <= len(mic.reads) <= 20
+
+    def test_zero_idle_timeout_fires_immediately(self):
+        # idle_timeout=0.0 is a valid (if aggressive) setting: the very
+        # first silent frame is at now-t_origin == 0.0 >= 0.0, so it
+        # times out at once. Distinct from None (wait forever).
+        mic = VirtualMicStream(rate=RATE, chunk_size=CHUNK)
+        mic.push(make_silence(0.5, rate=RATE))
+        engine = _stub_engine()
+        out: dict = {}
+
+        wav, _, _ = record_utterance_streaming(
+            mic,
+            engine,
+            transcribe_fn=lambda w: None,
+            clock=FrameClock(),
+            output=io.StringIO(),
+            idle_timeout=0.0,
+            out_metrics=out,
+        )
+        assert wav == b""
+        assert out.get("idle_timed_out") is True
+        # Tripped on the first frame.
+        assert len(mic.reads) == 1
