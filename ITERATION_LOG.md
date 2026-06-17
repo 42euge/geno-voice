@@ -14278,3 +14278,113 @@ turn to the right bucket.
     (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
     on a committed `baseline.json`; diversity-check surface paused per
     iter-143/144.
+
+## iter-162 — displaced mid-thought fragments not glued onto the response (backlog #9 correctness fix)
+
+**Branch:** `iter-162-displaced` (merged ff to main, commit `5d0aa08`)
+**Date:** 2026-06-17
+
+**Goal:** Fix a *live* correctness bug iter-159's wiring exposed: when the
+organic aggregator releases two distinct turns in one `offer` — an abandoned
+mid-thought fragment plus a genuinely-new utterance, split by a long silence —
+`resolve_turn` space-glued them into one garbled LLM input.
+
+**Why:** In organic mode the user trails off mid-thought ("I was thinking about
+the"); the aggregator holds it. The next thing it hears is NOT a quick
+continuation but a long silence (> `max_gap_secs`) that proves the held text was
+*not* a false endpoint, followed by a complete new utterance ("What time is
+it?"). `UtteranceBuffer.offer` then releases **two** turns in one call: the
+abandoned fragment (released as its own `NEW` turn) *and* the new utterance.
+iter-159's `resolve_turn` joined the whole `turns` list with spaces and fed
+`"I was thinking about the What time is it?"` to the LLM — a semantically-wrong
+prompt. The buffer only *ever* emits >1 turn when a silence forced a `NEW`
+boundary — precisely the case where the turns are distinct, never a continuation
+to join. (A genuine merge is a *single* released turn, glued internally.) So
+joining at the `resolve_turn` layer was never correct.
+
+**What changed:**
+
+1. **`examples/_chat_aggregation.py` — the fix.** `resolve_turn` now responds
+   to the **last** released turn only and exposes the earlier ones as
+   `ResolvedTurn.displaced: tuple[str, ...]` (in order). `false_endpoint` is now
+   the *responded* (last) turn's own flag, not an OR across the abandoned
+   fragments — an abandoned merged fragment must not falsely stamp a fresh,
+   non-merged response. Single-turn releases (the common case; every half-duplex
+   release) leave `displaced` empty — byte-for-byte the prior behavior.
+
+2. **`examples/_chat_loop.py` — `TurnResult.displaced: tuple[str, ...] = ()`.**
+   `run_one_turn` captures `resolved.displaced`, prints a `_DIM` status line, and
+   carries it out on both the responded return *and* the LLM-error return (the
+   displaced text is real captured speech, independent of whether the response
+   then succeeded).
+
+3. **`examples/_chat_session.py` — collection.** `SessionState.utterances_displaced:
+   list[str]`. `run_session` extends it from `getattr(result, "displaced", ())`
+   right after each `run_one_turn` call (before the error / no-metrics branches,
+   so a fragment surfaces even when its turn errored). Defensive `getattr` keeps
+   a pre-iter-162 `TurnResult` shape contributing nothing.
+
+4. **`examples/_chat_metrics.py` — surfacing.** `SessionMeta.utterances_displaced`
+   (SessionMeta-only, no legacy kwarg path) threads to a new
+   `_emit_displaced_utterances_line` helper. One fragment ⇒ a single quoted
+   line; multiple ⇒ a count header + one quoted line each. Surfaced on **both**
+   the normal path and the no-completed-turns early-return path (a session can
+   displace a fragment yet land no completed turns). The line names `iter-162`
+   for `grep`, mirroring the iter-114+ / iter-160 summary-line conventions. The
+   mid-session analog of iter-160's shutdown `stranded_utterance` line.
+
+5. **`examples/mic_chat.py` — wiring.** `run_chat` passes
+   `state.utterances_displaced` into `SessionMeta`.
+
+6. **Half-duplex / `aggregator=None` unchanged.** The buffer never releases more
+   than one turn at a time there, so `displaced` is always empty, the counter
+   stays empty, and the summary line is suppressed — byte-for-byte today's
+   output. Every existing call site is untouched.
+
+7. **+23 tests.**
+   - `tests/unit/test_chat_aggregation.py` (rewrote the multi-turn block +
+     defaults): respond-to-last-not-joined (the headline garble repro);
+     single-turn release has no displaced; `false_endpoint` is the responded
+     turn's own flag (both directions); three-turn release displaces all but the
+     last; blank-turn handling; all-blank collapse.
+   - `tests/unit/test_chat_loop_aggregator.py` (+1 test, +3 assertions): the
+     live long-silence-displaces-fragment path (responds to the new utterance,
+     not the glue; fragment rides out on `displaced`); the genuine-merge path
+     asserts `displaced == ()`; no-aggregator and half-duplex assert empty.
+   - `tests/unit/test_chat_session.py` (+5): collection from a successful turn,
+     accumulation in order across turns, collection even when the turn errored,
+     back-compat default-empty, default-empty clean session.
+   - `tests/unit/test_displaced_utterances_line.py` (new, +14): helper
+     suppression (None/empty/all-blank), single-fragment formatting (quoted,
+     stripped, names iter-162, explains abandoned-mid-thought), multi-fragment
+     (header + per-line, blanks dropped from count), and `print_session_summary`
+     integration on the normal + zero-turn paths.
+
+8. **Discoverability:** iter-162 findings-log entry + backlog #9 row update in
+   `docs/research/organic-turn-taking.md`; README Research section names
+   `resolve_turn`'s respond-to-last rule, `TurnResult.displaced`,
+   `SessionState.utterances_displaced`, and `_emit_displaced_utterances_line`.
+
+**Verification:**
+- `python -m pytest tests/unit/test_chat_aggregation.py tests/unit/test_chat_loop_aggregator.py tests/unit/test_chat_session.py tests/unit/test_displaced_utterances_line.py -q` → **65 passed** (re-run on main post-merge).
+- Full unit suite (in worktree, pre-merge): **2199 passed** (2176 prior + 23).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `py_compile` of `_chat_aggregation.py` / `_chat_loop.py` / `_chat_session.py` / `_chat_metrics.py` / `mic_chat.py` clean.
+
+**Notes:**
+- **No runtime behavior change for today's sessions.** The garble only occurred
+  in organic mode (merging on, off by default) on a multi-turn release; in
+  half-duplex the buffer never releases >1 turn, so `displaced` is always empty
+  and the summary is unchanged.
+- Next directions:
+  - **Mid-session long-silence flush** (the larger item iter-160/161 named):
+    feed a trailed-off fragment to the engine as its own turn via an inter-turn
+    clock read in `run_session`, rather than only surfacing it in the summary.
+    This lap makes the *displaced*-fragment half correct first.
+  - Wire the still-pending `should_abandon_turn` (iter-152) into the `mic_chat`
+    barge path and `should_emit_backchannel` (iter-153) into the live cue path,
+    both behind their full-duplex sub-flags.
+  - Carried over (off-track): the CI workflow
+    (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
+    on a committed `baseline.json`; diversity-check surface paused per
+    iter-143/144.
