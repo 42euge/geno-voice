@@ -272,7 +272,20 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   branch crashed on every transcript), and `broadcast_cue` re-picked a *random*
   cue from a private `CUE_TYPES` list (dropping the rotation and risking cue
   keys outside it). Now the live broadcast is indexed to the single
-  `CUE_ROTATION` source of truth. Also shipped: the **organic-path naturalness
+  `CUE_ROTATION` source of truth. The **mid-speech** monitor's VAD-event
+  driver is `session/monologue_clock.py`
+  (`tests/unit/test_monologue_clock.py`): `MonologueClock` consumes
+  `on_speech_start(now)` / `on_speech_stop(now)` (the VAD
+  started/stopped stream) and derives the two quantities `observe` needs but
+  can't compute itself — `monologue_start_at` (a speech run that **survives**
+  brief clause-boundary pauses and resets only on a `stop → start` gap
+  ≥ `reset_gap_secs`, default 2.0s = `backchannel_timing.py`'s `max_pause_secs`
+  = `turn_decider.py`'s `silence_floor_secs`, one shared scalar) and
+  `pause_secs(now)` (the live within-speech gap, zero while speaking). So a
+  long monologue accumulates `user_speaking_secs` across its clause pauses (the
+  warm-up gate eventually clears) and the monitor emits exactly in the
+  clause-pause window — the last pure piece before the (pipecat-blocked) live
+  `Broadcaster` wiring becomes a thin adapter. Also shipped: the **organic-path naturalness
   metrics** (`examples/_chat_metrics.py`,
   `tests/unit/test_emit_organic_block.py`) — two additive `TurnMetrics`
   fields, `false_endpoint` (the EOU decision fired early and the user

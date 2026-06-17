@@ -15317,3 +15317,97 @@ share with `CUE_ROTATION`.
     (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
     on a committed `baseline.json`; diversity-check surface paused per
     iter-143/144.
+
+## iter-173 — the monologue clock: the VAD-event driver for `BackchannelMonitor` (backlog #7)
+
+**Branch:** `iter-173-monologue-clock` (merged ff to main)
+**Date:** 2026-06-17
+
+**Goal:** Supply the two derived inputs `BackchannelMonitor.observe(*, now,
+monologue_start_at, pause_secs)` (iter-170) needs but nothing on main produced.
+
+**Why:** iter-170 shipped the stateful monitor and iter-171 gave it the cue
+rotation — it answers *when* and *which*. But `observe` consumes
+`monologue_start_at` and `pause_secs`, and **neither existed as a derivable
+quantity.** Neither is a raw clock read:
+
+1. A *monologue* is not one VAD speech segment. A person mid-thought pauses at
+   clause boundaries ("I was thinking… [0.5s] …about the deadline") without
+   yielding the floor — and those brief pauses are precisely the backchannel
+   opportunities the monitor watches for. The monologue must survive a short
+   `stop → start` gap and reset only on a turn-end-sized one, so
+   `user_speaking_secs` keeps accumulating across clause pauses (the warm-up
+   gate clears) rather than resetting on every breath.
+2. `pause_secs` is the live within-speech gap since the last speech frame,
+   zero while talking.
+
+Deriving both from the VAD `started`/`stopped` event stream is cross-event
+state the pure seam can't carry — the same driver gap iter-156's
+`UtteranceBuffer` / iter-158's `UtteranceAggregator` filled for the merge seam
+and iter-170's `BackchannelMonitor` filled for the emit timestamp.
+
+**What changed:**
+
+1. **`session/monologue_clock.py`** — new pure, dependency-free module.
+   `MonologueClock` consumes `on_speech_start(now)` / `on_speech_stop(now)` (the
+   `VADUserStartedSpeakingFrame` / `VADUserStoppedSpeakingFrame` stream the live
+   `Broadcaster` already sees) and exposes `monologue_start_at`,
+   `pause_secs(now)`, plus read-only `speaking` / `last_stop_at` views.
+   - **Monologue continuity:** `on_speech_start` begins a *new* monologue iff
+     there's no current one *or* the gap since the last stop is
+     `>= reset_gap_secs`; otherwise the existing monologue continues untouched.
+   - **Shared boundary scalar:** `reset_gap_secs` defaults to 2.0s — *exactly*
+     `backchannel_timing.py`'s `max_pause_secs` and `turn_decider.py`'s
+     `silence_floor_secs`. The clause-pause/turn-end boundary is now one number
+     across the monologue clock, the backchannel window, and the turn decider;
+     they can't drift apart.
+   - **Pause deferral:** `on_speech_stop` does *not* end the monologue (only the
+     next start, or its absence, decides whether the stop was a clause pause or
+     a turn-end), so the reset decision lives entirely in `on_speech_start`.
+     `pause_secs(now)` reports the growing gap meanwhile, clamped `>= 0` against
+     clock skew. `reset()` clears all state.
+
+2. **+18 tests** (`tests/unit/test_monologue_clock.py`, file-path-loaded into a
+   stub `session` namespace like `test_backchannel_monitor.py`): config
+   validation (default == shared 2.0s; non-positive rejected); initial state;
+   first-start begins monologue; pause grows after stop / clamps on skew /
+   zeroes on resume; short gap continues the monologue (single + repeated clause
+   pauses); long gap resets; threshold inclusive on the reset side (exactly 2.0s
+   resets, 1.99s continues); custom threshold; `reset` clears all + post-reset
+   start always fresh; **two end-to-end integration tests** driving a real
+   `BackchannelMonitor` from the clock — organic mode emits "mhmm" exactly in
+   the clause-pause window after warm-up, and the half-duplex invariant survives
+   the wiring (default monitor never emits even with a perfect clock pause).
+
+**Discoverability:** iter-173 findings-log entry + backlog #7 row update in
+`docs/research/organic-turn-taking.md`; README Research section names
+`session/monologue_clock.py`, the `monologue_start_at` clause-pause-survival /
+turn-end-reset semantics, the shared 2.0s scalar, and that this is the last pure
+piece before the pipecat-blocked `Broadcaster` wiring.
+
+**Verification:**
+- `python -m pytest tests/unit/test_monologue_clock.py -q` → **18 passed**.
+- Full unit suite (in worktree, pre-merge): **2355 passed** (2337 prior + 18).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `python -W error::SyntaxWarning -m py_compile session/monologue_clock.py`
+  clean.
+- (`tests/test_session.py` still errors on collection — `ModuleNotFoundError:
+  pipecat` — pre-existing on main, not a regression; that suite needs the
+  absent x86_64 dep.)
+
+**Notes:**
+- Next directions:
+  - **Mid-speech live cue wiring for #7** — all three pure pieces now exist:
+    *when* (`decide_backchannel_timing`, iter-153), *which* (`cue_rotation` +
+    the monitor's rotation index, iter-171), and the *inputs* (`MonologueClock`,
+    this lap). The remaining hop is the live `pipecat_server.py` `Broadcaster`
+    wiring: `clock.on_speech_start/stop` from the VAD frames, then
+    `monitor.observe(now, clock.monologue_start_at, clock.pause_secs(now))` →
+    `broadcast_cue(d.cue_type)` — a thin adapter, still blocked on the absent
+    pipecat dep on the x86_64 runner.
+  - **Live barge-path wiring for #5** — `should_abandon_turn` (iter-152) into
+    the `mic_chat` barge path; blocked on no transcript at VAD-trigger time.
+  - Carried over (off-track): the CI workflow
+    (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
+    on a committed `baseline.json`; diversity-check surface paused per
+    iter-143/144.
