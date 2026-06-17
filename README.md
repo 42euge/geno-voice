@@ -288,7 +288,11 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   *third* quantity `observe` consumes (`now - monologue_start_at`) — so the None
   guard and skew clamp live in one place rather than being recomputed by hand at
   every call site (the unguarded `now - None` that raised the driver's
-  `TypeError` below). `session/backchannel_driver.py`
+  `TypeError` below). The monitor mirrors that with
+  `secs_since_last_backchannel(now)` — the *one* derived quantity a clock can't
+  answer (it depends on the monitor's own past emits) — so both `observe` and the
+  driver's no-monologue short-circuit source it from the single owner of the
+  last-emit timestamp and can't drift. `session/backchannel_driver.py`
   (`tests/unit/test_backchannel_driver.py`) then **composes** the clock and the
   monitor into one `BackchannelDriver` so the live `Broadcaster` wiring is a
   *truly* thin shim — `on_speech_start` / `on_speech_stop` off the VAD frames,

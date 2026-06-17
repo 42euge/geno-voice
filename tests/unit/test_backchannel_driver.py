@@ -140,6 +140,22 @@ def test_none_tick_secs_since_is_none_when_never_emitted():
     assert tick.secs_since_last_backchannel is None
 
 
+def test_none_tick_secs_since_sources_monitor_accessor():
+    """The no-monologue short-circuit reports exactly the monitor's own
+    secs_since_last_backchannel(now) — not a driver-local recompute — so the
+    None guard and skew clamp can't drift from the in-decision derivation."""
+    d = BackchannelDriver(config=_organic())
+    d.on_speech_start(0.0)
+    d.on_speech_stop(16.0)
+    assert d.observe(now=16.5).emit is True  # arm the monitor's last-emit clock
+    d.clock.reset()  # wipe the monologue, keep the monitor's emit timestamp
+    tick = d.observe(now=20.0)
+    assert tick.emit is False
+    assert tick.secs_since_last_backchannel == d.monitor.secs_since_last_backchannel(
+        now=20.0
+    )
+
+
 def test_none_tick_echoes_pause_secs_zero_before_speech():
     d = BackchannelDriver(config=_organic())
     tick = d.observe(now=5.0)

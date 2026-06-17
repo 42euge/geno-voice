@@ -15655,3 +15655,93 @@ former hand-recompute / `TypeError`.
     the `mic_chat` barge path; blocked on no transcript at VAD-trigger time.
   - Carried over (off-track): the CI workflow still blocked on a committed
     `baseline.json`; diversity-check surface paused per iter-143/144.
+
+## iter-177 — `BackchannelMonitor.secs_since_last_backchannel(now)`: the monitor-side accessor mirror (#7)
+
+**Branch:** `iter-177-monitor-secs-since` (merged ff to main)
+**Date:** 2026-06-17
+
+**Goal:** Give `BackchannelMonitor` the accessor for the *third* quantity
+`decide_backchannel_timing` consumes — `secs_since_last_backchannel(now)` — so
+both the monitor's own `observe` and the `BackchannelDriver`'s no-monologue
+short-circuit source it from one place instead of duplicating the None-guard +
+skew-clamp derivation. The monitor-side mirror of iter-176's
+`MonologueClock.user_speaking_secs(now)`.
+
+**Why:** `decide_backchannel_timing(*, user_speaking_secs, pause_secs,
+secs_since_last_backchannel, ...)` consumes three derived quantities. iter-176
+folded *two* of them (`user_speaking_secs`, `pause_secs`) onto the
+`MonologueClock` so the driver's no-monologue short-circuit stopped
+hand-recomputing them. But the **third** — `secs_since_last_backchannel`
+(`now - last_emit`, `None` if never emitted) — is the one quantity a clock
+*can't* answer: it depends on the monitor's own past EMIT decisions, so the
+monitor is its rightful owner. Yet the driver's no-monologue path still
+hand-recomputed it:
+
+    last_emit = self._monitor.last_backchannel_at
+    secs_since = None if last_emit is None else max(0.0, now - last_emit)
+
+— which **duplicated the exact None-guard + `max(0.0, …)` skew clamp already
+living inside `BackchannelMonitor.observe`**. Two copies of one derivation are
+free to drift (a future clamp tweak in one place, not the other). Folding it
+onto a single monitor method — the owner of `_last_backchannel_at` — completes
+the "every derived quantity has exactly one owner" cleanup the iter-176 lap
+started across the #7 stack. Pure, fully unblocked (no pipecat), behavior-
+preserving.
+
+**What changed:**
+
+1. **`session/backchannel_monitor.py` —
+   `BackchannelMonitor.secs_since_last_backchannel(now)`** — returns `None`
+   before the first emit / after `reset` (the value the stateless seam treats as
+   "never backchanneled, rate limit passes"), else `now - last_emit` clamped
+   `>= 0` against clock skew. Placed alongside the other read-only accessors.
+
+2. **`session/backchannel_monitor.py` — `observe` rewired** — derives
+   `secs_since = self.secs_since_last_backchannel(now)` instead of the inline
+   `if self._last_backchannel_at is None: … else max(0.0, …)`. Behavior-identical
+   (the accessor *is* that derivation), now the single source of truth.
+
+3. **`session/backchannel_driver.py` — `observe` no-monologue short-circuit**
+   drops its local `last_emit` / `max(0.0, …)` recompute and calls
+   `self._monitor.secs_since_last_backchannel(now)`. Behavior-preserving — the
+   iter-174 None-tick tests (`reports`, `is_none_when_never`) still pass
+   byte-for-byte — but now indexed to the monitor's owner so the clamp can't
+   drift from the in-decision derivation.
+
+**+6 tests:**
+- 5 in `tests/unit/test_backchannel_monitor.py`: None before first emit;
+  measures `now - last_emit` after an emit; clamps against clock skew; None
+  after `reset`; `observe`-matches-accessor consistency (they share the one
+  derivation so they cannot drift).
+- 1 in `tests/unit/test_backchannel_driver.py`: the no-monologue short-circuit
+  reports exactly `monitor.secs_since_last_backchannel(now)`.
+
+**Discoverability:** iter-177 findings-log entry + backlog #7 row update in
+`docs/research/organic-turn-taking.md`; README Research section now names the
+monitor's `secs_since_last_backchannel(now)` accessor as the mirror of the
+clock's `user_speaking_secs(now)` — the one derived quantity a clock can't own.
+
+**Verification:**
+- `python -m pytest tests/unit/test_backchannel_monitor.py
+  tests/unit/test_backchannel_driver.py -q` → **46 passed** (40 prior + 6).
+- Full unit suite (in worktree, pre-merge): **2395 passed** (2389 prior + 6).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `python -W error::SyntaxWarning -m py_compile session/backchannel_monitor.py
+  session/backchannel_driver.py` clean.
+- (`tests/test_session.py` still errors on collection — `ModuleNotFoundError:
+  pipecat` — pre-existing on main, not a regression.)
+
+**Notes:**
+- Next directions:
+  - **Live mid-speech cue wiring for #7** — feed the VAD frames to a
+    `BackchannelDriver` in `pipecat_server.py`'s `Broadcaster`, `broadcast_cue`
+    on emit, surface `driver.emit_count` into the
+    `SessionMeta.backchannels_emitted` slot (iter-175). The pure stack's derived
+    quantities now each have a single owner (clock: `user_speaking_secs` /
+    `pause_secs`; monitor: `secs_since_last_backchannel`). Still blocked only on
+    the absent pipecat dep on the x86_64 runner.
+  - **Live barge-path wiring for #5** — `should_abandon_turn` (iter-152) into
+    the `mic_chat` barge path; blocked on no transcript at VAD-trigger time.
+  - Carried over (off-track): the CI workflow still blocked on a committed
+    `baseline.json`; diversity-check surface paused per iter-143/144.

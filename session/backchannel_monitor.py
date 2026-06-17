@@ -176,6 +176,28 @@ class BackchannelMonitor:
         """Current position in the shared ``CUE_ROTATION`` (advances per emit)."""
         return self._cue_index
 
+    def secs_since_last_backchannel(self, now: float) -> float | None:
+        """Seconds since the monitor last emitted, or ``None`` if it never has.
+
+        The third quantity the decision consumes (alongside
+        ``user_speaking_secs`` and ``pause_secs``) and the one *only the monitor
+        can answer* — it depends on the monitor's own past EMIT decisions, not
+        on anything a clock reads. ``observe`` derives it inline each call; this
+        accessor folds that derivation onto one method so consumers that need it
+        *outside* the decision path (e.g. the driver's no-monologue short-circuit
+        in iter-174) source it from the single owner of ``_last_backchannel_at``
+        rather than re-spelling the ``None`` guard and ``>= 0`` skew clamp — the
+        monitor-side mirror of iter-176's ``MonologueClock.user_speaking_secs``.
+
+        Returns ``None`` before the first emit / after ``reset`` (the value the
+        stateless seam treats as "never backchanneled, rate limit passes"), else
+        ``now - last_emit`` clamped ``>= 0`` against clock skew.
+        """
+        last_emit = self._last_backchannel_at
+        if last_emit is None:
+            return None
+        return max(0.0, now - last_emit)
+
     def observe(
         self,
         *,
@@ -205,10 +227,7 @@ class BackchannelMonitor:
         the monitor never mutates its state. Byte-for-byte today's behavior.
         """
         user_speaking_secs = max(0.0, now - monologue_start_at)
-        if self._last_backchannel_at is None:
-            secs_since: float | None = None
-        else:
-            secs_since = max(0.0, now - self._last_backchannel_at)
+        secs_since = self.secs_since_last_backchannel(now)
 
         timing = decide_backchannel_timing(
             user_speaking_secs=user_speaking_secs,

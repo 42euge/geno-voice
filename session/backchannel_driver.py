@@ -182,17 +182,20 @@ class BackchannelDriver:
         unguarded ``now - monologue_start_at`` subtraction, which would raise
         ``TypeError`` on a ``None`` start. The monitor's state is never touched
         on this path, so the half-duplex invariant and the rate limit are both
-        preserved.
+        preserved. The reported ``secs_since_last_backchannel`` comes from the
+        monitor's own ``secs_since_last_backchannel(now)`` accessor (the owner of
+        ``_last_backchannel_at``), not a hand-recompute, so the None guard and
+        the skew clamp can't drift from the in-decision derivation.
         """
         start = self._clock.monologue_start_at
         if start is None:
-            last_emit = self._monitor.last_backchannel_at
-            secs_since = None if last_emit is None else max(0.0, now - last_emit)
             return BackchannelDecision(
                 emit=False,
                 user_speaking_secs=self._clock.user_speaking_secs(now),
                 pause_secs=self._clock.pause_secs(now),
-                secs_since_last_backchannel=secs_since,
+                secs_since_last_backchannel=self._monitor.secs_since_last_backchannel(
+                    now
+                ),
                 cue_type=None,
             )
         return self._monitor.observe(

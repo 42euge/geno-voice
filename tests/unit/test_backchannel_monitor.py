@@ -261,6 +261,49 @@ def test_negative_since_last_clamped():
     assert d.emit is False  # 0 < 5s rate limit ⇒ held
 
 
+# ---- secs_since_last_backchannel accessor (iter-177) -----------------------
+
+def test_secs_since_accessor_none_before_first_emit():
+    """No emit yet ⇒ the accessor returns None (rate limit passes)."""
+    m = _mon()
+    assert m.secs_since_last_backchannel(now=50.0) is None
+
+
+def test_secs_since_accessor_measures_from_last_emit():
+    """After an emit, the accessor reports now - last_emit."""
+    m = _mon()
+    m.observe(now=12.0, monologue_start_at=0.0, pause_secs=0.5)  # emit at 12
+    assert m.secs_since_last_backchannel(now=20.0) == pytest.approx(8.0)
+
+
+def test_secs_since_accessor_clamps_against_skew():
+    """A 'now' before the recorded emit (clock skew) clamps to >= 0."""
+    m = _mon()
+    m.observe(now=12.0, monologue_start_at=0.0, pause_secs=0.5)  # emit at 12
+    assert m.secs_since_last_backchannel(now=11.0) == 0.0
+
+
+def test_secs_since_accessor_none_after_reset():
+    """reset() clears the last-emit clock ⇒ the accessor reports None again."""
+    m = _mon()
+    m.observe(now=12.0, monologue_start_at=0.0, pause_secs=0.5)
+    assert m.secs_since_last_backchannel(now=20.0) == pytest.approx(8.0)
+    m.reset()
+    assert m.secs_since_last_backchannel(now=20.0) is None
+
+
+def test_observe_secs_since_matches_accessor():
+    """observe's reported secs_since equals the standalone accessor's value —
+    they share the one derivation, so they cannot drift."""
+    m = _mon()
+    m.observe(now=12.0, monologue_start_at=0.0, pause_secs=0.5)  # emit at 12
+    # A held tick at 15: observe derives secs_since the same way the accessor
+    # does, off the single owner of _last_backchannel_at.
+    d = m.observe(now=15.0, monologue_start_at=0.0, pause_secs=0.5)
+    assert d.secs_since_last_backchannel == m.secs_since_last_backchannel(now=15.0)
+    assert d.secs_since_last_backchannel == pytest.approx(3.0)
+
+
 # ---- decision dataclass / observability ------------------------------------
 
 def test_decision_echoes_inputs():
