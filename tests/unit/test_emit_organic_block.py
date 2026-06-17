@@ -25,6 +25,7 @@ sys.path.insert(0, str(ROOT))
 
 from examples._chat_metrics import (  # noqa: E402
     OrganicStats,
+    SessionMeta,
     TurnMetrics,
     _emit_organic_block,
     print_session_summary,
@@ -64,6 +65,49 @@ class TestOrganicStatsDefaults:
         assert s.false_endpoints == 0
         assert s.continuers_total == 0
         assert s.n == 0
+        assert s.utterances_held == 0
+
+
+# ---- Utterances held (iter-161) ---------------------------------
+
+
+class TestUtterancesHeld:
+    def test_held_alone_emits_block_and_line(self):
+        # A session that only held utterances (no false endpoints, no
+        # continuers) still surfaces the held count under the header.
+        emit, lines = _capture()
+        _emit_organic_block(emit, OrganicStats(utterances_held=3, n=5))
+        assert any("Organic turn-taking:" in ln for ln in lines)
+        assert any(
+            "Utterances held:  3 (mid-thought, buffered for merge "
+            "— not VAD false triggers)" in ln
+            for ln in lines
+        )
+
+    def test_held_zero_omits_line(self):
+        emit, lines = _capture()
+        _emit_organic_block(emit, OrganicStats(false_endpoints=1, n=5))
+        assert not any("Utterances held" in ln for ln in lines)
+
+    def test_held_alone_does_not_emit_false_endpoint_line(self):
+        emit, lines = _capture()
+        _emit_organic_block(emit, OrganicStats(utterances_held=2))
+        assert not any("False endpoints" in ln for ln in lines)
+        assert not any("Continuers held" in ln for ln in lines)
+
+    def test_held_with_other_signals_under_one_header(self):
+        emit, lines = _capture()
+        _emit_organic_block(
+            emit,
+            OrganicStats(
+                false_endpoints=1, continuers_total=2, utterances_held=3, n=10
+            ),
+        )
+        headers = [ln for ln in lines if "Organic turn-taking:" in ln]
+        assert len(headers) == 1
+        assert any("False endpoints:  1/10 turns" in ln for ln in lines)
+        assert any("Continuers held:  2" in ln for ln in lines)
+        assert any("Utterances held:  3" in ln for ln in lines)
 
 
 # ---- No-data path (the half-duplex default) ---------------------
@@ -223,3 +267,52 @@ class TestSummaryWiring:
         out = _strip_ansi(capsys.readouterr().out)
         assert "False endpoint" not in out
         assert "Continuers:" not in out
+
+
+# ---- print_session_summary wiring of utterances_held (iter-161) -
+
+
+def _summary_meta(metrics, meta):
+    buf = io.StringIO()
+    print_session_summary(metrics, {"model": "test"}, file=buf, meta=meta)
+    return _strip_ansi(buf.getvalue())
+
+
+class TestHeldSummaryWiring:
+    def test_held_via_meta_surfaces_in_summary(self):
+        # A completed turn plus a SessionMeta carrying utterances_held
+        # surfaces the held line under the organic block.
+        out = _summary_meta(
+            [TurnMetrics(ttfs=0.5, transcript="hi")],
+            SessionMeta(utterances_held=2),
+        )
+        assert "Organic turn-taking:" in out
+        assert "Utterances held:  2" in out
+        assert "not VAD false triggers" in out
+
+    def test_held_zero_via_meta_omits_block(self):
+        # Default meta (held=0) on a plain turn → no organic block.
+        out = _summary_meta(
+            [TurnMetrics(ttfs=0.5, transcript="hi")],
+            SessionMeta(),
+        )
+        assert "Utterances held" not in out
+        assert "Organic turn-taking" not in out
+
+    def test_held_surfaces_on_zero_turn_early_return(self):
+        # A session that held a fragment but completed zero turns still
+        # shows the held count on the no-completed-turns early-return path.
+        out = _summary_meta([], SessionMeta(utterances_held=1))
+        assert "Session ended (no completed turns)" in out
+        assert "Utterances held:  1" in out
+
+    def test_held_not_counted_as_vad_false_trigger(self):
+        # The headline fix: a held utterance must NOT appear in the VAD
+        # false-trigger line. With held=2 and false_triggers=0, there is
+        # no VAD false-trig line, but the held line is present.
+        out = _summary_meta(
+            [TurnMetrics(ttfs=0.5, transcript="hi")],
+            SessionMeta(utterances_held=2, false_triggers=0),
+        )
+        assert "VAD false-trig" not in out
+        assert "Utterances held:  2" in out

@@ -180,6 +180,8 @@ class TestNoAggregator:
         assert result.metrics is not None
         assert result.metrics.transcript == "how are you"
         assert result.metrics.false_endpoint is False
+        # iter-161: a responded turn is never flagged held.
+        assert result.held is False
 
 
 # ---- Half-duplex aggregator: transparent passthrough ------------------------
@@ -197,6 +199,8 @@ class TestHalfDuplexPassthrough:
         assert result.metrics.false_endpoint is False
         # Nothing held — the buffer is a passthrough.
         assert agg.pending is None
+        # iter-161: half-duplex never holds, so the turn is never flagged.
+        assert result.held is False
 
 
 # ---- Organic aggregator: hold + merge ---------------------------------------
@@ -222,6 +226,9 @@ class TestOrganicHold:
         # Held — no metrics, no LLM response, no user message appended.
         assert result.metrics is None
         assert result.had_error is False
+        # iter-161: flagged ``held`` so run_session counts it as a held
+        # utterance, not a VAD false trigger.
+        assert result.held is True
         assert agg.pending == "I think that"
         assert messages == [{"role": "system", "content": "x"}]
 

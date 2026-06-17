@@ -79,10 +79,19 @@ class TurnResult:
       ``had_error`` — True if the LLM call raised. The caller
         should not append the assistant message to history in
         this case (already popped inside the loop).
+      ``held`` (iter-161) — True when this turn produced no metrics
+        because the organic UtteranceAggregator *held* the utterance
+        mid-thought (a successful capture being buffered for a merge),
+        NOT because the VAD false-triggered. Lets ``run_session`` count
+        held utterances separately from VAD false triggers instead of
+        conflating the two (iter-159 wired the held path to return
+        ``metrics=None``, which the loop otherwise reads as a false
+        trigger). Always False on the half-duplex / no-aggregator path.
     """
     metrics: Optional[TurnMetrics]
     next_primed_frames: Optional[list]
     had_error: bool = False
+    held: bool = False
 
 
 class ChatLoop:
@@ -360,7 +369,14 @@ class ChatLoop:
                         f"{agg_result.gap_secs:.2f}s, looks mid-thought): "
                         f"{resolved.held!r}{_RESET}"
                     )
-                return TurnResult(metrics=None, next_primed_frames=None)
+                # iter-161: flag this as a HELD utterance, not a false
+                # trigger. The transcript was captured fine — the
+                # aggregator is buffering it for a merge. run_session
+                # counts these separately so the VAD false-trigger rate
+                # isn't inflated by deliberate organic holds.
+                return TurnResult(
+                    metrics=None, next_primed_frames=None, held=True,
+                )
             metrics.transcript = resolved.text
             metrics.false_endpoint = resolved.false_endpoint
             if resolved.false_endpoint:

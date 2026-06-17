@@ -30,6 +30,10 @@ class _StubResult:
     metrics: Optional[Any] = None
     had_error: bool = False
     next_primed_frames: Optional[list] = None
+    # iter-161: the organic aggregator held this utterance mid-thought
+    # (a successful capture being buffered for merge, NOT a VAD false
+    # trigger). Defaults False so the legacy no-metrics path is unchanged.
+    held: bool = False
 
 
 class _StubMetrics:
@@ -185,6 +189,74 @@ def test_no_metrics_no_error_increments_false_triggers():
     # counter, success advances it, then the queue-empty KI
     # gets one more prompt.
     assert captured_turns == [1, 1, 2]
+
+
+# ---- iter-161 held-utterance handling -------------------------------------
+
+
+def test_held_utterance_increments_utterances_held_not_false_triggers():
+    """A no-metrics turn flagged ``held`` is the organic aggregator
+    buffering a mid-thought fragment for merge — a successful capture,
+    NOT a VAD false trigger. It bumps ``utterances_held`` and leaves
+    ``false_triggers`` alone, while reusing the turn counter exactly
+    like a false trigger (the operator re-listens for the continuation)."""
+    loop = _StubChatLoop(queue=[
+        _StubResult(metrics=None, had_error=False, held=True),
+        _StubResult(metrics=_StubMetrics()),
+    ])
+    captured_turns: list[int] = []
+    state = run_session(
+        loop, "p",
+        log=_silent,
+        prompt_log=lambda t: captured_turns.append(t),
+        trim_messages=_stub_trim,
+    )
+    assert state.utterances_held == 1
+    assert state.false_triggers == 0
+    assert len(state.all_metrics) == 1
+    # Same prompt cadence as a false trigger: held reuses [1], success
+    # advances to [1]→turn 2, queue-empty KI prompts [2].
+    assert captured_turns == [1, 1, 2]
+
+
+def test_held_and_false_trigger_counted_separately():
+    """A held utterance and a genuine false trigger in the same session
+    land in different counters — held does not pollute false_triggers."""
+    loop = _StubChatLoop(queue=[
+        _StubResult(metrics=None, held=True),   # held mid-thought
+        _StubResult(metrics=None, held=False),  # genuine VAD false trigger
+        _StubResult(metrics=_StubMetrics()),
+    ])
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+    )
+    assert state.utterances_held == 1
+    assert state.false_triggers == 1
+
+
+def test_no_metrics_without_held_attr_defaults_to_false_trigger():
+    """Back-compat: a result object that lacks a ``held`` attribute (the
+    pre-iter-161 TurnResult shape) is still treated as a false trigger.
+    ``run_session`` reads ``held`` defensively via getattr."""
+    # SimpleNamespace WITHOUT a `held` field — mimics an old TurnResult.
+    old_shape = SimpleNamespace(
+        metrics=None, had_error=False, next_primed_frames=None,
+    )
+    loop = _StubChatLoop(queue=[old_shape, _StubResult(metrics=_StubMetrics())])
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+    )
+    assert state.false_triggers == 1
+    assert state.utterances_held == 0
+
+
+def test_utterances_held_defaults_zero():
+    """A clean session (no held utterances) leaves the counter at 0."""
+    loop = _StubChatLoop(queue=[_StubResult(metrics=_StubMetrics())])
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+    )
+    assert state.utterances_held == 0
 
 
 # ---- primed_frames threading ---------------------------------------------

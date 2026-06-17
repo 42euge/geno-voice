@@ -374,6 +374,9 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
                 # iter-160: surface a mid-thought fragment the aggregator
                 # was still holding at shutdown so it isn't silently lost.
                 stranded_utterance=state.stranded_utterance,
+                # iter-161: count of mid-thought utterances buffered for a
+                # merge — surfaced separately from VAD false triggers.
+                utterances_held=state.utterances_held,
             ),
         )
     finally:

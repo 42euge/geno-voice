@@ -47,6 +47,14 @@ class SessionState:
     messages: list[dict] = field(default_factory=list)
     all_metrics: list = field(default_factory=list)
     false_triggers: int = 0
+    # iter-161: turns where the organic UtteranceAggregator HELD the
+    # utterance mid-thought (a successful capture buffered for a merge),
+    # which iter-159 surfaces as a no-metrics TurnResult flagged
+    # ``held``. Counted separately from ``false_triggers`` so a held
+    # fragment — the opposite of a VAD misfire — does not inflate the
+    # false-trigger rate. 0 on the half-duplex / no-aggregator path
+    # (nothing is ever held).
+    utterances_held: int = 0
     llm_errors: int = 0
     trim_events: int = 0
     trim_messages_evicted: int = 0
@@ -152,7 +160,18 @@ def run_session(
                 state.llm_errors += 1
                 continue
             if result.metrics is None:
-                state.false_triggers += 1
+                # iter-161: a no-metrics turn is EITHER the organic
+                # aggregator holding a mid-thought utterance for a merge
+                # (a successful capture — ``held``) OR a genuine VAD
+                # false trigger (recorder fired but no transcript). Read
+                # ``held`` defensively (getattr) so a pre-iter-161
+                # TurnResult shape without the field still counts as a
+                # false trigger. Both paths re-listen without consuming
+                # the turn counter.
+                if getattr(result, "held", False):
+                    state.utterances_held += 1
+                else:
+                    state.false_triggers += 1
                 continue
             log("")  # newline after streamed bot text
             result.metrics.print(turn + 1)

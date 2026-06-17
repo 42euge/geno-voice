@@ -312,7 +312,15 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   silently lost — the released text rides out on `SessionState.stranded_utterance`
   and the session summary surfaces it (`_emit_stranded_utterance_line`). Mid-
   session a held pending always resolves via the next utterance's gap inside
-  `offer`; shutdown is the one path `offer` can't reach.
+  `offer`; shutdown is the one path `offer` can't reach. **Held utterances are
+  counted separately from VAD false triggers** (`examples/_chat_loop.py`,
+  `examples/_chat_session.py`, `tests/unit/test_chat_session.py`, iter-161): a
+  held mid-thought utterance returns `TurnResult(held=True)` so `run_session`
+  bumps `SessionState.utterances_held` instead of `false_triggers` — a buffered
+  fragment is a *successful* capture, not a VAD misfire, and conflating the two
+  (as iter-159's wiring did) silently inflated the false-trigger rate whenever
+  merging was on. The count surfaces on its own "Utterances held" line in the
+  organic-turn-taking summary block (`OrganicStats.utterances_held`).
 - **[Performance metrics taxonomy](docs/perf-metrics-taxonomy.md)** — a
   catalog of metrics worth instrumenting on a local-first voice agent.
 

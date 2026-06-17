@@ -233,7 +233,7 @@ output discoverable from README" discipline. Local only.
 | 6 | **Adopt pipecat `smart-turn`** — replace #2's heuristic body with the smart-turn model inside `pipecat_server.py`'s pipeline; same `turn_decider` interface. Measure false-endpoint rate vs silence-only baseline on recorded sessions. | High | TODO (blocked on model + Apple Silicon) |
 | 7 | **Agent backchannel emission timing** — a learned/heuristic "good moment to backchannel" signal (Krisp-style) feeding the existing `PLAY_CUE` path, so the agent emits continuers *during* long user speech, not only on silence. | Medium | **DONE iter-153** (decision seam `decide_backchannel_timing`; cue-path wiring is the follow-on) |
 | 8 | **Naturalness metrics for the organic path** — extend `TurnMetrics` / session-summary with false-endpoint rate and continuer-detection counts so the track is measured, not asserted. | Medium | **DONE iter-154** (`false_endpoint` + `continuers_detected` `TurnMetrics` fields; `_emit_organic_block` summary block; populating them from the live organic path is the follow-on) |
-| 9 | **Utterance buffer-merge** (Section 4's second half) — a pure `decide_utterance_continuation(prev_text, next_text, gap_secs)` that, when a silence endpoint fires on *unfinished*-looking text and a continuation arrives within the pause window, returns `MERGE` (the endpoint was a false positive — user paused mid-thought) vs `NEW`. Composes #4's `utterance_completeness` + #3's gate. Repairs the false endpoints #8 measures. | Medium | **DONE iter-155** (decision seam `decide_utterance_continuation`) + **iter-156** (stateful `UtteranceBuffer` hold-and-merge driver) + **iter-157** (`max_merge_depth` starvation cap) + **iter-158** (`UtteranceAggregator` cross-turn gap-measuring driver) + **iter-159** (live `ChatLoop` wiring behind the off-by-default `aggregator` seam — held ⇒ re-listen, merged ⇒ respond to joined text + set `TurnMetrics.false_endpoint`) + **iter-160** (`run_session` flushes the aggregator on shutdown — a held mid-thought fragment the user never completed before Ctrl+C surfaces on `SessionState.stranded_utterance` + a session-summary line rather than vanishing inside the buffer) |
+| 9 | **Utterance buffer-merge** (Section 4's second half) — a pure `decide_utterance_continuation(prev_text, next_text, gap_secs)` that, when a silence endpoint fires on *unfinished*-looking text and a continuation arrives within the pause window, returns `MERGE` (the endpoint was a false positive — user paused mid-thought) vs `NEW`. Composes #4's `utterance_completeness` + #3's gate. Repairs the false endpoints #8 measures. | Medium | **DONE iter-155** (decision seam `decide_utterance_continuation`) + **iter-156** (stateful `UtteranceBuffer` hold-and-merge driver) + **iter-157** (`max_merge_depth` starvation cap) + **iter-158** (`UtteranceAggregator` cross-turn gap-measuring driver) + **iter-159** (live `ChatLoop` wiring behind the off-by-default `aggregator` seam — held ⇒ re-listen, merged ⇒ respond to joined text + set `TurnMetrics.false_endpoint`) + **iter-160** (`run_session` flushes the aggregator on shutdown — a held mid-thought fragment the user never completed before Ctrl+C surfaces on `SessionState.stranded_utterance` + a session-summary line rather than vanishing inside the buffer) + **iter-161** (held utterances counted separately from VAD false triggers — `TurnResult.held` flag ⇒ `SessionState.utterances_held` + an "Utterances held" line in the organic summary block, fixing iter-159's silent inflation of the false-trigger rate) |
 
 ---
 
@@ -870,3 +870,57 @@ output discoverable from README" discipline. Local only.
   inter-turn gap (today it doesn't read a clock between turns). Then wire the
   still-pending `should_abandon_turn` (iter-152) / `should_emit_backchannel`
   (iter-153) seams behind their sub-flags.
+
+### iter-161 (2026-06-16) — held utterances ≠ VAD false triggers (#9 metric fix)
+
+- **Fixed a metric-correctness bug iter-159's wiring introduced.** When the
+  organic aggregator *holds* a mid-thought utterance, `run_one_turn` returns a
+  no-metrics `TurnResult` (so `run_session` re-listens for the continuation).
+  But `run_session` counted *every* no-metrics, no-error turn as a **VAD false
+  trigger** (`state.false_triggers += 1`). A held utterance is the *opposite* of
+  a false trigger: the transcript was captured fine and is being deliberately
+  buffered for a merge. So whenever utterance-merging was on, every mid-thought
+  hold silently inflated the false-trigger rate the iter-048 summary reports —
+  making the VAD look noisier than it is and burying the organic buffer's real
+  activity inside an unrelated metric.
+- **The fix — a `held` flag on the no-metrics path.**
+  - `TurnResult` gains `held: bool = False` (`examples/_chat_loop.py`). The
+    held-branch return in `run_one_turn` now sets `held=True`; every other
+    no-metrics return (no-transcription, too-short) leaves it `False`.
+  - `run_session` (`examples/_chat_session.py`) reads it defensively
+    (`getattr(result, "held", False)` — a pre-iter-161 `TurnResult` shape with
+    no field still counts as a false trigger) and routes a held turn to a new
+    `SessionState.utterances_held` counter instead of `false_triggers`. Both
+    paths still re-listen without consuming the turn counter — only the
+    *attribution* changes.
+  - The count threads `SessionState.utterances_held` → `SessionMeta.utterances_held`
+    → `OrganicStats.utterances_held` → a new "Utterances held" line in
+    `_emit_organic_block` (`examples/_chat_metrics.py`), surfaced on both the
+    normal and the zero-completed-turns early-return paths (a session can hold
+    a fragment yet complete no turns). The line names the count as
+    "buffered for merge — not VAD false triggers" so the distinction is explicit
+    in the summary.
+- **Half-duplex / no-aggregator unchanged.** A default `FullDuplexConfig` never
+  holds, so `held` is always `False`, `utterances_held` stays 0, and the organic
+  block is suppressed — byte-for-byte today's summary. `aggregator=None` (every
+  existing call site) is likewise untouched.
+- **+12 tests.** `tests/unit/test_chat_session.py` (+4): held bumps
+  `utterances_held` not `false_triggers` (same prompt cadence); held + a genuine
+  false trigger counted separately; a result object lacking `held` defaults to
+  false-trigger (back-compat); `utterances_held` defaults 0.
+  `tests/unit/test_chat_loop_aggregator.py` (+3 assertions): held path sets
+  `held=True`; no-aggregator and half-duplex paths leave `held=False`.
+  `tests/unit/test_emit_organic_block.py` (+8): `OrganicStats.utterances_held`
+  default; held-alone emits the block + line; held=0 omits; held doesn't emit
+  the false-endpoint/continuer lines; held + other signals share one header;
+  `print_session_summary`/`SessionMeta` wiring on the normal + zero-turn paths;
+  and the headline guarantee — a held utterance does **not** appear in the VAD
+  false-trigger line.
+- **Verification:** full unit suite **2176 passed** (2164 prior + 12);
+  integration **30 passed, 1 skipped**; `py_compile` of the four touched modules
+  clean.
+- **Next:** the mid-session long-silence flush iter-160 named (feed a trailed-off
+  fragment to the engine as its own turn before a genuinely new thought; needs an
+  inter-turn clock read in `run_session`). Then wire the still-pending
+  `should_abandon_turn` (iter-152) / `should_emit_backchannel` (iter-153) seams
+  behind their sub-flags.

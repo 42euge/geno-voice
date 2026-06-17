@@ -1053,11 +1053,19 @@ class OrganicStats:
         actually buying floor-holds.
       ``n`` (iter-154): total completed turns — denominator for the
         false-endpoint rate.
+      ``utterances_held`` (iter-161): turns where the organic
+        UtteranceAggregator held a mid-thought utterance for a merge
+        (a successful capture buffered, NOT a VAD false trigger).
+        Surfaced so the operator sees how often the merge buffer
+        engaged — and so these holds are visibly distinct from the
+        VAD false-trigger count they used to be miscounted as
+        (the iter-159→iter-161 fix).
     """
 
     false_endpoints: int = 0
     continuers_total: int = 0
     n: int = 0
+    utterances_held: int = 0
 
 
 def _emit_organic_block(emit, stats: OrganicStats) -> None:
@@ -1069,14 +1077,22 @@ def _emit_organic_block(emit, stats: OrganicStats) -> None:
         mis-decision rate — the agent declared the user done early).
       - Continuers held: total continuers recognized and not treated
         as turn-grabs (the win continuer-aware listening buys).
+      - Utterances merged-held (iter-161): mid-thought fragments the
+        aggregator buffered for a merge rather than responding to
+        immediately.
 
-    **Fully suppressed when both counters are zero** — which is the
+    **Fully suppressed when all counters are zero** — which is the
     half-duplex default, so existing sessions print byte-for-byte the
     same summary they did before iter-154. The block only appears once
     the organic path is wired in and starts populating the per-turn
-    ``false_endpoint`` / ``continuers_detected`` fields.
+    ``false_endpoint`` / ``continuers_detected`` fields (or holds a
+    mid-thought utterance, iter-161).
     """
-    if stats.false_endpoints <= 0 and stats.continuers_total <= 0:
+    if (
+        stats.false_endpoints <= 0
+        and stats.continuers_total <= 0
+        and stats.utterances_held <= 0
+    ):
         return
 
     emit(f"    {_BOLD}Organic turn-taking:{_RESET}")
@@ -1104,6 +1120,16 @@ def _emit_organic_block(emit, stats: OrganicStats) -> None:
         emit(
             f"    Continuers held:  {stats.continuers_total} "
             f"(backchannels kept the floor)"
+        )
+    # iter-161: mid-thought fragments the aggregator buffered for a
+    # merge. Distinct from VAD false triggers — a successful capture
+    # deliberately held to repair a false endpoint. Surfacing the count
+    # makes the merge buffer's activity visible and documents that these
+    # holds are NOT counted in the VAD false-trigger line.
+    if stats.utterances_held > 0:
+        emit(
+            f"    Utterances held:  {stats.utterances_held} "
+            f"(mid-thought, buffered for merge — not VAD false triggers)"
         )
 
 
@@ -2342,6 +2368,12 @@ class SessionMeta:
     # half-duplex (which never holds). When set, the summary surfaces it
     # so the dropped final fragment is visible rather than silently lost.
     stranded_utterance: Optional[str] = None
+    # iter-161: count of turns where the organic aggregator HELD a
+    # mid-thought utterance for a merge (buffered, not responded to).
+    # ``run_session`` tracks these separately from VAD false triggers;
+    # surfaced in the organic-turn-taking summary block. 0 on the
+    # half-duplex / no-aggregator path (nothing is ever held).
+    utterances_held: int = 0
 
 
 def print_session_summary(
@@ -2413,6 +2445,8 @@ def print_session_summary(
             # iter-160: stranded fragment — SessionMeta-only, no legacy
             # kwarg path.
             stranded_utterance=meta.stranded_utterance,
+            # iter-161: held-utterance count — SessionMeta-only.
+            utterances_held=meta.utterances_held,
         )
     else:
         meta_eff = SessionMeta(
@@ -2430,6 +2464,8 @@ def print_session_summary(
     trim_messages_evicted = meta_eff.trim_messages_evicted
     # iter-160: stranded mid-thought fragment held at shutdown.
     stranded_utterance = meta_eff.stranded_utterance
+    # iter-161: count of mid-thought utterances buffered for a merge.
+    utterances_held = meta_eff.utterances_held
 
     def _emit(line: str = "") -> None:
         if file is None:
@@ -2442,6 +2478,13 @@ def print_session_summary(
     _emit(f"{_DIM}{'─' * 56}{_RESET}")
     if not metrics_list:
         _emit(f"{_BOLD}  Session ended (no completed turns){_RESET}")
+        # iter-161: a session can hold one or more mid-thought utterances
+        # yet complete zero turns (every fragment was buffered, none ever
+        # merged into a responded turn before the user quit). Surface the
+        # held count here too so it isn't dropped on the early return —
+        # false_endpoints/continuers are necessarily 0 with no turns, so
+        # the block only shows the held line.
+        _emit_organic_block(_emit, OrganicStats(utterances_held=utterances_held))
         # iter-160: even a session with zero completed turns can strand a
         # mid-thought fragment — the user spoke one unfinished utterance,
         # it was held, then they quit. Surface it before the early return.
@@ -2912,6 +2955,9 @@ def print_session_summary(
             false_endpoints=false_endpoints_total,
             continuers_total=continuers_total,
             n=n,
+            # iter-161: held-utterance count tracked by run_session and
+            # threaded through SessionMeta.
+            utterances_held=utterances_held,
         ),
     )
     # iter-057: total seconds of audio carried over by the watcher
