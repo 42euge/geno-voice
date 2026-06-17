@@ -15047,3 +15047,101 @@ end-to-end closure.
     (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
     on a committed `baseline.json`; diversity-check surface paused per
     iter-143/144.
+
+## iter-170 — BackchannelMonitor: the stateful driver for agent backchannel timing (backlog #7)
+
+**Branch:** `iter-170-backchannel-monitor` (merged ff to main, commit `4aad710`)
+**Date:** 2026-06-17
+
+**Goal:** Ship the missing **stateful driver** layer for backlog #7 (agent
+backchannel emission timing). iter-153 shipped the *pure decision*
+`decide_backchannel_timing(*, user_speaking_secs, pause_secs,
+secs_since_last_backchannel, …)` → `EMIT` / `HOLD`, but it is stateless: it
+demands the caller inject three quantities, and one of them —
+`secs_since_last_backchannel` — is **not** something a recorder can measure. It
+depends on the monitor's *own past EMIT decisions*. This lap adds the driver
+that owns that state, the same seam → stateful-driver step the merge track took
+from iter-155's `decide_utterance_continuation` to iter-156's `UtteranceBuffer`
+and iter-158's `UtteranceAggregator`.
+
+**Why:** A live cue path calling the pure seam each frame would have no way to
+remember when it last emitted, so it would pass `secs_since_last_backchannel=None`
+forever — the rate limit (`min_between_cues_secs`, default 20s) would never
+engage and the agent would chatter "mhmm mhmm mhmm" on every qualifying pause
+frame. The two named next-direction live-wirings (#5 `should_abandon_turn` into
+the `mic_chat` barge path; #7 `should_emit_backchannel` into the cue path) both
+hit real walls on the x86_64 runner: #5 has no transcript at VAD-trigger time
+(the watcher fires on energy, not words), and #7's natural home
+`pipecat_server.py` can't be imported (pipecat absent). The driver layer is the
+honest, fully-testable increment that unblocks #7's eventual wiring without
+faking the blocked dependency — and it is the piece the seam genuinely needs
+next.
+
+**What changed:** new `session/backchannel_monitor.py`:
+
+1. **`BackchannelMonitor.observe(*, now, monologue_start_at, pause_secs)`** —
+   derives `user_speaking_secs = now - monologue_start_at` and
+   `secs_since_last_backchannel = now - last_emit` (`None` until the first
+   emit), both clamped `>= 0` against clock skew (mirroring the
+   aggregator / `_chat_loop` defensive clamps), routes them through
+   `decide_backchannel_timing`, and — *iff* the decision is `EMIT` — records
+   `now` as the new last-emit timestamp and bumps `emit_count`, then returns a
+   frozen `BackchannelDecision` (the actionable `emit` bool plus the derived
+   quantities for observability).
+
+2. **The one stateful step the seam can't do:** remembering its own last emit.
+   Recording on `EMIT` is what makes the rate limit bite across calls — proven
+   by `test_repeated_qualifying_pauses_do_not_chatter` (a stream of perfect
+   pauses 1s apart fires at 11/16/21/26s, every 5s, not every second).
+
+3. **`reset()`** clears the last-emit timestamp so a fresh session / long lull
+   starts the rate limit over; the lifetime `emit_count` is intentionally kept
+   so a session summary can still report the total.
+
+4. **Half-duplex invariant.** Default `FullDuplexConfig()` ⇒
+   `decide_backchannel_timing` short-circuits to `HOLD`, so `emit` is always
+   `False` and the last-emit timestamp is *never* set — the monitor is an inert
+   observer. Byte-for-byte today's behavior; the emit machinery engages only
+   behind the off-by-default `agent_backchannels` flag (`active` property
+   surfaces the resolved gate).
+
+**+16 tests** (`tests/unit/test_backchannel_monitor.py`, new file, loads by
+file path to dodge `session/__init__`'s eager pipecat import): half-duplex inert
+(default config + sub-flag-off-under-master-on); sub-flag-on-under-master-off
+active; every gate (warm-up hold, no-pause hold, turn-end-gap hold,
+clause-pause emit); rate-limit engages after first emit; rate-limit clears after
+the interval; the no-chatter stream regression; `reset` clears the limit but
+keeps the count; negative-duration and negative-since-last clamps; the decision
+dataclass echoes inputs and is frozen; the real default 15s warm-up composing
+through.
+
+**Discoverability:** iter-170 findings-log entry + backlog #7 row update in
+`docs/research/organic-turn-taking.md`; README Research section names
+`BackchannelMonitor.observe` / `reset`, the cross-event rate-limit state, the
+`UtteranceBuffer`/`UtteranceAggregator` driver-relationship mirror, and the
+`pipecat_server` cue-path wiring follow-on.
+
+**Verification:**
+- `python -m pytest tests/unit/test_backchannel_monitor.py -q` → **16 passed**.
+- Full unit suite (in worktree, pre-merge): **2319 passed** (2303 prior + 16).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `python -W error::SyntaxWarning -m py_compile session/backchannel_monitor.py`
+  clean.
+
+**Notes:**
+- Next directions:
+  - **Live cue-path wiring for #7** — feed `BackchannelMonitor.observe` from
+    `pipecat_server.py`'s `Broadcaster` (which already owns the monologue clock
+    and the `broadcast_cue` path) so a well-timed mid-speech pause emits a cue.
+    Blocked on the absent pipecat dep on the x86_64 runner, the same wall #6
+    hits — a wiring lap will need a stubbed pipecat surface or a thin
+    transport-agnostic seam in `Broadcaster`.
+  - **Live barge-path wiring for #5** — `should_abandon_turn` (iter-152) into
+    the `mic_chat` barge path. Blocked on no transcript being available at
+    VAD-trigger time (`BargeInWatcher` fires `coord.trigger` on energy, not
+    words); needs the post-barge replayed-frames transcript threaded back to the
+    abandon decision.
+  - Carried over (off-track): the CI workflow
+    (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
+    on a committed `baseline.json`; diversity-check surface paused per
+    iter-143/144.
