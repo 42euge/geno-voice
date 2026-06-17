@@ -13257,3 +13257,104 @@ while the track matures.
     (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still
     blocked on a committed `baseline.json`; diversity-check surface paused per
     iter-143/144.
+
+## iter-152 — continuer-aware barge-in decision: decide_barge_action (backlog #5)
+
+**Branch:** `iter-152-continuer-barge` (merged ff to main, commit `69f40f3`)
+**Date:** 2026-06-16
+
+**Goal:** iter-151 shipped the off-by-default full-duplex gate (backlog #3).
+This lap ships backlog #5, the **continuer-aware barge-in decision** — the
+pure seam that decides whether a user barge during agent speech should
+**ABANDON** the agent's turn (a true interruption) or **FINISH** it (the user
+only backchanneled). It composes the two earlier seams it depends on: the
+backchannel classifier (#1, iter-148) and the full-duplex config gate (#3,
+iter-151).
+
+**Why:** geno-voice already has substantial barge-in machinery on the
+`mic_chat` path (`BargeInWatcher` + `BargeInCoordinator`, iter-009/010;
+cancel-flush, iter-026), but today *any* barge cancels the agent's turn. A user
+"mhmm" / "yeah" / "right" during agent speech is a **continuer** — *keep going,
+I'm listening* — not a turn-grab; abandoning the turn on it clips the agent's
+own sentence for nothing and makes it feel skittish. The abandon-vs-finish
+discrimination is exactly where iter-148's classifier pays off a second time
+(the research doc called this out: §4 "utterance queueing / interruption").
+
+**What changed:**
+
+1. **`session/barge_decision.py` (new) — backlog #5 decision seam.** Pure,
+   dependency-free, GENO.md-conventional:
+   - `decide_barge_action(transcript, energy=None, *, config=None,
+     max_words=…, energy_ceiling=…) -> BargeAction` (`ABANDON` / `FINISH`).
+   - **Rule 1 — the half-duplex invariant.** If
+     `config.continuer_aware_listening_active()` is False (the default), return
+     `ABANDON` for *every* transcript — byte-for-byte today's "any barge
+     cancels" behavior, and the transcript isn't even classified. `config`
+     defaults to a fresh `FullDuplexConfig()` (off).
+   - **Rule 2 — organic mode** (gate on): classify the barge transcript via
+     `classify_backchannel`; a confirmed `CONTINUER` ⇒ `FINISH`, while
+     `SUBSTANTIVE` real speech *and* `NOT_SPEECH` empty/noise both ⇒ `ABANDON`.
+     Deliberately conservative toward `ABANDON` — only a *confirmed* continuer
+     holds the floor, so a misclassification errs on responsiveness (the user
+     who really interrupted is never left talking over a droning agent).
+   - `energy` / `max_words` / `energy_ceiling` thread straight through to the
+     classifier, so the audio-aware emphatic-"YEAH!"-takes-the-floor gate
+     (iter-148: loud short continuer above the ceiling ⇒ SUBSTANTIVE) works
+     here too.
+   - `should_abandon_turn(...)` — the call-site-shaped boolean convenience.
+     With a default config it's always `True`, so the eventual wiring
+     (`if should_abandon_turn(text, ...): coord.trigger()`) leaves the existing
+     unconditional `coord.trigger()` unchanged under half-duplex.
+
+2. **Why a decision seam, not coordinator wiring, this lap.** Same discipline
+   as the rest of the track (iter-148/149/150/151): ship the pure, fully-tested
+   primitive *behind the off-by-default gate first*; wire it into the live
+   `mic_chat` barge path as a separate, reviewable lap. That keeps the proven
+   half-duplex path un-regressed while the organic behavior matures, and never
+   introduces behavior + guard in one step.
+
+3. **`tests/unit/test_barge_decision.py` (new, +40 tests):** the half-duplex
+   invariant (every transcript — continuer, substantive, empty — abandons under
+   default / explicit-default / master-on-but-`continuer_aware_listening=False`
+   configs; the continuer isn't even classified when gated); organic mode
+   (continuer FINISHes across the lexicon, substantive/empty ABANDON,
+   sub-flag-true overrides master-off); the energy gate (loud continuer
+   abandons, quiet finishes, custom ceiling threads through); `max_words`
+   threading (3 continuer words abandon at default, finish at `max_words=3`);
+   `should_abandon_turn` boolean (default always-True, organic split,
+   decide-match); and purity/interface (`config` keyword-only, no config
+   mutation, distinct enum values). Loaded by file path under a stub `session`
+   namespace — the same `session/__init__` pipecat-bypass trick the
+   text_eou / turn_decider / full_duplex tests use (pipecat is absent on the
+   x86_64 runner).
+
+4. **Discoverability:** marked backlog #5 **DONE iter-152** (decision seam;
+   coordinator wiring noted as the follow-on) in
+   `docs/research/organic-turn-taking.md` with a findings-log entry; extended
+   the README Research section to name the seam, its `ABANDON`/`FINISH`
+   semantics, the half-duplex invariant, and its guarding test.
+
+**Verification:**
+- `python -m pytest tests/unit/test_barge_decision.py -q` → **40 passed in 0.10s**.
+- Full unit suite (on main, post-merge): **1959 passed** (1919 prior + 40 new).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `python -m py_compile session/barge_decision.py` → clean.
+
+**Notes:**
+- **No runtime behavior change.** `barge_decision.py` is a new, as-yet-unwired
+  pure module; nothing imports it from the live path yet. The
+  `mic_chat`/`mic_talk` and `pipecat_server` paths are untouched (intentional —
+  the decision seam ships before the coordinator wiring that consumes it).
+- Next directions:
+  - **Wire `should_abandon_turn` into the `mic_chat` barge path** (the direct
+    follow-on): gate `coord.trigger()` behind it, threading the barge
+    transcript + RMS energy from `BargeInWatcher` in, gated behind
+    `continuer_aware_listening_active()`; measure false-abandon rate.
+  - **#8 naturalness metrics** — false-endpoint rate + continuer counts in
+    `TurnMetrics`/session-summary, so this track is measured not asserted.
+  - **#7 agent backchannel emission timing** — gated behind
+    `agent_backchannels_active()`.
+  - Carried over (off-track): the CI workflow
+    (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still
+    blocked on a committed `baseline.json`; diversity-check surface paused per
+    iter-143/144.
