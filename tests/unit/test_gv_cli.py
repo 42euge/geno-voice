@@ -10,6 +10,7 @@ they receive.
 
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -95,6 +96,64 @@ def test_bad_speed_exits_2():
     with pytest.raises(SystemExit) as exc:
         gv.build_parser().parse_args(["chat", "--speed", "fast"])
     assert exc.value.code == 2
+
+
+# ---- speed_type: bounded validator (iter-182) --------------------------
+
+
+def test_speed_type_accepts_bounds_and_midrange():
+    # Inclusive endpoints and an in-range value all pass through as floats.
+    assert gv.speed_type(str(gv.SPEED_MIN)) == gv.SPEED_MIN
+    assert gv.speed_type(str(gv.SPEED_MAX)) == gv.SPEED_MAX
+    mid = gv.speed_type("1.25")
+    assert isinstance(mid, float)
+    assert mid == 1.25
+
+
+def test_speed_type_integer_string_becomes_float():
+    value = gv.speed_type("2")
+    assert isinstance(value, float)
+    assert value == 2.0
+
+
+@pytest.mark.parametrize("raw", ["fast", "", "1.0x", "abc"])
+def test_speed_type_rejects_non_numbers(raw):
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.speed_type(raw)
+
+
+@pytest.mark.parametrize("raw", ["0", "-1", "-0.5"])
+def test_speed_type_rejects_zero_and_negative(raw):
+    # The pre-iter-182 `type=float` happily forwarded these to the TTS engine.
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.speed_type(raw)
+
+
+@pytest.mark.parametrize("raw", ["0.49", "2.01", "10", "100"])
+def test_speed_type_rejects_out_of_range(raw):
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.speed_type(raw)
+
+
+def test_speed_type_rejects_nan():
+    with pytest.raises(argparse.ArgumentTypeError) as exc:
+        gv.speed_type("nan")
+    # The message names nan, not the bounds (NaN is unordered).
+    assert "nan" in str(exc.value)
+
+
+@pytest.mark.parametrize("cmd", ["talk", "chat"])
+def test_parser_rejects_out_of_range_speed_via_systemexit(cmd):
+    # End-to-end through argparse: an out-of-range --speed exits 2.
+    with pytest.raises(SystemExit) as exc:
+        gv.build_parser().parse_args([cmd, "--speed", "0"])
+    assert exc.value.code == 2
+
+
+@pytest.mark.parametrize("cmd", ["talk", "chat"])
+def test_parser_accepts_in_range_speed(cmd):
+    args = gv.build_parser().parse_args([cmd, "--speed", "1.5"])
+    assert args.speed == 1.5
 
 
 # ---- dispatch: routing with stub handlers ------------------------------

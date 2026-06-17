@@ -18,6 +18,38 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 DEFAULT_MODEL = "mlx-community/whisper-large-v3-turbo"
 
+# TTS speech-rate multiplier bounds (the kokoro `speed` parameter). The engine
+# treats this as a wall-clock multiplier on synthesis, so values <= 0 are
+# nonsensical (zero / negative-rate speech) and very large values produce
+# unintelligible output. The accepted window matches kokoro's documented
+# practical range; the parser rejects anything outside it with the usual
+# argparse SystemExit(2) instead of forwarding garbage to the TTS engine.
+SPEED_MIN = 0.5
+SPEED_MAX = 2.0
+
+
+def speed_type(raw):
+    """Argparse ``type`` for ``--speed``: parse to float and bound-check.
+
+    Pure and side-effect-free so it can be unit-tested directly. Raises
+    :class:`argparse.ArgumentTypeError` (which argparse renders as
+    ``SystemExit(2)``) when ``raw`` is not a number or falls outside
+    ``[SPEED_MIN, SPEED_MAX]``. NaN is rejected explicitly — it compares
+    false against both bounds, so without the guard the range message would
+    misleadingly name the bounds rather than the real problem.
+    """
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(f"speed must be a number, got {raw!r}")
+    if value != value:  # NaN is unordered; name it directly.
+        raise argparse.ArgumentTypeError("speed must be a number, got nan")
+    if not (SPEED_MIN <= value <= SPEED_MAX):
+        raise argparse.ArgumentTypeError(
+            f"speed must be between {SPEED_MIN} and {SPEED_MAX}, got {value}"
+        )
+    return value
+
 
 def cmd_bench(args):
     # bench is a legacy argv-driven entrypoint: it parses its own sys.argv
@@ -74,12 +106,22 @@ def build_parser():
     talk = sub.add_parser("talk", help="Talk mode — STT → NLP → canned response → TTS")
     talk.add_argument("--model", default=DEFAULT_MODEL)
     talk.add_argument("--voice", default="af_heart", help="TTS voice (default: af_heart)")
-    talk.add_argument("--speed", type=float, default=1.0, help="TTS speed (default: 1.0)")
+    talk.add_argument(
+        "--speed",
+        type=speed_type,
+        default=1.0,
+        help=f"TTS speed in [{SPEED_MIN}, {SPEED_MAX}] (default: 1.0)",
+    )
 
     chat = sub.add_parser("chat", help="Chat mode — STT → LLM (litellm) → TTS")
     chat.add_argument("--model", default=DEFAULT_MODEL)
     chat.add_argument("--voice", default="af_heart", help="TTS voice (default: af_heart)")
-    chat.add_argument("--speed", type=float, default=1.0, help="TTS speed (default: 1.0)")
+    chat.add_argument(
+        "--speed",
+        type=speed_type,
+        default=1.0,
+        help=f"TTS speed in [{SPEED_MIN}, {SPEED_MAX}] (default: 1.0)",
+    )
 
     return parser
 
