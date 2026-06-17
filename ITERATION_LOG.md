@@ -16539,3 +16539,92 @@ operator-facing path (a typo'd VAD knob is a plausible support case).
     — both still blocked only on the absent pipecat dep on the x86_64 runner.
   - Carried over (off-track): the CI workflow still blocked on a committed
     `baseline.json`; diversity-check surface paused per iter-143/144.
+
+## iter-188 — mirror the `warn` seam into `parse_stt_config` / `parse_filler_config`
+
+**Branch:** `iter-188-config-warn` (merged ff to main)
+**Commit:** `408ec7e`
+**Date:** 2026-06-17
+
+**Goal:** Implement the iter-187 next-direction — "mirror the warn seam into
+`parse_stt_config` / `parse_filler_config`; both are tolerant parsers with the
+same silent-fallback gap; the iter-187 `warn` seam is a clean template to lift
+across them." Lift the iter-187 `parse_vad_config(warn=...)` operator-visibility
+seam onto the two remaining tolerant config parsers in `examples/_chat_config.py`.
+
+**Why:** `parse_stt_config` (iter-119) and `parse_filler_config` (iter-034) are
+both *tolerant* — a typo'd value silently falls back to the default so a bad
+`config.local.yaml` can't crash startup. But "tolerant" had meant "silent":
+`stt_engine: 5` (wrong type), `fillers: "hmm"` (string instead of list), a
+non-string filler item, or `fillers_idle_threshold: "abc"` all vanished into the
+default with **zero operator feedback** — the user's tuning just had no effect
+and they had no clue why. iter-187 closed exactly this gap for the VAD parser;
+this lap completes the trio so the whole chat-config layer has the same
+silently-broken → operator-visible-warning → crash-on-bad-construction spectrum.
+
+**What changed:**
+
+1. **`examples/_chat_config.py`** — both parsers gain an optional
+   `warn: Any = None` parameter (a callable taking one string, e.g. `print` or a
+   styled log adapter), following the conventions' inject-`log` seam: the parser
+   emits **plain text**, ANSI styling stays at the caller.
+   - `parse_stt_config`: refactored the four string knobs (`stt_engine`,
+     `stt_model`, `stt_device`, `stt_compute`) into a `(yaml_key, out_key,
+     default)` table. A present-but-rejected key (non-string, empty/whitespace)
+     warns once naming the key, value, and default. Missing keys stay silent.
+   - `parse_filler_config`: warns when `fillers` is present-but-not-a-list (whole
+     section ignored), per dropped non-string item, per dropped empty/whitespace
+     item, and when `fillers_idle_threshold` is a bad/non-positive value. Also now
+     **rejects `bool`** for `fillers_idle_threshold` (`True` used to sail through
+     the `> 0` check and become `1.0`) — matches the iter-186/187 reject side.
+   - `warn=None` (default) → unchanged, fully backwards compatible; both stay pure
+     value-returners for existing call sites / tests.
+
+2. **`examples/mic_chat.py`** — wires a YELLOW log adapter into both
+   `parse_stt_config` and `parse_filler_config` calls (mirroring the iter-187 vad
+   wiring) so a typo'd STT or filler knob surfaces a styled one-liner at startup.
+
+3. **`tests/unit/test_parse_stt_config.py`** — new `TestParseSttConfigWarn` class
+   (8 tests): no-warn-by-default backwards compat; valid config silent; missing
+   keys silent; non-mapping chat silent; wrong-type warns with key+value+default;
+   empty-string warns; one-warning-per-bad-key (valid keys stay silent); warn
+   names the right per-key default.
+
+4. **`tests/unit/test_filler_config.py`** — new `TestParseFillerConfigWarn` class
+   (11 tests): no-warn-by-default; valid config silent; missing/non-mapping
+   silent; fillers-not-a-list warns; non-string item warns (once each);
+   empty/whitespace item warns; bad/non-positive/bool `fillers_idle_threshold`
+   warns; valid-fillers-with-bad-threshold warns once. Plus updated the existing
+   `test_bool_threshold_uses_default` to pin the new bool-rejection behavior
+   (`True`/`False` → default 0.6, was 1.0).
+
+**Verification:**
+- `python -m pytest tests/unit/test_filler_config.py
+  tests/unit/test_parse_stt_config.py tests/unit/test_vad_config.py -q` →
+  **97 passed**.
+- Full unit suite (in worktree, pre-merge): **2596 passed** (2577 prior + 19 new).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `python -W error::SyntaxWarning -m py_compile examples/_chat_config.py
+  examples/mic_chat.py tests/unit/test_filler_config.py
+  tests/unit/test_parse_stt_config.py` clean.
+- Drift check: no production call site of either parser outside the two wired
+  `mic_chat.py` calls (grep over `--include=*.py`).
+- (`tests/test_session.py` still errors on collection — `ModuleNotFoundError:
+  pipecat` — pre-existing on main, not a regression.)
+
+**Notes:**
+- The chat-config layer now has uniform operator visibility: VAD (iter-187), STT,
+  and filler parsers all warn on dropped values; `parse_llm_config` raises
+  (required config) and `parse_max_user_assistant` returns a scalar. Next
+  directions:
+  - **`parse_max_user_assistant` warn seam** — the last tolerant parser without
+    one; a typo'd `max_user_assistant: "ten"` silently reverts to 20. Lower value
+    than the STT/filler lift (single scalar, narrower failure surface) but
+    completes the set.
+  - **Property/fuzz coverage for `rms_amplitude`** — a hypothesis test that the
+    RMS of any constant-amplitude signal equals `|level|/32768` (carried from
+    iter-185/186).
+  - **Live mid-speech cue wiring for #7** and **live barge-path wiring for #5**
+    — both still blocked only on the absent pipecat dep on the x86_64 runner.
+  - Carried over (off-track): the CI workflow still blocked on a committed
+    `baseline.json`; diversity-check surface paused per iter-143/144.
