@@ -132,7 +132,13 @@ class TurnTakingConfig:
     early_session_extension_secs: float = 2.0
     early_session_window_secs: float = 120.0
 
-    # Backchannel limits
+    # Backchannel limits. These two scalars are deliberately mirrored by
+    # ``backchannel_timing.py``'s ``BackchannelTimingConfig`` (same 15.0 / 20.0)
+    # so the silence-driven turn-end cue path and the mid-speech backchannel
+    # path obey one shared cadence — the agent feels like one speaker, not two
+    # subsystems with divergent tempos. That cross-module equality is pinned by
+    # ``tests/unit/test_backchannel_rate_limit_mirror_invariant.py`` (iter-181)
+    # against the sibling config, not a hardcoded literal.
     min_speaking_before_first_cue_secs: float = 15.0
     min_between_cues_secs: float = 20.0
 

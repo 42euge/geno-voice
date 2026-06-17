@@ -15983,3 +15983,92 @@ lap makes that drift a red test.
     the `mic_chat` barge path; blocked on no transcript at VAD-trigger time.
   - Carried over (off-track): the CI workflow still blocked on a committed
     `baseline.json`; diversity-check surface paused per iter-143/144.
+
+## iter-181 — the backchannel rate-limit mirror invariant: pin `BackchannelTimingConfig` rate limits == `TurnTakingConfig` cross-module (#7 hardening)
+
+**Branch:** `iter-181-ratelimit-mirror` (merged ff to main)
+**Date:** 2026-06-17
+
+**Goal:** Pin the *third* shared scalar between geno-voice's two
+backchannel-cue paths that the docstrings assert but no test enforced — the
+**rate limits**. iter-179 pinned the silence-floor scalar shared across three
+modules (`reset_gap_secs == max_pause_secs == silence_floor_secs` = 2.0);
+iter-180 pinned the partition *inequality* between the two windows
+(`max_pause_secs <= silence_backchannel_min`). This lap pins the **equality**
+of the two rate-limit knobs the two cue-path configs share —
+`min_speaking_before_first_cue_secs` (15.0s) and `min_between_cues_secs` (20.0s)
+— between `backchannel_timing.py`'s `BackchannelTimingConfig` and
+`turn_taking.py`'s `TurnTakingConfig`, against the sibling config itself, not a
+hardcoded literal.
+
+**Why:** The two paths share more than the silence-axis partition. They also
+share two rate limits, by deliberate design, so the agent's mid-speech "mhmm"
+(`backchannel_timing.py`, iter-153) and its silence-driven turn-end cue
+(`turn_taking.py`'s `TurnTakingEngine`) feel like the same speaker obeying one
+set of manners, not two subsystems with divergent tempos.
+`BackchannelTimingConfig`'s docstring states the contract: "Defaults mirror the
+analogous knobs the `TurnTakingEngine` already uses for its trailing-silence
+cues so the two paths feel consistent ... the same rate limits as
+`TurnTakingConfig` (15.0 / 20.0)." **But nothing tested the cross-module
+equality.** `test_backchannel_timing.py` only asserts
+`min_speaking_before_first_cue_secs == 15.0` / `min_between_cues_secs == 20.0`
+against *hardcoded literals* (`test_config_defaults`); `test_turn_decider` /
+`test_turn_taking` never read `TurnTakingConfig`'s copies for comparison. So
+retuning `TurnTakingConfig.min_between_cues_secs` down to 10.0 (a plausible "let
+the turn-end cue fire a touch more often" tweak) would **silently** leave the
+mid-speech path still rate-limited at 20.0 — the two paths would backchannel at
+*different* cadences, the exact divergence the "so the two paths feel
+consistent" docstring promises can't happen — and every per-module test would
+stay green because none looks at the sibling. This lap makes that drift a red
+test.
+
+**What changed:**
+
+1. **`tests/unit/test_backchannel_rate_limit_mirror_invariant.py`** (new) — 5
+   tests derived from both configs themselves (loaded by file path into a stub
+   `session` namespace, like the siblings), not from literals:
+   - `test_warmup_floor_is_shared_across_both_cue_paths` —
+     `min_speaking_before_first_cue_secs` equal across both configs.
+   - `test_between_cues_gap_is_shared_across_both_cue_paths` —
+     `min_between_cues_secs` equal across both configs.
+   - `test_both_rate_limits_mirror_in_one_assertion` (headline pair, so the
+     "feel consistent" contract holds as a unit).
+   - `test_warmup_is_not_longer_than_between_cues_gap` (sanity on the shared
+     values' ordering: 15.0 ≤ 20.0 in both configs).
+   - `test_current_rate_limits_are_fifteen_and_twenty_seconds` (records the
+     present shared values so an *intentional* retune is a deliberate edit to
+     this test, not a silent change — distinct from the equality tests, which
+     guarantee the two paths move together).
+
+2. **Docstring cross-references** added in `session/backchannel_timing.py`
+   (`BackchannelTimingConfig` docstring) and `session/turn_taking.py`
+   (`TurnTakingConfig`'s backchannel-limits block), and the **README** Research
+   section, each naming the iter-181 guard so the "feel consistent" claim points
+   at its enforcing test.
+
+**Verification:**
+- `python -m pytest tests/unit/test_backchannel_rate_limit_mirror_invariant.py -q`
+  → **5 passed**.
+- Confirmed the invariant catches drift: setting
+  `TurnTakingConfig.min_between_cues_secs = 10.0` turns **4 of the 5 red** (the
+  warm-up-equality test correctly stays green — that pair didn't move), then
+  restored.
+- Full unit suite (in worktree, pre-merge): **2411 passed** (2406 prior + 5).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `python -W error::SyntaxWarning -m py_compile session/turn_taking.py
+  session/backchannel_timing.py
+  tests/unit/test_backchannel_rate_limit_mirror_invariant.py` clean.
+- (`tests/test_session.py` still errors on collection — `ModuleNotFoundError:
+  pipecat` — pre-existing on main, not a regression.)
+
+**Notes:**
+- Next directions:
+  - **Live mid-speech cue wiring for #7** — feed the VAD frames to a
+    `BackchannelDriver` in `pipecat_server.py`'s `Broadcaster`, `broadcast_cue`
+    on emit, surface `driver.emit_count` into the
+    `SessionMeta.backchannels_emitted` slot (iter-175). Still blocked only on
+    the absent pipecat dep on the x86_64 runner.
+  - **Live barge-path wiring for #5** — `should_abandon_turn` (iter-152) into
+    the `mic_chat` barge path; blocked on no transcript at VAD-trigger time.
+  - Carried over (off-track): the CI workflow still blocked on a committed
+    `baseline.json`; diversity-check surface paused per iter-143/144.

@@ -82,6 +82,12 @@ class BackchannelTimingConfig:
       - ``min_speaking_before_first_cue_secs`` / ``min_between_cues_secs`` —
         the same rate limits as ``TurnTakingConfig`` (15.0 / 20.0), so the
         agent doesn't backchannel over a short reply or chatter repeatedly.
+        That those two scalars *equal* ``TurnTakingConfig``'s same-named knobs
+        — so the mid-speech and turn-end paths backchannel at one shared
+        cadence — is pinned by
+        ``tests/unit/test_backchannel_rate_limit_mirror_invariant.py``
+        (iter-181) against the sibling config itself, not a hardcoded
+        ``15.0`` / ``20.0``.
       - ``min_pause_secs`` — a pause must be at least this long to count as a
         real clause boundary (not a mid-word stumble). Default 0.3s.
       - ``max_pause_secs`` — at/above this the gap is heading toward turn-end

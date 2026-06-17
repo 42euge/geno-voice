@@ -292,7 +292,13 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   silence-driven turn-end cue window opens, `max_pause_secs` (2.0s) ≤
   `turn_taking.py`'s `silence_backchannel_min` (4.0s) — is pinned by
   `tests/unit/test_cue_window_partition_invariant.py` (iter-180) so the two cue
-  paths can't overlap and double-fire on one gap) and
+  paths can't overlap and double-fire on one gap; and beyond the silence axis,
+  the two paths also share *two rate limits* — `min_speaking_before_first_cue_secs`
+  (15.0s) and `min_between_cues_secs` (20.0s) — so the agent backchannels at one
+  shared cadence regardless of which path emits, pinned by
+  `tests/unit/test_backchannel_rate_limit_mirror_invariant.py` (iter-181) against
+  `TurnTakingConfig` itself so retuning one config's rate limit without the other
+  fails the test instead of silently splitting the two paths' tempos) and
   `pause_secs(now)` (the live within-speech gap, zero while speaking). So a
   long monologue accumulates `user_speaking_secs` across its clause pauses (the
   warm-up gate eventually clears) and the monitor emits exactly in the
