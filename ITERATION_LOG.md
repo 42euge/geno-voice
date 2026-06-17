@@ -13990,3 +13990,103 @@ passthrough).
     (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
     on a committed `baseline.json`; diversity-check surface paused per
     iter-143/144.
+
+## iter-159 — wire UtteranceAggregator into ChatLoop (backlog #9 live entrypoint)
+
+**Branch:** `iter-159-agg-wiring` (merged ff to main, commit `d6ed7d6`)
+**Date:** 2026-06-16
+
+**Goal:** every lap since iter-155 named the same next direction — *wire the
+organic utterance aggregator into the live STT loop* — and iter-158 declared it
+"fully unblocked" once both pure pieces (`UtteranceBuffer` + `UtteranceAggregator`)
+existed. This lap does the wiring: connects `UtteranceAggregator` to
+`ChatLoop.run_one_turn` behind an off-by-default `aggregator=None` seam, and
+constructs one in `mic_chat.run_chat` from `full_duplex_config_from_env()`.
+
+**Why:** the buffer/aggregator have been hardened in isolation across four laps
+(155 decision, 156 buffer, 157 cap, 158 aggregator). The only thing left to make
+backlog #9 *live* was the entrypoint connection — and the one genuinely
+policy-laden part of that connection (folding the aggregator's variable-length
+release into the single-turn loop's one-in/one-out shape) is exactly the kind of
+logic the track keeps pure and tested. So this lap isolates that fold in
+`resolve_turn` and keeps the loop a thin consumer, matching the rhythm.
+
+**What changed:**
+
+1. **`examples/_chat_aggregation.py` (new) — `resolve_turn` + `ResolvedTurn`.**
+   Pure, dependency-free (duck-typed over `.turns` / `.held`, so it loads with
+   no `session` import — the eager-pipecat trap the sibling seams dodge). Folds
+   an `AggregatedResult` into one `ResolvedTurn(respond, text, false_endpoint,
+   held)`:
+   - no turns ⇒ `respond=False` (everything held — re-listen);
+   - one+ turns ⇒ join their non-empty texts with single spaces (a long-gap
+     release glues the held fragment onto the displacing turn rather than
+     dropping it), `false_endpoint` is the OR across released turns;
+   - a release of only blank turns collapses to `respond=False`.
+
+2. **`ChatLoop.__init__(aggregator=None)` + `run_one_turn` wiring.** When
+   `aggregator is None` (the default, and what every existing call site passes),
+   the loop is byte-for-byte the pre-iter-159 path. When present, after STT
+   produces the transcript and before the LLM stream opens, the loop calls
+   `aggregator.offer(transcript, speech_start_at, speech_ended_at)` and resolves:
+   - **HELD** (`respond=False`): return no-metrics (same shape as a false
+     trigger) so `run_session` re-listens without consuming the turn counter —
+     and without opening an LLM stream for half an utterance. A dim status line
+     shows the held text + measured gap.
+   - **RELEASED** (`respond=True`): set `metrics.transcript = resolved.text`
+     (possibly merged) and `metrics.false_endpoint = resolved.false_endpoint`,
+     **populating iter-154's metric from the live path**.
+
+3. **Timestamps from the recorder, gap math in the aggregator.** Both
+   `speech_start_at` (recorder `out_metrics`, iter-082) and `speech_ended_at`
+   (`clock() - silence_duration`) share `self._clock`; the aggregator clamps any
+   negative frame-clock-skew gap. `speech_start_at` falls back to
+   `speech_ended_at` on the (unreachable-for-non-empty-transcript) no-latch path.
+
+4. **`mic_chat.run_chat` builds the aggregator** from
+   `full_duplex_config_from_env()` (lazy-imported so the session package's eager
+   pipecat import isn't paid on import). With the `GENO_FULL_DUPLEX*` flags unset
+   the config is half-duplex ⇒ the buffer is a transparent passthrough ⇒
+   `run_one_turn` always responds immediately with the original text,
+   `false_endpoint=False`. Unchanged until merging is explicitly enabled.
+
+5. **+16 tests.**
+   - `tests/unit/test_chat_aggregation.py` (+11): held/no-held; single-turn
+     (plain, merged false_endpoint, held-passthrough); multi-turn
+     (join-with-space, false_endpoint OR, strip+drop-empty, all-empty-collapse);
+     `ResolvedTurn` frozen + defaults.
+   - `tests/unit/test_chat_loop_aggregator.py` (+5): drives the *real*
+     `ChatLoop.run_one_turn` with a real `UtteranceAggregator` + virtual audio +
+     a manual clock — aggregator=None unchanged; half-duplex passthrough
+     responds-immediately + nothing pending; organic hold (no metrics, text
+     buffered, no user message appended); organic merge (joined text fed to the
+     LLM + `false_endpoint=True`); complete-utterance emits immediately.
+
+6. **Discoverability:** iter-159 findings-log entry + backlog #9 row update in
+   `docs/research/organic-turn-taking.md`; README Research section names the
+   live wiring, the `ChatLoop(aggregator=...)` seam, `resolve_turn`, and the
+   held/merged behavior.
+
+**Verification:**
+- `python -m pytest tests/unit/test_chat_aggregation.py tests/unit/test_chat_loop_aggregator.py -q` → **16 passed** (re-run on main post-merge).
+- Full unit suite (in worktree, pre-merge): **2145 passed** (2129 prior + 11 + 5).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `py_compile` of `_chat_aggregation.py` / `_chat_loop.py` / `mic_chat.py` clean.
+
+**Notes:**
+- **Half-duplex unchanged.** The new branches only execute when an aggregator is
+  injected AND its config has `utterance_merging` on. Default config = transparent
+  passthrough (always one turn, never held), so behavior is byte-for-byte today's.
+- Next directions:
+  - **`aggregator.flush()` on long inter-turn silence / shutdown** — if the user
+    trails off and stops after a held fragment, the pending must be flushed and
+    fed to the engine so it isn't stranded. This needs a hook in `run_session`
+    (which owns the inter-turn boundary) rather than `run_one_turn` (which only
+    sees one utterance). The natural follow-on lap.
+  - Wire the still-pending `should_abandon_turn` (iter-152) into the `mic_chat`
+    barge path and `should_emit_backchannel` (iter-153) into the live cue path,
+    both behind their full-duplex sub-flags.
+  - Carried over (off-track): the CI workflow
+    (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
+    on a committed `baseline.json`; diversity-check surface paused per
+    iter-143/144.
