@@ -296,7 +296,19 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
     auto_aggressive_threshold = float(
         chat_cfg.get("auto_aggressive_threshold", 0.0)
     )
+    # iter-159: organic utterance aggregation (backlog #9 live wiring).
+    # Build an UtteranceAggregator from the GENO_FULL_DUPLEX* env flags. With
+    # the flags unset (the default) the aggregator's config is half-duplex, so
+    # its buffer is a transparent passthrough and ChatLoop behaves byte-for-byte
+    # as before. With GENO_FULL_DUPLEX_UTTERANCE_MERGING on, a mid-thought
+    # utterance is held and merged with a quick follow-on. Lazy-imported so the
+    # session package's eager pipecat import isn't paid unless we're actually on
+    # a device running the live chat.
+    from session.full_duplex import full_duplex_config_from_env
+    from session.utterance_aggregator import UtteranceAggregator
+    aggregator = UtteranceAggregator(config=full_duplex_config_from_env())
     chat_loop = ChatLoop(
+        aggregator=aggregator,
         mic=mic,
         speaker_factory=audio_io.speaker_factory,
         rate=RATE,

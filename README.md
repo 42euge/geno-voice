@@ -294,7 +294,18 @@ Longer-horizon design exploration lives under [`docs/research/`](docs/research/)
   and the measured `gap_secs`). This keeps the eventual live STT-loop wiring a
   thin driver: it hands the aggregator the two timestamps and feeds the
   returned turns to the engine. With a default config the aggregator is the
-  same transparent passthrough as the buffer beneath it.
+  same transparent passthrough as the buffer beneath it. **Wired into the live
+  loop** (`examples/_chat_loop.py`, `tests/unit/test_chat_loop_aggregator.py`,
+  iter-159) behind an off-by-default `ChatLoop(aggregator=...)` seam:
+  `mic_chat.run_chat` builds one from `full_duplex_config_from_env()`, and per
+  finalized utterance `run_one_turn` offers the transcript + the recorder's
+  speech timestamps. `examples/_chat_aggregation.py::resolve_turn` folds the
+  variable-length `AggregatedResult` into one decision for the single-turn loop
+  — a *held* utterance re-listens (no LLM stream for half a thought); a
+  *released* (possibly merged) turn is responded to and sets
+  `TurnMetrics.false_endpoint`, populating iter-154's false-endpoint metric from
+  the live path. With `aggregator=None` (default) or the `GENO_FULL_DUPLEX*`
+  flags unset, the path is byte-for-byte unchanged.
 - **[Performance metrics taxonomy](docs/perf-metrics-taxonomy.md)** — a
   catalog of metrics worth instrumenting on a local-first voice agent.
 

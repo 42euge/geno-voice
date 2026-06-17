@@ -37,6 +37,7 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Iterator, Optional
 
+from examples._chat_aggregation import resolve_turn
 from examples._chat_helpers import (
     flush_pending_audio,
     split_complete_sentences,
@@ -140,6 +141,19 @@ class ChatLoop:
         # comfortably above normal token-streaming jitter, well
         # below the user's "is this broken" threshold.
         auto_aggressive_threshold: float = 0.0,
+        # iter-159: organic utterance aggregation (backlog #9 live wiring).
+        # When None (default), the loop responds to each finalized utterance
+        # exactly as before — byte-for-byte the pre-aggregator path. When an
+        # ``UtteranceAggregator`` is injected, each finalized transcript is
+        # offered to it with the recorder's measured speech_start_at /
+        # speech_ended_at; a HELD utterance returns a no-metrics TurnResult
+        # (the loop re-listens, like a false trigger) and a released turn
+        # carries its false_endpoint flag onto TurnMetrics — populating
+        # iter-154's metric from the live path. The aggregator is itself
+        # off-by-default at the config level (a default FullDuplexConfig makes
+        # its buffer a transparent passthrough), so even an injected aggregator
+        # is a no-op until GENO_FULL_DUPLEX_UTTERANCE_MERGING is on.
+        aggregator=None,
         # Tunables / I/O
         clock: Callable[[], float] = time.monotonic,
         output=None,
@@ -184,6 +198,12 @@ class ChatLoop:
         self._aggressive_first_sentence = aggressive_first_sentence
         # iter-093: auto-aggressive-on-stall threshold (seconds).
         self._auto_aggressive_threshold = auto_aggressive_threshold
+
+        # iter-159: optional cross-turn utterance aggregator. None = the
+        # proven single-utterance path; an UtteranceAggregator engages the
+        # hold-and-merge organic path (itself a passthrough unless its config
+        # has utterance_merging on).
+        self._aggregator = aggregator
 
         self._clock = clock
         self._output = output  # passed to record_utterance_streaming
@@ -300,6 +320,54 @@ class ChatLoop:
         if speech_dur > 0:
             metrics.stt_rtf = stt_time / speech_dur
         metrics.transcript = text.strip()
+        # iter-159: organic utterance aggregation (backlog #9 live wiring).
+        # Offer the finalized transcript to the cross-turn aggregator with the
+        # recorder's measured speech endpoints. The aggregator measures the
+        # inter-utterance silence gap and either holds this utterance (it looks
+        # mid-thought — wait for a quick continuation to merge) or releases one
+        # or more turns. ``resolve_turn`` folds the release into one decision:
+        #   - HELD (respond=False): nothing ready this cycle. Return no-metrics
+        #     (same shape as a false trigger) so run_session re-listens without
+        #     consuming the turn counter. The buffered text rides along in the
+        #     aggregator for the next offer.
+        #   - RELEASED (respond=True): respond to the (possibly merged) text,
+        #     and stamp metrics.false_endpoint so iter-154's metric populates
+        #     from the live path.
+        # When self._aggregator is None (default) none of this runs — the
+        # transcript is used verbatim, byte-for-byte the pre-iter-159 path.
+        # Even with an aggregator injected, a default FullDuplexConfig makes
+        # its buffer a transparent passthrough (always one turn, never held),
+        # so respond is always True with the original text and false_endpoint
+        # stays False — unchanged behavior until merging is explicitly on.
+        if self._aggregator is not None:
+            # speech_start_at may be None on paths where the recorder didn't
+            # latch a speech frame (it always does on DONE_OK, the only path
+            # that reaches a non-empty transcript). Fall back to speech_ended_at
+            # so the gap math stays defined; both timestamps share self._clock,
+            # and the aggregator clamps any negative gap from frame-clock skew.
+            agg_start = (
+                speech_start_at if speech_start_at is not None else speech_ended_at
+            )
+            agg_result = self._aggregator.offer(
+                metrics.transcript, agg_start, speech_ended_at
+            )
+            resolved = resolve_turn(agg_result)
+            if not resolved.respond:
+                # Held mid-thought — re-listen for the continuation.
+                if resolved.held:
+                    self._print(
+                        f"  {_DIM}holding utterance (gap "
+                        f"{agg_result.gap_secs:.2f}s, looks mid-thought): "
+                        f"{resolved.held!r}{_RESET}"
+                    )
+                return TurnResult(metrics=None, next_primed_frames=None)
+            metrics.transcript = resolved.text
+            metrics.false_endpoint = resolved.false_endpoint
+            if resolved.false_endpoint:
+                self._print(
+                    f"  {_DIM}merged false-endpoint continuation "
+                    f"(gap {agg_result.gap_secs:.2f}s){_RESET}"
+                )
         # iter-064: user speaking rate. Symmetric to iter-046's
         # bot_wpm. Whitespace-split word count is a decent proxy —
         # Whisper transcripts use space-separated tokens, and the

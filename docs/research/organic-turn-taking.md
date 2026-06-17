@@ -233,7 +233,7 @@ output discoverable from README" discipline. Local only.
 | 6 | **Adopt pipecat `smart-turn`** — replace #2's heuristic body with the smart-turn model inside `pipecat_server.py`'s pipeline; same `turn_decider` interface. Measure false-endpoint rate vs silence-only baseline on recorded sessions. | High | TODO (blocked on model + Apple Silicon) |
 | 7 | **Agent backchannel emission timing** — a learned/heuristic "good moment to backchannel" signal (Krisp-style) feeding the existing `PLAY_CUE` path, so the agent emits continuers *during* long user speech, not only on silence. | Medium | **DONE iter-153** (decision seam `decide_backchannel_timing`; cue-path wiring is the follow-on) |
 | 8 | **Naturalness metrics for the organic path** — extend `TurnMetrics` / session-summary with false-endpoint rate and continuer-detection counts so the track is measured, not asserted. | Medium | **DONE iter-154** (`false_endpoint` + `continuers_detected` `TurnMetrics` fields; `_emit_organic_block` summary block; populating them from the live organic path is the follow-on) |
-| 9 | **Utterance buffer-merge** (Section 4's second half) — a pure `decide_utterance_continuation(prev_text, next_text, gap_secs)` that, when a silence endpoint fires on *unfinished*-looking text and a continuation arrives within the pause window, returns `MERGE` (the endpoint was a false positive — user paused mid-thought) vs `NEW`. Composes #4's `utterance_completeness` + #3's gate. Repairs the false endpoints #8 measures. | Medium | **DONE iter-155** (decision seam `decide_utterance_continuation`) + **iter-156** (stateful `UtteranceBuffer` hold-and-merge driver) + **iter-157** (`max_merge_depth` starvation cap) + **iter-158** (`UtteranceAggregator` cross-turn gap-measuring driver; entrypoint wiring is the remaining follow-on) |
+| 9 | **Utterance buffer-merge** (Section 4's second half) — a pure `decide_utterance_continuation(prev_text, next_text, gap_secs)` that, when a silence endpoint fires on *unfinished*-looking text and a continuation arrives within the pause window, returns `MERGE` (the endpoint was a false positive — user paused mid-thought) vs `NEW`. Composes #4's `utterance_completeness` + #3's gate. Repairs the false endpoints #8 measures. | Medium | **DONE iter-155** (decision seam `decide_utterance_continuation`) + **iter-156** (stateful `UtteranceBuffer` hold-and-merge driver) + **iter-157** (`max_merge_depth` starvation cap) + **iter-158** (`UtteranceAggregator` cross-turn gap-measuring driver) + **iter-159** (live `ChatLoop` wiring behind the off-by-default `aggregator` seam — held ⇒ re-listen, merged ⇒ respond to joined text + set `TurnMetrics.false_endpoint`; `flush()` on long-silence/shutdown is the remaining follow-on) |
 
 ---
 
@@ -764,3 +764,62 @@ output discoverable from README" discipline. Local only.
   from each turn's flag — closing iter-154's metric live-population loop on the
   user side. Or wire the still-pending `should_abandon_turn` (iter-152) /
   `should_emit_backchannel` (iter-153) seams.
+
+### iter-159 (2026-06-16) — live `ChatLoop` wiring of the aggregator (#9 entrypoint)
+
+- **Wired the organic aggregator into the live turn loop** — the follow-on every
+  lap since iter-155 named. Both pure pieces existed (`UtteranceBuffer` +
+  `UtteranceAggregator`); this lap connects them to `ChatLoop.run_one_turn`
+  behind a new **off-by-default `aggregator=None` seam**. With `aggregator=None`
+  (the default, and what every existing call site passes) the loop is
+  byte-for-byte the pre-iter-159 path. `mic_chat.run_chat` now constructs an
+  `UtteranceAggregator(config=full_duplex_config_from_env())`, so the live chat
+  uses it — but with the `GENO_FULL_DUPLEX*` flags unset the config is
+  half-duplex and the buffer is a transparent passthrough, so behavior is
+  unchanged until merging is explicitly enabled.
+- **The impedance mismatch is isolated in a pure helper.** `run_one_turn` is
+  single-utterance-in / single-response-out; the aggregator may hold (0 turns)
+  or release several at once. `examples/_chat_aggregation.py::resolve_turn`
+  folds an `AggregatedResult` into one `ResolvedTurn(respond, text,
+  false_endpoint, held)`: no turns ⇒ `respond=False`; one+ turns ⇒ join their
+  non-empty texts (a long-gap release glues the held fragment onto the new turn
+  rather than dropping it), `false_endpoint` is the OR across released turns.
+  Kept pure + dependency-free (duck-typed over `.turns`/`.held`) so it loads
+  without `session/__init__`'s eager pipecat import — the sibling-seam trick.
+  This is the track's rhythm: extract the policy-laden fold, keep the loop a
+  thin consumer.
+- **Two new live branches, after STT, before the LLM stream.**
+  - **HELD** (`respond=False`): the utterance looks mid-thought and was buffered.
+    `run_one_turn` returns no-metrics (same shape as a false trigger), so
+    `run_session` re-listens without consuming the turn counter — and crucially
+    without opening an LLM stream for half an utterance. A dim status line shows
+    the held text + measured gap.
+  - **RELEASED** (`respond=True`): respond to the (possibly merged) text and set
+    `metrics.false_endpoint = resolved.false_endpoint`, **populating iter-154's
+    metric from the live path** — the false-endpoint rate is now measured, not
+    just asserted by the seam tests.
+- **Timestamps come from the recorder, gap math from the aggregator.** The loop
+  hands `offer(transcript, speech_start_at, speech_ended_at)` the two stamps the
+  recorder already produces (`speech_start_at` via `out_metrics`/iter-082,
+  `speech_ended_at` = `clock() - silence_duration`). Both share `self._clock`;
+  the aggregator clamps any negative frame-clock-skew gap. `speech_start_at`
+  falls back to `speech_ended_at` on the (unreachable-for-non-empty-transcript)
+  path where the recorder didn't latch a speech frame.
+- **+16 tests.** `tests/unit/test_chat_aggregation.py` (+11): held/no-held,
+  single-turn (plain + merged false_endpoint + held-passthrough), multi-turn
+  (join-with-space, false_endpoint OR, strip+drop-empty, all-empty-collapse),
+  `ResolvedTurn` frozen + defaults. `tests/unit/test_chat_loop_aggregator.py`
+  (+5): drives the *real* `ChatLoop.run_one_turn` with a real aggregator +
+  virtual audio + a manual clock — aggregator=None unchanged, half-duplex
+  passthrough responds-immediately, organic hold (no metrics, text buffered, no
+  user message appended), organic merge (joined text fed to LLM +
+  `false_endpoint=True`), complete-utterance emits immediately.
+- **Verification:** full unit suite **2145 passed** (2129 prior + 11 + 5);
+  integration **30 passed, 1 skipped**; `py_compile` clean.
+- **Next:** call `aggregator.flush()` on a long inter-turn silence (the user
+  trailed off and stopped after a held fragment) and at session shutdown, so a
+  held pending isn't stranded — feed the flushed turn to the engine. This needs
+  a hook in `run_session` (which owns the inter-turn boundary) rather than
+  `run_one_turn` (which only sees one utterance). Then wire the still-pending
+  `should_abandon_turn` (iter-152) / `should_emit_backchannel` (iter-153) seams
+  behind their sub-flags.
