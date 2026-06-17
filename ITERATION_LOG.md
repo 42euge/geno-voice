@@ -15411,3 +15411,102 @@ piece before the pipecat-blocked `Broadcaster` wiring.
     (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
     on a committed `baseline.json`; diversity-check surface paused per
     iter-143/144.
+
+## iter-174 — the backchannel driver: composing the clock + monitor (backlog #7)
+
+**Branch:** `iter-174-backchannel-driver` (merged ff to main)
+**Date:** 2026-06-17
+
+**Goal:** Collapse the `MonologueClock` + `BackchannelMonitor` composition — the
+"thin adapter" iter-173 named as the only remaining piece of the mid-speech cue
+path — into a single `BackchannelDriver` object, and fix the latent crash the
+hand-spelled composition carried.
+
+**Why:** iter-173 ended with all three pure pieces of backlog #7 in place
+(*when* = `decide_backchannel_timing`; *which* = `cue_rotation` + the monitor's
+index; the *inputs* = `MonologueClock`) and described the live wiring as "a thin
+adapter":
+
+    clock.on_speech_start(t); clock.on_speech_stop(t)
+    d = monitor.observe(now=now, monologue_start_at=clock.monologue_start_at,
+                        pause_secs=clock.pause_secs(now))
+    if d.emit: broadcast_cue(d.cue_type)
+
+But that adapter is **two objects + a four-line ritual repeated by hand** (both
+integration tests in `test_monologue_clock.py` spell it out), and the
+`monitor.observe` line has a **latent crash**: it passes
+`clock.monologue_start_at` straight in, but that is `None` until the first
+speech start — and `BackchannelMonitor.observe` computes
+`now - monologue_start_at` with no None guard, so an `observe` tick *before any
+speech* (a warm-up poll, a timer on a freshly-`reset` session) raises
+`TypeError`. Confirmed this lap with a standalone repro. The composition is pure
+and testable; only feeding the VAD frames and calling `broadcast_cue` are
+genuinely pipecat-bound. So extracting the composition leaves the live wiring a
+*truly* thin shim and closes the crash in one place.
+
+**What changed:**
+
+1. **`session/backchannel_driver.py`** — new pure module (dependency-free
+   beyond its two organic-track siblings). `BackchannelDriver` owns a
+   `MonologueClock` and a `BackchannelMonitor` and exposes:
+   - `on_speech_start(now)` / `on_speech_stop(now)` — forwarded to the clock
+     (the `VADUserStartedSpeakingFrame` / `VADUserStoppedSpeakingFrame` events).
+   - `observe(now)` — reads `monologue_start_at` + `pause_secs(now)` off its own
+     clock and routes them through its own monitor, returning the monitor's
+     `BackchannelDecision`. **Short-circuits a no-monologue tick**
+     (`monologue_start_at is None`, before first speech or right after `reset`)
+     to a no-emit decision — the correct organic answer (no speaker to
+     backchannel) *and* the crash guard — without touching monitor state, so the
+     rate limit and half-duplex invariant survive. The no-monologue decision
+     still reports the real `secs_since_last_backchannel` if the monitor ever
+     emitted (and the echoed `pause_secs`).
+   - `reset()` — clears the clock fully + the monitor's rate-limit clock, but
+     (like the monitor) keeps the lifetime `emit_count` and cue-rotation
+     position.
+   - Read-only passthrough views (`active`, `speaking`, `monologue_start_at`,
+     `last_backchannel_at`, `emit_count`, `cue_index`) + `clock` / `monitor`.
+   - Construction mirrors the siblings (`config` / `timing` / `clock_config`),
+     plus optional injected `clock=` / `monitor=` collaborators for tests.
+
+2. **+19 tests** (`tests/unit/test_backchannel_driver.py`, file-path-loaded into
+   a stub `session` namespace like its siblings): construction / config
+   forwarding / injected-collaborator precedence; the **None-tick crash guard**
+   (observe before speech, observe after reset, secs-since-emit reporting on a
+   None tick, secs-since None when never emitted, pause echo); end-to-end emit
+   in the clause-pause window; monologue continuity across a clause pause; cue
+   rotation across consecutive emits; rate-limit HOLD on a too-soon second
+   pause; half-duplex never-emit + never-mutate-state; `speaking` passthrough;
+   reset clears clock + rate limit but keeps rotation/tally; reset allows an
+   immediate re-emit on a fresh monologue while continuing the rotation.
+
+**Discoverability:** iter-174 findings-log entry + backlog #7 row update in
+`docs/research/organic-turn-taking.md`; README Research section names
+`session/backchannel_driver.py`, the one-object composition, the None-tick
+crash it closes, and that the live `Broadcaster` wiring is now a truly thin
+shim.
+
+**Verification:**
+- `python -m pytest tests/unit/test_backchannel_driver.py -q` → **19 passed**.
+- Full unit suite (in worktree, pre-merge): **2374 passed** (2355 prior + 19).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `python -W error::SyntaxWarning -m py_compile session/backchannel_driver.py`
+  clean.
+- Standalone repro confirmed the pre-fix `TypeError` on a None-start
+  `monitor.observe` (the crash the driver guards).
+- (`tests/test_session.py` still errors on collection — `ModuleNotFoundError:
+  pipecat` — pre-existing on main, not a regression; that suite needs the
+  absent x86_64 dep.)
+
+**Notes:**
+- Next directions:
+  - **Live mid-speech cue wiring for #7** — backlog #7's pure stack is now
+    *complete and composed*. The live `pipecat_server.py` `Broadcaster` wiring
+    is a truly thin shim: construct a `BackchannelDriver`, feed `on_speech_*`
+    from the VAD frames, call `observe(now)` on a tick, `broadcast_cue(d.cue_type)`
+    on emit. Still blocked only on the absent pipecat dep on the x86_64 runner.
+  - **Live barge-path wiring for #5** — `should_abandon_turn` (iter-152) into
+    the `mic_chat` barge path; blocked on no transcript at VAD-trigger time.
+  - Carried over (off-track): the CI workflow
+    (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
+    on a committed `baseline.json`; diversity-check surface paused per
+    iter-143/144.
