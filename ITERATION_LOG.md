@@ -14586,3 +14586,98 @@ clock read will consume.
     (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
     on a committed `baseline.json`; diversity-check surface paused per
     iter-143/144.
+
+## iter-165 — pre-speech idle timeout on the recorder (backlog #9, the flush mechanism)
+
+**Branch:** `iter-165-idle-timeout` (merged ff to main, commit `ee3476d`)
+**Date:** 2026-06-17
+
+**Goal:** Ship the recorder *mechanism* the iter-164 mid-session flush decision
+needs — an optional `idle_timeout` on `record_utterance_streaming` so the live
+loop can regain control during a long inter-turn pause instead of blocking
+forever waiting for speech to start.
+
+**Why:** Every lap since iter-160 named the same blocker as the next direction:
+*"`run_session` reads no clock between turns."* The deeper cause is that
+`record_utterance_streaming` **blocks forever waiting for speech to start** —
+its loop sits in `VadEvent.IDLE` until the user speaks. So there is no point at
+which the loop can measure an inter-turn silence and act on it. A held
+mid-thought fragment (iter-156 `UtteranceBuffer`) can therefore only ever
+surface when the *next* utterance arrives (iter-162's displaced-fragment path)
+or at shutdown (iter-160's flush). The one case neither reaches is the user who
+trails off mid-thought and then says **nothing** for a long beat — exactly the
+case iter-164's `decide_silence_flush` was built to answer. iter-164 shipped the
+pure *decision*; this lap ships the *mechanism* that lets the loop reach that
+decision mid-session.
+
+**What changed:** `examples/_chat_recording.py` —
+`record_utterance_streaming(..., idle_timeout: float | None = None, ...)`:
+
+1. **The timeout.** In the `VadEvent.IDLE` branch (still waiting for speech),
+   when `idle_timeout` is set and `now - t_origin >= idle_timeout` *and* no
+   speech frame has been seen yet (`first_speech_at is None`), the loop breaks
+   with an `idle_timed_out` flag. Measured off the same frame-aligned virtual
+   clock (`now = t_origin + frame_idx * frame_dt`) as everything else, so it is
+   deterministic under the test `FrameClock` and tracks wall time in
+   production.
+
+2. **Gated on `first_speech_at is None`.** The timeout governs *only* the
+   pre-speech wait. Once a speech frame is seen, the normal `silence_duration`
+   end-of-turn logic owns the rest of the utterance and the idle timeout no
+   longer applies — so a long mid-utterance trailing pause can never be misread
+   as an idle timeout.
+
+3. **Empty-tuple return + distinct cause flag.** On timeout the recorder returns
+   `(b"", 0.0, 0.0)` — the same shape a VAD false trigger / too-short utterance
+   returns, so the existing no-transcript caller path is unchanged — and sets
+   `out_metrics["idle_timed_out"] = True` so the live loop can tell a deliberate
+   idle timeout (the inter-turn-flush trigger) apart from a genuine false
+   trigger. No preview line was rendered (we never saw speech), so there is
+   nothing to clear.
+
+4. **`None` (default) preserves wait-forever behavior byte-for-byte.** No call
+   site passes `idle_timeout` yet, so the recorder waits for speech exactly as
+   before. The new path is entirely opt-in — same decision-seam/mechanism-first
+   rhythm as iter-152/153/164 (ship one well-scoped layer, leave the live wiring
+   as the explicit follow-on).
+
+**+7 tests** (`tests/unit/test_chat_recording.py`,
+`TestRecordUtterancePreSpeechIdleTimeout`): default-None records normally with
+no flag; the timeout fires on pure pre-speech silence (empty tuple + flag set);
+`transcribe_fn` is never called on a timeout; speech-before-timeout records
+normally; the mid-utterance-trailing-pause gate (2.0s trailing silence with
+`idle_timeout=0.5` still yields a real transcript via DONE_OK); the timeout
+fires near the configured window (asserted via `mic.reads` count); and
+`idle_timeout=0.0` fires on the very first frame (distinct from `None`).
+
+**Discoverability:** iter-165 findings-log entry + backlog #9 row update in
+`docs/research/organic-turn-taking.md`; README Research section names the
+`idle_timeout` arg, the `first_speech_at is None` gate, the `idle_timed_out`
+flag, and the `ChatLoop`→`run_session` wiring follow-on.
+
+**Verification:**
+- `python -m pytest tests/unit/test_chat_recording.py -q` → **21 passed**
+  (14 prior + 7 net new).
+- Full unit suite (in worktree, pre-merge): **2252 passed** (2245 prior + 7).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `python -W error::SyntaxWarning -m py_compile examples/_chat_recording.py`
+  clean.
+
+**Notes:**
+- **No runtime behavior change for today's sessions.** `idle_timeout` defaults
+  to `None` and no production call site passes it, so the recorder waits for
+  speech exactly as before — byte-for-byte. The mechanism only engages once the
+  live wiring lands.
+- Next directions:
+  - **Wire `idle_timeout` through `ChatLoop` → `run_session`** so a held
+    fragment's inter-turn silence is measured, fed to
+    `should_flush_held_utterance` (iter-164), and a real mid-session flush
+    responds to the fragment as its own turn before the next `[N] waiting...`.
+    The recorder side is now unblocked.
+  - Wire the still-pending `should_abandon_turn` (iter-152) into the `mic_chat`
+    barge path and `should_emit_backchannel` (iter-153) into the live cue path,
+    both behind their full-duplex sub-flags.
+  - Carried over (off-track): the CI workflow
+    (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
+    on a committed `baseline.json`; diversity-check surface paused per
+    iter-143/144.
