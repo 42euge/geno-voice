@@ -13782,3 +13782,95 @@ reviewable lap).
     (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
     on a committed `baseline.json`; diversity-check surface paused per
     iter-143/144.
+
+## iter-157 — merge-depth safety cap on UtteranceBuffer (backlog #9 hardening)
+
+**Branch:** `iter-157-merge-cap` (merged ff to main, commit `eecdf29`)
+**Date:** 2026-06-16
+
+**Goal:** every lap since iter-155 named the same next direction — *wire
+`UtteranceBuffer` into the live STT loop*. Before doing that (the first lap to
+touch a live entrypoint), close a latent starvation hole in the iter-156 buffer:
+chained merges accumulate with **no upper bound**. A held unfinished pending is
+re-held on every continuation, so a pathological STT stream that never finalizes
+a complete-looking sentence (or noise the completeness scorer reads as trailing
+off) would let the buffer hold-and-merge *forever* — the turn engine would never
+receive the utterance. This lap ships a bounded `max_merge_depth` cap so the
+buffer self-limits, making the eventual live wiring safe.
+
+**Why:** unbounded hold is exactly the kind of failure that's invisible in unit
+tests of the happy path but catastrophic in a live loop (the user talks, the
+agent goes silent forever). The fix must land *before* the buffer drives a real
+entrypoint, not after. It also fits the track's rhythm precisely — harden the
+pure primitive in isolation behind the off-by-default gate; the entrypoint
+wiring stays a separate reviewable lap. Zero runtime behavior change today (the
+module is still unwired, and even wired the default cap never fires in a real
+conversation).
+
+**What changed:**
+
+1. **`session/utterance_buffer.py` — `max_merge_depth` cap.**
+   `UtteranceBuffer(..., max_merge_depth=DEFAULT_MAX_MERGE_DEPTH)` (default 8).
+   When a held pending has already absorbed `max_merge_depth` continuations, the
+   next merge **force-emits** the running text as a finished turn (still flagged
+   `false_endpoint=True` — it repaired real false endpoints on the way up to the
+   cap) instead of holding it again, then the buffer starts fresh. Below the cap,
+   behavior is byte-for-byte iter-156's.
+
+2. **`DEFAULT_MAX_MERGE_DEPTH = 8`** — deliberately well above any realistic
+   conversation (a genuine mid-thought pause produces one, occasionally two false
+   endpoints per turn, never eight), so the cap is a pure backstop for the
+   degenerate stream — the same role iter-085's `max_token_gap` watch and
+   iter-014's rms-empty guard play on their own paths.
+
+3. **`merge_count` read-only property** — observability for how many
+   continuations the held pending has absorbed (0 when idle). A live loop / test
+   can watch it approach the cap. Resets to 0 on every release: a NEW arrival, a
+   `flush()`, or a force-emit.
+
+4. **`max_merge_depth < 1` rejected with `ValueError`** — a cap below 1 would
+   force-emit a freshly-held candidate before it could absorb any continuation,
+   i.e. disable holding entirely (which is what half-duplex already does).
+   Rejected loudly rather than silently defeating the organic path.
+
+5. **Half-duplex passthrough entirely unaffected** — the cap only governs the
+   hold-and-merge path; half-duplex never holds, so even a tiny cap is a no-op
+   there. Pinned by a dedicated test.
+
+6. **`tests/unit/test_utterance_buffer.py` (+12 tests, 44 total):** default value;
+   `merge_count` start / track-each-merge / reset-on-NEW / reset-on-flush;
+   force-emit at the cap (cap=2 and the cap=1 first-merge corner); force-emitted
+   turn keeps `false_endpoint`; below-cap == iter-156; fresh budget after
+   force-emit (cap doesn't permanently disable holding); `ValueError` on cap < 1;
+   half-duplex no-op.
+
+7. **Discoverability:** iter-157 findings-log entry + backlog #9 row update in
+   `docs/research/organic-turn-taking.md`; README Research section notes the cap.
+
+**Verification:**
+- `python -m pytest tests/unit/test_utterance_buffer.py -q` → **44 passed in 0.10s**.
+- Full unit suite (in worktree, pre-merge): **2102 passed** (2090 prior + 12).
+- Integration (`tests/integration/`): **30 passed, 1 skipped**.
+- `py_compile session/utterance_buffer.py` clean.
+- Re-ran on main post-merge: **44 passed**.
+
+**Notes:**
+- **No runtime behavior change.** The module is still unwired; nothing in the
+  live `mic_chat` / `mic_talk` / `pipecat_server` path imports `utterance_buffer`
+  yet, and even when wired the default cap (8) never fires in a real
+  conversation. The cap is purely a safety property for the degenerate stream.
+- Next directions:
+  - **The live wiring is now safe** — `UtteranceBuffer` self-limits. Wire it into
+    the live `mic_chat` / `pipecat_server` STT loop: instantiate from
+    `full_duplex_config_from_env`, route finalized transcripts through
+    `offer(text, measured_gap)`, feed the returned `turns` to the engine, call
+    `flush()` on a long-silence / shutdown, and set each turn's
+    `TurnMetrics.false_endpoint` from `EmittedTurn.false_endpoint` — closing
+    iter-154's metric live-population loop on the user side.
+  - **Wire `should_abandon_turn`** (iter-152) into the `mic_chat` barge path, and
+    **`should_emit_backchannel`** (iter-153) into the live cue path — both gated
+    behind their full-duplex sub-flags.
+  - Carried over (off-track): the CI workflow
+    (`.github/workflows/stt-benchmark.yml` → `scripts/ci-gate.sh`) still blocked
+    on a committed `baseline.json`; diversity-check surface paused per
+    iter-143/144.
