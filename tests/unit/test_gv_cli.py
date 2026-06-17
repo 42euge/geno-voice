@@ -230,6 +230,90 @@ def test_parser_accepts_noncurated_voice(cmd):
     assert args.voice == "bf_emma"
 
 
+# ---- model_type: non-empty / no-whitespace validator (iter-184) --------
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "tiny",                                    # short alias
+        "base",
+        "large-v3",                                # alias with version suffix
+        "large-v3-turbo",
+        "mlx-community/whisper-large-v3-turbo",    # full HF repo id (the default)
+        "openai/whisper-tiny",                     # third-party HF repo
+        "/models/whisper.gguf",                    # absolute local path
+        "./local-model",                           # relative local path
+        gv.DEFAULT_MODEL,                          # the actual default
+    ],
+)
+def test_model_type_accepts_well_formed_ids(raw):
+    # No single grammar — aliases, repo ids, and paths all pass. The gate
+    # only rejects empty / whitespace-bearing values, so every legitimate
+    # form is preserved verbatim.
+    assert gv.model_type(raw) == raw
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "",      # empty
+        "   ",   # whitespace only
+        "\t",    # tab only
+        "\n",    # newline only
+    ],
+)
+def test_model_type_rejects_empty_and_whitespace_only(raw):
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.model_type(raw)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        " tiny",          # leading space
+        "tiny ",          # trailing space
+        "  tiny  ",       # surrounding space
+        "large v3",       # embedded space
+        "mlx\tcommunity", # embedded tab
+        "model\nname",    # embedded newline
+    ],
+)
+def test_model_type_rejects_whitespace_in_id(raw):
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.model_type(raw)
+
+
+def test_model_type_empty_message_names_the_value():
+    with pytest.raises(argparse.ArgumentTypeError) as exc:
+        gv.model_type("")
+    msg = str(exc.value)
+    assert "non-empty" in msg
+
+
+def test_model_type_whitespace_message_names_the_value():
+    with pytest.raises(argparse.ArgumentTypeError) as exc:
+        gv.model_type("large v3")
+    msg = str(exc.value)
+    assert "whitespace" in msg
+    assert "large v3" in msg
+
+
+@pytest.mark.parametrize("cmd", ["bench", "stream", "talk", "chat"])
+def test_parser_rejects_whitespace_model_via_systemexit(cmd):
+    # End-to-end through argparse: a whitespace-bearing --model exits 2.
+    with pytest.raises(SystemExit) as exc:
+        gv.build_parser().parse_args([cmd, "--model", "large v3"])
+    assert exc.value.code == 2
+
+
+@pytest.mark.parametrize("cmd", ["bench", "stream", "talk", "chat"])
+def test_parser_accepts_well_formed_model(cmd):
+    # A well-formed alias parses through on every command.
+    args = gv.build_parser().parse_args([cmd, "--model", "tiny"])
+    assert args.model == "tiny"
+
+
 # ---- dispatch: routing with stub handlers ------------------------------
 
 

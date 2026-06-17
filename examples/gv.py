@@ -82,6 +82,39 @@ def voice_type(raw):
     return raw
 
 
+def model_type(raw):
+    """Argparse ``type`` for ``--model``: reject empty / whitespace ids.
+
+    The model knob is the broadest of the three CLI string inputs: it
+    accepts short aliases (``tiny``, ``large-v3``), full HF repo ids
+    (``mlx-community/whisper-large-v3-turbo``), and local filesystem
+    paths. There is no single grammar to validate against — unlike
+    ``--voice`` (iter-183) and ``--speed`` (iter-182) — so a strict
+    format check would wrongly reject legitimate inputs. We validate
+    only the one thing every valid form agrees on: a model id is a
+    non-empty token with no surrounding or embedded whitespace.
+
+    This catches the obvious garbage — an empty string, a whitespace-
+    only value, or an accidental ``"  tiny"`` / ``"large v3"`` — at the
+    parser with the usual ``SystemExit(2)`` (via
+    :class:`argparse.ArgumentTypeError`), instead of forwarding it to
+    the STT engine where it surfaces as a confusing load failure deep
+    in the synthesis stack. Pure and side-effect-free for direct unit
+    testing. Anything well-formed (alias, repo id, or path) passes
+    through unchanged — model *existence* is still resolved lazily at
+    load time, as before.
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        raise argparse.ArgumentTypeError(
+            f"model must be a non-empty id, got {raw!r}"
+        )
+    if raw != raw.strip() or any(c.isspace() for c in raw):
+        raise argparse.ArgumentTypeError(
+            f"model must not contain whitespace, got {raw!r}"
+        )
+    return raw
+
+
 def cmd_bench(args):
     # bench is a legacy argv-driven entrypoint: it parses its own sys.argv
     # rather than taking kwargs, so we rebuild argv here. Only forward
@@ -129,13 +162,13 @@ def build_parser():
     sub = parser.add_subparsers(dest="command")
 
     bench = sub.add_parser("bench", help="Batch mode — transcribe after silence")
-    bench.add_argument("--model", default=DEFAULT_MODEL)
+    bench.add_argument("--model", type=model_type, default=DEFAULT_MODEL)
 
     stream = sub.add_parser("stream", help="Streaming mode — live progressive transcription")
-    stream.add_argument("--model", default=DEFAULT_MODEL)
+    stream.add_argument("--model", type=model_type, default=DEFAULT_MODEL)
 
     talk = sub.add_parser("talk", help="Talk mode — STT → NLP → canned response → TTS")
-    talk.add_argument("--model", default=DEFAULT_MODEL)
+    talk.add_argument("--model", type=model_type, default=DEFAULT_MODEL)
     talk.add_argument(
         "--voice",
         type=voice_type,
@@ -150,7 +183,7 @@ def build_parser():
     )
 
     chat = sub.add_parser("chat", help="Chat mode — STT → LLM (litellm) → TTS")
-    chat.add_argument("--model", default=DEFAULT_MODEL)
+    chat.add_argument("--model", type=model_type, default=DEFAULT_MODEL)
     chat.add_argument(
         "--voice",
         type=voice_type,
