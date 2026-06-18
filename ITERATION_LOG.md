@@ -19358,3 +19358,99 @@ behavior or the proven fixed-rate default path.
    grid shows pre-roll improves the typical opening, the tail, AND the
    consistency simultaneously; pick a value (256–512ms) and gate on a
    busier/newly-synced corpus.
+
+---
+
+## iter-220 — On-device `base_wpm` calibration from rendered samples
+
+**Branch:** `iter-220-base-wpm-calib` (merged ff to main, commit `5ae6be8`)
+**Date:** 2026-06-18
+
+**Improvement (the pure arithmetic core that turns a rendered TTS sample into
+a measured `base_wpm`, closing the iter-219 backlog item #1):** iter-216
+shipped `simulate_speed_trajectory`; iter-217 shipped `sweep_mirror_grid` /
+`pick_best_mirror_config`; iter-218 shipped the `gv simulate-mirror` CLI;
+iter-219 ran the fair in-band sweep and landed a hard finding: **`base_wpm`
+cannot be tuned by replay.** It is the bot's actual `bot_wpm` (iter-046) at
+Kokoro `speed=1.0` — a hardware/voice calibration — and the simulator's own
+`ideal = user_wpm / base_wpm` *uses* it to define the convergence target, so a
+`base_wpm` sweep scores each cell against its own moving target (circular). The
+named follow-on in the iter-219 backlog was the natural next hop: a calibration
+harness that *measures* `base_wpm` from a known-length render rather than
+replaying it. This lap ships that calibration's audio-free arithmetic core.
+
+What changed (`session/wpm_mirror.py`):
+- **`CalibrationSample`** (frozen) — one render: `words` synthesized into
+  `audio_seconds` of audio at a known Kokoro `speed` (default the `1.0`
+  calibration point). Derives `bot_wpm` (`words·60/audio_seconds`, the iter-046
+  convention) and `implied_base_wpm` (`bot_wpm / speed` — the rate normalized
+  back to `speed=1.0`, since `bot_wpm ≈ speed · base_wpm`, the same relation the
+  live `SpeedController` inverts when it picks `speed ≈ target_wpm / base_wpm`).
+  `__post_init__` rejects non-positive `words` / `audio_seconds` / `speed`
+  loudly — a non-positive value is a measurement bug (empty script, zero-length
+  clip, missing speed) that would divide by zero or yield a negative rate.
+- **`BaseWpmCalibration`** (frozen) — the verdict: a robust **median**
+  `implied_base_wpm` across samples (median not mean, so a single mis-timed
+  render can't skew it), plus `n_samples`, `min_base_wpm`/`max_base_wpm`,
+  `spread` (renders disagreeing ⇒ inconsistent synth or a bad sample),
+  `default_base_wpm` (the nominal compared against), and `drift`
+  (`implied − nominal`: how far this voice clocks from the 165 seed; positive ⇒
+  faster than nominal at speed 1.0).
+- **`calibrate_base_wpm(samples, default_base_wpm=DEFAULT_BASE_WPM)`** — folds
+  the samples; `None` on empty. Because each sample's `implied_base_wpm`
+  normalizes out the render's `speed`, samples taken at *different* speeds are
+  directly comparable and must agree on the base.
+- Added the three symbols to `__all__`; `import statistics` for the median.
+
+**Why this is the engine, not the on-device render.** Following the
+iter-216-engine-first / iter-218-CLI-later split: the real Kokoro render that
+*produces* the samples is the on-device follow-on (gate on a real synth);
+this lap ships the pure measurement that converts a rendered duration into a
+`base_wpm` verdict — no I/O, no clock, no audio — unit-tested in isolation
+exactly like the iter-216/217/219 simulator engine it complements.
+
+**Off-by-default invariant untouched.** A pure read-only analysis helper;
+nothing in the live `mic_chat` / `pipecat_server` path imports it, so it
+cannot change runtime behavior or the proven fixed-rate default path.
+
+**Verification:**
+- New tests: `python -m pytest tests/unit/test_calibrate_base_wpm.py` →
+  **24 passed**. Coverage: `bot_wpm` = words/minute and scales with duration;
+  `implied_base_wpm == bot_wpm` at speed 1.0 and correctly normalizes out
+  speed 0.5 / 2.0; default speed is 1.0; non-positive rejection matrix
+  (words / audio_seconds / speed, each zero and negative); frozen sample;
+  single-sample / median-is-robust / mixed-speed-agreement / drift (both
+  signs) / empty→`None` / custom default / frozen result / no input mutation /
+  determinism / even-count median averages the middle two.
+- Full Python unit suite: `python -m pytest tests/unit/` → **3038 passed**
+  (3014 prior + 24 new), run on the feature branch before ff-merge. GATE
+  command: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/`.
+  Re-verified `test_calibrate_base_wpm.py` (24 passed) on main after merge.
+- `python -W error::SyntaxWarning -m py_compile session/wpm_mirror.py
+  tests/unit/test_calibrate_base_wpm.py` clean.
+- (`tests/test_session.py` still errors on collection — pre-existing missing
+  `pipecat` dep, not a regression.)
+
+**Next planned items:**
+1. **[wpm-mirroring, follow-on] On-device render that produces the calibration
+   samples.** The arithmetic core now exists; the remaining work is the gated
+   on-device piece: synthesize a fixed known-length script through the real
+   Kokoro voice at `speed=1.0` (and optionally a couple of other speeds to
+   cross-check), measure the rendered `audio_seconds`, build
+   `CalibrationSample`s, and report `calibrate_base_wpm(...).implied_base_wpm`
+   so a deployment sets `base_wpm` from its own voice. Optionally surface it as
+   `gv calibrate-base-wpm` (the iter-218 CLI split) once a render path is wired.
+2. **[silence] Run the actual `--sweep silence_ms` over a newly-synced corpus**
+   — the sweep harness carries the full floor/typical/ceiling/spread shape on
+   all three axes from one shared renderer (iter-207). Gate a real `silence_ms`
+   default change on a corpus that exercises real mid-utterance pauses *and*
+   two-turns-one-pause cases (the seed corpus is flat in both windows).
+3. **[latency, highest value] Pre-warm the capture pipeline** — still the top
+   user-facing bug (3–5s `click_to_capture_ms`). Needs an on-device timing
+   harness; cannot be replayed. The iter-208..212 sentinels now make
+   playback-side, recording-loop, mid-stream-LLM, and end-to-end TTFS slowdowns
+   visible in session summaries.
+4. **[preroll-default] Bump the client `prerollMs` default above 0** — iter-200's
+   grid shows pre-roll improves the typical opening, the tail, AND the
+   consistency simultaneously; pick a value (256–512ms) and gate on a
+   busier/newly-synced corpus.
