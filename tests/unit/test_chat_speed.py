@@ -189,3 +189,33 @@ def test_property_speed_matches_current():
     c = SpeedController(1.0, mirror=mirror)
     c.observe(206.0)
     assert c.speed == c.current() == 1.25
+
+
+# ---- initial accessor (iter-215) -------------------------------------------
+
+
+def test_initial_matches_build_speed():
+    assert SpeedController(0.9).initial == 0.9
+
+
+def test_initial_coerced_to_float():
+    c = SpeedController(1)
+    assert isinstance(c.initial, float)
+    assert c.initial == 1.0
+
+
+def test_initial_unchanged_by_observe():
+    """observe moves current() but never initial — the summary reports the
+    initial→current drift, so initial must be the frozen start value."""
+    mirror = _SequenceMirror([1.1, 1.2, 1.3])
+    c = SpeedController(1.0, mirror=mirror)
+    for _ in range(3):
+        c.observe(220.0)
+    assert c.initial == 1.0
+    assert c.current() == 1.3
+
+
+def test_initial_stable_without_mirror():
+    c = SpeedController(0.85)
+    c.observe(250.0)
+    assert c.initial == 0.85 == c.current()

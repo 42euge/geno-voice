@@ -1414,6 +1414,53 @@ def _emit_wpm_block(emit, stats: WpmStats) -> None:
             emit(f"    Mirror gap:       {gap:+.0f} WPM (bot − user)")
 
 
+def _emit_wpm_mirror_line(
+    emit,
+    *,
+    active: bool,
+    initial_speed: float,
+    final_speed: float,
+) -> None:
+    """iter-215: surface the WPM mirror's per-session speed adaptation.
+
+    Closes iter-214 backlog #1. The iter-213/214 WPM mirror adapts the Kokoro
+    ``speed`` toward the user's measured rate turn-to-turn; this line *measures*
+    that adaptation so it can be seen working (the iter-210 bot_wpm sentinel and
+    the iter-064 "Mirror gap" WPM line should show the gap shrinking when it's
+    on) rather than asserted.
+
+    Emits one of two shapes when the mirror is active:
+      - speed moved:  ``WPM mirror:       on, speed 1.00 → 1.12 (+0.12) …``
+      - speed held:   ``WPM mirror:       on, speed held at 1.00 …``
+    The ``held`` branch fires when start and end are within a hair (the mirror's
+    deadband kept the rate put — e.g. a user already at the base rate), so the
+    operator sees "it was on and chose not to move" rather than a misleading
+    ``+0.00``.
+
+    **Suppressed entirely when ``active`` is False** — the off-by-default path
+    (no ``wpm_mirror`` config, ``mirror=None``). The summary is then byte-for-
+    byte the pre-iter-215 output: a session that never enabled mirroring sees no
+    new line. This is the whole point — measuring the adaptation can never
+    regress the proven fixed-rate summary.
+    """
+    if not active:
+        return
+    delta = final_speed - initial_speed
+    if abs(delta) < 0.005:
+        # Within rounding of "no movement" — the mirror's deadband held the
+        # rate. Report it as held rather than a misleading "+0.00".
+        emit(
+            f"    WPM mirror:       on, speed held at {initial_speed:.2f} "
+            f"(adapts toward user rate — iter-213/214)"
+        )
+    else:
+        emit(
+            f"    WPM mirror:       on, speed {initial_speed:.2f} → "
+            f"{final_speed:.2f} ({delta:+.2f}) "
+            f"(adapted toward user rate — iter-213/214)"
+        )
+
+
 @dataclass
 class SentenceStats:
     """iter-095: sentence-shape statistics consumed by
@@ -3178,6 +3225,25 @@ class SessionMeta:
     # asserted. 0 on the half-duplex / no-driver path (the driver never
     # emits). SessionMeta-only — no legacy kwarg path.
     backchannels_emitted: int = 0
+    # iter-215: WPM-mirror adaptation surface (closes iter-214 backlog #1). The
+    # iter-213/214 WPM mirror now *adapts* the Kokoro ``speed`` toward the
+    # user's measured rate turn-to-turn; these three fields let the summary
+    # *measure* that adaptation rather than asserting it.
+    #   ``wpm_mirror_active``: whether a live WpmMirror was wired in (the
+    #     operator turned ``chat.wpm_mirror.enabled`` on). False on the
+    #     off-by-default path — the line is then suppressed entirely, so the
+    #     summary is byte-for-byte the pre-iter-215 output.
+    #   ``wpm_mirror_initial_speed``: the Kokoro speed the session started with
+    #     (``SpeedController.initial``).
+    #   ``wpm_mirror_final_speed``: the speed it ended with
+    #     (``SpeedController.current()``) — the net of every per-turn nudge.
+    # Pair them with the existing iter-064 "Mirror gap" WPM line: when mirroring
+    # is on, the gap should shrink as the speed drifts toward the user's rate
+    # (the iter-210 bot_wpm sentinel sees the same convergence). SessionMeta-only
+    # — no legacy kwarg path.
+    wpm_mirror_active: bool = False
+    wpm_mirror_initial_speed: float = 0.0
+    wpm_mirror_final_speed: float = 0.0
 
 
 def print_session_summary(
@@ -3257,6 +3323,10 @@ def print_session_summary(
             flushed_utterances=meta.flushed_utterances,
             # iter-175: agent backchannel emit count — SessionMeta-only.
             backchannels_emitted=meta.backchannels_emitted,
+            # iter-215: WPM-mirror adaptation surface — SessionMeta-only.
+            wpm_mirror_active=meta.wpm_mirror_active,
+            wpm_mirror_initial_speed=meta.wpm_mirror_initial_speed,
+            wpm_mirror_final_speed=meta.wpm_mirror_final_speed,
         )
     else:
         meta_eff = SessionMeta(
@@ -3282,6 +3352,10 @@ def print_session_summary(
     flushed_utterances = meta_eff.flushed_utterances
     # iter-175: lifetime agent-backchannel emit count from the organic driver.
     backchannels_emitted = meta_eff.backchannels_emitted
+    # iter-215: WPM-mirror per-session speed adaptation surface.
+    wpm_mirror_active = meta_eff.wpm_mirror_active
+    wpm_mirror_initial_speed = meta_eff.wpm_mirror_initial_speed
+    wpm_mirror_final_speed = meta_eff.wpm_mirror_final_speed
 
     def _emit(line: str = "") -> None:
         if file is None:
@@ -3985,6 +4059,16 @@ def print_session_summary(
     )
     # iter-094: WPM block extracted to _emit_wpm_block helper.
     _emit_wpm_block(_emit, WpmStats(user_wpms=user_wpms, bot_wpms=bot_wpms))
+    # iter-215: surface the WPM mirror's per-session speed adaptation right
+    # under the WPM medians / mirror gap it complements. Suppressed entirely on
+    # the off-by-default path (no live mirror), so a session that never enabled
+    # mirroring sees the pre-iter-215 summary byte-for-byte.
+    _emit_wpm_mirror_line(
+        _emit,
+        active=wpm_mirror_active,
+        initial_speed=wpm_mirror_initial_speed,
+        final_speed=wpm_mirror_final_speed,
+    )
     # iter-077: context size summary. The MEDIAN tells you the
     # typical per-call cost; the MAX tells you the worst case.
     # Pair them: if max ≫ median, late turns blew up — likely a

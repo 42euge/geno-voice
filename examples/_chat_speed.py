@@ -67,12 +67,27 @@ class SpeedController:
             eager pipecat import.
         """
         self._speed = float(initial_speed)
+        # iter-215: remember the speed we were built with so the session
+        # summary can report the start→end drift the mirror introduced
+        # (``current() - initial`` is the net adaptation). Never mutated by
+        # ``observe`` — only ``_speed`` moves.
+        self._initial = self._speed
         self._mirror = mirror
 
     @property
     def speed(self) -> float:
         """The current speed multiplier (read-only property)."""
         return self._speed
+
+    @property
+    def initial(self) -> float:
+        """The speed the controller was built with (read-only).
+
+        iter-215: the session summary reports ``initial → current`` so the
+        operator can see how far the WPM mirror drove the rate over the
+        session. Unaffected by ``observe`` — only the live speed moves.
+        """
+        return self._initial
 
     def current(self) -> float:
         """Zero-arg accessor for the current speed.

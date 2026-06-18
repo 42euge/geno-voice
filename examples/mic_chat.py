@@ -481,6 +481,14 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
                 # iter-167: mid-thought fragments flushed mid-session on a
                 # long inter-turn idle silence (backlog #9 wiring hop 2).
                 flushed_utterances=state.flushed_utterances,
+                # iter-215: surface the WPM mirror's per-session speed drift
+                # (iter-214 backlog #1). Active only when the operator turned
+                # mirroring on; off-by-default leaves wpm_mirror_active False,
+                # so the summary is byte-for-byte unchanged. initial→current is
+                # the net of every per-turn nudge SpeedController.observe made.
+                wpm_mirror_active=speed_controller.active,
+                wpm_mirror_initial_speed=speed_controller.initial,
+                wpm_mirror_final_speed=speed_controller.current(),
             ),
         )
     finally:
