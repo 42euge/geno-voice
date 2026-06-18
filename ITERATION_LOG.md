@@ -21079,3 +21079,103 @@ was no swept surface for that knob.
 4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
    --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
    refresh the comparison table.
+
+## iter-239 — `gv vad-sweep --min-speeches`: a third sweep axis (min-speech floor)
+
+**Branch:** `iter-239-vad-sweep-speech-axis` (merged ff to main, commit `f466c6a`)
+**Date:** 2026-06-18
+
+**No STEER.md this lap.** The two top-priority next items carried since
+iter-227 (wire `ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()`
+in the desktop app) both need a Mac + mic + browser and can't run headless on
+the loop host. The recording corpus is unchanged since iter-231 (same 6 WAVs),
+so the "ingest new recordings" item had nothing to do. I took the first
+headless-doable item from the iter-238 backlog: `gv vad-sweep` further axes
+(item #3) — add the minimum-speech floor as a third sweep axis (`--min-speeches`),
+the natural next step after iter-238's hangover axis since the `axis` machinery
+is already generic.
+
+**The gap.** iter-236 shipped `gv vad-sweep` tabulating Silero segmentation
+over N P(speech) gates; iter-237 added a `--csv` emitter; iter-238 added a
+second axis — the trailing-silence hangover (`--min-silences`) — by
+parameterising the swept dimension via a generic `axis` keyword. An operator
+tuning the *minimum-speech floor* (`min_speech_ms` — the shortest speech region
+the segmenter keeps; anything briefer is dropped as noise) still had to
+hand-run N separate `gv vad --min-speech-ms` invocations and eyeball the
+results. There was no swept surface for that knob, even though it's the dual of
+the hangover (culling short regions vs. merging adjacent ones).
+
+**What changed.**
+1. **Reused the generic `axis` machinery.** `examples/gv.py`:
+   `_SWEEP_AXIS_LABEL` gains `min_speech_ms → "min_speech"`. The two millisecond
+   axes are now grouped in a new `_SWEEP_MS_AXES = ("min_silence_ms",
+   "min_speech_ms")` tuple that `_format_sweep_axis_value` consults, so both
+   print as bare integers (`400`, not `0.40`) — replacing the iter-238
+   single-axis `== "min_silence_ms"` check. `vad_segmentation_sweep` /
+   `render_vad_sweep` / `render_vad_sweep_json` / `render_vad_sweep_csv` are
+   UNCHANGED — they were already axis-parameterised in iter-238.
+2. **Shared the ms-list validator.** `nonneg_float_list_type` is reused verbatim
+   for `--min-speeches`; its docstring + error text generalised from
+   "min-silences" to "a millisecond list" (no test asserts on the text — checked
+   with grep before editing).
+3. **`cmd_vad_sweep` picks the axis** from whichever list was passed:
+   `--min-silences` → `min_silence_ms`, `--min-speeches` → `min_speech_ms`, else
+   the `--thresholds` default. The swept value flows into the matching
+   `SileroParams` field; every non-swept knob is held at its scalar (gate at
+   `--threshold`, floor at `--min-speech-ms` when sweeping a different axis).
+4. **Parser:** `--min-speeches` joins the existing mutually-exclusive axis group,
+   so the three axes can never combine (the iter-238 two-way mutex becomes a
+   three-way one for free). Help text on `--threshold` / `--min-speech-ms`
+   updated for the new ignore/hold semantics; module header + section comments
+   name all three axes.
+5. **Tests.**
+   - `tests/unit/test_gv_vad.py` (**+15**): the `--min-speeches` parser flag
+     (parse / default-None / zero-allowed); three-way mutual exclusivity (vs
+     `--thresholds` AND vs `--min-silences`); negative-member rejection;
+     `vad_segmentation_sweep` axis keying; renderers labelling the `min_speech`
+     column / carrying the `min_speech_ms` axis key / CSV header = axis name;
+     `cmd_vad_sweep` speech-axis end-to-end (segmenter sees the swept
+     `min_speech_ms` with the gate held at scalar `--threshold` and
+     `--min-silence-ms` held at its scalar; json/csv/unavailable branches). NO
+     torch import — driven through the injected segmenter seam.
+   - `tests/integration/test_gv_vad_cli.py` (**+3**): over THE GATE recording,
+     each speech-sweep row equals an independent `gv vad --json` run at that
+     floor; segments are monotone non-increasing across rising floors (a higher
+     floor can only drop short regions, never add them — the culling mirror of
+     the hangover axis's merging); `--csv` agrees with `--json` on this axis.
+     Skips without corpus/package.
+6. **Docs** (`docs/research/voice-capture-tuning.md`) — a `--min-speeches`
+   subsection beside `--min-silences`: invocation, the real-corpus table
+   (verified against `voice-20260618-110355.wav`: 5 segments down to 2 by 800ms,
+   elbow at ~400ms), the segment-non-increasing property and its culling cause,
+   the axis labelling, and the new `min_speech_ms` value for the JSON `"axis"`
+   key. The section intro now names all three axes.
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3402 passed** (3387 prior + 15 new), run on the feature branch before
+  ff-merge. Re-confirmed on main after merge: `pytest
+  tests/unit/test_gv_vad.py tests/unit/test_gv_cli.py` → **253 passed**.
+- Integration: `python -m pytest tests/integration/test_gv_vad_cli.py` →
+  **28 passed** (25 prior + 3 new; corpus symlinked into the worktree, symlink
+  removed before commit so it is not tracked). silero-vad IS installed on this
+  host, so these ran against the real model.
+- Manual smoke on the branch over `voice-20260618-110355.wav`:
+  `gv vad-sweep … --min-speeches 50,100,200,400,800` → a 5-row table
+  (`50→5/16.2s, 100→5/16.2s, 200→5/16.2s, 400→4/15.7s, 800→2/14.3s`) showing
+  the floor elbow at ~400ms; `--csv` and `--json` over the same axis matched.
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] `gv vad-sweep` 2-D grid** — now that all three 1-D axes exist
+   (threshold / hangover / floor), extend the `axis` machinery to a
+   threshold×hangover (or any pair) grid (the analogue of `simulate-mirror
+   --grid`), so the elbow can be read in two dimensions at once.
+4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
+   --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
+   refresh the comparison table.
