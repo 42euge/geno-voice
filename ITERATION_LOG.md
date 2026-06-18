@@ -20733,3 +20733,88 @@ segmentation could not feed a script/pipeline without scraping the text report.
 4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
    --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
    refresh the comparison table.
+
+## iter-235 — `gv vad-diff`: compare two Silero thresholds on the CLI
+
+**Branch:** `iter-235-gv-vad-diff` (merged ff to main, commit `9b34c03`)
+**Date:** 2026-06-18
+
+**No STEER.md this lap.** The two top-priority next items carried since
+iter-227 (wire `ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()`
+in the desktop app) both need a Mac + mic + browser and can't run headless on
+the loop host. The recording corpus is unchanged since iter-231 (same 6 WAVs),
+so the "ingest new recordings" item had nothing to do. I took the last
+headless-doable item from the iter-234 backlog: a `gv` mode that diffs two
+segmentations using the JSON surface (item #3).
+
+**The gap.** iter-234 shipped the machine-readable `gv vad --json` surface but
+left it without a consumer. Tuning the Silero P(speech) gate against the corpus
+still meant running `gv vad` twice at two thresholds and eyeballing the two
+reports to see how segmentation shifted — no single command quantified the
+delta.
+
+**What changed.**
+1. **`examples/gv.py`** — new `gv vad-diff <wav>` subcommand: segments one WAV
+   twice (`--threshold-a` then `--threshold-b`, all other knobs shared) and
+   prints the signed segment-count / speech-seconds delta.
+   - **`vad_segmentation_delta(a, b)`** — the pure delta core: both sides plus
+     signed `b - a` deltas (`num_segments`, `speech_s`), rounded to 3 places
+     like `render_vad_json`. Works on any `SileroResult`-shaped object so the
+     unit tests drive it without importing torch.
+   - **`render_vad_diff` / `render_vad_diff_json`** — the human and JSON twins
+     (mirroring `render_vad_segments` / `render_vad_json`), with the shared
+     install-hint degrade path when either result is `None`. The human report
+     shows `segments: 5 → 4 (-1)` / `speech total: 16.2s → 15.2s (-1.0s)` with
+     explicit signs; the JSON carries `threshold_a/b`, both sides, and the
+     signed deltas.
+   - **`cmd_vad_diff`** — same injected `segmenter`/`availability`/`log` seams
+     as the iter-233 `cmd_vad`; segments twice with only the threshold varying.
+     Registered as the `vad-diff` handler with a new subparser
+     (`--threshold-a` default 0.5, `--threshold-b` default 0.7, plus the shared
+     min-speech/min-silence/speech-pad/max-speech/`--json` flags).
+   - **`_signed` / `_signed_float`** — explicit-sign delta formatting helpers.
+2. **Tests.**
+   - `tests/unit/test_gv_vad.py` (**+20**, now 75 in-file): parser
+     registration/defaults/overrides/range-rejection/`--json`;
+     `vad_segmentation_delta` (subset / identical / positive / 3-place
+     rounding); `render_vad_diff` + `render_vad_diff_json` (unavailable, signed
+     deltas, plus-sign); `cmd_vad_diff` (unavailable text+json, runs both
+     thresholds in A-then-B order, json branch, shares knobs across both runs
+     with a genuine `SileroParams`). NO torch import.
+   - `tests/integration/test_gv_vad_cli.py` (**+3**): over the REAL corpus —
+     `vad-diff --json` equals two independent `gv vad --json` runs at the same
+     thresholds; a higher B gate is a subset (speech delta ≤ 0) on THE GATE
+     recording; the human report is well-formed. Skips without corpus/package.
+   - `tests/unit/test_gv_cli.py`: handler-map assertion now includes `vad-diff`.
+3. **Docs** (`docs/research/voice-capture-tuning.md`) — a `gv vad-diff`
+   subsection beside `gv vad`/`--json`: invocation, the `A → B (delta)` report
+   shape, the subset relationship, and the JSON payload keys.
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3317 passed** (3297 prior + 20 new), run on the feature branch before
+  ff-merge. Re-confirmed on main: `pytest tests/unit/test_gv_vad.py
+  tests/unit/test_gv_cli.py` → **168 passed**.
+- Integration: `python -m pytest tests/integration/test_gv_vad_cli.py` →
+  **18 passed** (corpus symlinked into the worktree; symlink removed before
+  commit so it is not tracked). silero-vad IS installed on this host, so these
+  ran against the real model.
+- Manual smoke on the branch: `python examples/gv.py vad-diff
+  fixtures/recordings/voice-20260618-110355.wav --threshold-a 0.5
+  --threshold-b 0.9` → `segments 5 → 4 (-1)`, `speech 16.2s → 15.2s (-1.0s)`;
+  `--json` emits the matching delta document.
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] `gv vad-sweep`** — generalize iter-235's two-point diff to a sweep
+   over N thresholds (mirror `fixtures/replay_silero.py --sweep`), emitting a
+   table of segment-count/speech-seconds vs threshold so the gate's elbow is
+   visible at a glance, not just a single A-vs-B pair.
+4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
+   --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
+   refresh the comparison table.
