@@ -81,7 +81,13 @@ shows timing moving earlier without hand-inspecting each recording's
 first onset across detected recordings — the worst-case ceiling a sweep
 wants to *minimize*. It is to `onset1` what `min_onsets` is to `onsets`:
 the mean can look great while one recording is captured far too late, and
-that single bad onset is a real regression the mean would hide.
+that single bad onset is a real regression the mean would hide. iter-199
+completes the spread with `onset1_min`: the *earliest* first onset across
+detected recordings — the best-case floor. With `onset1_min`/`onset1`/
+`onset1_max` together a sweep shows the whole best/typical/worst timing
+distribution in one pass, and the floor marks the *irreducible* earliest
+capture an onset-shaping knob can't push past (when `onset1_min` stops
+moving, that knob has saturated on its best recording).
 
 `tests/integration/test_vad_recordings.py` turns every recording into a
 regression test (the data flywheel): the more the user talks to the app,
@@ -308,6 +314,46 @@ practical takeaway for backlog item 5: a smaller debounce improves the
 *typical* opening but does nothing for the worst case, whereas pre-roll is
 the lever that tightens the tail — they are complementary, not redundant.
 
+### Best-case onset floor (iter-199)
+
+`onset1` (mean) and `onset1_max` (worst case) describe the typical and tail
+of the timing distribution; iter-199 adds `onset1_min` — the *earliest*
+first onset across detected recordings — so a single sweep now reports the
+full best/typical/worst spread. The floor's job is to expose the
+*irreducible* earliest capture: an onset-shaping knob can't pull a recording
+earlier than its best case, so when `onset1_min` stops moving, that knob has
+saturated. The same two sweeps, now showing all three:
+
+```
+python fixtures/replay_vad.py --sweep debounce_ms --sweep-values 100,200,300
+```
+| debounce_ms | trig | onset1_min (best) | onset1 (mean) | onset1_max (worst) |
+|-------------|------|-------------------|---------------|--------------------|
+| 100 | 4/4 | **232.2ms** | 1271.3ms | 2995.4ms |
+| 200 (default) | 4/4 | **232.2ms** | 1532.5ms | 2995.4ms |
+| 300 | **3/4** | **232.2ms** | 2190.4ms | 3343.7ms |
+
+```
+python fixtures/replay_vad.py --sweep preroll_ms --sweep-values 0,256,512
+```
+| preroll_ms | trig | onset1_min (best) | onset1 (mean) | onset1_max (worst) |
+|------------|------|-------------------|---------------|--------------------|
+| 0 (default) | 4/4 | 232.2ms | 1532.5ms | 2995.4ms |
+| 256 | 4/4 | **0.0ms** | 1282.9ms | 2740.0ms |
+| 512 | 4/4 | **0.0ms** | 1091.3ms | 2484.5ms |
+
+**What the floor reveals:** across every debounce value the floor is *pinned
+at 232.2ms* — the earliest recording's real speech starts there and no amount
+of debounce tuning can capture it sooner, confirming debounce is a
+*typical-case* lever, not a best-case one (it mirrors how `onset1_max` stays
+pinned across the same sweep — debounce moves only the middle of the spread).
+Pre-roll, by contrast, drives the floor all the way to **0.0ms** (the
+recording start) at 256ms of pre-roll: the best recording's soft attack is
+recovered right back to the file boundary, where the clamp stops it. So the
+floor confirms from the *bottom* of the distribution what `onset1_max`
+confirmed from the top — pre-roll shifts the whole spread uniformly while
+debounce only moves the interior.
+
 ## Findings & backlog (prioritized)
 
 1. **[latency] Pre-warm the capture pipeline.** The 3–5s `click_to_capture_ms`
@@ -386,7 +432,14 @@ the lever that tightens the tail — they are complementary, not redundant.
    onset (see the onset-timing section above); 300ms is the cliff (drops a
    recording). The replay evidence now supports lowering the client `debounceMs`
    *default* to 100; the remaining gate is confirming it on a busier corpus
-   before changing the shipped default._
+   before changing the shipped default._ **iter-198/199: the timing aggregate
+   now carries its worst case (`onset1_max`) and best case (`onset1_min`)
+   alongside the mean.** Both confirm debounce is a *typical-case* lever only:
+   across the 100→300ms sweep the floor stays pinned at 232.2ms and the ceiling
+   at 2995ms — debounce moves only the interior of the spread, while pre-roll
+   shifts the whole distribution (floor → 0.0ms, ceiling → 2484ms at 512ms).
+   Pair any `debounceMs` default drop with a pre-roll bump so the tail and floor
+   improve too, not just the mean.
 6. **[silence] Right-size the silence timeout.** 800ms may over-split or
    over-merge turns. The seed corpus shows clean multi-segment splits;
    revisit if new recordings show truncated or run-on turns.

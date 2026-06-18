@@ -380,6 +380,7 @@ class TestAggregateResults:
         point = aggregate_results(VadParams(threshold=0.006), results)
         assert point.mean_first_onset_ms == 0.0
         assert point.max_first_onset_ms == 0.0
+        assert point.min_first_onset_ms == 0.0
 
     def test_max_first_onset_is_latest_detected_recording(self, tmp_path):
         corpus = _make_corpus(tmp_path)
@@ -406,6 +407,35 @@ class TestAggregateResults:
             max(r.segments[0].onset_ms for r in detected)
         )
         assert point.max_first_onset_ms > 0.0
+
+    def test_min_first_onset_is_earliest_detected_recording(self, tmp_path):
+        corpus = _make_corpus(tmp_path)
+        results = replay_all(corpus, VadParams(threshold=0.006))
+        point = aggregate_results(VadParams(threshold=0.006), results)
+        first_onsets = [r.segments[0].onset_ms for r in results if r.segments]
+        assert first_onsets, "fixture should detect speech in at least one rec"
+        # The best-case floor is the min over the same detected onsets the mean
+        # averages — never above the mean, never below any actual onset. It
+        # bounds the full spread together with mean/max:
+        # min <= mean <= max.
+        assert point.min_first_onset_ms == pytest.approx(min(first_onsets))
+        assert point.min_first_onset_ms <= point.mean_first_onset_ms
+        assert point.min_first_onset_ms <= point.max_first_onset_ms
+
+    def test_min_first_onset_excludes_missed_recordings(self, tmp_path):
+        corpus = _make_corpus(tmp_path)
+        # At 0.015 one recording misses; the floor must reflect only the
+        # detected recording's onset, not be dragged to 0 by the miss (which
+        # has no onset time at all — a 0.0 would falsely read as "earliest").
+        results = replay_all(corpus, VadParams(threshold=0.015))
+        detected = [r for r in results if r.segments]
+        missed = [r for r in results if not r.segments]
+        assert detected and missed, "fixture must mix a hit and a miss at 0.015"
+        point = aggregate_results(VadParams(threshold=0.015), results)
+        assert point.min_first_onset_ms == pytest.approx(
+            min(r.segments[0].onset_ms for r in detected)
+        )
+        assert point.min_first_onset_ms > 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -640,6 +670,8 @@ class TestSweepCli:
         assert "onset1=" in out
         # ...as is its worst-case ceiling.
         assert "onset1_max=" in out
+        # ...and its best-case floor.
+        assert "onset1_min=" in out
 
     def test_sweep_json_includes_mean_first_onset(self, tmp_path, capsys):
         corpus = _make_corpus(tmp_path)
@@ -661,6 +693,19 @@ class TestSweepCli:
         assert "max_first_onset_ms" in payload[0]
         # The ceiling is never below the mean over the same detected set.
         assert payload[0]["max_first_onset_ms"] >= payload[0]["mean_first_onset_ms"]
+
+    def test_sweep_json_includes_min_first_onset(self, tmp_path, capsys):
+        corpus = _make_corpus(tmp_path)
+        rc = main(["--sweep", "threshold", "--sweep-values", "0.006", "--dir", str(corpus), "--json"])
+        assert rc == 0
+        import json as _json
+
+        payload = _json.loads(capsys.readouterr().out)
+        assert "min_first_onset_ms" in payload[0]
+        assert payload[0]["min_first_onset_ms"] > 0.0
+        # The floor bounds the spread from below: min <= mean <= max.
+        assert payload[0]["min_first_onset_ms"] <= payload[0]["mean_first_onset_ms"]
+        assert payload[0]["min_first_onset_ms"] <= payload[0]["max_first_onset_ms"]
 
 
 # ---------------------------------------------------------------------------
@@ -685,9 +730,10 @@ class TestGridCli:
         # Each cell labels both axes.
         assert out.count("threshold=") == 4
         assert out.count("gain=") == 4
-        # The grid table carries both onset-timing aggregates per cell.
+        # The grid table carries all three onset-timing aggregates per cell.
         assert out.count("onset1=") == 4
         assert out.count("onset1_max=") == 4
+        assert out.count("onset1_min=") == 4
 
     def test_grid_json_row_major(self, tmp_path, capsys):
         corpus = _make_corpus(tmp_path)
