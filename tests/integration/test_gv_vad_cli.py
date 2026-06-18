@@ -150,3 +150,68 @@ def test_gv_vad_json_matches_human_report_counts(wav: Path):
 
     payload = json.loads(_run(wav, json=True)[0])
     assert payload["num_segments"] == len(human_rows)
+
+
+# ---- iter-235: gv vad-diff over the real corpus ------------------------
+
+
+def _diff_args(wav: Path, **over):
+    base = dict(
+        wav=str(wav),
+        threshold_a=0.5,
+        threshold_b=0.7,
+        min_speech_ms=250.0,
+        min_silence_ms=800.0,
+        speech_pad_ms=30.0,
+        max_speech_s=float("inf"),
+        json=False,
+    )
+    base.update(over)
+    return argparse.Namespace(**base)
+
+
+def _run_diff(wav: Path, **over) -> list[str]:
+    lines: list[str] = []
+    gv.cmd_vad_diff(_diff_args(wav, **over), log=lines.append)
+    return lines
+
+
+def test_gv_vad_diff_json_matches_two_separate_vad_runs():
+    """``gv vad-diff`` must report exactly the delta between two independent
+    ``gv vad --json`` runs at the same thresholds — proving it segments twice
+    with the real engine and computes the delta consistently."""
+    wav = RECORDINGS_DIR / CONTINUOUS_31S
+    if not wav.exists():
+        pytest.skip(f"{CONTINUOUS_31S} not present")
+
+    a = json.loads(_run(wav, threshold=0.5, json=True)[0])
+    b = json.loads(_run(wav, threshold=0.9, json=True)[0])
+
+    diff = json.loads(_run_diff(wav, threshold_a=0.5, threshold_b=0.9, json=True)[0])
+    assert diff["available"] is True
+    assert diff["name"] == CONTINUOUS_31S
+    assert diff["num_segments_a"] == a["num_segments"]
+    assert diff["num_segments_b"] == b["num_segments"]
+    assert diff["num_segments_delta"] == b["num_segments"] - a["num_segments"]
+    assert abs(diff["speech_s_delta"] - (b["speech_s"] - a["speech_s"])) <= 0.01
+
+
+def test_gv_vad_diff_higher_threshold_is_a_subset():
+    """A stricter B gate recovers no more speech than the looser A gate — the
+    speech-seconds delta is ≤ 0 across the corpus's hardest recording."""
+    wav = RECORDINGS_DIR / CONTINUOUS_31S
+    if not wav.exists():
+        pytest.skip(f"{CONTINUOUS_31S} not present")
+    diff = json.loads(_run_diff(wav, threshold_a=0.5, threshold_b=0.95, json=True)[0])
+    assert diff["speech_s_delta"] <= 1e-6
+
+
+def test_gv_vad_diff_human_report_is_well_formed():
+    """The human-readable diff names the file, both thresholds, and the arrow."""
+    wav = RECORDINGS_DIR / CONTINUOUS_31S
+    if not wav.exists():
+        pytest.skip(f"{CONTINUOUS_31S} not present")
+    text = "\n".join(_run_diff(wav, threshold_a=0.5, threshold_b=0.7))
+    assert CONTINUOUS_31S in text
+    assert "0.50" in text and "0.70" in text
+    assert "→" in text

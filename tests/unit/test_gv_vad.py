@@ -492,3 +492,302 @@ def test_cmd_vad_without_json_stays_human_readable():
     assert len(lines) > 1
     with pytest.raises(json.JSONDecodeError):
         json.loads(lines[0])
+
+
+# ====================================================================
+# iter-235 — gv vad-diff: compare two thresholds (first gv vad --json consumer)
+# ====================================================================
+
+
+def _diff_args(**over):
+    base = dict(
+        wav="rec.wav",
+        threshold_a=0.5,
+        threshold_b=0.7,
+        min_speech_ms=250.0,
+        min_silence_ms=800.0,
+        speech_pad_ms=30.0,
+        max_speech_s=float("inf"),
+        json=False,
+    )
+    base.update(over)
+    return argparse.Namespace(**base)
+
+
+# ---- parser: registration & defaults -----------------------------------
+
+
+def test_vad_diff_in_handler_map():
+    assert gv.DEFAULT_HANDLERS["vad-diff"] is gv.cmd_vad_diff
+
+
+def test_vad_diff_defaults():
+    args = gv.build_parser().parse_args(["vad-diff", "rec.wav"])
+    assert args.command == "vad-diff"
+    assert args.wav == "rec.wav"
+    assert args.threshold_a == 0.5
+    assert args.threshold_b == 0.7
+    # Shared knobs default to the same SileroParams values as `gv vad`.
+    assert args.min_speech_ms == 250.0
+    assert args.min_silence_ms == 800.0
+    assert args.speech_pad_ms == 30.0
+    assert args.json is False
+
+
+def test_vad_diff_overrides_thresholds():
+    args = gv.build_parser().parse_args(
+        ["vad-diff", "rec.wav", "--threshold-a", "0.3", "--threshold-b", "0.9"]
+    )
+    assert args.threshold_a == 0.3
+    assert args.threshold_b == 0.9
+
+
+def test_vad_diff_rejects_out_of_range_threshold():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(["vad-diff", "rec.wav", "--threshold-a", "1.5"])
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(["vad-diff", "rec.wav", "--threshold-b", "-0.1"])
+
+
+def test_vad_diff_json_flag():
+    args = gv.build_parser().parse_args(["vad-diff", "rec.wav", "--json"])
+    assert args.json is True
+
+
+# ---- vad_segmentation_delta: pure delta core ---------------------------
+
+
+def test_delta_fewer_segments_at_higher_threshold():
+    # A higher gate is typically a subset: fewer regions, less speech.
+    a = _Result(
+        name="r.wav",
+        sample_rate=16000,
+        duration_s=10.0,
+        segments=[_Seg(0.0, 1.0), _Seg(2.0, 3.0), _Seg(5.0, 6.0)],
+    )
+    b = _Result(
+        name="r.wav",
+        sample_rate=16000,
+        duration_s=10.0,
+        segments=[_Seg(0.0, 1.0)],
+    )
+    d = gv.vad_segmentation_delta(a, b)
+    assert d["num_segments_a"] == 3
+    assert d["num_segments_b"] == 1
+    assert d["num_segments_delta"] == -2
+    assert d["speech_s_a"] == 3.0
+    assert d["speech_s_b"] == 1.0
+    assert d["speech_s_delta"] == -2.0
+
+
+def test_delta_identical_segmentations_are_zero():
+    segs = [_Seg(0.0, 1.0), _Seg(2.0, 3.5)]
+    a = _Result(name="r.wav", sample_rate=16000, duration_s=5.0, segments=list(segs))
+    b = _Result(name="r.wav", sample_rate=16000, duration_s=5.0, segments=list(segs))
+    d = gv.vad_segmentation_delta(a, b)
+    assert d["num_segments_delta"] == 0
+    assert d["speech_s_delta"] == 0.0
+
+
+def test_delta_positive_when_b_has_more():
+    a = _Result(name="r.wav", sample_rate=16000, duration_s=5.0, segments=[_Seg(0.0, 1.0)])
+    b = _Result(
+        name="r.wav",
+        sample_rate=16000,
+        duration_s=5.0,
+        segments=[_Seg(0.0, 1.0), _Seg(2.0, 3.0)],
+    )
+    d = gv.vad_segmentation_delta(a, b)
+    assert d["num_segments_delta"] == 1
+    assert d["speech_s_delta"] == 1.0
+
+
+def test_delta_rounds_to_three_places():
+    a = _Result(
+        name="r.wav", sample_rate=16000, duration_s=5.0, segments=[_Seg(0.0, 0.123456)]
+    )
+    b = _Result(
+        name="r.wav", sample_rate=16000, duration_s=5.0, segments=[_Seg(0.0, 0.987654)]
+    )
+    d = gv.vad_segmentation_delta(a, b)
+    assert d["speech_s_a"] == 0.123
+    assert d["speech_s_b"] == 0.988
+    assert d["speech_s_delta"] == 0.865
+
+
+# ---- render_vad_diff: human-readable -----------------------------------
+
+
+def test_render_diff_none_marks_unavailable():
+    lines = gv.render_vad_diff(None, None, label_a=0.5, label_b=0.7)
+    assert len(lines) == 1
+    assert "silero-vad" in lines[0]
+
+
+def test_render_diff_one_none_marks_unavailable():
+    r = _Result(name="r.wav", sample_rate=16000, duration_s=5.0)
+    assert "silero-vad" in gv.render_vad_diff(r, None, label_a=0.5, label_b=0.7)[0]
+
+
+def test_render_diff_shows_signed_deltas():
+    a = _Result(
+        name="rec.wav",
+        sample_rate=16000,
+        duration_s=10.0,
+        segments=[_Seg(0.0, 1.0), _Seg(2.0, 3.0), _Seg(5.0, 6.0)],
+    )
+    b = _Result(name="rec.wav", sample_rate=16000, duration_s=10.0, segments=[_Seg(0.0, 1.0)])
+    text = "\n".join(gv.render_vad_diff(a, b, label_a=0.5, label_b=0.7))
+    assert "rec.wav" in text
+    assert "0.50" in text and "0.70" in text
+    assert "3 → 1" in text
+    assert "(-2)" in text
+    assert "(-2.0s)" in text
+
+
+def test_render_diff_positive_delta_carries_plus_sign():
+    a = _Result(name="rec.wav", sample_rate=16000, duration_s=5.0, segments=[_Seg(0.0, 1.0)])
+    b = _Result(
+        name="rec.wav",
+        sample_rate=16000,
+        duration_s=5.0,
+        segments=[_Seg(0.0, 1.0), _Seg(2.0, 3.0)],
+    )
+    text = "\n".join(gv.render_vad_diff(a, b, label_a=0.3, label_b=0.5))
+    assert "1 → 2" in text
+    assert "(+1)" in text
+    assert "(+1.0s)" in text
+
+
+# ---- render_vad_diff_json: machine-readable ----------------------------
+
+
+def test_render_diff_json_none_marks_unavailable():
+    payload = json.loads(gv.render_vad_diff_json(None, None, label_a=0.5, label_b=0.7))
+    assert payload["available"] is False
+    assert "silero-vad" in payload["hint"]
+    assert "num_segments_delta" not in payload
+
+
+def test_render_diff_json_carries_both_sides_and_deltas():
+    a = _Result(
+        name="rec.wav",
+        sample_rate=16000,
+        duration_s=10.0,
+        segments=[_Seg(0.0, 1.0), _Seg(2.0, 3.0), _Seg(5.0, 6.0)],
+    )
+    b = _Result(name="rec.wav", sample_rate=16000, duration_s=10.0, segments=[_Seg(0.0, 1.0)])
+    payload = json.loads(gv.render_vad_diff_json(a, b, label_a=0.5, label_b=0.7))
+    assert payload["available"] is True
+    assert payload["name"] == "rec.wav"
+    assert payload["threshold_a"] == 0.5
+    assert payload["threshold_b"] == 0.7
+    assert payload["num_segments_a"] == 3
+    assert payload["num_segments_b"] == 1
+    assert payload["num_segments_delta"] == -2
+    assert payload["speech_s_delta"] == -2.0
+
+
+# ---- cmd_vad_diff: the handler -----------------------------------------
+
+
+def test_cmd_vad_diff_unavailable_emits_hint():
+    lines: List[str] = []
+    gv.cmd_vad_diff(
+        _diff_args(),
+        log=lines.append,
+        segmenter=lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("must not segment when unavailable")
+        ),
+        availability=lambda: False,
+    )
+    assert len(lines) == 1
+    assert "silero-vad" in lines[0]
+
+
+def test_cmd_vad_diff_unavailable_json():
+    lines: List[str] = []
+    gv.cmd_vad_diff(
+        _diff_args(json=True),
+        log=lines.append,
+        segmenter=lambda *a, **k: (_ for _ in ()).throw(AssertionError("no")),
+        availability=lambda: False,
+    )
+    assert len(lines) == 1
+    assert json.loads(lines[0])["available"] is False
+
+
+def test_cmd_vad_diff_runs_both_thresholds():
+    # The handler must segment twice — once per threshold — forwarding the
+    # shared knobs both times. We capture the threshold of each call.
+    seen = []
+
+    def seg(wav, params=None):
+        seen.append(params.threshold)
+        # Higher threshold → fewer segments (subset behaviour).
+        n = 3 if params.threshold < 0.6 else 1
+        return _Result(
+            name="rec.wav",
+            sample_rate=16000,
+            duration_s=10.0,
+            segments=[_Seg(float(i), i + 0.5) for i in range(n)],
+        )
+
+    lines: List[str] = []
+    gv.cmd_vad_diff(
+        _diff_args(threshold_a=0.5, threshold_b=0.7),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert seen == [0.5, 0.7]  # A first, then B
+    text = "\n".join(lines)
+    assert "3 → 1" in text
+    assert "(-2)" in text
+
+
+def test_cmd_vad_diff_json_branch():
+    def seg(wav, params=None):
+        n = 3 if params.threshold < 0.6 else 1
+        return _Result(
+            name="rec.wav",
+            sample_rate=16000,
+            duration_s=10.0,
+            segments=[_Seg(float(i), i + 0.5) for i in range(n)],
+        )
+
+    lines: List[str] = []
+    gv.cmd_vad_diff(
+        _diff_args(threshold_a=0.5, threshold_b=0.7, json=True),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert len(lines) == 1
+    payload = json.loads(lines[0])
+    assert payload["num_segments_delta"] == -2
+    assert payload["threshold_a"] == 0.5
+    assert payload["threshold_b"] == 0.7
+
+
+def test_cmd_vad_diff_shares_knobs_across_both_runs():
+    # Both runs must carry the SAME min_speech_ms / max_speech_s — only the
+    # threshold differs. Build genuine SileroParams to lock field names.
+    pytest.importorskip("vad.silero")
+    captured = []
+
+    def seg(wav, params=None):
+        captured.append(params)
+        return _Result(name="rec.wav", sample_rate=16000, duration_s=1.0)
+
+    gv.cmd_vad_diff(
+        _diff_args(threshold_a=0.4, threshold_b=0.8, min_speech_ms=120.0, max_speech_s=20.0),
+        log=lambda *_: None,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert len(captured) == 2
+    assert [p.threshold for p in captured] == [0.4, 0.8]
+    # Shared knobs identical across both runs.
+    assert captured[0].min_speech_ms == captured[1].min_speech_ms == 120.0
+    assert captured[0].max_speech_s == captured[1].max_speech_s == 20.0

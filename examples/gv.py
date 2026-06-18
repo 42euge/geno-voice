@@ -10,6 +10,7 @@ Usage:
     gv calibrate-base-wpm … # offline base_wpm calibration (--verdict for an adopt/keep call)
     gv vad recording.wav  # offline Silero VAD — segment a WAV into speech regions
     gv vad recording.wav --json # machine-readable segmentation (SileroResult.to_dict shape)
+    gv vad-diff recording.wav --threshold-a 0.5 --threshold-b 0.7  # compare two P(speech) gates
     gv <cmd> --model ...  # override STT model
 """
 
@@ -497,6 +498,101 @@ def render_vad_json(result, *, threshold=None):
     return json.dumps(payload, indent=2)
 
 
+def vad_segmentation_delta(result_a, result_b):
+    """Compute the delta between two Silero segmentations of the same WAV.
+
+    iter-234 shipped the machine-readable ``gv vad --json`` surface; this is
+    its first consumer — the pure core of ``gv vad-diff``, which segments one
+    recording under two ``--threshold`` values (or any two SileroResult-shaped
+    objects) and quantifies how the segmentation shifts. Bigger thresholds gate
+    out marginal speech, so the higher-threshold run is typically a *subset* of
+    the lower one (fewer regions, less total speech).
+
+    Pure: takes two objects exposing the ``SileroResult`` shape
+    (``num_segments`` / ``speech_s``) and returns a plain ``dict`` of both
+    sides plus their signed deltas (b minus a). No I/O, no rounding loss beyond
+    3 places (matching :func:`render_vad_json`), so it is testable without
+    importing torch.
+    """
+    a_segs = result_a.num_segments
+    b_segs = result_b.num_segments
+    a_speech = round(result_a.speech_s, 3)
+    b_speech = round(result_b.speech_s, 3)
+    return {
+        "num_segments_a": a_segs,
+        "num_segments_b": b_segs,
+        "num_segments_delta": b_segs - a_segs,
+        "speech_s_a": a_speech,
+        "speech_s_b": b_speech,
+        "speech_s_delta": round(b_speech - a_speech, 3),
+    }
+
+
+def render_vad_diff(result_a, result_b, *, label_a, label_b):
+    """Render a two-threshold segmentation comparison as plain-text lines.
+
+    The human-readable twin of :func:`render_vad_diff_json`. ``label_a`` /
+    ``label_b`` are the two ``--threshold`` values being compared. Either
+    result of ``None`` (segmenter unavailable) yields the shared install hint,
+    matching :func:`render_vad_segments`. Pure: returns a list of strings.
+    """
+    if result_a is None or result_b is None:
+        return [
+            "silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        ]
+    d = vad_segmentation_delta(result_a, result_b)
+    name = result_a.name
+    return [
+        f"silero VAD diff — {name}",
+        f"  threshold A:  {label_a:.2f}",
+        f"  threshold B:  {label_b:.2f}",
+        f"  segments:     {d['num_segments_a']} → {d['num_segments_b']} "
+        f"({_signed(d['num_segments_delta'])})",
+        f"  speech total: {d['speech_s_a']:.1f}s → {d['speech_s_b']:.1f}s "
+        f"({_signed_float(d['speech_s_delta'])}s)",
+    ]
+
+
+def render_vad_diff_json(result_a, result_b, *, label_a, label_b):
+    """Render a two-threshold segmentation comparison as a JSON string.
+
+    Machine-readable twin of :func:`render_vad_diff`, so a sweep harness can
+    consume the delta directly. Either result ``None`` →
+    ``{"available": false}`` + install hint, mirroring :func:`render_vad_json`.
+    Pure: returns a single JSON string built from the results' attributes.
+    """
+    if result_a is None or result_b is None:
+        return json.dumps(
+            {
+                "available": False,
+                "hint": (
+                    "install 'silero-vad' (pulls torch + torchaudio) to enable "
+                    "offline neural segmentation"
+                ),
+            },
+            indent=2,
+        )
+    payload = {
+        "available": True,
+        "name": result_a.name,
+        "threshold_a": label_a,
+        "threshold_b": label_b,
+        **vad_segmentation_delta(result_a, result_b),
+    }
+    return json.dumps(payload, indent=2)
+
+
+def _signed(n):
+    """Format an int delta with an explicit sign (``+3`` / ``0`` / ``-2``)."""
+    return f"+{n}" if n > 0 else str(n)
+
+
+def _signed_float(x):
+    """Format a float delta with an explicit sign, 1 decimal place."""
+    return f"+{x:.1f}" if x > 0 else f"{x:.1f}"
+
+
 def _load_wpm_mirror():
     """Load ``session/wpm_mirror.py`` directly by file path.
 
@@ -647,6 +743,61 @@ def cmd_vad(args, *, log=print, segmenter=None, availability=None):
             log(line)
 
 
+def cmd_vad_diff(args, *, log=print, segmenter=None, availability=None):
+    """Segment one WAV under two thresholds and report how the result shifts.
+
+    The first consumer of the iter-234 ``gv vad --json`` surface: instead of
+    eyeballing two separate ``gv vad`` reports, ``gv vad-diff recording.wav``
+    runs Silero twice (``--threshold-a`` then ``--threshold-b``, all other
+    knobs shared) and prints the signed segment-count / speech-seconds delta.
+    Useful for tuning the P(speech) gate against the recording corpus.
+
+    Same injected-dependency contract as :func:`cmd_vad`: ``segmenter`` /
+    ``availability`` default to the real :mod:`vad.silero` functions, imported
+    lazily so the parser stays torch-free. When ``silero-vad`` is absent the
+    handler prints the install hint and returns, never crashing.
+    """
+    if segmenter is None or availability is None:
+        from vad.silero import segment_recording, silero_available
+
+        segmenter = segment_recording if segmenter is None else segmenter
+        availability = silero_available if availability is None else availability
+
+    as_json = getattr(args, "json", False)
+
+    if not availability():
+        if as_json:
+            log(render_vad_diff_json(None, None, label_a=args.threshold_a,
+                                     label_b=args.threshold_b))
+        else:
+            for line in render_vad_diff(None, None, label_a=args.threshold_a,
+                                        label_b=args.threshold_b):
+                log(line)
+        return
+
+    from vad.silero import SileroParams
+
+    def _seg(threshold):
+        params = SileroParams(
+            threshold=threshold,
+            min_speech_ms=args.min_speech_ms,
+            min_silence_ms=args.min_silence_ms,
+            speech_pad_ms=args.speech_pad_ms,
+            max_speech_s=args.max_speech_s,
+        )
+        return segmenter(args.wav, params=params)
+
+    result_a = _seg(args.threshold_a)
+    result_b = _seg(args.threshold_b)
+    if as_json:
+        log(render_vad_diff_json(result_a, result_b, label_a=args.threshold_a,
+                                 label_b=args.threshold_b))
+    else:
+        for line in render_vad_diff(result_a, result_b, label_a=args.threshold_a,
+                                    label_b=args.threshold_b):
+            log(line)
+
+
 def cmd_bench(args):
     # bench is a legacy argv-driven entrypoint: it parses its own sys.argv
     # rather than taking kwargs, so we rebuild argv here. Only forward
@@ -684,6 +835,7 @@ DEFAULT_HANDLERS = {
     "simulate-mirror": cmd_simulate_mirror,
     "calibrate-base-wpm": cmd_calibrate_base_wpm,
     "vad": cmd_vad,
+    "vad-diff": cmd_vad_diff,
 }
 
 # Seed mirror tunables, mirrored as the CLI defaults so the simulator's
@@ -935,6 +1087,71 @@ def build_parser():
         action="store_true",
         help="Emit machine-readable JSON instead of the human-readable report "
         "(mirrors fixtures/replay_silero.py --json / SileroResult.to_dict)",
+    )
+
+    # gv vad-diff — segment one WAV under two thresholds and report the delta.
+    # The first consumer of gv vad --json: compares the P(speech) gate at two
+    # settings without eyeballing two separate reports. All knobs but threshold
+    # are shared between the two runs.
+    vad_diff = sub.add_parser(
+        "vad-diff",
+        help="Offline Silero VAD — segment a WAV at two thresholds and report "
+        "the segment-count / speech-seconds delta (tune the P(speech) gate)",
+    )
+    vad_diff.add_argument(
+        "wav",
+        help="Path to a 16-bit PCM WAV file to segment under both thresholds",
+    )
+    vad_diff.add_argument(
+        "--threshold-a",
+        type=unit_interval_type,
+        default=vad_threshold_default,
+        dest="threshold_a",
+        help=f"First P(speech) gate in [0, 1] (default: {vad_threshold_default})",
+    )
+    vad_diff.add_argument(
+        "--threshold-b",
+        type=unit_interval_type,
+        default=0.7,
+        dest="threshold_b",
+        help="Second P(speech) gate in [0, 1] (default: 0.7)",
+    )
+    vad_diff.add_argument(
+        "--min-speech-ms",
+        type=nonneg_float_type,
+        default=vad_min_speech_default,
+        dest="min_speech_ms",
+        help="Drop speech regions shorter than this, in ms — shared by both "
+        f"runs (default: {vad_min_speech_default})",
+    )
+    vad_diff.add_argument(
+        "--min-silence-ms",
+        type=nonneg_float_type,
+        default=vad_min_silence_default,
+        dest="min_silence_ms",
+        help="Trailing silence before a region ends, in ms — shared by both "
+        f"runs (default: {vad_min_silence_default})",
+    )
+    vad_diff.add_argument(
+        "--speech-pad-ms",
+        type=nonneg_float_type,
+        default=vad_speech_pad_default,
+        dest="speech_pad_ms",
+        help="Symmetric padding added to each region, in ms — shared by both "
+        f"runs (default: {vad_speech_pad_default})",
+    )
+    vad_diff.add_argument(
+        "--max-speech-s",
+        type=max_speech_type,
+        default=vad_max_speech_default,
+        dest="max_speech_s",
+        help="Force-split regions longer than this, in seconds — shared by "
+        "both runs; 'inf'/'none' never splits (default: inf)",
+    )
+    vad_diff.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON instead of the human-readable report",
     )
 
     return parser

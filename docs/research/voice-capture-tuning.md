@@ -109,6 +109,32 @@ the same keys (`name`, `sample_rate`, `duration_s`, `num_segments`, `speech_s`,
 JSON is `{"available": false, "hint": …}` so a consumer detects the degraded
 path from the document itself rather than parsing prose.
 
+### `gv vad-diff` — compare two thresholds (iter-235)
+
+The first consumer of the `gv vad --json` surface. Tuning the P(speech) gate
+against the corpus previously meant running `gv vad` twice and eyeballing the
+two reports. `gv vad-diff` runs the segmenter twice over one WAV — once per
+threshold, all other knobs shared — and reports the signed delta:
+
+```
+gv vad-diff recording.wav                                 # 0.5 vs 0.7 (defaults)
+gv vad-diff recording.wav --threshold-a 0.3 --threshold-b 0.9  # wider sweep
+gv vad-diff recording.wav --json                          # machine-readable delta
+```
+
+The human report names the file, both thresholds, and the `A → B` segment-count
+and speech-seconds transitions with explicit signs, e.g.
+`segments: 5 → 4 (-1)` / `speech total: 16.2s → 15.2s (-1.0s)`. A higher gate is
+typically a *subset* of a lower one (fewer regions, less speech), so the deltas
+are usually `≤ 0`. The `--json` payload carries `threshold_a`/`threshold_b`,
+both sides (`num_segments_a/b`, `speech_s_a/b`), and the signed
+`num_segments_delta`/`speech_s_delta`, so a sweep harness can consume it
+directly. The same degrade-to-`{"available": false}` contract as `gv vad`
+applies. `cmd_vad_diff` reuses the iter-233 injected-dependency seams;
+`vad_segmentation_delta` is the pure delta core, tested without torch in
+`tests/unit/test_gv_vad.py`, and `tests/integration/test_gv_vad_cli.py` proves
+the diff equals two independent `gv vad --json` runs over the real corpus.
+
 ### Silero vs energy-VAD segment counts (the headless proof)
 
 Measured over the seed corpus with `min_silence_ms=800` (the pipecat
