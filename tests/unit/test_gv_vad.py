@@ -805,6 +805,7 @@ def _sweep_args(**over):
         wav="rec.wav",
         thresholds=[0.3, 0.5, 0.7, 0.9],
         min_silences=None,
+        min_speeches=None,
         threshold=0.5,
         min_speech_ms=250.0,
         min_silence_ms=800.0,
@@ -1509,6 +1510,234 @@ def test_cmd_vad_sweep_silence_axis_unavailable_uses_axis_label():
     lines: List[str] = []
     gv.cmd_vad_sweep(
         _sweep_args(min_silences=[400.0, 800.0], json=True),
+        log=lines.append,
+        segmenter=lambda *a, **k: (_ for _ in ()).throw(AssertionError("no")),
+        availability=lambda: False,
+    )
+    assert len(lines) == 1
+    assert json.loads(lines[0])["available"] is False
+
+
+# ====================================================================
+# iter-239 — gv vad-sweep --min-speeches: a third sweep axis (floor)
+# ====================================================================
+
+
+# ---- parser wiring: --min-speeches axis --------------------------------
+
+
+def test_vad_sweep_min_speeches_parses():
+    args = gv.build_parser().parse_args(
+        ["vad-sweep", "rec.wav", "--min-speeches", "50,100,200"]
+    )
+    assert args.min_speeches == [50.0, 100.0, 200.0]
+    # The threshold list keeps its default; the handler picks the speech axis.
+    assert args.thresholds == [0.3, 0.5, 0.7, 0.9]
+
+
+def test_vad_sweep_min_speeches_default_is_none():
+    # Without --min-speeches the speech axis is off (None), so the handler
+    # sweeps --thresholds (the iter-236 default).
+    args = gv.build_parser().parse_args(["vad-sweep", "rec.wav"])
+    assert args.min_speeches is None
+
+
+def test_vad_sweep_min_speeches_allows_zero():
+    # 0 ms is legitimate (disable the floor — keep every region).
+    args = gv.build_parser().parse_args(
+        ["vad-sweep", "rec.wav", "--min-speeches", "0,100"]
+    )
+    assert args.min_speeches == [0.0, 100.0]
+
+
+def test_vad_sweep_thresholds_and_min_speeches_mutually_exclusive():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-sweep", "rec.wav", "--thresholds", "0.3,0.5", "--min-speeches", "50,100"]
+        )
+
+
+def test_vad_sweep_min_silences_and_min_speeches_mutually_exclusive():
+    # The two ms axes are also mutually exclusive — only one knob varies per run.
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-sweep", "rec.wav", "--min-silences", "400,800", "--min-speeches", "50,100"]
+        )
+
+
+def test_vad_sweep_rejects_negative_min_speech_member():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-sweep", "rec.wav", "--min-speeches", "100,-1"]
+        )
+
+
+# ---- vad_segmentation_sweep / renderers: speech axis -------------------
+
+
+def test_sweep_axis_keys_rows_by_speech_axis_name():
+    r_lo = _Result(
+        name="r.wav",
+        sample_rate=16000,
+        duration_s=10.0,
+        segments=[_Seg(0.0, 1.0), _Seg(2.0, 3.0)],
+    )
+    r_hi = _Result(
+        name="r.wav", sample_rate=16000, duration_s=10.0, segments=[_Seg(0.0, 1.0)]
+    )
+    rows = gv.vad_segmentation_sweep([50.0, 400.0], [r_lo, r_hi], axis="min_speech_ms")
+    assert rows == [
+        {"min_speech_ms": 50.0, "num_segments": 2, "speech_s": 2.0},
+        {"min_speech_ms": 400.0, "num_segments": 1, "speech_s": 1.0},
+    ]
+
+
+def test_render_sweep_speech_axis_labels_column():
+    r_lo = _Result(
+        name="rec.wav",
+        sample_rate=16000,
+        duration_s=10.0,
+        segments=[_Seg(0.0, 1.0), _Seg(2.0, 3.0)],
+    )
+    r_hi = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=10.0, segments=[_Seg(0.0, 1.0)]
+    )
+    lines = gv.render_vad_sweep(
+        [50.0, 400.0], [r_lo, r_hi], name="rec.wav", axis="min_speech_ms"
+    )
+    text = "\n".join(lines)
+    assert "min_speech" in text
+    assert "min_silence" not in text
+    # Floor values print as bare integers (50, 400), not 0.50 gates.
+    assert "50" in text and "400" in text
+    assert "0.50" not in text
+
+
+def test_render_sweep_json_carries_speech_axis():
+    r = _Result(name="rec.wav", sample_rate=16000, duration_s=5.0, segments=[_Seg(0.0, 1.0)])
+    payload = json.loads(
+        gv.render_vad_sweep_json([100.0], [r], name="rec.wav", axis="min_speech_ms")
+    )
+    assert payload["axis"] == "min_speech_ms"
+    assert payload["sweep"] == [
+        {"min_speech_ms": 100.0, "num_segments": 1, "speech_s": 1.0}
+    ]
+
+
+def test_render_sweep_csv_header_is_speech_axis_name():
+    r = _Result(name="rec.wav", sample_rate=16000, duration_s=5.0, segments=[_Seg(0.0, 1.0)])
+    text = gv.render_vad_sweep_csv([100.0], [r], name="rec.wav", axis="min_speech_ms")
+    rows = list(csv.reader(io.StringIO(text)))
+    assert rows[0] == ["min_speech_ms", "num_segments", "speech_s"]
+    assert rows[1] == ["100.0", "1", "1.0"]
+
+
+# ---- cmd_vad_sweep: speech axis end-to-end -----------------------------
+
+
+def test_cmd_vad_sweep_speech_axis_sweeps_floor():
+    # When --min-speeches is set, the segmenter sees the SWEPT min_speech_ms and
+    # the gate held at scalar --threshold; the scalar --min-speech-ms is ignored.
+    pytest.importorskip("vad.silero")
+    captured = []
+
+    def seg(wav, params=None):
+        captured.append(params)
+        # A higher floor drops more short regions → fewer segments.
+        n = 3 if params.min_speech_ms < 200 else 1
+        return _Result(
+            name="rec.wav",
+            sample_rate=16000,
+            duration_s=10.0,
+            segments=[_Seg(float(i), i + 0.5) for i in range(n)],
+        )
+
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(min_speeches=[50.0, 400.0], threshold=0.7, min_speech_ms=999.0),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert [p.min_speech_ms for p in captured] == [50.0, 400.0]
+    # Gate held at scalar --threshold for every run; the shared --min-speech-ms
+    # scalar (999) is NOT used as a swept value.
+    assert {p.threshold for p in captured} == {0.7}
+    text = "\n".join(lines)
+    assert "min_speech" in text
+    assert "50" in text and "400" in text
+
+
+def test_cmd_vad_sweep_speech_axis_holds_silence_scalar():
+    # The non-swept ms knob (--min-silence-ms) is shared across every run.
+    captured = []
+
+    def seg(wav, params=None):
+        captured.append(params)
+        return _Result(
+            name="rec.wav", sample_rate=16000, duration_s=10.0, segments=[_Seg(0.0, 1.0)]
+        )
+
+    gv.cmd_vad_sweep(
+        _sweep_args(min_speeches=[50.0, 400.0], min_silence_ms=750.0),
+        log=lambda *a: None,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert {p.min_silence_ms for p in captured} == {750.0}
+
+
+def test_cmd_vad_sweep_speech_axis_json_branch():
+    def seg(wav, params=None):
+        n = 3 if params.min_speech_ms < 200 else 1
+        return _Result(
+            name="rec.wav",
+            sample_rate=16000,
+            duration_s=10.0,
+            segments=[_Seg(float(i), i + 0.5) for i in range(n)],
+        )
+
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(min_speeches=[50.0, 400.0], json=True),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert len(lines) == 1
+    payload = json.loads(lines[0])
+    assert payload["axis"] == "min_speech_ms"
+    assert [row["min_speech_ms"] for row in payload["sweep"]] == [50.0, 400.0]
+    assert payload["sweep"][0]["num_segments"] == 3
+    assert payload["sweep"][1]["num_segments"] == 1
+
+
+def test_cmd_vad_sweep_speech_axis_csv_branch():
+    def seg(wav, params=None):
+        return _Result(
+            name="rec.wav",
+            sample_rate=16000,
+            duration_s=10.0,
+            segments=[_Seg(0.0, 1.0)],
+        )
+
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(min_speeches=[50.0, 400.0], csv=True),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert len(lines) == 1
+    rows = list(csv.reader(io.StringIO(lines[0])))
+    assert rows[0] == ["min_speech_ms", "num_segments", "speech_s"]
+    assert [row[0] for row in rows[1:]] == ["50.0", "400.0"]
+
+
+def test_cmd_vad_sweep_speech_axis_unavailable():
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(min_speeches=[50.0, 400.0], json=True),
         log=lines.append,
         segmenter=lambda *a, **k: (_ for _ in ()).throw(AssertionError("no")),
         availability=lambda: False,

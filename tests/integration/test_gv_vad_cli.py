@@ -227,6 +227,7 @@ def _sweep_args(wav: Path, **over):
         wav=str(wav),
         thresholds=[0.3, 0.5, 0.7, 0.9],
         min_silences=None,
+        min_speeches=None,
         threshold=0.5,
         min_speech_ms=250.0,
         min_silence_ms=800.0,
@@ -375,6 +376,72 @@ def test_gv_vad_sweep_silence_axis_csv_matches_json():
         _run_sweep(wav, min_silences=min_silences, json=True)[0]
     )["sweep"]
     assert [float(r["min_silence_ms"]) for r in csv_rows] == min_silences
+    for csv_row, json_row in zip(csv_rows, json_rows):
+        assert int(csv_row["num_segments"]) == json_row["num_segments"]
+        assert abs(float(csv_row["speech_s"]) - json_row["speech_s"]) <= 0.01
+
+
+# ---- iter-239: gv vad-sweep --min-speeches (min-speech floor axis) -----
+
+
+def test_gv_vad_sweep_speech_axis_matches_independent_vad_runs():
+    """Each min-speech sweep row must equal an independent ``gv vad --json`` run
+    at that floor (gate held fixed) — proving the third axis segments once per
+    value with the real engine, exactly like the threshold/silence axes."""
+    wav = RECORDINGS_DIR / CONTINUOUS_31S
+    if not wav.exists():
+        pytest.skip(f"{CONTINUOUS_31S} not present")
+
+    min_speeches = [50.0, 200.0, 800.0]
+    held_gate = 0.5
+    sweep = json.loads(
+        _run_sweep(wav, min_speeches=min_speeches, threshold=held_gate, json=True)[0]
+    )
+    assert sweep["available"] is True
+    assert sweep["axis"] == "min_speech_ms"
+    assert [row["min_speech_ms"] for row in sweep["sweep"]] == min_speeches
+
+    for ms, row in zip(min_speeches, sweep["sweep"]):
+        single = json.loads(
+            _run(wav, threshold=held_gate, min_speech_ms=ms, json=True)[0]
+        )
+        assert row["num_segments"] == single["num_segments"]
+        assert abs(row["speech_s"] - single["speech_s"]) <= 0.01
+
+
+def test_gv_vad_sweep_speech_axis_segments_are_monotone_non_increasing():
+    """Reading down an ascending-floor sweep, the segment count never grows — a
+    higher min-speech floor can only drop short regions, never add them. The
+    elbow is where short regions start getting culled."""
+    wav = RECORDINGS_DIR / CONTINUOUS_31S
+    if not wav.exists():
+        pytest.skip(f"{CONTINUOUS_31S} not present")
+    sweep = json.loads(
+        _run_sweep(wav, min_speeches=[50.0, 100.0, 200.0, 400.0, 800.0], json=True)[0]
+    )
+    segs = [row["num_segments"] for row in sweep["sweep"]]
+    for lo, hi in zip(segs, segs[1:]):
+        assert hi <= lo, f"segments rose across rising floors: {segs}"
+
+
+def test_gv_vad_sweep_speech_axis_csv_matches_json():
+    """``gv vad-sweep --min-speeches --csv`` describes the same segmentation as
+    ``--json`` over THE GATE recording — the two surfaces agree on the third
+    axis too, and the CSV header is the swept axis name."""
+    wav = RECORDINGS_DIR / CONTINUOUS_31S
+    if not wav.exists():
+        pytest.skip(f"{CONTINUOUS_31S} not present")
+
+    min_speeches = [50.0, 200.0, 800.0]
+    csv_lines = _run_sweep(wav, min_speeches=min_speeches, csv=True)
+    assert len(csv_lines) == 1
+    csv_rows = list(csv.DictReader(io.StringIO(csv_lines[0])))
+    assert "min_speech_ms" in csv_rows[0]
+
+    json_rows = json.loads(
+        _run_sweep(wav, min_speeches=min_speeches, json=True)[0]
+    )["sweep"]
+    assert [float(r["min_speech_ms"]) for r in csv_rows] == min_speeches
     for csv_row, json_row in zip(csv_rows, json_rows):
         assert int(csv_row["num_segments"]) == json_row["num_segments"]
         assert abs(float(csv_row["speech_s"]) - json_row["speech_s"]) <= 0.01

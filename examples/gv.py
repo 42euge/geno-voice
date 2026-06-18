@@ -13,6 +13,7 @@ Usage:
     gv vad-diff recording.wav --threshold-a 0.5 --threshold-b 0.7  # compare two P(speech) gates
     gv vad-sweep recording.wav --thresholds 0.3,0.5,0.7,0.9  # sweep N gates, tabulate the elbow
     gv vad-sweep recording.wav --min-silences 200,400,800,1600  # sweep the hangover instead
+    gv vad-sweep recording.wav --min-speeches 50,100,200,400  # sweep the min-speech floor instead
     gv <cmd> --model ...  # override STT model
 """
 
@@ -170,13 +171,15 @@ def unit_interval_list_type(raw):
 
 
 def nonneg_float_list_type(raw):
-    """Argparse ``type`` for ``gv vad-sweep --min-silences``: a list of hangovers.
+    """Argparse ``type`` for ``gv vad-sweep`` millisecond sweep axes: a list.
 
-    iter-236 swept the P(speech) gate (``--thresholds``); iter-238 adds a second
-    sweep axis — the trailing-silence hangover ``min_silence_ms`` — so this
-    parses a comma-separated list (e.g. ``"400,600,800,1000"``) into ``[400.0,
-    600.0, 800.0, 1000.0]`` at the parser. Each token must be a valid
-    :func:`nonneg_float_type` value (a number ``>= 0``, not NaN — ``0`` is
+    iter-236 swept the P(speech) gate (``--thresholds``); iter-238 added a second
+    sweep axis — the trailing-silence hangover ``min_silence_ms`` (``--min-
+    silences``); iter-239 adds a third — the minimum-speech floor
+    ``min_speech_ms`` (``--min-speeches``). Both millisecond axes share this
+    validator: it parses a comma-separated list (e.g. ``"400,600,800,1000"``)
+    into ``[400.0, 600.0, 800.0, 1000.0]`` at the parser. Each token must be a
+    valid :func:`nonneg_float_type` value (a number ``>= 0``, not NaN — ``0`` is
     legitimate, it disables the minimum); duplicates and unsorted input are
     preserved as given (the operator may want a specific column order). Rejects
     an empty list. Pure and side-effect-free for direct unit testing — the
@@ -184,12 +187,12 @@ def nonneg_float_list_type(raw):
     """
     if not isinstance(raw, str):
         raise argparse.ArgumentTypeError(
-            f"min-silences must be a string, got {raw!r}"
+            f"a millisecond list must be a string, got {raw!r}"
         )
     tokens = [t.strip() for t in raw.split(",") if t.strip()]
     if not tokens:
         raise argparse.ArgumentTypeError(
-            f"min-silences must be a non-empty comma-separated list, got {raw!r}"
+            f"a millisecond list must be non-empty and comma-separated, got {raw!r}"
         )
     return [nonneg_float_type(tok) for tok in tokens]
 
@@ -634,21 +637,25 @@ def render_vad_diff_json(result_a, result_b, *, label_a, label_b):
 
 
 # gv vad-sweep axis metadata. iter-236 swept only the P(speech) gate; iter-238
-# adds the trailing-silence hangover as a second axis. Each entry gives the
-# human-table column label (right-justified to 9, matching the original
-# "threshold" width) and the per-value display formatter — a gate prints with 2
-# decimals (0.30), a millisecond hangover as a bare integer (800). The dict key
-# is also the row key emitted by vad_segmentation_sweep and the CSV/JSON column
-# name, so a consumer reads which dimension was swept straight off the data.
+# adds the trailing-silence hangover as a second axis; iter-239 adds the
+# minimum-speech floor as a third. Each entry gives the human-table column label
+# (right-justified to 9, matching the original "threshold" width) and the
+# per-value display formatter — a gate prints with 2 decimals (0.30), a
+# millisecond knob (hangover or speech floor) as a bare integer (800). The dict
+# key is also the row key emitted by vad_segmentation_sweep and the CSV/JSON
+# column name, so a consumer reads which dimension was swept straight off the
+# data. Both millisecond axes format identically, so they're grouped below.
+_SWEEP_MS_AXES = ("min_silence_ms", "min_speech_ms")
 _SWEEP_AXIS_LABEL = {
     "threshold": "threshold",
     "min_silence_ms": "min_silence",
+    "min_speech_ms": "min_speech",
 }
 
 
 def _format_sweep_axis_value(axis, value):
-    """Format one swept-axis value for the human table (gate vs. ms hangover)."""
-    if axis == "min_silence_ms":
+    """Format one swept-axis value for the human table (gate vs. ms knob)."""
+    if axis in _SWEEP_MS_AXES:
         return f"{value:.0f}"
     return f"{value:.2f}"
 
@@ -758,8 +765,8 @@ def render_vad_sweep_csv(values, results, *, name, axis="threshold"):
     emits a flat ``<axis>,num_segments,speech_s`` table that pipes straight into
     a spreadsheet or a plotting script (gnuplot, matplotlib's ``loadtxt``,
     pandas ``read_csv``) without a JSON-parsing step. The first column header is
-    the swept ``axis`` name (``threshold`` or ``min_silence_ms``) so the grid is
-    self-describing. ``name`` is accepted for signature parity with the other
+    the swept ``axis`` name (``threshold``, ``min_silence_ms``, or
+    ``min_speech_ms``) so the grid is self-describing. ``name`` is accepted for signature parity with the other
     ``render_vad_sweep_*`` twins but is not part of the tabular body — a CSV is
     a pure data grid, so the WAV name would only appear as an awkward repeated
     column. Any ``None`` in ``results`` (segmenter unavailable) yields a single
@@ -1010,9 +1017,12 @@ def cmd_vad_sweep(args, *, log=print, segmenter=None, availability=None):
     ``--min-silences 400,600,800,1000`` switches the swept dimension to
     ``min_silence_ms`` (the gate is then held fixed at scalar ``--threshold``),
     so an operator can find the hangover elbow where adjacent speech regions
-    start merging. The two axes are mutually exclusive (the parser rejects
-    ``--thresholds`` together with ``--min-silences``); exactly one knob varies
-    per run.
+    start merging. iter-239 adds a THIRD axis — the minimum-speech floor.
+    Passing ``--min-speeches 50,100,200,400`` sweeps ``min_speech_ms`` (the gate
+    again held at scalar ``--threshold``), so an operator can find the floor
+    where short speech regions start getting dropped. The three axes are
+    mutually exclusive (the parser rejects passing more than one); exactly one
+    knob varies per run.
 
     Same injected-dependency contract as :func:`cmd_vad` / :func:`cmd_vad_diff`:
     ``segmenter`` / ``availability`` default to the real :mod:`vad.silero`
@@ -1029,13 +1039,19 @@ def cmd_vad_sweep(args, *, log=print, segmenter=None, availability=None):
     as_json = getattr(args, "json", False)
     as_csv = getattr(args, "csv", False)
 
-    # Pick the swept axis: --min-silences (if given) sweeps the hangover with the
-    # gate held at scalar --threshold; otherwise sweep --thresholds (the default
-    # iter-236 behaviour) with the hangover held at scalar --min-silence-ms.
+    # Pick the swept axis: --min-silences sweeps the hangover, --min-speeches the
+    # minimum-speech floor (both with the gate held at scalar --threshold);
+    # otherwise sweep --thresholds (the default iter-236 behaviour) with the
+    # millisecond knobs held at their scalars. The parser guarantees at most one
+    # of the three is set.
     min_silences = getattr(args, "min_silences", None)
+    min_speeches = getattr(args, "min_speeches", None)
     if min_silences is not None:
         axis = "min_silence_ms"
         values = min_silences
+    elif min_speeches is not None:
+        axis = "min_speech_ms"
+        values = min_speeches
     else:
         axis = "threshold"
         values = args.thresholds
@@ -1053,13 +1069,14 @@ def cmd_vad_sweep(args, *, log=print, segmenter=None, availability=None):
     from vad.silero import SileroParams
 
     def _seg(value):
-        # The swept axis takes ``value``; the other dimension is held at its
+        # The swept axis takes ``value``; every other dimension is held at its
         # scalar knob. Every non-swept knob is shared across all runs.
         threshold = value if axis == "threshold" else args.threshold
         min_silence_ms = value if axis == "min_silence_ms" else args.min_silence_ms
+        min_speech_ms = value if axis == "min_speech_ms" else args.min_speech_ms
         params = SileroParams(
             threshold=threshold,
-            min_speech_ms=args.min_speech_ms,
+            min_speech_ms=min_speech_ms,
             min_silence_ms=min_silence_ms,
             speech_pad_ms=args.speech_pad_ms,
             max_speech_s=args.max_speech_s,
@@ -1439,30 +1456,30 @@ def build_parser():
     # gv vad-sweep — segment one WAV across a swept knob and tabulate the result.
     # Generalises iter-235's two-point vad-diff to a sweep so the knob's elbow is
     # visible at a glance. iter-236 swept the P(speech) gate (--thresholds);
-    # iter-238 adds a second axis, the trailing-silence hangover (--min-silences),
-    # mutually exclusive with --thresholds. Every non-swept knob is shared across
-    # all runs.
+    # iter-238 adds a second axis, the trailing-silence hangover (--min-silences);
+    # iter-239 adds a third, the minimum-speech floor (--min-speeches). The three
+    # axes are mutually exclusive. Every non-swept knob is shared across all runs.
     vad_sweep = sub.add_parser(
         "vad-sweep",
         help="Offline Silero VAD — segment a WAV across a swept knob "
-        "(--thresholds gate or --min-silences hangover) and tabulate "
-        "segment-count / speech-seconds (find the knob's elbow)",
+        "(--thresholds gate, --min-silences hangover, or --min-speeches floor) "
+        "and tabulate segment-count / speech-seconds (find the knob's elbow)",
     )
     vad_sweep.add_argument(
         "wav",
         help="Path to a 16-bit PCM WAV file to segment at each swept value",
     )
-    # The swept axis: --thresholds (default) OR --min-silences, never both. The
-    # default list lives on --thresholds so a bare `vad-sweep rec.wav` keeps the
-    # iter-236 behaviour; a group default isn't "provided", so the mutex only
-    # fires when both are passed explicitly.
+    # The swept axis: --thresholds (default) OR --min-silences OR --min-speeches,
+    # never more than one. The default list lives on --thresholds so a bare
+    # `vad-sweep rec.wav` keeps the iter-236 behaviour; a group default isn't
+    # "provided", so the mutex only fires when two are passed explicitly.
     vad_sweep_axis = vad_sweep.add_mutually_exclusive_group()
     vad_sweep_axis.add_argument(
         "--thresholds",
         type=unit_interval_list_type,
         default=[0.3, 0.5, 0.7, 0.9],
         help="Comma-separated P(speech) gates in [0, 1] to sweep "
-        "(default: 0.3,0.5,0.7,0.9; mutually exclusive with --min-silences)",
+        "(default: 0.3,0.5,0.7,0.9; mutually exclusive with the ms axes)",
     )
     vad_sweep_axis.add_argument(
         "--min-silences",
@@ -1471,14 +1488,24 @@ def build_parser():
         dest="min_silences",
         help="Comma-separated trailing-silence hangovers in ms to sweep "
         "instead of the gate (e.g. 400,600,800,1000); the gate is held at the "
-        "scalar --threshold (mutually exclusive with --thresholds)",
+        "scalar --threshold (mutually exclusive with the other axes)",
+    )
+    vad_sweep_axis.add_argument(
+        "--min-speeches",
+        type=nonneg_float_list_type,
+        default=None,
+        dest="min_speeches",
+        help="Comma-separated minimum-speech floors in ms to sweep instead of "
+        "the gate (e.g. 50,100,200,400); the gate is held at the scalar "
+        "--threshold (mutually exclusive with the other axes)",
     )
     vad_sweep.add_argument(
         "--threshold",
         type=unit_interval_type,
         default=vad_threshold_default,
-        help="Scalar P(speech) gate held fixed when sweeping --min-silences, in "
-        f"[0, 1]; ignored when sweeping --thresholds (default: {vad_threshold_default})",
+        help="Scalar P(speech) gate held fixed when sweeping --min-silences or "
+        "--min-speeches, in [0, 1]; ignored when sweeping --thresholds "
+        f"(default: {vad_threshold_default})",
     )
     vad_sweep.add_argument(
         "--min-speech-ms",
@@ -1486,7 +1513,8 @@ def build_parser():
         default=vad_min_speech_default,
         dest="min_speech_ms",
         help="Drop speech regions shorter than this, in ms — shared by all "
-        f"runs (default: {vad_min_speech_default})",
+        "runs when sweeping --thresholds; ignored when sweeping --min-speeches "
+        f"(default: {vad_min_speech_default})",
     )
     vad_sweep.add_argument(
         "--min-silence-ms",

@@ -143,7 +143,8 @@ of `fixtures/replay_silero.py`'s sweep over the corpus), so the knob's *elbow* �
 where recovered speech falls off as the gate tightens, or where regions merge as
 the hangover lengthens — is visible at a glance rather than as a single A-vs-B
 delta. The default swept knob is the P(speech) gate (`--thresholds`); iter-238
-adds the trailing-silence hangover as a second axis (`--min-silences`, below):
+adds the trailing-silence hangover as a second axis (`--min-silences`, below) and
+iter-239 adds the minimum-speech floor as a third (`--min-speeches`, below):
 
 ```
 gv vad-sweep recording.wav                                  # 0.3,0.5,0.7,0.9 (defaults)
@@ -238,6 +239,47 @@ keys each row by that name. Integration tests pin that each silence-sweep row
 equals an independent `gv vad --json` run at that hangover, that segments are
 monotone non-increasing across rising hangovers, and that `--csv` agrees with
 `--json` on this axis — all over the real corpus.
+
+**`--min-speeches` — a third sweep axis (iter-239).** Passing `--min-speeches`
+instead sweeps the *minimum-speech floor* `min_speech_ms` — the shortest speech
+region the segmenter keeps; anything briefer is dropped as noise. As with
+`--min-silences`, the gate is held fixed at the scalar `--threshold` (default
+`0.5`). All three axes are mutually exclusive (argparse rejects passing more than
+one); exactly one knob varies per run.
+
+```
+gv vad-sweep recording.wav --min-speeches 50,100,200,400,800        # sweep the floor
+gv vad-sweep recording.wav --min-speeches 50,100,200 --threshold 0.7 # hold the gate at 0.7
+gv vad-sweep recording.wav --min-speeches 50,100,200 --csv          # flat CSV for plots
+```
+
+The column label, the JSON/CSV first column, and the `--json` `axis` key all
+become `min_speech` / `min_speech_ms`. Floor values print as bare integers in
+the human table (`400`, not `0.40`), sharing the millisecond formatter with the
+hangover axis. Over `voice-20260618-110355.wav`:
+
+```
+silero VAD sweep — voice-20260618-110355.wav
+  min_speech  segments  speech
+         50         5   16.2s
+        100         5   16.2s
+        200         5   16.2s
+        400         4   15.7s
+        800         2   14.3s
+```
+
+A *higher* floor can only drop short regions (never add them), so the segment
+count is non-increasing as the value rises — the same monotonicity shape as the
+hangover axis, from the opposite cause (culling, not merging). Here the elbow is
+at ~400 ms: below it every region clears the floor (5 segments), then short
+clauses start getting culled, collapsing to 2 by 800 ms. The `--min-speeches`
+list is parsed by the same `nonneg_float_list_type` validator as `--min-silences`
+(comma-separated durations `≥ 0`, order preserved, empty list rejected; `0` is
+legitimate). The `--json` `"axis"` key now also takes `"min_speech_ms"` and keys
+each row by that name. Integration tests pin that each speech-sweep row equals an
+independent `gv vad --json` run at that floor, that segments are monotone
+non-increasing across rising floors, and that `--csv` agrees with `--json` on
+this axis — all over the real corpus.
 
 ### Silero vs energy-VAD segment counts (the headless proof)
 
