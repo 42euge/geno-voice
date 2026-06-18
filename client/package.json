@@ -4,6 +4,9 @@
   "description": "Browser-side voice capture, VAD, and audio utilities for geno-voice.",
   "type": "module",
   "main": "index.js",
+  "scripts": {
+    "test": "node --test"
+  },
   "license": "MIT",
   "keywords": ["geno-voice", "audio-worklet", "vad", "voice-capture"]
 }

@@ -236,10 +236,17 @@ onsets), pinned by `TestGridSweep` in
    corpus a 256–512ms pre-roll pulls every recording's first `onset_ms`
    earlier by ~250–510ms (see the table above) with no change to onset count
    and no segment overlap — validated by `TestPrerollRecoversOpening` in
-   `tests/integration/test_vad_recordings.py`. Next: wire the ring buffer
-   into `ContinuousListener` — keep the last `preroll_ms` of `_handleFrame`
-   input around even while listening, and prepend it to `this.chunks` at the
-   commit point in `_handleFrame` (default `preroll_ms = 0` for parity)._
+   `tests/integration/test_vad_recordings.py`. **iter-193: wired into the
+   client.** `ContinuousListener` now takes a `prerollMs` option (default `0`
+   = exact historical parity) and keeps a bounded ring of pre-onset frames
+   (`_pushPreroll` / `_drainPreroll`, sized from `prerollMs` × sample rate).
+   While listening, every sub-threshold frame — and the frames of any broken
+   speech candidate — fold into the ring; at the commit point in
+   `_handleFrame` the ring is drained and prepended to `this.chunks`, so the
+   committed segment recovers the clipped soft attack. Covered by the repo's
+   first JS suite, `client/voice-capture.test.js` (`node --test`): parity at
+   `prerollMs=0`, prepend-on-commit, ring capacity bound, candidate-fold,
+   drain-reset, sample-rate scaling, `stop()` clear._
 3. **[threshold] Confirm 0.006 holds as the corpus grows.** The regression
    test guards against silent regressions. Re-run `replay_vad.py --sweep
    threshold ...` each lap on any newly-synced recordings; if a new

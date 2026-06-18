@@ -215,13 +215,22 @@ export class VoiceRecorder {
 }
 
 export class ContinuousListener {
-  constructor({ onSpeechEnd, onStateChange, workletUrl, silenceThreshold = 0.015, silenceDurationMs = 800, minSpeechMs = 500 } = {}) {
+  constructor({ onSpeechEnd, onStateChange, workletUrl, silenceThreshold = 0.015, silenceDurationMs = 800, minSpeechMs = 500, prerollMs = 0 } = {}) {
     this.onSpeechEnd = onSpeechEnd;
     this.onStateChange = onStateChange;
     this._workletUrl = workletUrl || null;
     this.silenceThreshold = silenceThreshold;
     this.silenceDurationMs = silenceDurationMs;
     this.minSpeechMs = minSpeechMs;
+    // Pre-roll ring buffer (iter-193): keep the last `prerollMs` of pre-onset
+    // audio so the committed segment recovers the quiet soft attack the RMS
+    // gate would otherwise clip. 0 (the default) reproduces the historical
+    // clip-the-opening behaviour exactly. Replay-proven safe in iter-191.
+    this.prerollMs = prerollMs;
+    this._sampleRate = 48000;
+    this._prerollChunks = [];
+    this._prerollSamples = 0;
+    this._recomputePreroll();
     this.active = false;
     this.speaking = false;
     this.chunks = [];
@@ -230,6 +239,29 @@ export class ContinuousListener {
     this.silenceTimer = null;
     this.stream = null;
     this.audioContext = null;
+  }
+
+  // Derive the pre-roll ring capacity (in samples) from the current sample
+  // rate and `prerollMs`. Recomputed in start() once the real AudioContext
+  // sample rate is known.
+  _recomputePreroll() {
+    this._prerollMaxSamples =
+      this.prerollMs > 0 ? Math.round((this.prerollMs / 1000) * this._sampleRate) : 0;
+  }
+
+  // Append a pre-onset frame to the ring buffer and trim the oldest frames so
+  // the retained audio never exceeds the pre-roll capacity. No-op when
+  // pre-roll is disabled (capacity 0) so the default path stays zero-cost.
+  _pushPreroll(frame) {
+    if (this._prerollMaxSamples <= 0) return;
+    this._prerollChunks.push(frame);
+    this._prerollSamples += frame.length;
+    while (
+      this._prerollChunks.length > 1 &&
+      this._prerollSamples - this._prerollChunks[0].length >= this._prerollMaxSamples
+    ) {
+      this._prerollSamples -= this._prerollChunks.shift().length;
+    }
   }
 
   mute() { this._muted = true; }
@@ -249,6 +281,11 @@ export class ContinuousListener {
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
     this.audioContext = new AudioCtx();
     await this.audioContext.resume();
+
+    this._sampleRate = this.audioContext.sampleRate || 48000;
+    this._recomputePreroll();
+    this._prerollChunks = [];
+    this._prerollSamples = 0;
 
     const source = this.audioContext.createMediaStreamSource(this.stream);
     const silentGain = this.audioContext.createGain();
@@ -305,7 +342,10 @@ export class ContinuousListener {
           this._candidateChunks.push(new Float32Array(input));
           if (performance.now() - this._speechCandidate > 200) {
             this.speaking = true;
-            this.chunks = this._candidateChunks;
+            // Prepend the pre-roll ring (pre-onset audio) so the committed
+            // segment keeps the quiet soft attack the RMS gate clipped. With
+            // pre-roll disabled this drains empty → historical behaviour.
+            this.chunks = this._drainPreroll().concat(this._candidateChunks);
             this._candidateChunks = null;
             this._speechCandidate = null;
             this.speechStartedAt = performance.now();
@@ -318,12 +358,29 @@ export class ContinuousListener {
         this._resetSilenceTimer();
       }
     } else {
+      // A broken candidate's frames become pre-onset history: fold them into
+      // the ring so a later real onset can still reach back across them.
+      if (this._candidateChunks) {
+        for (const c of this._candidateChunks) this._pushPreroll(c);
+      }
       this._speechCandidate = null;
       this._candidateChunks = null;
       if (this.speaking) {
         this.chunks.push(new Float32Array(input));
+      } else {
+        this._pushPreroll(new Float32Array(input));
       }
     }
+  }
+
+  // Return the buffered pre-onset frames (oldest → newest) and reset the ring.
+  // Empty array when pre-roll is disabled, preserving the historical segment.
+  _drainPreroll() {
+    if (this._prerollMaxSamples <= 0) return [];
+    const frames = this._prerollChunks;
+    this._prerollChunks = [];
+    this._prerollSamples = 0;
+    return frames;
   }
 
   _resetSilenceTimer() {
@@ -354,6 +411,8 @@ export class ContinuousListener {
   async stop() {
     this.active = false;
     this.speaking = false;
+    this._prerollChunks = [];
+    this._prerollSamples = 0;
     if (this.silenceTimer) clearTimeout(this.silenceTimer);
     if (this._source) this._source.disconnect();
     if (this._processor) {
