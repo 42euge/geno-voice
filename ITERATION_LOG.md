@@ -17744,3 +17744,94 @@ signature a real-corpus `silence_ms` sweep will read at the high end.
    busier/newly-synced corpus.
 4. **[gain] Add a gain×preroll grid finding** — quantify whether amplifying the
    pre-roll audio changes the recovered soft-attack quality.
+
+---
+
+## iter-203 — add `min_segment_ms` over-split floor aggregate to the VAD sweep
+
+**Branch:** `iter-203-min-segment-ms` (merged ff to main, commit `1cd66eb`)
+**Date:** 2026-06-17
+
+**Improvement (backlog item 6 — the over-split floor on the duration axis):**
+the replay sweep's `SweepPoint` brackets both ends of the onset-*count* axis
+(`min_onsets` floor / `max_onsets` ceiling) and carries a full best/typical/
+worst/spread envelope on the onset-*timing* axis (`onset1_min`/`onset1`/
+`onset1_max`/`onset1_std`). On the segment-*duration* axis it had only one
+half: `max_segment_ms` (iter-202, the over-*merge* ceiling). This lap adds the
+symmetric companion — `min_segment_ms`, the over-*split* floor on the duration
+axis — so the duration axis now brackets both ends exactly as the count axis
+does (`min_segment_ms` is to `max_segment_ms` what `min_onsets` is to
+`max_onsets`).
+
+Why it matters: `max_onsets` reads over-splitting by *count* — a too-short
+`silence_ms` fragments one utterance into many short segments, so a single
+recording's onset count climbs. `min_segment_ms` reads the *same* failure by
+*duration*: as the fragments get chopped ever shorter, the shortest emitted
+segment collapses toward the `min_speech` gate. The two are the count- and
+duration-axis fingerprints of the same fragmentation, while `max_segment_ms`
+reads the opposite failure (over-merge). With all four bracket aggregates
+present — `min_onsets`/`max_onsets` on count, `min_seg`/`max_seg` on duration —
+a single `--sweep silence_ms` reads every silence-timeout failure mode in one
+pass: the count floor catches a *miss*, the count ceiling and duration floor
+catch a *fragment*, the duration ceiling catches a *merge*.
+
+What changed:
+- **`fixtures/replay_vad.py`** — `SweepPoint` gains a `min_segment_ms` float
+  field (`min` over every detected segment's `duration_ms` across the corpus,
+  `0.0` for an empty/all-miss corpus); `aggregate_results` computes it
+  (`min(seg_durations)`); `summary_line` and `_grid_summary_line` surface a
+  `min_seg=` column right before `max_seg=` in the human sweep/grid tables; it
+  rides along in `--json` for free (dataclass field via `asdict`).
+- **`tests/unit/test_replay_vad.py`** — +4 dedicated tests (83 → 87):
+  `test_min_segment_is_shortest_committed_segment` (equals `min` over all
+  detected durations; bounded below by the `min_speech` gate and above by the
+  ceiling), `test_min_segment_falls_when_short_silence_oversplits` (the same
+  1s-tone / 300ms-gap / 1s-tone recording iter-201/202 used — splits into two
+  short halves at `silence_ms=100`, merges into one long segment at `800`; the
+  floor drops under the split, the over-split signal on the duration axis),
+  `test_min_segment_zero_when_nothing_detected`, and a new
+  `test_sweep_json_includes_min_segment`. Plus assertions folded into the
+  empty-corpus zero test, the human-table column test (`min_seg=`), and the
+  grid human-table test (4 cells each carry `min_seg=`).
+- **`docs/research/voice-capture-tuning.md`** — `min_seg` documented in the
+  "Each row reports" legend; new "Over-split floor on the duration axis
+  (iter-203)" section with the synthetic-gap table; backlog item 6 updated to
+  note all four bracket aggregates now read in one pass.
+
+**Corpus evidence (the over-split floor, on the synthetic gap):** the same
+1s-tone / 300ms-gap / 1s-tone recording, swept across `silence_ms` and read on
+the duration axis:
+- `silence_ms=100`: gap (300ms) > timeout → **splits** into two ~1152ms halves
+  (`min_seg=1152.0ms`, the floor drops to a short fragment).
+- `silence_ms=400` and `800`: gap < timeout → **merges** into one 2304ms run-on
+  segment (`min_seg=2304.0ms`, floor = ceiling, single segment).
+As `silence_ms` rises past the gap the floor *climbs* (fragments fuse); a low
+`silence_ms` pulls it toward the `min_speech` gate (more, shorter fragments) —
+the duration-axis over-split signal, symmetric to `max_seg` ballooning under
+the merge.
+
+**Verification:**
+- `python -m pytest tests/unit/test_replay_vad.py` → **87 passed** (83 + 4 new).
+- Full Python unit suite: `python -m pytest tests/unit/` → **2683 passed**
+  (2679 prior + 4 new).
+- Integration `tests/integration/test_vad_recordings.py` → skipped in the
+  worktree (the binary corpus lives only in the main checkout); the synthetic
+  over-split demo above exercised the new aggregate directly.
+- (`tests/test_session.py` still errors on collection — pre-existing missing
+  `pipecat` dep, not a regression.)
+
+**Next planned items (from the research-doc backlog):**
+1. **[silence] Run the actual `--sweep silence_ms` over a newly-synced corpus**
+   — all four bracket aggregates are now legible (`min_onsets`/`max_onsets` on
+   count, `min_seg`/`max_seg` on duration), so gate a real `silence_ms` default
+   change on a corpus that exercises real mid-utterance pauses *and*
+   two-turns-one-pause cases (the seed corpus is flat in both windows).
+2. **[latency, highest value] Pre-warm the capture pipeline** — still the top
+   user-facing bug (3–5s `click_to_capture_ms`). Needs an on-device timing
+   harness; cannot be replayed.
+3. **[preroll-default] Bump the client `prerollMs` default above 0** — iter-200's
+   grid shows pre-roll improves the typical opening, the tail, AND the
+   consistency simultaneously; pick a value (256–512ms) and gate on a
+   busier/newly-synced corpus.
+4. **[gain] Add a gain×preroll grid finding** — quantify whether amplifying the
+   pre-roll audio changes the recovered soft-attack quality.
