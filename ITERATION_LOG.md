@@ -18123,3 +18123,90 @@ and duration axes do.
    busier/newly-synced corpus.
 4. **[gain] Add a gain×preroll grid finding** — quantify whether amplifying the
    pre-roll audio changes the recovered soft-attack quality.
+
+---
+
+## iter-207 — de-duplicate the VAD sweep/grid metrics block
+
+**Branch:** `iter-207-dedupe-summary` (merged ff to main, commit `7b526a5`)
+**Date:** 2026-06-17
+
+**Improvement (maintainability — kill the two-place edit hazard):**
+iters 201–206 each appended exactly one aggregate column to the
+`fixtures/replay_vad.py` sweep tables (`max_onsets`, `std_onsets`,
+`max/min/mean/std_segment_ms`). Every one of those six laps had to hand-edit the
+**same metrics block in two byte-identical places** — `SweepPoint.summary_line`
+(single-axis `--sweep` table) and the module-level `_grid_summary_line` (2-D
+`--grid` table). The two were identical from `trig=` onward and kept in sync
+only by manual copy-paste discipline. That is a standing drift hazard: the next
+column-add — or a single typo in one renderer — silently desyncs the sweep table
+from the grid table, and an operator comparing the two reads mismatched columns
+with no error. Six consecutive laps paying that tax is the signal it should be
+one place.
+
+This lap collapses the duplication into one source of truth:
+- **`fixtures/replay_vad.py`** — new `SweepPoint.metrics_columns()` emits the
+  label-independent block (every statistic from `trig=` onward: the detection
+  counts plus the full count/timing/duration axes — `min_onsets`/`max_onsets`/
+  `onset_std`/`onsets`/`speak_frames`/`mean_over`/`onset1_min`/`onset1`/
+  `onset1_max`/`onset1_std`/`min_seg`/`mean_seg`/`max_seg`/`seg_std`).
+  `summary_line()` now returns `f"{label}={value:<8} " + self.metrics_columns()`;
+  `_grid_summary_line()` returns `f"{a}={va:<8} {b}={vb:<8} " + p.metrics_columns()`.
+  Both delegate to the shared method, so a future aggregate column is written
+  **once** and lands in both tables automatically — the drift can no longer
+  happen by construction. The rendered output is byte-for-byte identical to
+  before (the leading label was already produced the same way; only the trailing
+  block moved into a shared method).
+
+What changed:
+- **`fixtures/replay_vad.py`** — added `metrics_columns()`; rewrote
+  `summary_line` and `_grid_summary_line` as `label + metrics_columns()`. Net
+  −22 duplicated f-string lines.
+- **`tests/unit/test_replay_vad.py`** — +1 class `TestMetricsColumns` (4 tests),
+  importing `_grid_summary_line`:
+  `test_summary_line_is_label_plus_shared_columns` (the sweep line is exactly
+  `"<label> "` + the shared block, and the block carries no parameter label),
+  `test_grid_line_is_two_labels_plus_shared_columns` (the grid line is
+  `"<a> <b> "` + the same block), `test_both_renderers_share_the_identical_metrics_block`
+  (the block is a verbatim substring of *both* rendered lines, so a new column
+  reaches both at once), and `test_metrics_columns_carries_every_axis_aggregate`
+  (every expected token is present — guards against a future edit silently
+  dropping a column from the shared block). 101 → 105.
+
+**Verification:**
+- `python -m pytest tests/unit/test_replay_vad.py` → **105 passed** (101 + 4 new).
+- Full Python unit suite: `python -m pytest tests/unit/` → **2701 passed**
+  (2697 prior + 4 new). GATE command:
+  `cd ~/code-purp/geno-voice && python -m pytest tests/unit/`.
+- Output-format parity confirmed directly: a synthetic `SweepPoint` rendered
+  through both `summary_line` and `_grid_summary_line` produced the same metrics
+  block, matching the pre-refactor column layout the existing CLI table tests
+  pin.
+- (`tests/test_session.py` still errors on collection — pre-existing missing
+  `pipecat` dep, not a regression.)
+
+**Why this lap (not another aggregate):** the sweep harness now carries the full
+floor/typical/ceiling/spread shape on all three axes (count, timing, duration) —
+the aggregate backlog is saturated for the seed corpus, which is flat in the
+windows the remaining levers (`silence_ms`) need. Adding a seventh duplicated
+column would deepen the very drift hazard this lap removes. Consolidating first
+makes the *next* legitimate column-add a one-place edit.
+
+**Next planned items (from the research-doc backlog):**
+1. **[silence] Run the actual `--sweep silence_ms` over a newly-synced corpus**
+   — every axis is now fully legible AND emitted from one shared renderer: count
+   (`min_onsets`/`max_onsets`/`onset_std`), timing (`onset1_min`/`onset1`/
+   `onset1_max`/`onset1_std`), duration (`min_seg`/`mean_seg`/`max_seg`/`seg_std`).
+   Gate a real `silence_ms` default change on a corpus that exercises real
+   mid-utterance pauses *and* two-turns-one-pause cases (the seed corpus is flat
+   in both windows); prefer the value that minimizes `onset_std` and `seg_std`
+   among those with an acceptable `mean_seg`.
+2. **[latency, highest value] Pre-warm the capture pipeline** — still the top
+   user-facing bug (3–5s `click_to_capture_ms`). Needs an on-device timing
+   harness; cannot be replayed.
+3. **[preroll-default] Bump the client `prerollMs` default above 0** — iter-200's
+   grid shows pre-roll improves the typical opening, the tail, AND the
+   consistency simultaneously; pick a value (256–512ms) and gate on a
+   busier/newly-synced corpus.
+4. **[gain] Add a gain×preroll grid finding** — quantify whether amplifying the
+   pre-roll audio changes the recovered soft-attack quality.
