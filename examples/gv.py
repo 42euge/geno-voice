@@ -7,6 +7,7 @@ Usage:
     gv talk               # talk mode — STT → NLP → canned response → TTS
     gv chat               # chat mode — STT → LLM (litellm) → TTS
     gv simulate-mirror …  # offline WPM-mirror trajectory / grid-sweep simulator
+    gv calibrate-base-wpm … # offline base_wpm calibration from rendered samples
     gv <cmd> --model ...  # override STT model
 """
 
@@ -188,6 +189,74 @@ def positive_floats_type(raw):
     return values
 
 
+def calibration_sample_type(raw):
+    """Argparse ``type`` for one ``calibrate-base-wpm --samples`` triple.
+
+    Parses ``"words:audio_seconds[:speed]"`` into a ``(words, audio_seconds,
+    speed)`` tuple of floats. Each triple is one rendered TTS sample: a
+    known-length script of ``words`` words synthesized into ``audio_seconds`` of
+    audio at the Kokoro ``speed`` knob (default the ``1.0`` calibration point).
+    The handler builds a :class:`CalibrationSample` from each tuple and folds
+    them with ``calibrate_base_wpm``.
+
+    Pure and side-effect-free for direct unit testing. Raises
+    :class:`argparse.ArgumentTypeError` (rendered by argparse as
+    ``SystemExit(2)``) on a malformed shape (wrong field count), a non-numeric /
+    NaN field, or a non-positive field — every field must be a usable
+    measurement, and the engine's own ``CalibrationSample.__post_init__`` rejects
+    ``<= 0`` loudly, so the parser catches the same malformed input early with a
+    clean CLI error instead of forwarding garbage.
+    """
+    if not isinstance(raw, str):
+        raise argparse.ArgumentTypeError(f"sample must be a string, got {raw!r}")
+    fields = [f.strip() for f in raw.split(":")]
+    if len(fields) not in (2, 3) or any(not f for f in fields):
+        raise argparse.ArgumentTypeError(
+            "sample must be 'words:audio_seconds[:speed]', got "
+            f"{raw!r}"
+        )
+    names = ("words", "audio_seconds", "speed")
+    values = []
+    for name, tok in zip(names, fields):
+        try:
+            value = float(tok)
+        except (TypeError, ValueError):
+            raise argparse.ArgumentTypeError(
+                f"{name} must be a number, got {tok!r}"
+            )
+        if value != value:  # NaN is unordered.
+            raise argparse.ArgumentTypeError(f"{name} must be a number, got nan")
+        if value <= 0:
+            raise argparse.ArgumentTypeError(
+                f"{name} must be positive, got {value}"
+            )
+        values.append(value)
+    if len(values) == 2:
+        values.append(1.0)  # default speed = the 1.0 calibration point.
+    return tuple(values)
+
+
+def render_calibration(calib):
+    """Render a ``BaseWpmCalibration`` verdict as plain-text report lines.
+
+    Pure: returns a list of strings (no I/O, no ANSI) so it is testable in
+    isolation — the handler joins and prints them. ``calib`` of ``None`` (no
+    samples) yields a single "no samples" line.
+    """
+    if calib is None:
+        return ["base_wpm calibration: no samples (nothing to calibrate from)"]
+    lines = [
+        "base_wpm calibration from rendered samples",
+        f"  samples:          {calib.n_samples}",
+        f"  implied base_wpm: {calib.implied_base_wpm:.1f} (median; set DEFAULT_BASE_WPM to this)",
+        f"  range:            {calib.min_base_wpm:.1f} – {calib.max_base_wpm:.1f}",
+        f"  spread:           {calib.spread:.1f} (renders disagree if large)",
+        f"  nominal:          {calib.default_base_wpm:.1f}",
+        f"  drift:            {calib.drift:+.1f} (implied − nominal; + ⇒ voice faster than nominal)",
+    ]
+    return lines
+
+
 def render_trajectory(traj, *, wpms=None):
     """Render a :class:`SpeedTrajectory` as plain-text report lines.
 
@@ -308,6 +377,32 @@ def cmd_simulate_mirror(args, *, log=print):
         log(line)
 
 
+def cmd_calibrate_base_wpm(args, *, log=print):
+    """Fold rendered TTS samples into a measured ``base_wpm`` and print it.
+
+    The iter-220 calibration core (``CalibrationSample`` / ``calibrate_base_wpm``)
+    is the audio-free arithmetic; this CLI handler is its iter-218-style
+    CLI-later twin. Each ``--samples`` triple (``words:audio_seconds[:speed]``)
+    is one render measured offline; the handler builds the samples and reports
+    the robust median ``implied_base_wpm`` so a deployment can set
+    ``DEFAULT_BASE_WPM`` from its own voice instead of the 165 nominal.
+
+    The engine is loaded lazily by file path so the parser stays audio-free and
+    importable on any platform. ``log`` is injectable for tests.
+    """
+    wm = _load_wpm_mirror()
+    CalibrationSample = wm.CalibrationSample
+    calibrate_base_wpm = wm.calibrate_base_wpm
+
+    samples = [
+        CalibrationSample(words=int(words), audio_seconds=audio_seconds, speed=speed)
+        for (words, audio_seconds, speed) in args.samples
+    ]
+    calib = calibrate_base_wpm(samples, default_base_wpm=args.nominal)
+    for line in render_calibration(calib):
+        log(line)
+
+
 def cmd_bench(args):
     # bench is a legacy argv-driven entrypoint: it parses its own sys.argv
     # rather than taking kwargs, so we rebuild argv here. Only forward
@@ -343,6 +438,7 @@ DEFAULT_HANDLERS = {
     "talk": cmd_talk,
     "chat": cmd_chat,
     "simulate-mirror": cmd_simulate_mirror,
+    "calibrate-base-wpm": cmd_calibrate_base_wpm,
 }
 
 # Seed mirror tunables, mirrored as the CLI defaults so the simulator's
@@ -460,6 +556,27 @@ def build_parser():
         type=positive_floats_type,
         default=[0.3, 0.5, 0.7],
         help="Grid strength axis (comma-separated; default: 0.3,0.5,0.7)",
+    )
+
+    calib = sub.add_parser(
+        "calibrate-base-wpm",
+        help="Offline base_wpm calibration — fold rendered TTS samples "
+        "(words:audio_seconds[:speed]) into a measured base_wpm (no audio)",
+    )
+    calib.add_argument(
+        "--samples",
+        type=calibration_sample_type,
+        nargs="+",
+        required=True,
+        metavar="WORDS:SECONDS[:SPEED]",
+        help="One or more rendered samples as 'words:audio_seconds[:speed]', "
+        "e.g. 50:18.2 50:9.1:2.0 (speed defaults to the 1.0 calibration point)",
+    )
+    calib.add_argument(
+        "--nominal",
+        type=float,
+        default=base_wpm_default,
+        help=f"Nominal base_wpm to report drift against (default: {base_wpm_default})",
     )
 
     return parser

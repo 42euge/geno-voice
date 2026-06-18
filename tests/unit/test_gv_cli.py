@@ -393,6 +393,7 @@ def test_dispatch_default_handlers_are_the_real_cmds():
         "talk": gv.cmd_talk,
         "chat": gv.cmd_chat,
         "simulate-mirror": gv.cmd_simulate_mirror,
+        "calibrate-base-wpm": gv.cmd_calibrate_base_wpm,
     }
 
 
