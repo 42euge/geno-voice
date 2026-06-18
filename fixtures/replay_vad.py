@@ -413,6 +413,31 @@ class SweepPoint:
                          — a recording *fragmenting* — so a ``silence_ms`` sweep
                          can read the over-split end and the merge end in one
                          pass. ``0`` for an empty corpus.
+    ``std_onsets``     — the population standard deviation of the per-recording
+                         onset count across the corpus (the *consistency* of the
+                         onset count). This is to the count axis exactly what
+                         ``std_first_onset_ms`` is to the timing axis and
+                         ``std_segment_ms`` is to the duration axis:
+                         ``min_onsets``/``max_onsets`` bracket the envelope and
+                         ``total_onsets`` gives the sum, but none of them express
+                         *spread* — how unevenly the onsets are distributed across
+                         recordings. Two ``silence_ms`` values can share a
+                         ``total_onsets`` while one fragments a *single* recording
+                         into many short segments (one recording's count spikes
+                         far above the rest — high spread) and the other splits
+                         every recording evenly (low spread). ``min``/``max`` catch
+                         the spike only if it reaches the corpus extreme;
+                         ``std_onsets`` reads the *whole distribution's* unevenness
+                         directly, so a ``--sweep silence_ms`` can prefer the value
+                         that fragments uniformly (or not at all) over one that
+                         shatters a lone recording while leaving the total flat.
+                         Population (ddof=0) std over every recording's onset count
+                         *including misses* (a missed recording contributes a ``0``
+                         — a miss is a real data point on the count axis, unlike
+                         the onset-*timing* axis where a miss has no time and is
+                         excluded), so a single-recording corpus reads as ``0.0``
+                         (perfectly consistent given one point). ``0.0`` for an
+                         empty corpus.
     ``mean_first_onset_ms`` — mean of each recording's *first* segment
                          ``onset_ms`` (the emitted speech-start), averaged
                          only over recordings that detected at least one
@@ -572,6 +597,7 @@ class SweepPoint:
     mean_pct_over: float
     min_onsets: int
     max_onsets: int
+    std_onsets: float
     mean_first_onset_ms: float
     max_first_onset_ms: float
     min_first_onset_ms: float
@@ -588,6 +614,7 @@ class SweepPoint:
             f"trig={self.triggered}/{self.recordings}  "
             f"min_onsets={self.min_onsets:<2} "
             f"max_onsets={self.max_onsets:<2} "
+            f"onset_std={self.std_onsets:4.2f} "
             f"onsets={self.total_onsets:<3} "
             f"speak_frames={self.total_speaking_frames:<5} "
             f"mean_over={self.mean_pct_over:5.1f}% "
@@ -615,6 +642,16 @@ def aggregate_results(params: VadParams, results: List[ReplayResult]) -> SweepPo
     # silence_ms sweep reads a recording fragmenting (high max) as readily as one
     # dropping to a miss (zero min), without hand-inspecting each --json.
     max_onsets = max((r.onsets for r in results), default=0)
+    # Onset-count consistency: population std of the per-recording onset count
+    # across the WHOLE corpus, including misses (a missed recording contributes a
+    # 0 — a miss is a real point on the count axis, unlike the timing axis where a
+    # miss has no onset time and is excluded). min/max bracket the envelope and
+    # total gives the sum; this reads the distribution's unevenness, so a sweep
+    # can tell apart a value that fragments one lone recording (high spread, flat
+    # total) from one that splits every recording evenly. Population (ddof=0) so a
+    # single-recording corpus reads as 0.0 (consistent given one point).
+    onset_counts = [r.onsets for r in results]
+    std_onsets = float(np.std(onset_counts)) if onset_counts else 0.0
     # Onset *timing*: average each recording's first emitted onset, but only
     # over recordings that actually detected speech. A missed recording has
     # no onset time; folding in a 0.0 would falsely pull the mean toward
@@ -673,6 +710,7 @@ def aggregate_results(params: VadParams, results: List[ReplayResult]) -> SweepPo
         mean_pct_over=mean_over,
         min_onsets=min_onsets,
         max_onsets=max_onsets,
+        std_onsets=std_onsets,
         mean_first_onset_ms=mean_first_onset,
         max_first_onset_ms=max_first_onset,
         min_first_onset_ms=min_first_onset,
@@ -830,6 +868,7 @@ def _grid_summary_line(p: SweepPoint, param_a: str, param_b: str) -> str:
         f"trig={p.triggered}/{p.recordings}  "
         f"min_onsets={p.min_onsets:<2} "
         f"max_onsets={p.max_onsets:<2} "
+        f"onset_std={p.std_onsets:4.2f} "
         f"onsets={p.total_onsets:<3} "
         f"speak_frames={p.total_speaking_frames:<5} "
         f"mean_over={p.mean_pct_over:5.1f}% "

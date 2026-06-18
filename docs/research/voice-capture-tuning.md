@@ -71,7 +71,20 @@ real miss even when the total looks healthy), `max_onsets` (iter-201 — the
 busiest single recording, the *over-split ceiling*: the symmetric companion
 to `min_onsets`, where `min_onsets` catches a recording dropping to a miss
 and `max_onsets` catches the opposite — a recording *fragmenting* into many
-short segments, the signature of a too-short `silence_ms`), `max_seg` (iter-202
+short segments, the signature of a too-short `silence_ms`), `onset_std` (iter-206
+— `std_onsets`, the population standard deviation of the per-recording onset
+count across the corpus: the count-axis *consistency*, to the count axis what
+`onset1_std` is to the timing axis and `seg_std` is to the duration axis.
+`min_onsets`/`max_onsets` bracket the envelope and `onsets` gives the sum, but
+none express *spread* — how unevenly onsets are distributed across recordings.
+Two `silence_ms` values can share an `onsets` total while one fragments a single
+recording into many segments (one count spikes far above the rest — high spread)
+and the other splits every recording evenly (low spread); `min`/`max` catch the
+spike only if it reaches the corpus extreme, `onset_std` reads the whole
+distribution's unevenness directly. Population std over every recording's count
+*including misses* (a miss contributes a `0` — a real point on the count axis,
+unlike the timing axis where a miss has no onset time and is excluded), so a
+single-recording corpus reads as `0.0`), `max_seg` (iter-202
 — `max_segment_ms`, the longest single committed segment across the corpus: the
 *over-merge ceiling*, the duration-axis companion to `max_onsets`. Where
 `max_onsets` reads a too-*short* `silence_ms` fragmenting one utterance,
@@ -621,6 +634,43 @@ bounded above by the `max_seg - min_seg` range. As with the other duration
 aggregates, the seed corpus is flat in both silence windows, so gate any actual
 `silence_ms` default change on a newly-synced corpus.
 
+### Consistency of the count axis (iter-206)
+
+The onset-*timing* axis (`onset1_min`/`onset1`/`onset1_max`/`onset1_std`) and the
+segment-*duration* axis (`min_seg`/`mean_seg`/`max_seg`/`seg_std`) both carry the
+full envelope/center/spread shape after iter-205. The onset-*count* axis had only
+`min_onsets` (floor, iter-189), `max_onsets` (ceiling, iter-201) and `onsets`
+(corpus sum) — an envelope and a total, but no *spread*. iter-206 adds
+`std_onsets` (the `onset_std` column): the population standard deviation of the
+per-recording onset count across the corpus, to the count axis exactly what
+`onset1_std` is to the timing axis and `seg_std` is to the duration axis.
+
+The spread is the one thing min/max/total can't give. Two `silence_ms` values can
+share an `onsets` total while distributing those onsets completely differently:
+one fragments a *single* recording into many short segments (that recording's
+count spikes far above the rest — high spread) while the other splits *every*
+recording evenly (low spread). `min_onsets`/`max_onsets` catch the spike only if
+it reaches the corpus extreme; `onset_std` reads the whole distribution's
+unevenness directly, so a `--sweep silence_ms` can prefer the value that
+fragments uniformly (or not at all) over one that shatters a lone recording while
+leaving the total flat.
+
+| corpus | onset counts | onsets (total) | onset_std | reading |
+|--------|--------------|---------------:|----------:|---------|
+| two clean tones, one onset each | 1, 1 | 2 | **0.00** | even distribution → no spread |
+| one tone split by a sub-gap timeout + one clean tone | 2, 1 | 3 | **0.50** | one recording fragments while the other stays whole → real spread |
+
+Unlike the onset-*timing* std, which excludes missed recordings (a miss has no
+onset time), the count std *includes* a miss as a `0` — a recording detecting
+nothing is a real count of zero, and a corpus mixing a hit with a miss is
+genuinely inconsistent in onset count. Population (ddof=0) std, so a
+single-recording corpus reads as `0.0` ("perfectly consistent given one point")
+and the value is bounded above by the `max_onsets - min_onsets` range. With this
+the count axis carries the same envelope+spread shape the timing and duration
+axes do; as with the other silence-lever aggregates the seed corpus is flat in
+both windows, so gate any actual `silence_ms` default change on a newly-synced
+corpus.
+
 ## Findings & backlog (prioritized)
 
 1. **[latency] Pre-warm the capture pipeline.** The 3–5s `click_to_capture_ms`
@@ -735,7 +785,15 @@ aggregates, the seed corpus is flat in both silence windows, so gate any actual
    values can share a `mean_seg` while one segments uniformly and the other mixes
    short fragments with long run-ons; `seg_std` is the only aggregate that tells
    them apart, so prefer the `silence_ms` that minimizes `seg_std` among those
-   with an acceptable `mean_seg` (see "Consistency of the duration axis" above)._
+   with an acceptable `mean_seg` (see "Consistency of the duration axis" above).
+   iter-206: the `std_onsets` aggregate completes the *count* axis with its
+   consistency (spread), matching the timing axis's `onset1_std` and the duration
+   axis's `seg_std`. Two `silence_ms` values can share an `onsets` total while one
+   fragments a single recording (one count spikes — high spread) and the other
+   splits every recording evenly (low spread); `onset_std` is the only count
+   aggregate that reads that unevenness, so prefer the value that fragments
+   uniformly over one that shatters a lone recording (see "Consistency of the
+   count axis" above)._
 
 ## Methodology notes
 

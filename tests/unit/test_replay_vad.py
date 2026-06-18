@@ -327,6 +327,7 @@ class TestAggregateResults:
         assert point.mean_pct_over == 0.0
         assert point.min_onsets == 0
         assert point.max_onsets == 0
+        assert point.std_onsets == 0.0
         assert point.mean_first_onset_ms == 0.0
         assert point.max_first_onset_ms == 0.0
         assert point.min_first_onset_ms == 0.0
@@ -386,6 +387,85 @@ class TestAggregateResults:
         # The short timeout fragments the single utterance — the ceiling climbs.
         assert split.max_onsets > merged.max_onsets
 
+    def test_std_onsets_is_population_std_of_onset_counts(self, tmp_path):
+        corpus = _make_corpus(tmp_path)
+        results = replay_all(corpus, VadParams(threshold=0.006))
+        point = aggregate_results(VadParams(threshold=0.006), results)
+        # The count-consistency aggregate is the population std over EVERY
+        # recording's onset count — including misses (a 0 is a real point on the
+        # count axis), the same full corpus min/max bracket and total sum.
+        onset_counts = [r.onsets for r in results]
+        assert onset_counts, "fixture should replay at least one recording"
+        assert point.std_onsets == pytest.approx(float(np.std(onset_counts)))
+        # The spread is never negative and never exceeds the full min→max range.
+        assert point.std_onsets >= 0.0
+        assert point.std_onsets <= (point.max_onsets - point.min_onsets) + 1e-6
+
+    def test_std_onsets_zero_for_single_recording(self, tmp_path):
+        # One recording → one count → zero spread (population std of one point is
+        # 0.0, "perfectly consistent given one point", not the undefined sample
+        # std), even though that recording detects multiple onsets.
+        corpus = tmp_path / "one"
+        corpus.mkdir()
+        _write_wav(corpus / "a.wav", _tone(SR, 1.0))
+        (corpus / "a.json").write_text('{"peak_rms": 0.05}')
+        results = replay_all(corpus, VadParams(threshold=0.006))
+        assert len(results) == 1
+        point = aggregate_results(VadParams(threshold=0.006), results)
+        assert point.std_onsets == 0.0
+
+    def test_std_onsets_separates_lopsided_from_even(self, tmp_path):
+        # The signal min/max/total can't give: two corpora can share a
+        # total_onsets while one distributes onsets evenly (low spread) and the
+        # other piles them on a single recording (high spread). std_onsets is the
+        # only aggregate that tells them apart.
+        #
+        # EVEN: two recordings, one onset each → counts [1, 1] → total 2, std 0.
+        even = tmp_path / "even"
+        even.mkdir()
+        _write_wav(even / "a.wav", _tone(SR, 1.0))
+        (even / "a.json").write_text('{"peak_rms": 0.05}')
+        _write_wav(even / "b.wav", _tone(SR, 1.0))
+        (even / "b.json").write_text('{"peak_rms": 0.05}')
+        even_point = aggregate_results(
+            VadParams(threshold=0.006),
+            replay_all(even, VadParams(threshold=0.006)),
+        )
+        # LOPSIDED: one recording fragments into two segments (a 300ms gap split
+        # by a sub-gap silence_ms) while a sibling stays a single onset → counts
+        # [2, 1] → total 3, positive spread.
+        lop = tmp_path / "lop"
+        lop.mkdir()
+        gap = np.concatenate([_tone(SR, 1.0), _silence(int(SR * 0.3)), _tone(SR, 1.0)])
+        _write_wav(lop / "gap.wav", gap)
+        (lop / "gap.json").write_text('{"peak_rms": 0.05}')
+        _write_wav(lop / "solo.wav", _tone(SR, 1.0))
+        (lop / "solo.json").write_text('{"peak_rms": 0.05}')
+        lop_point = aggregate_results(
+            VadParams(silence_ms=100.0),
+            replay_all(lop, VadParams(silence_ms=100.0)),
+        )
+        # Even distribution → zero spread; lopsided → positive spread.
+        assert even_point.std_onsets == pytest.approx(0.0, abs=1e-6)
+        assert lop_point.std_onsets > 0.0
+        assert lop_point.std_onsets > even_point.std_onsets
+
+    def test_std_onsets_counts_misses_as_zero(self, tmp_path):
+        # Unlike the onset-TIMING std (which excludes missed recordings — a miss
+        # has no onset time), the onset-COUNT std includes a miss as a 0: a
+        # recording detecting nothing is a real count of 0, and a corpus mixing a
+        # hit and a miss is genuinely inconsistent in onset count.
+        corpus = _make_corpus(tmp_path)
+        results = replay_all(corpus, VadParams(threshold=0.015))
+        detected = [r for r in results if r.segments]
+        missed = [r for r in results if not r.segments]
+        assert detected and missed, "fixture must mix a hit and a miss at 0.015"
+        point = aggregate_results(VadParams(threshold=0.015), results)
+        # The 0-count miss is folded in (the std is over [hit_count, 0]), so the
+        # spread is strictly positive — the miss is not silently dropped.
+        assert point.std_onsets == pytest.approx(float(np.std([r.onsets for r in results])))
+        assert point.std_onsets > 0.0
+
     def test_mean_first_onset_averages_detected_recordings(self, tmp_path):
         corpus = _make_corpus(tmp_path)
         results = replay_all(corpus, VadParams(threshold=0.006))
@@ -431,6 +511,8 @@ class TestAggregateResults:
         assert point.max_segment_ms == 0.0
         assert point.mean_segment_ms == 0.0
         assert point.std_segment_ms == 0.0
+        # One all-miss recording → onset counts are all 0 → zero count spread.
+        assert point.std_onsets == 0.0
 
     def test_max_first_onset_is_latest_detected_recording(self, tmp_path):
         corpus = _make_corpus(tmp_path)
@@ -1027,6 +1109,9 @@ class TestSweepCli:
         # ...and the onset-count floor and over-split ceiling.
         assert "min_onsets=" in out
         assert "max_onsets=" in out
+        # ...and the onset-count consistency (spread) — completes the count axis
+        # to the same envelope+spread shape the timing and duration axes carry.
+        assert "onset_std=" in out
         # ...and the over-merge ceiling (longest committed segment) plus the
         # over-split floor (shortest committed segment) on the duration axis.
         assert "max_seg=" in out
@@ -1138,6 +1223,20 @@ class TestSweepCli:
         rng = payload[0]["max_segment_ms"] - payload[0]["min_segment_ms"]
         assert payload[0]["std_segment_ms"] <= rng + 1e-6
 
+    def test_sweep_json_includes_std_onsets(self, tmp_path, capsys):
+        corpus = _make_corpus(tmp_path)
+        rc = main(["--sweep", "threshold", "--sweep-values", "0.006", "--dir", str(corpus), "--json"])
+        assert rc == 0
+        import json as _json
+
+        payload = _json.loads(capsys.readouterr().out)
+        assert "std_onsets" in payload[0]
+        # The onset-count spread is non-negative and bounded above by the full
+        # min→max onset-count range.
+        assert payload[0]["std_onsets"] >= 0.0
+        rng = payload[0]["max_onsets"] - payload[0]["min_onsets"]
+        assert payload[0]["std_onsets"] <= rng + 1e-6
+
 
 # ---------------------------------------------------------------------------
 # CLI — main() with --grid (2-D grid sweep)
@@ -1169,6 +1268,8 @@ class TestGridCli:
         # ...and the onset-count floor + over-split ceiling per cell.
         assert out.count("min_onsets=") == 4
         assert out.count("max_onsets=") == 4
+        # ...and the onset-count consistency (spread) per cell.
+        assert out.count("onset_std=") == 4
         # ...and the over-merge ceiling + over-split floor (duration axis) per cell.
         assert out.count("max_seg=") == 4
         assert out.count("min_seg=") == 4
