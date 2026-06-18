@@ -17656,3 +17656,91 @@ the over-split signal a real-corpus `silence_ms` sweep will read.
    busier/newly-synced corpus.
 4. **[gain] Add a gain×preroll grid finding** — quantify whether amplifying the
    pre-roll audio changes the recovered soft-attack quality.
+
+---
+
+## iter-202 — add `max_segment_ms` over-merge ceiling aggregate to the VAD sweep
+
+**Branch:** `iter-202-max-segment-ms` (merged ff to main, commit `05da77e`)
+**Date:** 2026-06-17
+
+**Improvement (backlog item 6 — the over-merge half of the silence lever):**
+the replay sweep's `SweepPoint` carries two aggregate families: onset *count*
+(`min_onsets`/`max_onsets`/`total_onsets`) and onset *timing*
+(`onset1_min`/`onset1`/`onset1_max`/`onset1_std`). iter-201 made the
+silence-timeout *over-split* end legible with `max_onsets` — a too-short
+`silence_ms` fragments one utterance into many short segments, so the
+per-recording onset count climbing is its signature. The symmetric failure —
+a too-*long* `silence_ms` fusing two real conversational turns into one run-on
+segment — leaves the onset count flat (or even *lower*: two onsets become one)
+and is invisible to every count aggregate. Its only signature is a single
+segment's *duration* ballooning.
+
+This lap adds `max_segment_ms` — the longest single committed segment's
+`duration_ms` across the corpus, the over-*merge* ceiling. It is to the
+duration axis exactly what `max_onsets` is to the count axis. Paired, the two
+ceilings bracket both ends of the silence lever, so a single
+`--sweep silence_ms` reads the over-split end (`max_onsets` jumps at low
+values) and the over-merge end (`max_seg` climbs at high values) in one pass.
+
+What changed:
+- **`fixtures/replay_vad.py`** — `SweepPoint` gains a `max_segment_ms` float
+  field (`max` over every detected segment's `duration_ms` across the corpus,
+  `0.0` for an empty/all-miss corpus); `aggregate_results` computes it
+  (`max(s.duration_ms for r in results for s in r.segments)`); `summary_line`
+  and `_grid_summary_line` surface a `max_seg=` column after `onset1_std` in
+  the human sweep/grid tables; it rides along in `--json` for free (dataclass
+  field).
+- **`tests/unit/test_replay_vad.py`** — +4 dedicated tests (79 → 83):
+  `test_max_segment_is_longest_committed_segment` (equals `max` over all
+  detected segment durations; never below the `min_speech` gate),
+  `test_max_segment_rises_when_long_silence_overmerges` (a 1s-tone / 300ms-gap
+  / 1s-tone recording splits into 2 short segments at `silence_ms=100` but
+  merges into 1 long ~2.3s segment at `silence_ms=800` — `max_onsets` falls
+  2→1 while `max_segment_ms` balloons, the over-merge signal), and
+  `test_max_segment_zero_when_nothing_detected`. Plus assertions folded into
+  the empty-corpus and all-miss zero tests, a new `test_sweep_json_includes_max_segment`,
+  the human-table column test (`max_seg=`), and the grid human-table test (4
+  cells each carry `max_seg=`).
+- **`docs/research/voice-capture-tuning.md`** — `max_seg` documented in the
+  "Each row reports" legend; new "Over-merge ceiling, the other end of the
+  silence lever (iter-202)" section with the synthetic-gap table; backlog item
+  6 updated to note both ends of the silence lever are now legible.
+
+**Corpus evidence (the over-merge signal, on a synthetic gap):** the same
+1s-tone / 300ms-gap / 1s-tone recording iter-201 used, swept across
+`silence_ms`:
+- `silence_ms=100`: gap (300ms) > timeout → **splits** into two ~1152ms halves
+  (`max_onsets=2`, `max_seg=1152.0ms`).
+- `silence_ms=400` and `800`: gap < timeout → **merges** into one 2304ms run-on
+  segment (`max_onsets=1`, `max_seg=2304.0ms`).
+As `silence_ms` rises past the gap length the count ceiling *drops* (the merge)
+while the duration ceiling *doubles* (the bridged gap plus both halves) — the
+two ceilings move in opposite directions, which is exactly the over-merge
+signature a real-corpus `silence_ms` sweep will read at the high end.
+
+**Verification:**
+- `python -m pytest tests/unit/test_replay_vad.py` → **83 passed** (79 + 4 new).
+- Full Python unit suite: `python -m pytest tests/unit/` → **2679 passed**
+  (2675 prior + 4 new).
+- Integration `tests/integration/test_vad_recordings.py` → skipped in the
+  worktree (the binary corpus lives only in the main checkout); the synthetic
+  over-merge demo above exercised the new aggregate directly.
+- (`tests/test_session.py` still errors on collection — pre-existing missing
+  `pipecat` dep, not a regression.)
+
+**Next planned items (from the research-doc backlog):**
+1. **[silence] Run the actual `--sweep silence_ms` over a newly-synced corpus**
+   — both ends are now legible (`max_onsets` = over-split floor, `max_segment_ms`
+   = over-merge ceiling), so gate a real `silence_ms` default change on a corpus
+   that exercises real mid-utterance pauses *and* two-turns-one-pause cases (the
+   seed corpus is flat in both windows).
+2. **[latency, highest value] Pre-warm the capture pipeline** — still the top
+   user-facing bug (3–5s `click_to_capture_ms`). Needs an on-device timing
+   harness; cannot be replayed.
+3. **[preroll-default] Bump the client `prerollMs` default above 0** — iter-200's
+   grid shows pre-roll improves the typical opening, the tail, AND the
+   consistency simultaneously; pick a value (256–512ms) and gate on a
+   busier/newly-synced corpus.
+4. **[gain] Add a gain×preroll grid finding** — quantify whether amplifying the
+   pre-roll audio changes the recovered soft-attack quality.
