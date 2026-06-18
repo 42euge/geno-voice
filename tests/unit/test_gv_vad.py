@@ -17,6 +17,7 @@ x86_64 Linux runner.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -254,6 +255,7 @@ def _args(**over):
         min_silence_ms=800.0,
         speech_pad_ms=30.0,
         max_speech_s=float("inf"),
+        json=False,
     )
     base.update(over)
     return argparse.Namespace(**base)
@@ -333,3 +335,160 @@ def test_cmd_vad_builds_real_silero_params():
     assert params.threshold == 0.4
     assert params.min_speech_ms == 120.0
     assert params.max_speech_s == 20.0
+
+
+# ---- parser: the --json flag -------------------------------------------
+
+
+def test_vad_json_defaults_false():
+    args = gv.build_parser().parse_args(["vad", "rec.wav"])
+    assert args.json is False
+
+
+def test_vad_json_flag_sets_true():
+    args = gv.build_parser().parse_args(["vad", "rec.wav", "--json"])
+    assert args.json is True
+
+
+# ---- render_vad_json: pure machine-readable presentation ---------------
+
+
+def test_render_json_none_marks_unavailable():
+    payload = json.loads(gv.render_vad_json(None))
+    assert payload["available"] is False
+    assert "silero-vad" in payload["hint"]
+    # No segmentation keys leak onto the degraded payload.
+    assert "segments" not in payload
+
+
+def test_render_json_empty_segments():
+    result = _Result(name="quiet.wav", sample_rate=16000, duration_s=4.0)
+    payload = json.loads(gv.render_vad_json(result, threshold=0.5))
+    assert payload["available"] is True
+    assert payload["name"] == "quiet.wav"
+    assert payload["sample_rate"] == 16000
+    assert payload["num_segments"] == 0
+    assert payload["speech_s"] == 0.0
+    assert payload["segments"] == []
+    assert payload["threshold"] == 0.5
+
+
+def test_render_json_lists_each_segment():
+    result = _Result(
+        name="rec.wav",
+        sample_rate=48000,
+        duration_s=31.3,
+        segments=[_Seg(1.6, 2.1), _Seg(10.7, 18.5)],
+    )
+    payload = json.loads(gv.render_vad_json(result, threshold=0.6))
+    assert payload["num_segments"] == 2
+    # speech total = 0.5 + 7.8 = 8.3s, rounded to 3 places
+    assert payload["speech_s"] == 8.3
+    segs = payload["segments"]
+    assert len(segs) == 2
+    assert segs[0] == {"start_s": 1.6, "end_s": 2.1, "duration_s": 0.5}
+    assert segs[1]["start_s"] == 10.7 and segs[1]["end_s"] == 18.5
+    assert payload["threshold"] == 0.6
+
+
+def test_render_json_omits_threshold_when_none():
+    result = _Result(name="r.wav", sample_rate=16000, duration_s=1.0)
+    payload = json.loads(gv.render_vad_json(result))  # no threshold kwarg
+    assert "threshold" not in payload
+
+
+def test_render_json_rounds_to_three_places():
+    # Sub-millisecond Silero boundaries must round to 3 places like to_dict().
+    result = _Result(
+        name="r.wav",
+        sample_rate=16000,
+        duration_s=1.23456,
+        segments=[_Seg(0.123456, 0.987654)],
+    )
+    payload = json.loads(gv.render_vad_json(result))
+    assert payload["duration_s"] == 1.235
+    assert payload["segments"][0]["start_s"] == 0.123
+    assert payload["segments"][0]["end_s"] == 0.988
+    assert payload["segments"][0]["duration_s"] == 0.864
+
+
+def test_render_json_matches_silero_to_dict_shape():
+    # The hand-built payload must carry the same segmentation keys as the
+    # engine's SileroResult.to_dict() so consumers can treat gv output and
+    # the replay/server output interchangeably. Skip if the engine is absent.
+    silero = pytest.importorskip("vad.silero")
+    result = silero.SileroResult(
+        name="rec.wav",
+        sample_rate=16000,
+        duration_s=5.0,
+        segments=[silero.SpeechSegment(0.5, 1.5)],
+    )
+    via_to_dict = result.to_dict()
+    via_render = json.loads(gv.render_vad_json(result))
+    # Every key to_dict() emits is present in the render with equal values.
+    for key, value in via_to_dict.items():
+        assert via_render[key] == value
+
+
+# ---- cmd_vad: the --json branch ----------------------------------------
+
+
+def test_cmd_vad_json_unavailable_emits_unavailable_payload():
+    lines: List[str] = []
+    gv.cmd_vad(
+        _args(json=True),
+        log=lines.append,
+        segmenter=lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("must not segment when unavailable")
+        ),
+        availability=lambda: False,
+    )
+    # One JSON document, parseable, marking the degraded path.
+    assert len(lines) == 1
+    payload = json.loads(lines[0])
+    assert payload["available"] is False
+
+
+def test_cmd_vad_json_emits_segmentation_payload():
+    lines: List[str] = []
+
+    def seg(wav, params=None):
+        return _Result(
+            name="rec.wav",
+            sample_rate=16000,
+            duration_s=5.0,
+            segments=[_Seg(0.5, 1.5), _Seg(2.0, 4.0)],
+        )
+
+    gv.cmd_vad(
+        _args(json=True, threshold=0.6),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert len(lines) == 1
+    payload = json.loads(lines[0])
+    assert payload["available"] is True
+    assert payload["num_segments"] == 2
+    assert payload["threshold"] == 0.6
+    assert payload["segments"][0]["start_s"] == 0.5
+
+
+def test_cmd_vad_without_json_stays_human_readable():
+    # Regression guard: omitting --json keeps the multi-line text report, not
+    # a single JSON blob.
+    lines: List[str] = []
+
+    def seg(wav, params=None):
+        return _Result(
+            name="rec.wav",
+            sample_rate=16000,
+            duration_s=5.0,
+            segments=[_Seg(0.5, 1.5)],
+        )
+
+    gv.cmd_vad(_args(json=False), log=lines.append, segmenter=seg, availability=lambda: True)
+    # Multiple human-readable lines, and the first is NOT valid JSON.
+    assert len(lines) > 1
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(lines[0])

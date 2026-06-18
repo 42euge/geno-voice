@@ -9,10 +9,12 @@ Usage:
     gv simulate-mirror …  # offline WPM-mirror trajectory / grid-sweep simulator
     gv calibrate-base-wpm … # offline base_wpm calibration (--verdict for an adopt/keep call)
     gv vad recording.wav  # offline Silero VAD — segment a WAV into speech regions
+    gv vad recording.wav --json # machine-readable segmentation (SileroResult.to_dict shape)
     gv <cmd> --model ...  # override STT model
 """
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -447,6 +449,54 @@ def render_vad_segments(result, *, threshold=None):
     return lines
 
 
+def render_vad_json(result, *, threshold=None):
+    """Render a Silero ``SileroResult`` (iter-231) as a JSON string.
+
+    The machine-readable twin of :func:`render_vad_segments`, mirroring
+    ``fixtures/replay_silero.py --json`` / ``SileroResult.to_dict`` so the
+    segmentation can feed scripts and tooling, not just human eyes. Pure:
+    returns a single JSON string (no I/O) built from the result's attributes —
+    it does NOT call ``result.to_dict()``, so it works on any object exposing
+    the ``SileroResult`` shape (lets tests drive it without importing torch).
+
+    ``result`` of ``None`` (no segmenter available) yields an object with
+    ``{"available": false}`` plus the install hint, so a consumer can detect
+    the degraded path from the JSON itself rather than parsing prose. When
+    ``threshold`` is supplied it is echoed into the payload alongside the
+    segmentation, matching the human report's threshold line.
+    """
+    if result is None:
+        return json.dumps(
+            {
+                "available": False,
+                "hint": (
+                    "install 'silero-vad' (pulls torch + torchaudio) to enable "
+                    "offline neural segmentation"
+                ),
+            },
+            indent=2,
+        )
+    payload = {
+        "available": True,
+        "name": result.name,
+        "sample_rate": result.sample_rate,
+        "duration_s": round(result.duration_s, 3),
+        "num_segments": result.num_segments,
+        "speech_s": round(result.speech_s, 3),
+        "segments": [
+            {
+                "start_s": round(seg.start_s, 3),
+                "end_s": round(seg.end_s, 3),
+                "duration_s": round(seg.duration_s, 3),
+            }
+            for seg in result.segments
+        ],
+    }
+    if threshold is not None:
+        payload["threshold"] = threshold
+    return json.dumps(payload, indent=2)
+
+
 def _load_wpm_mirror():
     """Load ``session/wpm_mirror.py`` directly by file path.
 
@@ -570,9 +620,14 @@ def cmd_vad(args, *, log=print, segmenter=None, availability=None):
         segmenter = segment_recording if segmenter is None else segmenter
         availability = silero_available if availability is None else availability
 
+    as_json = getattr(args, "json", False)
+
     if not availability():
-        for line in render_vad_segments(None):
-            log(line)
+        if as_json:
+            log(render_vad_json(None))
+        else:
+            for line in render_vad_segments(None):
+                log(line)
         return
 
     from vad.silero import SileroParams
@@ -585,8 +640,11 @@ def cmd_vad(args, *, log=print, segmenter=None, availability=None):
         max_speech_s=args.max_speech_s,
     )
     result = segmenter(args.wav, params=params)
-    for line in render_vad_segments(result, threshold=args.threshold):
-        log(line)
+    if as_json:
+        log(render_vad_json(result, threshold=args.threshold))
+    else:
+        for line in render_vad_segments(result, threshold=args.threshold):
+            log(line)
 
 
 def cmd_bench(args):
@@ -871,6 +929,12 @@ def build_parser():
         dest="max_speech_s",
         help="Force-split regions longer than this, in seconds; 'inf'/'none' "
         "never splits (default: inf)",
+    )
+    vad.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON instead of the human-readable report "
+        "(mirrors fixtures/replay_silero.py --json / SileroResult.to_dict)",
     )
 
     return parser

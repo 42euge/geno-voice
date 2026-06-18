@@ -18,6 +18,7 @@ Skips cleanly when the recordings (large binary captures, not committed) or
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -61,6 +62,7 @@ def _vad_args(wav: Path, **over):
         min_silence_ms=800.0,
         speech_pad_ms=30.0,
         max_speech_s=float("inf"),
+        json=False,
     )
     base.update(over)
     return argparse.Namespace(**base)
@@ -115,3 +117,36 @@ def test_gv_vad_threshold_knob_changes_segmentation():
     strict_speech = speech_total(_run(wav, threshold=0.95))
     # A stricter gate can only keep or shrink recovered speech, never grow it.
     assert strict_speech <= default_speech + 1e-6
+
+
+def test_gv_vad_json_emits_parseable_segmentation():
+    """iter-234: ``gv vad --json`` over THE GATE recording emits a single
+    parseable JSON document whose segmentation matches the human report."""
+    wav = RECORDINGS_DIR / CONTINUOUS_31S
+    if not wav.exists():
+        pytest.skip(f"{CONTINUOUS_31S} not present")
+
+    json_lines = _run(wav, json=True)
+    # The whole report is one JSON document emitted via a single log() call.
+    assert len(json_lines) == 1
+    payload = json.loads(json_lines[0])
+    assert payload["available"] is True
+    assert payload["name"] == CONTINUOUS_31S
+    assert payload["threshold"] == 0.5
+    # ≥2 segments — the same GATE the human report pins.
+    assert payload["num_segments"] >= 2
+    assert len(payload["segments"]) == payload["num_segments"]
+    # speech_s equals the sum of per-segment durations (engine invariant).
+    summed = sum(s["duration_s"] for s in payload["segments"])
+    assert abs(summed - payload["speech_s"]) <= 0.01
+
+
+@pytest.mark.parametrize("wav", RECORDINGS, ids=[p.name for p in RECORDINGS])
+def test_gv_vad_json_matches_human_report_counts(wav: Path):
+    """For every recording, the --json segment count matches the human report's
+    "[ n]" rows — the two surfaces describe the same segmentation."""
+    human = _run(wav)
+    human_rows = [ln for ln in human if ln.lstrip().startswith("[")]
+
+    payload = json.loads(_run(wav, json=True)[0])
+    assert payload["num_segments"] == len(human_rows)

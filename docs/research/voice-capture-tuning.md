@@ -86,6 +86,7 @@ CLI exposes the same batch segmenter:
 gv vad recording.wav                             # speech regions for one WAV
 gv vad recording.wav --threshold 0.7             # stricter P(speech) gate
 gv vad recording.wav --min-silence-ms 500        # shorter end-of-turn hangover
+gv vad recording.wav --json                      # machine-readable (iter-234)
 ```
 
 The defaults track `SileroParams` (`threshold=0.5`, `min_speech_ms=250`,
@@ -98,6 +99,15 @@ degrade-don't-die contract as the server's 503). `cmd_vad` takes injected
 `segmenter`/`availability`/`log` seams so `tests/unit/test_gv_vad.py` covers it
 without torch; `tests/integration/test_gv_vad_cli.py` runs it over the real
 corpus and re-pins the 31s ≥2-segment gate through the CLI.
+
+**`--json` (iter-234)** swaps the human report for a single JSON document so the
+segmentation can feed scripts and tooling, mirroring
+`fixtures/replay_silero.py --json` / `SileroResult.to_dict`. The payload carries
+the same keys (`name`, `sample_rate`, `duration_s`, `num_segments`, `speech_s`,
+`segments[]` of `start_s`/`end_s`/`duration_s`, all rounded to 3 places) plus an
+`available` flag and the echoed `threshold`. On a host without `silero-vad` the
+JSON is `{"available": false, "hint": …}` so a consumer detects the degraded
+path from the document itself rather than parsing prose.
 
 ### Silero vs energy-VAD segment counts (the headless proof)
 
