@@ -386,12 +386,13 @@ def test_dispatch_unknown_command_prints_help_returns_1(capsys):
 
 
 def test_dispatch_default_handlers_are_the_real_cmds():
-    # The default handler map wires the four real command functions.
+    # The default handler map wires the real command functions.
     assert gv.DEFAULT_HANDLERS == {
         "bench": gv.cmd_bench,
         "stream": gv.cmd_stream,
         "talk": gv.cmd_talk,
         "chat": gv.cmd_chat,
+        "simulate-mirror": gv.cmd_simulate_mirror,
     }
 
 
