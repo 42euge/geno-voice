@@ -17174,3 +17174,78 @@ What changed:
 4. **[gain] Add a gain×preroll grid finding** — now that both knobs are wired
    into the client, quantify whether amplifying the pre-roll audio changes the
    recovered soft-attack quality.
+
+---
+
+## iter-196 — wire a tunable speech-onset debounce into the client ContinuousListener
+
+**Branch:** `iter-196-client-debounce` (merged ff to main, commit `957feb3`)
+**Date:** 2026-06-17
+
+**Improvement (research-doc backlog item 5, iter-195 next-planned #2):** The
+live `ContinuousListener` in `client/voice-capture.js` decides whether a
+sub-threshold→over-threshold transition becomes real "speaking" by requiring the
+candidate RMS to hold strictly over `silenceThreshold` for longer than a debounce
+window — but that window was a **hard-coded `200` literal** in `_handleFrame`,
+the last of the three onset-shaping knobs not yet exposed. The replay harness has
+modelled it as a tunable `VadParams.debounce_ms` field since iter-190, and the
+iter-190 sweep (`--sweep debounce_ms`) showed 100–200ms all keep `trig=4/4` on the
+seed corpus while 300ms drops a recording. iter-193 (pre-roll) and iter-195 (gain)
+established the pattern: add a validated constructor option, default to exact
+historical parity, mirror the replay-harness field. This lap ships the third knob
+following that same shape.
+
+What changed:
+- **`client/voice-capture.js`** — `ContinuousListener` now accepts a
+  `debounceMs` option (default `200` = exact parity with the historical literal).
+  - Constructor validates: `Number.isFinite(debounceMs) && debounceMs >= 0` else
+    falls back to `200` (so `NaN`, `Infinity`, negatives can't silently break the
+    onset gate). Unlike `gain`, **`0` is allowed and meaningful**: a candidate
+    that survives one more over-threshold frame (`elapsed > 0`) commits
+    immediately — the loosest setting.
+  - `_handleFrame` replaces the literal `performance.now() - this._speechCandidate
+    > 200` with `> this.debounceMs`. Nothing else in the state machine changes —
+    the consecutive-hold semantics (a single below-threshold frame still clears
+    the candidate) are untouched, so a shorter debounce only changes *how long*
+    the hold must last, not *that* it must be unbroken.
+- **`client/voice-capture.test.js`** — 7 new tests (28 → 35 total). A
+  `committedAfter(listener, feedFrames, n)` helper feeds `n` held-loud frames and
+  returns `listener.speaking`. Each fed frame advances the stubbed clock by
+  `FRAME_MS` (~21.33ms), so commit needs the elapsed-since-first-candidate to
+  exceed `debounceMs`. Coverage:
+  - **default `debounceMs === 200`** (parity assertion).
+  - **default frame-count boundary**: 10 loud frames stay under the 200ms hold
+    (no commit), 11 cross it (commit).
+  - **shorter debounce** (`50`): 4 frames commit — and a default 200ms listener
+    on the same 4 frames does NOT, proving the knob moves the boundary.
+  - **longer debounce** (`400`): the usual 14-frame commit burst is no longer
+    enough; 21 frames are needed.
+  - **`debounceMs=0`**: commits on the 2nd over-threshold frame.
+  - **fallback**: `-50` / `NaN` / `Infinity` → 200.
+  - **consecutive-hold reset**: a quiet frame mid-candidate clears it, so even a
+    short debounce never commits across an interruption.
+- **`docs/research/voice-capture-tuning.md`** — backlog item 5 updated: the
+  client knob is wired, defaults to 200, validated; next step is to validate
+  onset *timing* on the corpus before lowering the *default* below 200.
+
+**Verification:**
+- JS suite: `cd client && npm test` (`node --test`, node v22) → **35 passed,
+  0 failed** (28 prior + 7 new).
+- Full Python unit suite: `python -m pytest tests/unit/` → **2657 passed**
+  (unchanged — no Python touched this lap).
+- (`tests/test_session.py` still errors on collection — pre-existing missing
+  `pipecat` dep, not a regression.)
+
+**Next planned items (from the research-doc backlog):**
+1. **[latency, highest value] Pre-warm the capture pipeline** — still the top
+   user-facing bug (3–5s `click_to_capture_ms`). Needs an on-device timing
+   harness; cannot be replayed.
+2. **[debounce-timing] Validate onset *timing* (first `onset_ms`) moves earlier
+   at debounce 100ms** on the seed corpus — the missing evidence before lowering
+   the client *default* below 200; pairs with the now-wired pre-roll (iter-193)
+   and the new `debounceMs` knob.
+3. **[grid] Add a `--grid` finding for `debounce_ms × preroll_ms`** in the
+   replay harness — the two axes that both touch onset *timing*, now both
+   reachable as client knobs.
+4. **[gain] Add a gain×preroll grid finding** — quantify whether amplifying the
+   pre-roll audio changes the recovered soft-attack quality.
