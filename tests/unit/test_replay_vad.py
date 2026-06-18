@@ -327,6 +327,7 @@ class TestAggregateResults:
         assert point.mean_pct_over == 0.0
         assert point.min_onsets == 0
         assert point.mean_first_onset_ms == 0.0
+        assert point.max_first_onset_ms == 0.0
 
     def test_aggregates_across_corpus(self, tmp_path):
         corpus = _make_corpus(tmp_path)
@@ -378,6 +379,33 @@ class TestAggregateResults:
         assert all(not r.segments for r in results)
         point = aggregate_results(VadParams(threshold=0.006), results)
         assert point.mean_first_onset_ms == 0.0
+        assert point.max_first_onset_ms == 0.0
+
+    def test_max_first_onset_is_latest_detected_recording(self, tmp_path):
+        corpus = _make_corpus(tmp_path)
+        results = replay_all(corpus, VadParams(threshold=0.006))
+        point = aggregate_results(VadParams(threshold=0.006), results)
+        first_onsets = [r.segments[0].onset_ms for r in results if r.segments]
+        assert first_onsets, "fixture should detect speech in at least one rec"
+        # The worst-case ceiling is the max over the same detected onsets the
+        # mean averages — never below the mean, never above any actual onset.
+        assert point.max_first_onset_ms == pytest.approx(max(first_onsets))
+        assert point.max_first_onset_ms >= point.mean_first_onset_ms
+
+    def test_max_first_onset_excludes_missed_recordings(self, tmp_path):
+        corpus = _make_corpus(tmp_path)
+        # At 0.015 one recording misses; the ceiling must reflect only the
+        # detected recording's onset, not be skewed by the miss (which has no
+        # onset time at all).
+        results = replay_all(corpus, VadParams(threshold=0.015))
+        detected = [r for r in results if r.segments]
+        missed = [r for r in results if not r.segments]
+        assert detected and missed, "fixture must mix a hit and a miss at 0.015"
+        point = aggregate_results(VadParams(threshold=0.015), results)
+        assert point.max_first_onset_ms == pytest.approx(
+            max(r.segments[0].onset_ms for r in detected)
+        )
+        assert point.max_first_onset_ms > 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -610,6 +638,8 @@ class TestSweepCli:
         out = capsys.readouterr().out
         # The onset-timing aggregate is surfaced in the human table.
         assert "onset1=" in out
+        # ...as is its worst-case ceiling.
+        assert "onset1_max=" in out
 
     def test_sweep_json_includes_mean_first_onset(self, tmp_path, capsys):
         corpus = _make_corpus(tmp_path)
@@ -620,6 +650,17 @@ class TestSweepCli:
         payload = _json.loads(capsys.readouterr().out)
         assert "mean_first_onset_ms" in payload[0]
         assert payload[0]["mean_first_onset_ms"] > 0.0
+
+    def test_sweep_json_includes_max_first_onset(self, tmp_path, capsys):
+        corpus = _make_corpus(tmp_path)
+        rc = main(["--sweep", "threshold", "--sweep-values", "0.006", "--dir", str(corpus), "--json"])
+        assert rc == 0
+        import json as _json
+
+        payload = _json.loads(capsys.readouterr().out)
+        assert "max_first_onset_ms" in payload[0]
+        # The ceiling is never below the mean over the same detected set.
+        assert payload[0]["max_first_onset_ms"] >= payload[0]["mean_first_onset_ms"]
 
 
 # ---------------------------------------------------------------------------
@@ -644,6 +685,9 @@ class TestGridCli:
         # Each cell labels both axes.
         assert out.count("threshold=") == 4
         assert out.count("gain=") == 4
+        # The grid table carries both onset-timing aggregates per cell.
+        assert out.count("onset1=") == 4
+        assert out.count("onset1_max=") == 4
 
     def test_grid_json_row_major(self, tmp_path, capsys):
         corpus = _make_corpus(tmp_path)

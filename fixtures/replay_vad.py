@@ -411,6 +411,17 @@ class SweepPoint:
                          Recordings with no segments are excluded (a missed
                          recording has no onset time; counting it as 0ms
                          would falsely read as "earliest possible").
+    ``max_first_onset_ms`` — the *latest* first-segment ``onset_ms`` any
+                         single detected recording got (the worst-case
+                         recording for onset *timing*). This is to
+                         ``mean_first_onset_ms`` what ``min_onsets`` is to
+                         ``total_onsets``: the mean can look great while one
+                         recording is captured far too late, so a tuning sweep
+                         wants to minimize this ceiling, not just the mean —
+                         one badly-late onset is a real regression. Excludes
+                         missed recordings on the same reasoning as the mean
+                         (no segment → no onset time); ``0.0`` when nothing
+                         detected.
     """
 
     params: VadParams
@@ -421,6 +432,7 @@ class SweepPoint:
     mean_pct_over: float
     min_onsets: int
     mean_first_onset_ms: float
+    max_first_onset_ms: float
 
     def summary_line(self, label_key: str = "threshold") -> str:
         value = getattr(self.params, label_key)
@@ -431,7 +443,8 @@ class SweepPoint:
             f"onsets={self.total_onsets:<3} "
             f"speak_frames={self.total_speaking_frames:<5} "
             f"mean_over={self.mean_pct_over:5.1f}% "
-            f"onset1={self.mean_first_onset_ms:6.1f}ms"
+            f"onset1={self.mean_first_onset_ms:6.1f}ms "
+            f"onset1_max={self.max_first_onset_ms:6.1f}ms"
         )
 
 
@@ -449,6 +462,10 @@ def aggregate_results(params: VadParams, results: List[ReplayResult]) -> SweepPo
     # "earliest possible", masking the miss as great timing.
     first_onsets = [r.segments[0].onset_ms for r in results if r.segments]
     mean_first_onset = (sum(first_onsets) / len(first_onsets)) if first_onsets else 0.0
+    # Worst-case onset timing: the latest first onset across detected
+    # recordings. The mean can hide a single very-late capture; this ceiling
+    # exposes it, mirroring how min_onsets exposes the worst-case count.
+    max_first_onset = max(first_onsets) if first_onsets else 0.0
     return SweepPoint(
         params=params,
         recordings=n,
@@ -458,6 +475,7 @@ def aggregate_results(params: VadParams, results: List[ReplayResult]) -> SweepPo
         mean_pct_over=mean_over,
         min_onsets=min_onsets,
         mean_first_onset_ms=mean_first_onset,
+        max_first_onset_ms=max_first_onset,
     )
 
 
@@ -609,7 +627,8 @@ def _grid_summary_line(p: SweepPoint, param_a: str, param_b: str) -> str:
         f"onsets={p.total_onsets:<3} "
         f"speak_frames={p.total_speaking_frames:<5} "
         f"mean_over={p.mean_pct_over:5.1f}% "
-        f"onset1={p.mean_first_onset_ms:6.1f}ms"
+        f"onset1={p.mean_first_onset_ms:6.1f}ms "
+        f"onset1_max={p.max_first_onset_ms:6.1f}ms"
     )
 
 

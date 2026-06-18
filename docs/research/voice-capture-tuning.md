@@ -77,7 +77,11 @@ great timing (it would otherwise fold in a 0ms onset). This is the
 aggregate the onset-shaping knobs (`debounce_ms`, `preroll_ms`) move —
 the count aggregates stay flat while timing shifts — so a single sweep now
 shows timing moving earlier without hand-inspecting each recording's
-`--json`.
+`--json`. iter-198 adds the companion `onset1_max` column: the *latest*
+first onset across detected recordings — the worst-case ceiling a sweep
+wants to *minimize*. It is to `onset1` what `min_onsets` is to `onsets`:
+the mean can look great while one recording is captured far too late, and
+that single bad onset is a real regression the mean would hide.
 
 `tests/integration/test_vad_recordings.py` turns every recording into a
 regression test (the data flywheel): the more the user talks to the app,
@@ -265,6 +269,44 @@ levers stack: a 100ms debounce + 256ms pre-roll would pull the opening
 earlier on both axes. This is the replay-validated case for lowering the
 client `debounceMs` *default* below 200 (the knob has shipped since
 iter-196) once the busier corpus confirms it holds.
+
+### Worst-case onset ceiling (iter-198)
+
+The `onset1` mean above answers "does timing move earlier on average?" but
+hides a single recording captured far too late — exactly the failure
+`min_onsets` exists to catch on the *count* axis. iter-198 adds the
+companion `onset1_max` column: the latest first onset across detected
+recordings, a ceiling a sweep wants to *minimize*. The same two sweeps,
+now showing both:
+
+```
+python fixtures/replay_vad.py --sweep debounce_ms --sweep-values 100,200,300
+```
+| debounce_ms | trig | onset1 (mean) | onset1_max (worst) |
+|-------------|------|---------------|--------------------|
+| **100** | 4/4 | **1271.3ms** | 2995.4ms |
+| 200 (default) | 4/4 | 1532.5ms | 2995.4ms |
+| 300 | **3/4** | 2190.4ms | **3343.7ms** |
+
+```
+python fixtures/replay_vad.py --sweep preroll_ms --sweep-values 0,256,512
+```
+| preroll_ms | trig | onset1 (mean) | onset1_max (worst) |
+|------------|------|---------------|--------------------|
+| 0 (default) | 4/4 | 1532.5ms | 2995.4ms |
+| 256 | 4/4 | 1282.9ms | 2740.0ms |
+| 512 | 4/4 | 1091.3ms | 2484.5ms |
+
+**What the ceiling reveals that the mean does not:** lowering the debounce
+200→100ms pulls the *mean* ~261ms earlier yet leaves `onset1_max` pinned at
+**2995ms** — the worst recording isn't debounce-limited, so the debounce
+knob can't help its slow opening (one recording simply has a late real
+speech start). Pre-roll, by contrast, moves *both* numbers in lockstep
+(it shifts the emitted onset of every detected recording uniformly), so it
+pulls the ceiling down too (2995→2484ms at 512ms pre-roll). That is the
+practical takeaway for backlog item 5: a smaller debounce improves the
+*typical* opening but does nothing for the worst case, whereas pre-roll is
+the lever that tightens the tail — they are complementary, not redundant.
 
 ## Findings & backlog (prioritized)
 
