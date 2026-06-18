@@ -19043,3 +19043,107 @@ behavior.
    grid shows pre-roll improves the typical opening, the tail, AND the
    consistency simultaneously; pick a value (256–512ms) and gate on a
    busier/newly-synced corpus.
+
+---
+
+## iter-217 — Offline base_wpm × strength grid sweep + data-driven picker (backlog #1)
+
+**Branch:** `iter-217-mirror-tuning` (merged ff to main, commit `5223053`)
+**Date:** 2026-06-18
+
+**Improvement (a grid-sweep harness that scores `base_wpm` × `strength`
+candidates over a realistic arc so the tunables can be picked from data):**
+This lap advances iter-216 backlog item #1 — "use the simulator to pick
+`base_wpm`/`strength` from data." iter-213 shipped the pure `user_wpm → bot
+speed` mirror; iter-214 wired it into the live TTS path; iter-215 surfaced the
+per-session start→end drift in the summary; iter-216 shipped
+`simulate_speed_trajectory`, the single-config offline twin of the live
+`SpeedController` fold. The loop now **adapts**, **measures**, and can
+**simulate** the rate — but the tunables (`base_wpm` 165, `strength` 0.5) were
+still the seed defaults, never *compared* against alternatives over a sequence
+of varied pacing. This lap builds the missing comparison harness, the same
+shape as the VAD `sweep_param` harness (`fixtures/replay_vad.py`): fold a
+parameter grid over a fixed "corpus" (here the per-turn `user_wpm` arc) into one
+machine-readable row per cell, then aggregate into a verdict.
+
+What changed (`session/wpm_mirror.py`):
+- **`sweep_mirror_grid(user_wpms, base_wpms, strengths, initial_speed=1.0,
+  template=None)`** — replays one `user_wpm` arc through every
+  `(base_wpm, strength)` cell, cloning the non-grid tunables
+  (`min_speed`/`max_speed`/`min_delta`) from `template` (seed defaults when
+  `None`) so only the two grid axes vary. Returns one `MirrorGridPoint` per cell
+  in row-major order (outer `base_wpms`, inner `strengths`). Each cell is one
+  `simulate_speed_trajectory` call — the *same* fold the live path runs, so the
+  verdict transfers.
+- **`MirrorGridPoint`** (frozen) — carries the cell's tunables alongside the
+  convergence (`final_gap`), lurch (`max_step`), and churn (`moves`)
+  diagnostics, plus a lower-is-better `score(lurch_weight) =
+  |final_gap| + lurch_weight * max_step`. `abs_final_gap`/`score` return `None`
+  for an unscorable cell (no measurable turn), so a picker can skip it.
+- **`pick_best_mirror_config(points, lurch_weight=0.5)`** — returns the
+  lowest-score cell, earliest-tie (matching `_longest_consecutive_run` and the
+  VAD sweep), skipping unscorable cells; `None` on an empty/all-unscorable grid.
+- **`DEFAULT_LURCH_WEIGHT = 0.5`** — a smooth approach matters, but converging
+  to the user's pace matters twice as much (a slight lag is less jarring than a
+  per-turn lurch, but never reaching the user's pace defeats the mirror).
+- Added the three symbols + `DEFAULT_LURCH_WEIGHT` to `__all__`.
+
+**Why the seed defaults are NOT changed this lap.** Running the harness over the
+realistic slow→fast→slow demo arc `[120,140,200,230,200,140,120]` picks
+`base_wpm=180, strength=0.5` — but that arc ends in a **band-clamped** slow tail
+(120 WPM / any base → below the 0.8 `min_speed` floor), so the `final_gap`
+convergence term is biased toward whichever base pushes the final speed lowest,
+an artifact of the clamp rather than real pacing-tracking. Picking real defaults
+needs a corpus with genuinely varied, *non-clamped* pacing (rates staying inside
+the 0.8–1.3 band). The deliverable here is the **harness**, now in place to score
+such a corpus; flipping the seed defaults waits for that corpus.
+
+**Off-by-default invariant untouched.** The harness only ever builds `enabled`
+configs for offline scoring, and nothing in the live `mic_chat` /
+`pipecat_server` path imports it — a pure, read-only analysis tool (no I/O, no
+clock, no mutation of inputs) that cannot change runtime behavior or the proven
+fixed-rate default path.
+
+**Verification:**
+- New tests: `python -m pytest tests/unit/test_sweep_mirror_grid.py
+  tests/unit/test_simulate_speed_trajectory.py tests/unit/test_wpm_mirror.py`
+  → **89 passed** (18 new + 71 existing). Coverage: grid shape (one cell/pair,
+  row-major order, empty axes, int axes); each cell equals a direct
+  `simulate_speed_trajectory` call; `initial_speed` and `template`
+  band/deadband threaded through; score formula + `lurch_weight` + unscorable
+  `None`; picker lowest-score / lurch-penalty / empty / all-unscorable /
+  earliest-tie; a data-driven pick over the realistic arc stays in band; purity
+  (no input mutation) and determinism.
+- Full Python unit suite: `python -m pytest tests/unit/` → **2965 passed**
+  (2947 prior + 18 new), run on the feature branch before ff-merge. GATE
+  command: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/`.
+  Re-verified `test_sweep_mirror_grid.py` (18 passed) on main after merge.
+- `python -W error::SyntaxWarning -m py_compile session/wpm_mirror.py
+  tests/unit/test_sweep_mirror_grid.py` clean.
+- (`tests/test_session.py` still errors on collection — pre-existing missing
+  `pipecat` dep, not a regression.)
+
+**Next planned items:**
+1. **[wpm-mirroring, follow-on] Render a varied-pacing corpus that stays in the
+   intelligibility band and run the grid sweep on it for real.** The harness now
+   exists; the blocker is a corpus whose per-turn `user_wpm` arc varies *within*
+   0.8–1.3 (≈130–215 WPM at base 165) so `final_gap` measures tracking, not the
+   `min_speed`/`max_speed` clamp. Render slow↔fast turns inside the band, run
+   `sweep_mirror_grid` over `base_wpm` {150,165,180} × `strength` {0.3,0.5,0.7},
+   and either change the seed defaults from `pick_best_mirror_config`'s verdict
+   or document why 165/0.5 stand. Optionally expose it as a `gv`/`mic_chat
+   --simulate-mirror` sub-command for offline operator validation.
+2. **[silence] Run the actual `--sweep silence_ms` over a newly-synced corpus**
+   — the sweep harness carries the full floor/typical/ceiling/spread shape on
+   all three axes from one shared renderer (iter-207). Gate a real `silence_ms`
+   default change on a corpus that exercises real mid-utterance pauses *and*
+   two-turns-one-pause cases (the seed corpus is flat in both windows).
+3. **[latency, highest value] Pre-warm the capture pipeline** — still the top
+   user-facing bug (3–5s `click_to_capture_ms`). Needs an on-device timing
+   harness; cannot be replayed. The iter-208..212 sentinels now make
+   playback-side, recording-loop, mid-stream-LLM, and end-to-end TTFS slowdowns
+   visible in session summaries.
+4. **[preroll-default] Bump the client `prerollMs` default above 0** — iter-200's
+   grid shows pre-roll improves the typical opening, the tail, AND the
+   consistency simultaneously; pick a value (256–512ms) and gate on a
+   busier/newly-synced corpus.
