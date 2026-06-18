@@ -17106,3 +17106,71 @@ What changed:
    and the new state-machine tests.
 4. **[grid] Add a `--grid` finding for `debounce_ms × preroll_ms`** in the
    replay harness — the two axes that both touch onset *timing*.
+
+---
+
+## iter-195 — wire a software gain stage into the client ContinuousListener
+
+**Branch:** `iter-195-client-gain` (merged ff to main, commit `6333567`)
+**Date:** 2026-06-17
+
+**Improvement (research-doc backlog item 4, iter-194 next-planned #2):** The
+replay harness has modelled a software `gain` stage since iter-190
+(`fixtures/replay_vad.py` `frame_rms`: `samples * gain`), and the iter-192
+`--grid threshold,gain` sweep quantified the joint envelope: at threshold 0.015
+the far-field `voice-20260617-135015` misses at gain 1.0 but **1.5× gain
+recovers it** (`trig` 3/4 → 4/4) — a louder signal lets a stricter RMS gate
+still catch quiet far-field speech. But the live `ContinuousListener` in
+`client/voice-capture.js` had no gain knob, so that operating envelope wasn't
+reachable in the client. This lap ships the tunable knob, defaulting to unity
+so the historical path is untouched.
+
+What changed:
+- **`client/voice-capture.js`** — `ContinuousListener` now accepts a `gain`
+  option (default `1.0`).
+  - Constructor validates: `Number.isFinite(gain) && gain > 0` else falls back
+    to `1.0` (so `0`, negatives, `NaN`, `Infinity` can't silently break the
+    pipeline).
+  - New `_applyGain(input)` multiplies every sample by `this.gain`, returning a
+    new `Float32Array`. **Unity gain returns the input array unchanged** — a
+    zero-copy no-op, so the default path allocates nothing extra.
+  - `_handleFrame` calls `input = this._applyGain(input)` as its first step
+    (after the `active` guard), so RMS detection, the raw callback, the
+    committed segment, and the pre-roll ring all see the **same** amplified
+    signal — equivalent to a `gainNode` sitting upstream in the audio graph,
+    and a faithful mirror of the replay harness's pre-RMS multiply. Amplified
+    audio therefore flows into the committed WAV too, so STT sees the louder
+    signal (what a real upstream gain stage would also do).
+- **`client/voice-capture.test.js`** — 8 new tests (20 → 28 total):
+  default gain 1.0 + `_applyGain` zero-copy identity, unity fallback for
+  `0`/`-2`/`NaN`/`Infinity`, per-sample scaling (0.25 → 0.5 at 2×), **far-field
+  recovery** (a 0.01 frame sits under the 0.015 gate → no commit at 1×, commits
+  at 2× where rms 0.02 > 0.015), gain=1.0 segment-amplitude parity, gain>1
+  segment amplification (0.5 → 1.0 at 2×, so STT sees the louder signal),
+  raw-callback post-gain buffer+rms reporting, and amplified frames folding
+  into the pre-roll ring.
+- **`docs/research/voice-capture-tuning.md`** — marked backlog item 4 done with
+  the client-wiring summary; noted the chosen client operating point stays gain
+  1.0 (the grid shows unity already gives `trig=4/4` on the seed corpus) and the
+  knob is the documented hedge for a busier corpus needing a stricter threshold.
+
+**Verification:**
+- JS suite: `cd client && npm test` (`node --test`, node v22) → **28 passed,
+  0 failed** (20 prior + 8 new).
+- Full Python unit suite: `python -m pytest tests/unit/` → **2657 passed**
+  (unchanged — no Python touched this lap).
+- (`tests/test_session.py` still errors on collection — pre-existing missing
+  `pipecat` dep, not a regression.)
+
+**Next planned items (from the research-doc backlog):**
+1. **[latency, highest value] Pre-warm the capture pipeline** — still the top
+   user-facing bug (3–5s `click_to_capture_ms`). Needs an on-device timing
+   harness; cannot be replayed.
+2. **[debounce] Validate onset *timing* moves earlier at 100ms** before
+   lowering the client's hard-coded 200ms — pairs with the now-wired pre-roll
+   (iter-193) and gain (iter-195); the JS suite can cover the new debounce knob.
+3. **[grid] Add a `--grid` finding for `debounce_ms × preroll_ms`** in the
+   replay harness — the two axes that both touch onset *timing*.
+4. **[gain] Add a gain×preroll grid finding** — now that both knobs are wired
+   into the client, quantify whether amplifying the pre-roll audio changes the
+   recovered soft-attack quality.
