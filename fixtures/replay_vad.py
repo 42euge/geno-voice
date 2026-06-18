@@ -607,10 +607,22 @@ class SweepPoint:
     mean_segment_ms: float
     std_segment_ms: float
 
-    def summary_line(self, label_key: str = "threshold") -> str:
-        value = getattr(self.params, label_key)
+    def metrics_columns(self) -> str:
+        """The label-independent metrics block shared by every sweep table.
+
+        This is the single source of truth for the corpus-aggregate columns —
+        every statistic from ``trig=`` onward (the detection counts and the
+        full count/timing/duration axes). Both the single-axis sweep
+        (``summary_line``) and the 2-D grid (``_grid_summary_line``) emit the
+        *same* columns; only the leading parameter label differs. Keeping the
+        columns here (rather than copy-pasted into each renderer) means a new
+        aggregate column — as iters 201–206 added one per lap — is written
+        once and both tables stay in lockstep automatically. Before this
+        extraction the two renderers were byte-identical from ``trig=`` onward
+        and were kept in sync only by hand-editing both every lap, a standing
+        drift hazard.
+        """
         return (
-            f"{label_key}={value:<8} "
             f"trig={self.triggered}/{self.recordings}  "
             f"min_onsets={self.min_onsets:<2} "
             f"max_onsets={self.max_onsets:<2} "
@@ -627,6 +639,10 @@ class SweepPoint:
             f"max_seg={self.max_segment_ms:7.1f}ms "
             f"seg_std={self.std_segment_ms:7.1f}ms"
         )
+
+    def summary_line(self, label_key: str = "threshold") -> str:
+        value = getattr(self.params, label_key)
+        return f"{label_key}={value:<8} " + self.metrics_columns()
 
 
 def aggregate_results(params: VadParams, results: List[ReplayResult]) -> SweepPoint:
@@ -860,27 +876,16 @@ def _run_sweep(args, base: VadParams) -> int:
 
 
 def _grid_summary_line(p: SweepPoint, param_a: str, param_b: str) -> str:
-    """One-line summary of a grid cell, labelled by both swept axes."""
+    """One-line summary of a grid cell, labelled by both swept axes.
+
+    The metrics block after the two axis labels is shared verbatim with the
+    single-axis ``summary_line`` via ``SweepPoint.metrics_columns`` — only the
+    leading label differs (two axes here, one there), so the two tables can
+    never drift apart when a new aggregate column is added.
+    """
     va = getattr(p.params, param_a)
     vb = getattr(p.params, param_b)
-    return (
-        f"{param_a}={va:<8} {param_b}={vb:<8} "
-        f"trig={p.triggered}/{p.recordings}  "
-        f"min_onsets={p.min_onsets:<2} "
-        f"max_onsets={p.max_onsets:<2} "
-        f"onset_std={p.std_onsets:4.2f} "
-        f"onsets={p.total_onsets:<3} "
-        f"speak_frames={p.total_speaking_frames:<5} "
-        f"mean_over={p.mean_pct_over:5.1f}% "
-        f"onset1_min={p.min_first_onset_ms:6.1f}ms "
-        f"onset1={p.mean_first_onset_ms:6.1f}ms "
-        f"onset1_max={p.max_first_onset_ms:6.1f}ms "
-        f"onset1_std={p.std_first_onset_ms:6.1f}ms "
-        f"min_seg={p.min_segment_ms:7.1f}ms "
-        f"mean_seg={p.mean_segment_ms:7.1f}ms "
-        f"max_seg={p.max_segment_ms:7.1f}ms "
-        f"seg_std={p.std_segment_ms:7.1f}ms"
-    )
+    return f"{param_a}={va:<8} {param_b}={vb:<8} " + p.metrics_columns()
 
 
 def _run_grid(args, base: VadParams) -> int:

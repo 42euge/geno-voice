@@ -31,6 +31,7 @@ from fixtures.replay_vad import (  # noqa: E402
     sweep_param,
     sweep_grid,
     _parse_value_list,
+    _grid_summary_line,
     main,
 )
 
@@ -866,6 +867,65 @@ class TestAggregateResults:
         assert all(not r.segments for r in results)
         point = aggregate_results(VadParams(threshold=0.006), results)
         assert point.std_segment_ms == 0.0
+
+
+# ---------------------------------------------------------------------------
+# metrics_columns — the shared metrics block (iter-207 de-duplication)
+# ---------------------------------------------------------------------------
+
+
+class TestMetricsColumns:
+    """The sweep and grid tables must emit the *same* metrics block.
+
+    iters 201–206 each appended an aggregate column, hand-editing two
+    byte-identical renderers (``summary_line`` and ``_grid_summary_line``)
+    every lap. iter-207 collapsed that into one ``SweepPoint.metrics_columns``
+    so the two tables can never drift. These tests pin the invariant: both
+    renderers carry the exact shared block, differing only in the leading
+    parameter label.
+    """
+
+    def _point(self, tmp_path) -> "object":
+        corpus = _make_corpus(tmp_path)
+        return sweep_param("threshold", [0.006], recordings_dir=corpus)[0]
+
+    def test_summary_line_is_label_plus_shared_columns(self, tmp_path):
+        p = self._point(tmp_path)
+        cols = p.metrics_columns()
+        line = p.summary_line("threshold")
+        # The single-axis line is exactly "<label> " + the shared block.
+        value = getattr(p.params, "threshold")
+        assert line == f"threshold={value:<8} " + cols
+        # The shared block itself carries no parameter label.
+        assert "threshold=" not in cols
+
+    def test_grid_line_is_two_labels_plus_shared_columns(self, tmp_path):
+        p = self._point(tmp_path)
+        cols = p.metrics_columns()
+        line = _grid_summary_line(p, "threshold", "gain")
+        va = getattr(p.params, "threshold")
+        vb = getattr(p.params, "gain")
+        assert line == f"threshold={va:<8} gain={vb:<8} " + cols
+
+    def test_both_renderers_share_the_identical_metrics_block(self, tmp_path):
+        p = self._point(tmp_path)
+        cols = p.metrics_columns()
+        # The shared block is a verbatim substring of *both* rendered lines, so
+        # any future column added to metrics_columns lands in both tables at
+        # once — the drift that the two hand-synced renderers risked.
+        assert cols in p.summary_line("threshold")
+        assert cols in _grid_summary_line(p, "threshold", "gain")
+
+    def test_metrics_columns_carries_every_axis_aggregate(self, tmp_path):
+        # Guards against a future edit dropping a column from the shared block.
+        cols = self._point(tmp_path).metrics_columns()
+        for token in (
+            "trig=", "min_onsets=", "max_onsets=", "onset_std=", "onsets=",
+            "speak_frames=", "mean_over=", "onset1_min=", "onset1=",
+            "onset1_max=", "onset1_std=", "min_seg=", "mean_seg=",
+            "max_seg=", "seg_std=",
+        ):
+            assert token in cols, f"missing {token!r} from shared metrics block"
 
 
 # ---------------------------------------------------------------------------
