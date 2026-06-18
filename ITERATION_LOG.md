@@ -19454,3 +19454,97 @@ cannot change runtime behavior or the proven fixed-rate default path.
    grid shows pre-roll improves the typical opening, the tail, AND the
    consistency simultaneously; pick a value (256–512ms) and gate on a
    busier/newly-synced corpus.
+
+---
+
+## iter-221 — `gv calibrate-base-wpm` CLI over the iter-220 calibration core
+
+**Branch:** `iter-221-calib-cli` (merged ff to main, commit `bd13d11`)
+**Date:** 2026-06-18
+
+**Improvement (the iter-218-style CLI-later twin of the iter-220 calibration
+engine — closing iter-220 backlog item #1's CLI half):** iter-220 shipped the
+audio-free calibration core (`CalibrationSample` / `calibrate_base_wpm`): the
+pure arithmetic that turns a rendered TTS sample (`words` synthesized into
+`audio_seconds` of audio at a known Kokoro `speed`) into a measured `base_wpm`.
+The named follow-on was to expose that core on the `gv` CLI — exactly the
+iter-216-engine-first / iter-218-CLI-later split the simulate-mirror track
+already proved — so an operator can fold rendered samples offline and read the
+implied `base_wpm` to set `DEFAULT_BASE_WPM` from their own voice instead of
+the 165 nominal seed. This lap adds that subcommand.
+
+What changed (`examples/gv.py`), following the `simulate-mirror` shape exactly:
+- **`calibration_sample_type`** — argparse `type` parsing one
+  `words:audio_seconds[:speed]` triple into a `(words, audio_seconds, speed)`
+  float tuple; `speed` defaults to the `1.0` calibration point. Pure and
+  unit-testable in isolation. Rejects malformed shapes (wrong field count,
+  empty fields), non-numeric / NaN fields, and non-positive values with the
+  usual `SystemExit(2)` — the same malformed input the engine's
+  `CalibrationSample.__post_init__` rejects, but caught early with a clean CLI
+  error instead of forwarding garbage.
+- **`render_calibration`** — pure formatter returning plain-text report lines
+  (no I/O, no ANSI) for the median `implied_base_wpm`, range, spread, nominal,
+  and drift. A `None` verdict (no samples) yields a single "no samples" line.
+- **`cmd_calibrate_base_wpm`** — handler loading the engine lazily by file path
+  (keeping the parser audio-free and importable on x86_64 Linux without
+  pipecat), building the `CalibrationSample`s, folding them with
+  `calibrate_base_wpm`, and printing the report. `log` injectable for tests;
+  `--nominal` threads to the drift baseline.
+- Wired into `DEFAULT_HANDLERS` and `build_parser` (the `--samples` arg is
+  `nargs="+"` required; `--nominal` default sourced from the engine seed so it
+  matches the live config). Usage docstring updated.
+
+**Off-by-default invariant untouched.** A pure read-only analysis subcommand;
+nothing in the live `mic_chat` / `pipecat_server` path imports or changes, so
+it cannot regress the proven fixed-rate default path.
+
+**Verification:**
+- New tests: `python -m pytest tests/unit/test_gv_calibrate_base_wpm.py` →
+  **32 passed**. Coverage: handler-map wiring; parser defaults
+  (`speed` defaults to 1.0, `--nominal` from engine seed) / required `--samples`
+  / multiple samples + `--nominal` override; `calibration_sample_type`
+  (two-field default-speed, three-field, whitespace strip, bad-shape matrix,
+  non-numeric, NaN, non-positive, non-string, end-to-end `SystemExit(2)`);
+  `render_calibration` (None→no-samples line, all fields present); handler
+  (emits report, equals a direct engine fold, `--nominal` reaches drift,
+  default-`print` path, `main()` dispatch).
+- Updated `tests/unit/test_gv_cli.py` handler-map enumeration assertion to
+  include `calibrate-base-wpm`.
+- Full Python unit suite: `python -m pytest tests/unit/` → **3070 passed**
+  (3038 prior + 32 new), run on the feature branch before ff-merge. GATE
+  command: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/`.
+  Re-verified `test_gv_calibrate_base_wpm.py` + `test_gv_cli.py` (125 passed)
+  on main after merge.
+- `python -W error::SyntaxWarning -m py_compile examples/gv.py
+  tests/unit/test_gv_calibrate_base_wpm.py` clean.
+- Operator smoke (worktree): `gv calibrate-base-wpm --samples 50:18.2
+  50:9.1:2.0 --nominal 165` reports implied base_wpm **164.8** with spread
+  **0.0** — the two renders at speeds 1.0 and 2.0 agree exactly, confirming
+  `implied_base_wpm` normalizes out the render speed (the iter-220 finding,
+  now operator-runnable).
+- (`tests/test_session.py` still errors on collection — pre-existing missing
+  `pipecat` dep, not a regression.)
+
+**Next planned items:**
+1. **[wpm-mirroring, follow-on, last offline piece] On-device render that
+   produces the calibration samples.** The arithmetic core (iter-220) and now
+   the CLI (iter-221) both exist; the remaining work is the gated on-device
+   piece: synthesize a fixed known-length script through the real Kokoro voice
+   at `speed=1.0` (and a couple of other speeds to cross-check), measure the
+   rendered `audio_seconds`, and feed the durations into
+   `gv calibrate-base-wpm` so a deployment sets `base_wpm` from its own voice.
+   Gate on a real synth.
+2. **[silence] Run the actual `--sweep silence_ms` over a newly-synced corpus**
+   — the sweep harness carries the full floor/typical/ceiling/spread shape on
+   all three axes from one shared renderer (iter-207). Gate a real `silence_ms`
+   default change on a corpus that exercises real mid-utterance pauses *and*
+   two-turns-one-pause cases (the seed corpus is flat in both windows).
+3. **[latency, highest value] Pre-warm the capture pipeline** — still the top
+   user-facing bug (3–5s `click_to_capture_ms`). Needs an on-device timing
+   harness; cannot be replayed. The iter-208..212 sentinels now make
+   playback-side, recording-loop, mid-stream-LLM, and end-to-end TTFS slowdowns
+   visible in session summaries.
+4. **[preroll-default] Bump the client `prerollMs` default above 0** — iter-200's
+   grid shows pre-roll improves the typical opening, the tail, AND the
+   consistency simultaneously; pick a value (256–512ms) and gate on a
+   busier/newly-synced corpus.
