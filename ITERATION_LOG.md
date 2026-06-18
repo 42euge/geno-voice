@@ -19949,3 +19949,117 @@ line in the session summary and touches nothing in the live
    (iter-044, LLM not keeping up with synth) and `context_tokens`
    (iter-077, late-session creep) remain un-sentineled per-turn metrics
    that fit the same diversity-check template.
+
+## iter-226 — worker-idle-gap consistency sentinel
+
+**Branch:** `iter-226-worker-idle-gap-sentinel` (merged ff to main, commit `c1a7fb7`)
+**Date:** 2026-06-18
+
+**Improvement (a session-summary diversity-check sentinel over
+iter-044's per-turn `worker_idle_gap_total`):** The backlog's top
+items (on-device base_wpm render, real `silence_ms` sweep, capture
+pre-warm timing harness) all gate on real hardware/synth that can't
+run in a headless lap. This lap continues the documented sentinel
+sweep: `worker_idle_gap_total` — iter-044's cumulative seconds the
+SentenceWorker spent blocked waiting for the next sentence AFTER the
+first (the LLM not keeping up with synth+playback) — had **no
+sentinel**. iter-044 colors a single turn's inline figure yellow
+above 0.3s, but a **sustained** high-idle-gap run (the LLM
+systematically lagging synth, e.g. a slow model, long system prompt,
+or context creep) never reaches the summary, yet the user hears
+stop-start audio turn after turn, eroding the conversational feel the
+VISION targets.
+
+This is the latest instance of the GENO.md "Session-summary
+diversity-check pattern" after the original eight (iter-114..143)
+plus the iter-208..225 sentinels. A continuous-metric instance
+(bucket first, then scan), NON-inverted like iter-140/141/208/224
+(smaller idle gap is better, so the fine bucket is a LOW value and the
+boundaries are not flipped — unlike the inverted iter-142/143/225).
+
+What changed (`examples/_chat_metrics.py`):
+- **`_worker_idle_gap_bucket(idle_gap)`** maps the seconds metric to
+  `smooth` (<0.3s) / `stalled` (0.3-1.0s) / `starved` (>1.0s), with
+  the `stalled` boundary pinned to iter-044's documented 0.3s yellow
+  line. Non-positive input (worker never blocked after the first
+  sentence — a single-sentence turn or a turn the LLM stayed ahead,
+  both the fine/no-measurement state) returns `""` and is filtered
+  out by the consumer.
+- **`_emit_worker_idle_gap_consistency_line(emit, list,
+  threshold=5)`** drops the `"smooth"` bucket, runs the shared
+  iter-116 `_longest_consecutive_run`, and emits a per-value
+  suggestion (`starved`: synth sat idle over a second, check LLM
+  throughput / context size; `stalled`: the user hears short
+  silences, the LLM is lagging) plus a defensive `else` fallback.
+  Threshold 5, matching the other continuous-metric sentinels. Names
+  iter-044 in the warning text so operators can find the metric's
+  context.
+- **Wired into `print_session_summary`** right after the iter-225
+  split-coverage sentinel. Distinct from iter-143's
+  `streaming_overlap_ratio` sentinel: that measures the FRACTION of
+  synth that overlapped the stream; this measures the ABSOLUTE
+  seconds the worker sat idle, which a decent overlap ratio can still
+  hide on one slow sentence. Inverse of iter-062's `max_queue_depth`
+  (worker backed up vs worker starved).
+
+**Read-only invariant untouched.** Emits at most one extra advisory
+line in the session summary and touches nothing in the live
+`mic_chat` / `pipecat_server` path, so it cannot regress the runtime.
+
+**Verification:**
+- New tests:
+  `python -m pytest tests/unit/test_emit_worker_idle_gap_consistency_line.py`
+  → **22 passed**. Coverage: bucket boundaries (zero/negative→`""`,
+  smooth/stalled/starved edges, float granularity around the
+  non-inverted boundaries), empty/all-zero suppression, long-smooth +
+  just-under-yellow silence, alternating-smooth filter, threshold
+  (5 fires, 4 silent, custom 3/10), smooth-interleaving doesn't break
+  a run, `starved` breaks a `stalled` run (phase change), longest-of-
+  multiple, 4-space indent, iter-044 attribution, 1000-element scale.
+- Full Python unit suite: `python -m pytest tests/unit/` → **3169
+  passed** (3147 prior + 22 new), run on the feature branch before
+  ff-merge. GATE command:
+  `cd ~/code-purp/geno-voice && python -m pytest tests/unit/`.
+  Re-verified `test_emit_worker_idle_gap_consistency_line.py` +
+  `test_diversity_pattern_doc.py` (32 passed) — the doc-sync test
+  stays green, confirming the iter-208+ post-freeze precedent (new
+  sentinels need no GENO.md `_DIVERSITY_HELPERS` update).
+- `python -W error::SyntaxWarning -m py_compile examples/_chat_metrics.py
+  tests/unit/test_emit_worker_idle_gap_consistency_line.py` clean.
+- Operator smoke (worktree): `[2.0]*5` → `Worker idle gap: 5
+  consecutive 'starved' turns …`; `[0.5]*5` → `… 'stalled' …`;
+  `[0.1]*9` → silent.
+- (`tests/test_session.py` still errors on collection — pre-existing
+  missing `pipecat` dep, not a regression.)
+
+**Next planned items:**
+1. **[wpm-mirroring, follow-on, last offline piece] On-device render that
+   produces the calibration samples.** The arithmetic core (iter-220),
+   CLI (iter-221), verdict engine (iter-222), and verdict CLI surface
+   (iter-223) all exist; the remaining work is the gated on-device
+   piece: synthesize a fixed known-length script through the real
+   Kokoro voice at `speed=1.0` (plus a couple other speeds to
+   cross-check), measure the rendered `audio_seconds`, and feed the
+   durations into `gv calibrate-base-wpm --verdict` so a deployment
+   reads an adopt/keep call for `base_wpm` from its own voice. Gate on
+   a real synth.
+2. **[silence] Run the actual `--sweep silence_ms` over a newly-synced
+   corpus** — the sweep harness carries the full floor/typical/ceiling/
+   spread shape on all three axes from one shared renderer (iter-207).
+   Gate a real `silence_ms` default change on a corpus that exercises
+   real mid-utterance pauses *and* two-turns-one-pause cases (the seed
+   corpus is flat in both windows).
+3. **[latency, highest value] Pre-warm the capture pipeline** — still
+   the top user-facing bug (3–5s `click_to_capture_ms`). Needs an
+   on-device timing harness; cannot be replayed. The iter-208..212
+   sentinels (and now iter-224/225/226) make playback-side,
+   recording-loop, mid-stream-LLM, end-to-end TTFS, preview-quality,
+   split-coverage, and worker-idle-gap slowdowns visible in session
+   summaries.
+4. **[metrics] Continue the sentinel sweep** — `context_tokens`
+   (iter-077, late-session creep) remains an un-sentineled per-turn
+   metric that fits the diversity-check template, though its actionable
+   signal is a TREND (monotone growth), not a consecutive-run of a
+   problematic bucket, so it may warrant a trend-detector variant
+   rather than the run-scan. `mean_token_reveal_lag` (iter-071) is
+   another candidate.
