@@ -20388,3 +20388,101 @@ exactly the two gesture-gated tests fail (`not ok 42`, `not ok 51`;
    refresh the tuning-doc per-recording table.
 3. **[gain, client] If a future corpus yields `recommended_gain>1.0`**,
    wire the `gain` knob through the recorder path and prove parity.
+
+## iter-231 — replace energy-VAD with Silero neural VAD (the real fix)
+
+**Branch:** `iter-231-silero-vad` (merged ff to main, commit `a5100c0`)
+**Date:** 2026-06-18
+
+**OPERATOR STEERING (this lap):** replace energy-RMS VAD with Silero
+neural VAD, validated against the recording corpus. Supersedes the prior
+energy-VAD tuning (threshold/gain/preroll) — those stay as the fallback
+path; Silero is now primary.
+
+**The finding (ground truth).** `voice-20260618-110355.wav` (31s
+continuous speech) CANNOT be segmented by energy-RMS VAD: its in-speech
+noise floor (~0.016 RMS) sits too close to the speech median (~0.023), so
+no threshold × silence combination breaks it into more than 1 segment —
+the utterance never closes ("VAD triggered but wouldn't untrigger").
+Energy VAD is a dead end for this audio. Silero (neural) scores P(speech)
+per 32ms window and distinguishes speech from room-tone regardless of the
+energy floor; the live mic path (`pipecat_server.py`) already uses it.
+
+**What changed.**
+1. **`vad/silero.py`** — a lazy-loaded, dependency-degrading Silero
+   segmenter. `SileroParams` mirrors the pipecat `VADParams` knobs
+   (`min_silence_ms=800` = the live `stop_secs=0.8`). `silero_available()`
+   reports importability so callers degrade cleanly. All torch/silero
+   imports are deferred inside functions (GENO.md lazy-import pattern), so
+   the module imports on a host without the package. `segment_samples` /
+   `segment_wav_bytes` / `segment_recording` return `SileroResult`
+   dataclasses (extend-without-breaking, per the repo convention).
+   Resamples 44.1/48kHz corpus audio to Silero's 16kHz via torchaudio.
+2. **`server.py` (:5111)** — `POST /vad/silero` endpoint: WAV body in,
+   speech segments (start/end seconds) out; optional query params override
+   the SileroParams. Model loaded ONCE at startup (`_init_silero` in the
+   lifespan) so the first request pays no load latency; returns 503 when
+   the package is absent. `/health` now reports `"silero_vad": bool`.
+3. **`fixtures/replay_silero.py`** — headless replay over every recording
+   in `fixtures/recordings/`. `--compare` prints Silero segment counts
+   beside energy-VAD onset counts. **GATE PROOF**: the 31s recording →
+   **5 Silero segments vs 1 energy onset**. Full corpus (min_silence=800,
+   Silero defaults): 122716→2/2, 123829→**4**/2, 131451→1/1, 135015→3/5,
+   161615→**2**/1, 110355→**5**/1.
+4. **Tests.** `tests/unit/test_silero_vad.py` (16 tests) covers the pure
+   logic — dataclasses, params→`get_speech_timestamps` mapping, WAV decode,
+   resampling, stereo downmix, empty-input short-circuit — with the
+   `silero_vad` package stubbed via `sys.modules`, so it runs fast/
+   deterministically with no model or corpus. `tests/integration/
+   test_silero_recordings.py` (20 tests) runs the REAL model over the REAL
+   corpus and pins the gate: every recording segments to ≥1 region, the
+   31s recording splits to ≥2 (the hard gate), and Silero strictly
+   out-segments energy-VAD on ≥1 recording. Skips cleanly when the corpus
+   or the package is absent.
+5. **Fixed a pre-existing red integration test.**
+   `test_vad_recordings.py::TestThresholdRegression` asserted onset
+   *count* monotonicity (lower threshold ⇒ ≥ onsets). That is FALSE on
+   real elevated-noise audio: on `voice-20260617-161615.wav` the lower
+   0.006 gate keeps the inter-utterance gap above threshold and MERGES two
+   turns into 1 segment, while 0.015 splits them — so the lower threshold
+   shows FEWER onsets (1 vs 2). This was failing on main before this lap.
+   Rewrote it to assert monotonicity on *speech recovered*
+   (`frames_over_threshold` / `speaking_frames`), the genuinely monotonic
+   property (a more permissive gate can only let MORE frames clear). This
+   merging-vs-splitting failure is itself the energy-VAD dead-end Silero
+   replaces.
+6. **Docs** (`docs/research/voice-capture-tuning.md`) — a Silero section:
+   the energy-VAD-is-a-dead-end finding, the per-recording comparison
+   table, the `/vad/silero` endpoint contract, and the desktop-integration
+   backlog (ContinuousListener → `/vad/silero`, or the pipecat :8765 WS
+   path that already runs Silero). Energy VAD documented as the fallback.
+7. **`requirements.txt`** — `silero-vad>=5.1` (pulls torch + torchaudio).
+   Installed `silero-vad-6.2.1` + `torchaudio==2.10.0` (matched to the
+   in-venv `torch 2.10.0`; the default 2.11.0 mismatched CUDA and failed
+   to load).
+
+**Verification (exact):**
+- `python -m pytest tests/unit/` → **3206 passed** (3190 prior + 16 new),
+  run on main after ff-merge.
+- `python -m pytest tests/integration/` → **107 passed, 1 skipped** (the
+  pre-existing red test now green + 20 new Silero tests; skip is the
+  faster-whisper case). Run on the feature branch with the corpus
+  symlinked; the 36 Silero tests re-confirmed green on main with the real
+  corpus present.
+- `node --test` (in `client/`) → **52 passed**, 0 failed (unchanged — no
+  client JS change this lap).
+- Replay GATE: `python fixtures/replay_silero.py --compare` →
+  `voice-20260618-110355.wav` segments=5 (energy onsets=1). Gate met.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero`** (or
+   adopt the pipecat :8765 WS path) and GUI-test on the Mac. The endpoint
+   contract + `/health` availability probe are documented; energy VAD is
+   the fallback for hosts without silero-vad.
+2. **[server] Streaming Silero** — `/vad/silero` is batch (whole-WAV). For
+   live capture, expose a frame-by-frame / WebSocket Silero path (the
+   pipecat analyzer already does this internally) so the client gets
+   incremental speech/silence decisions without buffering the whole turn.
+3. **[recordings] Ingest new recordings every lap** — re-run
+   `replay_silero.py --compare` + the energy sweeps when new WAVs land, and
+   refresh the comparison table.
