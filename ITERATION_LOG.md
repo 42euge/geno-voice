@@ -18455,3 +18455,92 @@ What changed:
    grid shows pre-roll improves the typical opening, the tail, AND the
    consistency simultaneously; pick a value (256–512ms) and gate on a
    busier/newly-synced corpus.
+
+---
+
+## iter-211 — max-token-gap consistency sentinel
+
+**Branch:** `iter-211-max-token-gap-consistency` (merged ff to main, commit `13675da`)
+**Date:** 2026-06-18
+
+**Improvement (observability — sentinel on worst-case mid-stream LLM stalls):**
+iter-085's `max_token_gap` (the maximum inter-token gap during the LLM stream
+that turn, excluding the first-token wait — metric 3.21) was added *precisely
+because* mid-stream LLM stalls are otherwise silent: the user just hears a long
+pause and no signal fires. The per-turn metric existed, but the session summary
+had no *run* sentinel, so a recurring stall could persist across a whole session
+unnoticed. This lap adds the run sentinel: 5+ consecutive turns with a
+noticeable worst-case stall is the actionable signal that the LLM backend is
+consistently struggling to keep the stream fed.
+
+This is the **TWELFTH** instance of the session-summary diversity-check pattern
+(after iter-114 filler, iter-115/126 naturalness, iter-120 barge-phase, iter-128
+sentence-length, iter-140 stt-rtf, iter-141 tts-rtf, iter-142 llm-tps, iter-143
+streaming-overlap, iter-208 synth-dispatch, iter-209 eot-overhead, iter-210
+bot-wpm) and the **NINTH** applied to a continuous metric.
+
+**Critically distinct from iter-142's llm-tps sentinel.** That one watches the
+turn's *average* throughput (bigger-is-better — the fine state is a HIGH value).
+This one watches the turn's *worst single gap* (smaller-is-better — the fine
+state is a LOW value, monotonic like iter-140/141/208/209). The two watch
+different statistics of the same stream: a model can post a healthy mean TPS yet
+still stall badly once per turn, and this sentinel catches that worst-case shape
+the average smooths over.
+
+What changed:
+- **`examples/_chat_metrics.py`**:
+  - `_max_token_gap_bucket(seconds)` — maps the per-turn worst gap to
+    `fast` (< 0.50s, the fine state — no perceptible stall) / `slow`
+    (0.50–2.0s, a noticeable stall) / `very_slow` (> 2.0s, the user likely
+    thinks the bot is broken); returns `""` for non-positive input
+    (single-token turn / no measurable gap). **Smaller-is-better** like
+    iter-140/141/208/209 and UNLIKE the inverted iter-142/143, so the
+    boundaries are NOT flipped. Thresholds chosen against iter-085's own
+    ">500ms noticeable / >2s broken" guidance.
+  - `_emit_max_token_gap_consistency_line(emit, list, threshold=5)` — filters
+    out `fast`/`""` before the scan, reuses iter-116 `_longest_consecutive_run`,
+    and emits a per-value suggestion (`very_slow` → check backend load, model
+    size, host contention; `slow` → check the LLM backend, a healthy mean TPS
+    can hide these; defensive `else`). Warning text names iter-085 so operators
+    can grep the full context.
+  - Wired into `print_session_summary` immediately after the iter-210 bot-wpm
+    line, fed `[m.max_token_gap for m in metrics_list]`.
+- **`tests/unit/test_emit_max_token_gap_consistency_line.py`** — 21 tests
+  covering the full pattern matrix: bucket boundaries
+  (zero/negative/fast/slow/very_slow + float edges at 0.50/2.0), empty +
+  all-zero suppression, long-fast-run never fires, filter semantics (a `fast`
+  interleaving doesn't break a slow run; a `very_slow` phase-change DOES break a
+  slow run), at/above threshold per value, below threshold, custom threshold,
+  longest-of-multiple, 4-space indent, iter-085 attribution, 1000-element
+  scaling.
+
+**Verification:**
+- `python -m pytest tests/unit/test_emit_max_token_gap_consistency_line.py`
+  → **21 passed**.
+- Full Python unit suite: `python -m pytest tests/unit/` → **2786 passed**
+  (2765 prior + 21 new), run on the feature branch before ff-merge. GATE command:
+  `cd ~/code-purp/geno-voice && python -m pytest tests/unit/`.
+- (`tests/test_session.py` still errors on collection — pre-existing missing
+  `pipecat` dep, not a regression.)
+
+**Next planned items (from the research-doc backlog):**
+1. **[silence] Run the actual `--sweep silence_ms` over a newly-synced corpus**
+   — the sweep harness carries the full floor/typical/ceiling/spread shape on all
+   three axes from one shared renderer (iter-207). Gate a real `silence_ms`
+   default change on a corpus that exercises real mid-utterance pauses *and*
+   two-turns-one-pause cases (the seed corpus is flat in both windows); prefer
+   the value that minimizes `onset_std` and `seg_std` among those with an
+   acceptable `mean_seg`.
+2. **[latency, highest value] Pre-warm the capture pipeline** — still the top
+   user-facing bug (3–5s `click_to_capture_ms`). Needs an on-device timing
+   harness; cannot be replayed. The iter-208/209/211 sentinels already make
+   playback-side, recording-loop, and mid-stream-LLM slowdowns visible in
+   session summaries.
+3. **[wpm-mirroring] Adapt bot WPM toward the measured user WPM** — iter-210's
+   sentinel surfaces a mis-set rate; the natural follow-up is the iter-064
+   mirroring effect (match bot_wpm to user_wpm). Gate on a corpus with varied
+   user pacing.
+4. **[preroll-default] Bump the client `prerollMs` default above 0** — iter-200's
+   grid shows pre-roll improves the typical opening, the tail, AND the
+   consistency simultaneously; pick a value (256–512ms) and gate on a
+   busier/newly-synced corpus.
