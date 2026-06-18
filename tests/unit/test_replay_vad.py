@@ -328,6 +328,8 @@ class TestAggregateResults:
         assert point.min_onsets == 0
         assert point.mean_first_onset_ms == 0.0
         assert point.max_first_onset_ms == 0.0
+        assert point.min_first_onset_ms == 0.0
+        assert point.std_first_onset_ms == 0.0
 
     def test_aggregates_across_corpus(self, tmp_path):
         corpus = _make_corpus(tmp_path)
@@ -381,6 +383,7 @@ class TestAggregateResults:
         assert point.mean_first_onset_ms == 0.0
         assert point.max_first_onset_ms == 0.0
         assert point.min_first_onset_ms == 0.0
+        assert point.std_first_onset_ms == 0.0
 
     def test_max_first_onset_is_latest_detected_recording(self, tmp_path):
         corpus = _make_corpus(tmp_path)
@@ -436,6 +439,46 @@ class TestAggregateResults:
             min(r.segments[0].onset_ms for r in detected)
         )
         assert point.min_first_onset_ms > 0.0
+
+    def test_std_first_onset_is_population_std_of_detected(self, tmp_path):
+        corpus = _make_corpus(tmp_path)
+        results = replay_all(corpus, VadParams(threshold=0.006))
+        point = aggregate_results(VadParams(threshold=0.006), results)
+        first_onsets = [r.segments[0].onset_ms for r in results if r.segments]
+        assert first_onsets, "fixture should detect speech in at least one rec"
+        # Population (ddof=0) std over the same detected onsets the mean uses.
+        assert point.std_first_onset_ms == pytest.approx(float(np.std(first_onsets)))
+        # The spread is never negative and, when more than one recording is
+        # detected with differing onsets, is strictly positive.
+        assert point.std_first_onset_ms >= 0.0
+        if len(set(first_onsets)) > 1:
+            assert point.std_first_onset_ms > 0.0
+
+    def test_std_first_onset_zero_for_single_detected_recording(self, tmp_path):
+        corpus = _make_corpus(tmp_path)
+        # At 0.015 only the loud recording detects → a single onset → zero
+        # spread (population std of one point is 0.0, the documented
+        # "perfectly consistent given one point" reading, not undefined).
+        results = replay_all(corpus, VadParams(threshold=0.015))
+        detected = [r for r in results if r.segments]
+        assert len(detected) == 1, "fixture must leave exactly one hit at 0.015"
+        point = aggregate_results(VadParams(threshold=0.015), results)
+        assert point.std_first_onset_ms == 0.0
+
+    def test_std_first_onset_excludes_missed_recordings(self, tmp_path):
+        corpus = _make_corpus(tmp_path)
+        # The std must be computed over only the detected recordings; a missed
+        # recording contributes no onset time, so folding in a 0.0 would inflate
+        # the spread with a phantom early value.
+        results_all = replay_all(corpus, VadParams(threshold=0.006))
+        results_mixed = replay_all(corpus, VadParams(threshold=0.015))
+        detected_mixed = [r for r in results_mixed if r.segments]
+        missed_mixed = [r for r in results_mixed if not r.segments]
+        assert detected_mixed and missed_mixed, "fixture must mix a hit and a miss at 0.015"
+        point = aggregate_results(VadParams(threshold=0.015), results_mixed)
+        # Only the one detected recording counts → zero spread, NOT the spread
+        # that a phantom 0.0 onset for the miss would produce.
+        assert point.std_first_onset_ms == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -672,6 +715,8 @@ class TestSweepCli:
         assert "onset1_max=" in out
         # ...and its best-case floor.
         assert "onset1_min=" in out
+        # ...and its consistency (spread).
+        assert "onset1_std=" in out
 
     def test_sweep_json_includes_mean_first_onset(self, tmp_path, capsys):
         corpus = _make_corpus(tmp_path)
@@ -707,6 +752,20 @@ class TestSweepCli:
         assert payload[0]["min_first_onset_ms"] <= payload[0]["mean_first_onset_ms"]
         assert payload[0]["min_first_onset_ms"] <= payload[0]["max_first_onset_ms"]
 
+    def test_sweep_json_includes_std_first_onset(self, tmp_path, capsys):
+        corpus = _make_corpus(tmp_path)
+        rc = main(["--sweep", "threshold", "--sweep-values", "0.006", "--dir", str(corpus), "--json"])
+        assert rc == 0
+        import json as _json
+
+        payload = _json.loads(capsys.readouterr().out)
+        assert "std_first_onset_ms" in payload[0]
+        # The spread is non-negative and, with a multi-recording corpus whose
+        # onsets differ, bounded above by the full min→max range.
+        assert payload[0]["std_first_onset_ms"] >= 0.0
+        rng = payload[0]["max_first_onset_ms"] - payload[0]["min_first_onset_ms"]
+        assert payload[0]["std_first_onset_ms"] <= rng + 1e-6
+
 
 # ---------------------------------------------------------------------------
 # CLI — main() with --grid (2-D grid sweep)
@@ -730,10 +789,11 @@ class TestGridCli:
         # Each cell labels both axes.
         assert out.count("threshold=") == 4
         assert out.count("gain=") == 4
-        # The grid table carries all three onset-timing aggregates per cell.
+        # The grid table carries all four onset-timing aggregates per cell.
         assert out.count("onset1=") == 4
         assert out.count("onset1_max=") == 4
         assert out.count("onset1_min=") == 4
+        assert out.count("onset1_std=") == 4
 
     def test_grid_json_row_major(self, tmp_path, capsys):
         corpus = _make_corpus(tmp_path)

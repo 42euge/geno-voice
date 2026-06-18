@@ -436,6 +436,23 @@ class SweepPoint:
                          recordings on the same reasoning as the mean and max
                          (no segment → no onset time); ``0.0`` when nothing
                          detected.
+    ``std_first_onset_ms`` — the population standard deviation of the
+                         first-segment ``onset_ms`` across detected recordings
+                         (the *consistency* of onset timing). ``min``/``mean``/
+                         ``max`` give the envelope and center of the timing
+                         distribution; this gives its *spread* — how tightly the
+                         recordings cluster around the mean. Two parameter sets
+                         can share a mean onset while one opens at a consistent
+                         time every recording and the other swings between very
+                         early and very late; the std is the only aggregate that
+                         tells them apart, so a grid sweep can pick the cell that
+                         opens early *and* consistently rather than early on
+                         average with a wild tail. Population (not sample) std —
+                         a single detected recording has zero spread (``0.0``),
+                         which reads correctly as "perfectly consistent given one
+                         data point" rather than the undefined sample std. Uses
+                         the same detected-recordings subset as the mean (no
+                         segment → no onset time); ``0.0`` when nothing detected.
     """
 
     params: VadParams
@@ -448,6 +465,7 @@ class SweepPoint:
     mean_first_onset_ms: float
     max_first_onset_ms: float
     min_first_onset_ms: float
+    std_first_onset_ms: float
 
     def summary_line(self, label_key: str = "threshold") -> str:
         value = getattr(self.params, label_key)
@@ -460,7 +478,8 @@ class SweepPoint:
             f"mean_over={self.mean_pct_over:5.1f}% "
             f"onset1_min={self.min_first_onset_ms:6.1f}ms "
             f"onset1={self.mean_first_onset_ms:6.1f}ms "
-            f"onset1_max={self.max_first_onset_ms:6.1f}ms"
+            f"onset1_max={self.max_first_onset_ms:6.1f}ms "
+            f"onset1_std={self.std_first_onset_ms:6.1f}ms"
         )
 
 
@@ -486,6 +505,12 @@ def aggregate_results(params: VadParams, results: List[ReplayResult]) -> SweepPo
     # recordings. Paired with the mean and max it gives the full timing spread,
     # and marks the irreducible floor an onset-shaping knob can't push past.
     min_first_onset = min(first_onsets) if first_onsets else 0.0
+    # Onset-timing consistency: population std of the first onsets over the same
+    # detected subset. min/mean/max give the envelope; this gives the spread, so
+    # a sweep can tell apart two cells with the same mean — one consistent, one
+    # swinging. Population (ddof=0) so a single detected recording reads as 0.0
+    # (perfectly consistent given one point) rather than an undefined sample std.
+    std_first_onset = float(np.std(first_onsets)) if first_onsets else 0.0
     return SweepPoint(
         params=params,
         recordings=n,
@@ -497,6 +522,7 @@ def aggregate_results(params: VadParams, results: List[ReplayResult]) -> SweepPo
         mean_first_onset_ms=mean_first_onset,
         max_first_onset_ms=max_first_onset,
         min_first_onset_ms=min_first_onset,
+        std_first_onset_ms=std_first_onset,
     )
 
 
@@ -650,7 +676,8 @@ def _grid_summary_line(p: SweepPoint, param_a: str, param_b: str) -> str:
         f"mean_over={p.mean_pct_over:5.1f}% "
         f"onset1_min={p.min_first_onset_ms:6.1f}ms "
         f"onset1={p.mean_first_onset_ms:6.1f}ms "
-        f"onset1_max={p.max_first_onset_ms:6.1f}ms"
+        f"onset1_max={p.max_first_onset_ms:6.1f}ms "
+        f"onset1_std={p.std_first_onset_ms:6.1f}ms"
     )
 
 

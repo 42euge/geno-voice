@@ -87,7 +87,17 @@ detected recordings — the best-case floor. With `onset1_min`/`onset1`/
 `onset1_max` together a sweep shows the whole best/typical/worst timing
 distribution in one pass, and the floor marks the *irreducible* earliest
 capture an onset-shaping knob can't push past (when `onset1_min` stops
-moving, that knob has saturated on its best recording).
+moving, that knob has saturated on its best recording). iter-200 adds the
+last statistic, `onset1_std`: the population standard deviation of the
+first onsets across detected recordings — the timing *consistency*. The
+min/mean/max give the envelope and center; the std gives the *spread*, the
+one thing they can't — two parameter sets can share an `onset1` mean while
+one opens at a consistent time every recording and the other swings between
+very early and very late. The std is the only aggregate that distinguishes
+them, so a grid sweep can pick the cell that opens early *and* consistently
+rather than early-on-average with a wild tail. Population (not sample) std,
+so a single detected recording reads as `0.0` ("perfectly consistent given
+one point") rather than undefined.
 
 `tests/integration/test_vad_recordings.py` turns every recording into a
 regression test (the data flywheel): the more the user talks to the app,
@@ -353,6 +363,54 @@ recovered right back to the file boundary, where the clamp stops it. So the
 floor confirms from the *bottom* of the distribution what `onset1_max`
 confirmed from the top — pre-roll shifts the whole spread uniformly while
 debounce only moves the interior.
+
+### Onset-timing consistency, and the joint debounce×preroll grid (iter-200)
+
+`onset1_min`/`onset1`/`onset1_max` describe the *shape* of the timing
+distribution (where it starts, centers, and ends) but not how tightly the
+recordings cluster. iter-200 adds the last statistic, `onset1_std` — the
+population standard deviation of the first onsets across detected recordings,
+i.e. the timing *consistency*. Two parameter sets can share an `onset1` mean
+while one opens at a steady time every recording and the other swings wildly;
+only the std tells them apart, so a sweep can finally pick the cell that opens
+early *and* consistently rather than early-on-average with a ragged tail.
+
+With all four aggregates in place, the two onset-timing levers
+(`debounce_ms`, `preroll_ms`) are both reachable as client knobs (iter-196,
+iter-193), so the joint grid the backlog has been deferring is now readable in
+one pass (backlog item 3):
+
+```
+python fixtures/replay_vad.py --grid debounce_ms,preroll_ms \
+    --grid-values-a 100,200,300 --grid-values-b 0,256,512 --threshold 0.006
+```
+| debounce_ms | preroll_ms | trig | onset1_min | onset1 (mean) | onset1_max | onset1_std |
+|-------------|------------|------|-----------|---------------|-----------|-----------|
+| 100 | 0 | 4/4 | 232.2ms | 1271.3ms | 2995.4ms | 1081.2ms |
+| 100 | 256 | 4/4 | 0.0ms | 1021.7ms | 2740.0ms | 1075.7ms |
+| 100 | 512 | 4/4 | 0.0ms | 835.9ms | 2484.5ms | 1014.4ms |
+| 200 | 0 | 4/4 | 232.2ms | 1532.5ms | 2995.4ms | 982.0ms |
+| 200 | 256 | 4/4 | 0.0ms | 1282.9ms | 2740.0ms | 974.3ms |
+| **200** | **512** | **4/4** | **0.0ms** | **1091.3ms** | **2484.5ms** | **893.1ms** |
+| 300 | 0 | **3/4** | 232.2ms | 2190.4ms | 3343.7ms | 1391.9ms |
+| 300 | 256 | **3/4** | 0.0ms | 1942.7ms | 3088.3ms | 1381.1ms |
+| 300 | 512 | **3/4** | 0.0ms | 1772.5ms | 2832.8ms | 1261.4ms |
+
+**What the consistency column reveals** — a result the mean alone hides:
+lowering debounce 200→100ms pulls the *mean* ~261ms earlier (1532.5→1271.3ms
+at preroll 0) but actually *widens* the spread (982.0→1081.2ms). The earliest
+recording opens sooner while the late one stays pinned, so the gap between
+recordings grows — debounce buys a better average at the cost of *less*
+consistency. Pre-roll, by contrast, both shifts the mean earlier *and* tightens
+the spread (982.0→893.1ms across preroll 0→512 at debounce 200), because it
+moves every detected recording uniformly. The lowest-std cell that still holds
+`trig=4/4` is **debounce 200 / preroll 512** (onset1_std 893.1ms, mean
+1091.3ms): the most consistent early opening on the seed corpus comes from
+keeping the default debounce and leaning on pre-roll, *not* from dropping
+debounce. This sharpens backlog item 5's "pair a debounce drop with a pre-roll
+bump" — the grid says pre-roll is doing the real work for both the typical case
+*and* the consistency, so a pre-roll default bump is the higher-leverage change.
+The 300ms debounce row stays the cliff (`trig=3/4`, widest spread).
 
 ## Findings & backlog (prioritized)
 
