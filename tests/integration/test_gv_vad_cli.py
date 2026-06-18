@@ -226,6 +226,8 @@ def _sweep_args(wav: Path, **over):
     base = dict(
         wav=str(wav),
         thresholds=[0.3, 0.5, 0.7, 0.9],
+        min_silences=None,
+        threshold=0.5,
         min_speech_ms=250.0,
         min_silence_ms=800.0,
         speech_pad_ms=30.0,
@@ -307,6 +309,72 @@ def test_gv_vad_sweep_csv_matches_json_sweep():
         "sweep"
     ]
     assert [float(r["threshold"]) for r in csv_rows] == thresholds
+    for csv_row, json_row in zip(csv_rows, json_rows):
+        assert int(csv_row["num_segments"]) == json_row["num_segments"]
+        assert abs(float(csv_row["speech_s"]) - json_row["speech_s"]) <= 0.01
+
+
+# ---- iter-238: gv vad-sweep --min-silences (hangover axis) -------------
+
+
+def test_gv_vad_sweep_silence_axis_matches_independent_vad_runs():
+    """Each min-silence sweep row must equal an independent ``gv vad --json`` run
+    at that hangover (gate held fixed) — proving the second axis segments once
+    per value with the real engine, exactly like the threshold axis."""
+    wav = RECORDINGS_DIR / CONTINUOUS_31S
+    if not wav.exists():
+        pytest.skip(f"{CONTINUOUS_31S} not present")
+
+    min_silences = [200.0, 400.0, 800.0]
+    held_gate = 0.5
+    sweep = json.loads(
+        _run_sweep(wav, min_silences=min_silences, threshold=held_gate, json=True)[0]
+    )
+    assert sweep["available"] is True
+    assert sweep["axis"] == "min_silence_ms"
+    assert [row["min_silence_ms"] for row in sweep["sweep"]] == min_silences
+
+    for ms, row in zip(min_silences, sweep["sweep"]):
+        single = json.loads(
+            _run(wav, threshold=held_gate, min_silence_ms=ms, json=True)[0]
+        )
+        assert row["num_segments"] == single["num_segments"]
+        assert abs(row["speech_s"] - single["speech_s"]) <= 0.01
+
+
+def test_gv_vad_sweep_silence_axis_segments_are_monotone_non_increasing():
+    """Reading down an ascending-hangover sweep, the segment count never grows —
+    a longer trailing-silence requirement can only merge adjacent regions, never
+    split them. The elbow is where merging kicks in."""
+    wav = RECORDINGS_DIR / CONTINUOUS_31S
+    if not wav.exists():
+        pytest.skip(f"{CONTINUOUS_31S} not present")
+    sweep = json.loads(
+        _run_sweep(wav, min_silences=[100.0, 200.0, 400.0, 800.0, 1600.0], json=True)[0]
+    )
+    segs = [row["num_segments"] for row in sweep["sweep"]]
+    for lo, hi in zip(segs, segs[1:]):
+        assert hi <= lo, f"segments rose across rising hangovers: {segs}"
+
+
+def test_gv_vad_sweep_silence_axis_csv_matches_json():
+    """``gv vad-sweep --min-silences --csv`` describes the same segmentation as
+    ``--json`` over THE GATE recording — the two surfaces agree on the second
+    axis too, and the CSV header is the swept axis name."""
+    wav = RECORDINGS_DIR / CONTINUOUS_31S
+    if not wav.exists():
+        pytest.skip(f"{CONTINUOUS_31S} not present")
+
+    min_silences = [200.0, 400.0, 800.0]
+    csv_lines = _run_sweep(wav, min_silences=min_silences, csv=True)
+    assert len(csv_lines) == 1
+    csv_rows = list(csv.DictReader(io.StringIO(csv_lines[0])))
+    assert "min_silence_ms" in csv_rows[0]
+
+    json_rows = json.loads(
+        _run_sweep(wav, min_silences=min_silences, json=True)[0]
+    )["sweep"]
+    assert [float(r["min_silence_ms"]) for r in csv_rows] == min_silences
     for csv_row, json_row in zip(csv_rows, json_rows):
         assert int(csv_row["num_segments"]) == json_row["num_segments"]
         assert abs(float(csv_row["speech_s"]) - json_row["speech_s"]) <= 0.01

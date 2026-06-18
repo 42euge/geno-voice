@@ -135,13 +135,15 @@ applies. `cmd_vad_diff` reuses the iter-233 injected-dependency seams;
 `tests/unit/test_gv_vad.py`, and `tests/integration/test_gv_vad_cli.py` proves
 the diff equals two independent `gv vad --json` runs over the real corpus.
 
-### `gv vad-sweep` — tabulate N thresholds (iter-236)
+### `gv vad-sweep` — tabulate N values of one knob (iter-236)
 
 `gv vad-diff` compares the P(speech) gate at exactly two points; `gv vad-sweep`
-generalises that to a sweep over N thresholds (the single-file analogue of
-`fixtures/replay_silero.py`'s sweep over the corpus), so the gate's *elbow* —
-where recovered speech falls off as the gate tightens — is visible at a glance
-rather than as a single A-vs-B delta:
+generalises that to a sweep over N values of one knob (the single-file analogue
+of `fixtures/replay_silero.py`'s sweep over the corpus), so the knob's *elbow* —
+where recovered speech falls off as the gate tightens, or where regions merge as
+the hangover lengthens — is visible at a glance rather than as a single A-vs-B
+delta. The default swept knob is the P(speech) gate (`--thresholds`); iter-238
+adds the trailing-silence hangover as a second axis (`--min-silences`, below):
 
 ```
 gv vad-sweep recording.wav                                  # 0.3,0.5,0.7,0.9 (defaults)
@@ -196,6 +198,46 @@ When `silero-vad` is absent the output is a single `# silero VAD unavailable: �
 comment line so a degraded run stays self-describing. An integration test pins
 that the `--csv` rows describe the same segmentation as `--json` over the real
 corpus.
+
+**`--min-silences` — a second sweep axis (iter-238).** The default axis is the
+P(speech) gate (`--thresholds`); passing `--min-silences` instead sweeps the
+*trailing-silence hangover* `min_silence_ms` — how much quiet must follow speech
+before a region ends. The gate is then held fixed at the scalar `--threshold`
+(default `0.5`). The two axes are mutually exclusive (argparse rejects passing
+`--thresholds` together with `--min-silences`); exactly one knob varies per run.
+
+```
+gv vad-sweep recording.wav --min-silences 200,400,800,1600           # sweep the hangover
+gv vad-sweep recording.wav --min-silences 200,400,800 --threshold 0.7 # hold the gate at 0.7
+gv vad-sweep recording.wav --min-silences 200,400,800 --csv          # flat CSV for plots
+```
+
+The column label, the JSON/CSV first column, and the `--json` `axis` key all
+become `min_silence` / `min_silence_ms` so the swept dimension is readable
+straight off the data. Hangover values print as bare integers in the human
+table (`400`, not `0.40`). Over `voice-20260618-110355.wav`:
+
+```
+silero VAD sweep — voice-20260618-110355.wav
+  min_silence  segments  speech
+        200         9   14.5s
+        400         5   15.7s
+        800         5   16.2s
+       1600         5   16.2s
+```
+
+A *longer* hangover can only merge adjacent regions (never split them), so the
+segment count is non-increasing as the value rises — the mirror of the
+threshold axis's speech-non-increasing property. Here the elbow is sharp: at
+200 ms the recording fragments into 9 regions (silences between clauses end
+segments early), settling to 5 once the hangover reaches ~400 ms. The
+`--min-silences` list is parsed by `nonneg_float_list_type` (comma-separated
+durations `≥ 0`, order preserved, empty list rejected; `0` is legitimate). The
+`--json` payload gains an `"axis"` key (`"threshold"` or `"min_silence_ms"`) and
+keys each row by that name. Integration tests pin that each silence-sweep row
+equals an independent `gv vad --json` run at that hangover, that segments are
+monotone non-increasing across rising hangovers, and that `--csv` agrees with
+`--json` on this axis — all over the real corpus.
 
 ### Silero vs energy-VAD segment counts (the headless proof)
 

@@ -12,6 +12,7 @@ Usage:
     gv vad recording.wav --json # machine-readable segmentation (SileroResult.to_dict shape)
     gv vad-diff recording.wav --threshold-a 0.5 --threshold-b 0.7  # compare two P(speech) gates
     gv vad-sweep recording.wav --thresholds 0.3,0.5,0.7,0.9  # sweep N gates, tabulate the elbow
+    gv vad-sweep recording.wav --min-silences 200,400,800,1600  # sweep the hangover instead
     gv <cmd> --model ...  # override STT model
 """
 
@@ -166,6 +167,31 @@ def unit_interval_list_type(raw):
             f"thresholds must be a non-empty comma-separated list, got {raw!r}"
         )
     return [unit_interval_type(tok) for tok in tokens]
+
+
+def nonneg_float_list_type(raw):
+    """Argparse ``type`` for ``gv vad-sweep --min-silences``: a list of hangovers.
+
+    iter-236 swept the P(speech) gate (``--thresholds``); iter-238 adds a second
+    sweep axis — the trailing-silence hangover ``min_silence_ms`` — so this
+    parses a comma-separated list (e.g. ``"400,600,800,1000"``) into ``[400.0,
+    600.0, 800.0, 1000.0]`` at the parser. Each token must be a valid
+    :func:`nonneg_float_type` value (a number ``>= 0``, not NaN — ``0`` is
+    legitimate, it disables the minimum); duplicates and unsorted input are
+    preserved as given (the operator may want a specific column order). Rejects
+    an empty list. Pure and side-effect-free for direct unit testing — the
+    millisecond twin of :func:`unit_interval_list_type`.
+    """
+    if not isinstance(raw, str):
+        raise argparse.ArgumentTypeError(
+            f"min-silences must be a string, got {raw!r}"
+        )
+    tokens = [t.strip() for t in raw.split(",") if t.strip()]
+    if not tokens:
+        raise argparse.ArgumentTypeError(
+            f"min-silences must be a non-empty comma-separated list, got {raw!r}"
+        )
+    return [nonneg_float_type(tok) for tok in tokens]
 
 
 def nonneg_float_type(raw):
@@ -607,71 +633,102 @@ def render_vad_diff_json(result_a, result_b, *, label_a, label_b):
     return json.dumps(payload, indent=2)
 
 
-def vad_segmentation_sweep(thresholds, results):
-    """Pair each threshold with its segmentation summary for a sweep table.
+# gv vad-sweep axis metadata. iter-236 swept only the P(speech) gate; iter-238
+# adds the trailing-silence hangover as a second axis. Each entry gives the
+# human-table column label (right-justified to 9, matching the original
+# "threshold" width) and the per-value display formatter — a gate prints with 2
+# decimals (0.30), a millisecond hangover as a bare integer (800). The dict key
+# is also the row key emitted by vad_segmentation_sweep and the CSV/JSON column
+# name, so a consumer reads which dimension was swept straight off the data.
+_SWEEP_AXIS_LABEL = {
+    "threshold": "threshold",
+    "min_silence_ms": "min_silence",
+}
+
+
+def _format_sweep_axis_value(axis, value):
+    """Format one swept-axis value for the human table (gate vs. ms hangover)."""
+    if axis == "min_silence_ms":
+        return f"{value:.0f}"
+    return f"{value:.2f}"
+
+
+def vad_segmentation_sweep(values, results, *, axis="threshold"):
+    """Pair each swept-axis value with its segmentation summary for a table.
 
     iter-235 ``gv vad-diff`` quantifies the segmentation delta between exactly
-    two thresholds; iter-236 generalises that to a sweep over N thresholds so
-    the gate's elbow is visible at a glance rather than as a single A-vs-B pair
-    (the analogue of ``fixtures/replay_silero.py``'s sweep over the corpus).
+    two thresholds; iter-236 generalised that to a sweep over N P(speech) gates
+    so the gate's elbow is visible at a glance; iter-238 parameterises the swept
+    dimension via ``axis`` so the same machinery sweeps the trailing-silence
+    hangover (``axis="min_silence_ms"``) instead — the analogue of
+    ``fixtures/replay_silero.py``'s ``--min-silence-ms`` knob, but tabulated
+    across N values.
 
-    Pure: takes the parallel ``thresholds`` list and ``results`` list (each a
-    ``SileroResult``-shaped object segmented at the matching threshold) and
-    returns a list of per-threshold rows ``{"threshold", "num_segments",
+    Pure: takes the parallel ``values`` list (one per swept-axis point) and
+    ``results`` list (each a ``SileroResult``-shaped object segmented at the
+    matching value) and returns a list of rows ``{axis, "num_segments",
     "speech_s"}``, ``speech_s`` rounded to 3 places like
-    :func:`vad_segmentation_delta`. No I/O, no torch import, so it is testable
-    in isolation. Raises :class:`ValueError` if the two lists differ in length.
+    :func:`vad_segmentation_delta`. The row's axis key IS ``axis`` (default
+    ``"threshold"`` keeps the iter-236 callers unchanged). No I/O, no torch
+    import, so it is testable in isolation. Raises :class:`ValueError` if the
+    two lists differ in length.
     """
-    if len(thresholds) != len(results):
+    if len(values) != len(results):
         raise ValueError(
-            f"thresholds ({len(thresholds)}) and results ({len(results)}) "
+            f"values ({len(values)}) and results ({len(results)}) "
             "must be the same length"
         )
     return [
         {
-            "threshold": t,
+            axis: v,
             "num_segments": r.num_segments,
             "speech_s": round(r.speech_s, 3),
         }
-        for t, r in zip(thresholds, results)
+        for v, r in zip(values, results)
     ]
 
 
-def render_vad_sweep(thresholds, results, *, name):
-    """Render a threshold sweep as a plain-text table.
+def render_vad_sweep(values, results, *, name, axis="threshold"):
+    """Render a sweep as a plain-text table.
 
     The human-readable twin of :func:`render_vad_sweep_json`, mirroring the
-    other ``render_*`` helpers. ``name`` is the WAV being swept. Any ``None`` in
-    ``results`` (segmenter unavailable) yields the shared install hint. Pure:
-    returns a list of strings. Higher gates admit less speech, so reading down
-    the table the segment count / speech total are typically non-increasing —
-    the elbow where they fall off marks the gate getting too strict.
+    other ``render_*`` helpers. ``name`` is the WAV being swept; ``axis`` names
+    the swept dimension (``"threshold"`` gate or ``"min_silence_ms"`` hangover),
+    which sets the column label. Any ``None`` in ``results`` (segmenter
+    unavailable) yields the shared install hint. Pure: returns a list of
+    strings. Reading down the threshold table the segment count / speech total
+    are typically non-increasing (higher gates admit less speech); a longer
+    hangover merges adjacent regions, so the silence sweep tends to FEWER
+    segments as the value rises — the elbow marks the knob getting too strict.
     """
     if any(r is None for r in results):
         return [
             "silero VAD unavailable: install 'silero-vad' (pulls torch + "
             "torchaudio) to enable offline neural segmentation"
         ]
-    rows = vad_segmentation_sweep(thresholds, results)
+    rows = vad_segmentation_sweep(values, results, axis=axis)
+    label = _SWEEP_AXIS_LABEL.get(axis, axis)
     lines = [
         f"silero VAD sweep — {name}",
-        "  threshold  segments  speech",
+        f"  {label:>9}  segments  speech",
     ]
     for row in rows:
         lines.append(
-            f"  {row['threshold']:>9.2f}  {row['num_segments']:>8}  "
-            f"{row['speech_s']:>5.1f}s"
+            f"  {_format_sweep_axis_value(axis, row[axis]):>9}  "
+            f"{row['num_segments']:>8}  {row['speech_s']:>5.1f}s"
         )
     return lines
 
 
-def render_vad_sweep_json(thresholds, results, *, name):
-    """Render a threshold sweep as a JSON string.
+def render_vad_sweep_json(values, results, *, name, axis="threshold"):
+    """Render a sweep as a JSON string.
 
     Machine-readable twin of :func:`render_vad_sweep`, so the sweep can feed a
-    plotting/tuning script. Any ``None`` in ``results`` →
-    ``{"available": false}`` + install hint, mirroring :func:`render_vad_json`.
-    Pure: returns a single JSON string built from the results' attributes.
+    plotting/tuning script. The payload carries the swept ``axis`` name so a
+    consumer knows which dimension the rows vary (the rows are keyed by that
+    same name). Any ``None`` in ``results`` → ``{"available": false}`` + install
+    hint, mirroring :func:`render_vad_json`. Pure: returns a single JSON string
+    built from the results' attributes.
     """
     if any(r is None for r in results):
         return json.dumps(
@@ -687,26 +744,29 @@ def render_vad_sweep_json(thresholds, results, *, name):
     payload = {
         "available": True,
         "name": name,
-        "sweep": vad_segmentation_sweep(thresholds, results),
+        "axis": axis,
+        "sweep": vad_segmentation_sweep(values, results, axis=axis),
     }
     return json.dumps(payload, indent=2)
 
 
-def render_vad_sweep_csv(thresholds, results, *, name):
-    """Render a threshold sweep as CSV text (no trailing newline).
+def render_vad_sweep_csv(values, results, *, name, axis="threshold"):
+    """Render a sweep as CSV text (no trailing newline).
 
     The spreadsheet/plot-friendly twin of :func:`render_vad_sweep_json`: where
     JSON nests the rows under a ``sweep`` key for programmatic consumers, CSV
-    emits a flat ``threshold,num_segments,speech_s`` table that pipes straight
-    into a spreadsheet or a plotting script (gnuplot, matplotlib's ``loadtxt``,
-    pandas ``read_csv``) without a JSON-parsing step. ``name`` is accepted for
-    signature parity with the other ``render_vad_sweep_*`` twins but is not part
-    of the tabular body — a CSV is a pure data grid, so the WAV name would only
-    appear as an awkward repeated column. Any ``None`` in ``results`` (segmenter
-    unavailable) yields a single ``# silero VAD unavailable: ...`` comment line
-    so a degraded run is still self-describing rather than silently empty. Pure:
-    returns a single string built with the stdlib :mod:`csv` writer (RFC-4180
-    quoting, ``\\r\\n`` row terminators) with the trailing terminator stripped.
+    emits a flat ``<axis>,num_segments,speech_s`` table that pipes straight into
+    a spreadsheet or a plotting script (gnuplot, matplotlib's ``loadtxt``,
+    pandas ``read_csv``) without a JSON-parsing step. The first column header is
+    the swept ``axis`` name (``threshold`` or ``min_silence_ms``) so the grid is
+    self-describing. ``name`` is accepted for signature parity with the other
+    ``render_vad_sweep_*`` twins but is not part of the tabular body — a CSV is
+    a pure data grid, so the WAV name would only appear as an awkward repeated
+    column. Any ``None`` in ``results`` (segmenter unavailable) yields a single
+    ``# silero VAD unavailable: ...`` comment line so a degraded run is still
+    self-describing rather than silently empty. Pure: returns a single string
+    built with the stdlib :mod:`csv` writer (RFC-4180 quoting, ``\\r\\n`` row
+    terminators) with the trailing terminator stripped.
     """
     if any(r is None for r in results):
         return (
@@ -715,9 +775,9 @@ def render_vad_sweep_csv(thresholds, results, *, name):
         )
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(["threshold", "num_segments", "speech_s"])
-    for row in vad_segmentation_sweep(thresholds, results):
-        writer.writerow([row["threshold"], row["num_segments"], row["speech_s"]])
+    writer.writerow([axis, "num_segments", "speech_s"])
+    for row in vad_segmentation_sweep(values, results, axis=axis):
+        writer.writerow([row[axis], row["num_segments"], row["speech_s"]])
     return buf.getvalue().rstrip("\r\n")
 
 
@@ -937,14 +997,22 @@ def cmd_vad_diff(args, *, log=print, segmenter=None, availability=None):
 
 
 def cmd_vad_sweep(args, *, log=print, segmenter=None, availability=None):
-    """Segment one WAV at N thresholds and print a sweep table.
+    """Segment one WAV across a swept knob and print a sweep table.
 
-    Generalises the iter-235 two-point ``gv vad-diff`` to a sweep over a list of
-    P(speech) gates (the analogue of ``fixtures/replay_silero.py``'s sweep over
-    the corpus): ``gv vad-sweep recording.wav --thresholds 0.3,0.5,0.7,0.9``
-    segments once per threshold (all other knobs shared) and tabulates the
-    segment count / speech seconds vs threshold, so the gate's elbow is visible
-    at a glance instead of as a single A-vs-B delta.
+    Generalises the iter-235 two-point ``gv vad-diff`` to a sweep over N values
+    of ONE knob (the analogue of ``fixtures/replay_silero.py``'s sweep over the
+    corpus). The default axis is the P(speech) gate:
+    ``gv vad-sweep recording.wav --thresholds 0.3,0.5,0.7,0.9`` segments once per
+    threshold (all other knobs shared) and tabulates segment-count / speech
+    seconds vs threshold, so the gate's elbow is visible at a glance.
+
+    iter-238 adds a SECOND axis — the trailing-silence hangover. Passing
+    ``--min-silences 400,600,800,1000`` switches the swept dimension to
+    ``min_silence_ms`` (the gate is then held fixed at scalar ``--threshold``),
+    so an operator can find the hangover elbow where adjacent speech regions
+    start merging. The two axes are mutually exclusive (the parser rejects
+    ``--thresholds`` together with ``--min-silences``); exactly one knob varies
+    per run.
 
     Same injected-dependency contract as :func:`cmd_vad` / :func:`cmd_vad_diff`:
     ``segmenter`` / ``availability`` default to the real :mod:`vad.silero`
@@ -961,38 +1029,53 @@ def cmd_vad_sweep(args, *, log=print, segmenter=None, availability=None):
     as_json = getattr(args, "json", False)
     as_csv = getattr(args, "csv", False)
 
+    # Pick the swept axis: --min-silences (if given) sweeps the hangover with the
+    # gate held at scalar --threshold; otherwise sweep --thresholds (the default
+    # iter-236 behaviour) with the hangover held at scalar --min-silence-ms.
+    min_silences = getattr(args, "min_silences", None)
+    if min_silences is not None:
+        axis = "min_silence_ms"
+        values = min_silences
+    else:
+        axis = "threshold"
+        values = args.thresholds
+
     if not availability():
         if as_json:
-            log(render_vad_sweep_json([], [None], name=args.wav))
+            log(render_vad_sweep_json([], [None], name=args.wav, axis=axis))
         elif as_csv:
-            log(render_vad_sweep_csv([], [None], name=args.wav))
+            log(render_vad_sweep_csv([], [None], name=args.wav, axis=axis))
         else:
-            for line in render_vad_sweep([], [None], name=args.wav):
+            for line in render_vad_sweep([], [None], name=args.wav, axis=axis):
                 log(line)
         return
 
     from vad.silero import SileroParams
 
-    def _seg(threshold):
+    def _seg(value):
+        # The swept axis takes ``value``; the other dimension is held at its
+        # scalar knob. Every non-swept knob is shared across all runs.
+        threshold = value if axis == "threshold" else args.threshold
+        min_silence_ms = value if axis == "min_silence_ms" else args.min_silence_ms
         params = SileroParams(
             threshold=threshold,
             min_speech_ms=args.min_speech_ms,
-            min_silence_ms=args.min_silence_ms,
+            min_silence_ms=min_silence_ms,
             speech_pad_ms=args.speech_pad_ms,
             max_speech_s=args.max_speech_s,
         )
         return segmenter(args.wav, params=params)
 
-    results = [_seg(t) for t in args.thresholds]
+    results = [_seg(v) for v in values]
     # Use the segmenter's own name (basename) so the sweep matches `gv vad`'s
     # report; fall back to the raw path only if the sweep is empty.
     name = results[0].name if results else args.wav
     if as_json:
-        log(render_vad_sweep_json(args.thresholds, results, name=name))
+        log(render_vad_sweep_json(values, results, name=name, axis=axis))
     elif as_csv:
-        log(render_vad_sweep_csv(args.thresholds, results, name=name))
+        log(render_vad_sweep_csv(values, results, name=name, axis=axis))
     else:
-        for line in render_vad_sweep(args.thresholds, results, name=name):
+        for line in render_vad_sweep(values, results, name=name, axis=axis):
             log(line)
 
 
@@ -1353,24 +1436,49 @@ def build_parser():
         help="Emit machine-readable JSON instead of the human-readable report",
     )
 
-    # gv vad-sweep — segment one WAV at N thresholds and tabulate the result.
-    # Generalises iter-235's two-point vad-diff to a sweep so the gate's elbow
-    # is visible at a glance. All knobs but threshold are shared across runs.
+    # gv vad-sweep — segment one WAV across a swept knob and tabulate the result.
+    # Generalises iter-235's two-point vad-diff to a sweep so the knob's elbow is
+    # visible at a glance. iter-236 swept the P(speech) gate (--thresholds);
+    # iter-238 adds a second axis, the trailing-silence hangover (--min-silences),
+    # mutually exclusive with --thresholds. Every non-swept knob is shared across
+    # all runs.
     vad_sweep = sub.add_parser(
         "vad-sweep",
-        help="Offline Silero VAD — segment a WAV at N thresholds and tabulate "
-        "segment-count / speech-seconds vs threshold (find the gate's elbow)",
+        help="Offline Silero VAD — segment a WAV across a swept knob "
+        "(--thresholds gate or --min-silences hangover) and tabulate "
+        "segment-count / speech-seconds (find the knob's elbow)",
     )
     vad_sweep.add_argument(
         "wav",
-        help="Path to a 16-bit PCM WAV file to segment at each threshold",
+        help="Path to a 16-bit PCM WAV file to segment at each swept value",
     )
-    vad_sweep.add_argument(
+    # The swept axis: --thresholds (default) OR --min-silences, never both. The
+    # default list lives on --thresholds so a bare `vad-sweep rec.wav` keeps the
+    # iter-236 behaviour; a group default isn't "provided", so the mutex only
+    # fires when both are passed explicitly.
+    vad_sweep_axis = vad_sweep.add_mutually_exclusive_group()
+    vad_sweep_axis.add_argument(
         "--thresholds",
         type=unit_interval_list_type,
         default=[0.3, 0.5, 0.7, 0.9],
         help="Comma-separated P(speech) gates in [0, 1] to sweep "
-        "(default: 0.3,0.5,0.7,0.9)",
+        "(default: 0.3,0.5,0.7,0.9; mutually exclusive with --min-silences)",
+    )
+    vad_sweep_axis.add_argument(
+        "--min-silences",
+        type=nonneg_float_list_type,
+        default=None,
+        dest="min_silences",
+        help="Comma-separated trailing-silence hangovers in ms to sweep "
+        "instead of the gate (e.g. 400,600,800,1000); the gate is held at the "
+        "scalar --threshold (mutually exclusive with --thresholds)",
+    )
+    vad_sweep.add_argument(
+        "--threshold",
+        type=unit_interval_type,
+        default=vad_threshold_default,
+        help="Scalar P(speech) gate held fixed when sweeping --min-silences, in "
+        f"[0, 1]; ignored when sweeping --thresholds (default: {vad_threshold_default})",
     )
     vad_sweep.add_argument(
         "--min-speech-ms",
@@ -1386,7 +1494,8 @@ def build_parser():
         default=vad_min_silence_default,
         dest="min_silence_ms",
         help="Trailing silence before a region ends, in ms — shared by all "
-        f"runs (default: {vad_min_silence_default})",
+        "runs when sweeping --thresholds; ignored when sweeping --min-silences "
+        f"(default: {vad_min_silence_default})",
     )
     vad_sweep.add_argument(
         "--speech-pad-ms",
@@ -1413,7 +1522,7 @@ def build_parser():
     vad_sweep_fmt.add_argument(
         "--csv",
         action="store_true",
-        help="Emit a flat threshold,num_segments,speech_s CSV table for "
+        help="Emit a flat <axis>,num_segments,speech_s CSV table for "
         "spreadsheets/plots (mutually exclusive with --json)",
     )
 

@@ -804,6 +804,8 @@ def _sweep_args(**over):
     base = dict(
         wav="rec.wav",
         thresholds=[0.3, 0.5, 0.7, 0.9],
+        min_silences=None,
+        threshold=0.5,
         min_speech_ms=250.0,
         min_silence_ms=800.0,
         speech_pad_ms=30.0,
@@ -1249,3 +1251,267 @@ def test_cmd_vad_sweep_csv_uses_segmenter_name():
     assert "basename.wav" not in lines[0]
     rows = list(csv.reader(io.StringIO(lines[0])))
     assert len(rows) == 2  # header + single threshold row
+
+
+# ====================================================================
+# iter-238 — gv vad-sweep --min-silences: a second sweep axis (hangover)
+# ====================================================================
+
+
+# ---- nonneg_float_list_type: the --min-silences validator --------------
+
+
+def test_min_silences_list_parses_comma_separated():
+    assert gv.nonneg_float_list_type("400,600,800,1000") == [400.0, 600.0, 800.0, 1000.0]
+
+
+def test_min_silences_list_strips_whitespace_and_blanks():
+    assert gv.nonneg_float_list_type(" 400 , 800 ,") == [400.0, 800.0]
+
+
+def test_min_silences_list_preserves_order_and_duplicates():
+    assert gv.nonneg_float_list_type("800,400,800") == [800.0, 400.0, 800.0]
+
+
+def test_min_silences_list_allows_zero():
+    # 0 ms is legitimate (disable the minimum hangover), unlike thresholds which
+    # are bounded to [0, 1] — here only negatives are rejected.
+    assert gv.nonneg_float_list_type("0,400") == [0.0, 400.0]
+
+
+@pytest.mark.parametrize("raw", ["", "  ", ",", " , "])
+def test_min_silences_list_rejects_empty(raw):
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.nonneg_float_list_type(raw)
+
+
+@pytest.mark.parametrize("raw", ["400,-1", "-50"])
+def test_min_silences_list_rejects_negative_member(raw):
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.nonneg_float_list_type(raw)
+
+
+@pytest.mark.parametrize("raw", ["400,abc", "x"])
+def test_min_silences_list_rejects_non_number_member(raw):
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.nonneg_float_list_type(raw)
+
+
+def test_min_silences_list_rejects_non_string():
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.nonneg_float_list_type(800.0)
+
+
+# ---- parser wiring: --min-silences axis --------------------------------
+
+
+def test_vad_sweep_min_silences_parses():
+    args = gv.build_parser().parse_args(
+        ["vad-sweep", "rec.wav", "--min-silences", "400,600,800"]
+    )
+    assert args.min_silences == [400.0, 600.0, 800.0]
+    # The threshold list keeps its default; the handler picks the silence axis.
+    assert args.thresholds == [0.3, 0.5, 0.7, 0.9]
+
+
+def test_vad_sweep_min_silences_default_is_none():
+    # Without --min-silences the silence axis is off (None), so the handler
+    # sweeps --thresholds (the iter-236 default).
+    args = gv.build_parser().parse_args(["vad-sweep", "rec.wav"])
+    assert args.min_silences is None
+
+
+def test_vad_sweep_scalar_threshold_default_and_override():
+    args = gv.build_parser().parse_args(["vad-sweep", "rec.wav"])
+    assert args.threshold == 0.5
+    args = gv.build_parser().parse_args(
+        ["vad-sweep", "rec.wav", "--min-silences", "400,800", "--threshold", "0.7"]
+    )
+    assert args.threshold == 0.7
+
+
+def test_vad_sweep_thresholds_and_min_silences_mutually_exclusive():
+    # The two sweep axes can't both win; argparse rejects the combination with
+    # SystemExit(2) rather than silently picking one.
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-sweep", "rec.wav", "--thresholds", "0.3,0.5", "--min-silences", "400,800"]
+        )
+
+
+def test_vad_sweep_rejects_negative_min_silence_member():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-sweep", "rec.wav", "--min-silences", "400,-1"]
+        )
+
+
+# ---- vad_segmentation_sweep: axis parameter ----------------------------
+
+
+def test_sweep_axis_keys_rows_by_axis_name():
+    r_lo = _Result(
+        name="r.wav",
+        sample_rate=16000,
+        duration_s=10.0,
+        segments=[_Seg(0.0, 1.0), _Seg(2.0, 3.0)],
+    )
+    r_hi = _Result(
+        name="r.wav", sample_rate=16000, duration_s=10.0, segments=[_Seg(0.0, 1.0)]
+    )
+    rows = gv.vad_segmentation_sweep([400.0, 800.0], [r_lo, r_hi], axis="min_silence_ms")
+    assert rows == [
+        {"min_silence_ms": 400.0, "num_segments": 2, "speech_s": 2.0},
+        {"min_silence_ms": 800.0, "num_segments": 1, "speech_s": 1.0},
+    ]
+
+
+def test_sweep_axis_defaults_to_threshold():
+    # Omitting axis keeps the iter-236 row shape so old callers are unchanged.
+    r = _Result(name="r.wav", sample_rate=16000, duration_s=5.0, segments=[_Seg(0.0, 1.0)])
+    rows = gv.vad_segmentation_sweep([0.5], [r])
+    assert rows == [{"threshold": 0.5, "num_segments": 1, "speech_s": 1.0}]
+
+
+# ---- renderers: silence axis -------------------------------------------
+
+
+def test_render_sweep_silence_axis_labels_column():
+    r_lo = _Result(
+        name="rec.wav",
+        sample_rate=16000,
+        duration_s=10.0,
+        segments=[_Seg(0.0, 1.0), _Seg(2.0, 3.0)],
+    )
+    r_hi = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=10.0, segments=[_Seg(0.0, 1.0)]
+    )
+    lines = gv.render_vad_sweep(
+        [400.0, 800.0], [r_lo, r_hi], name="rec.wav", axis="min_silence_ms"
+    )
+    text = "\n".join(lines)
+    assert "min_silence" in text
+    assert "threshold" not in text
+    # Hangover values print as bare integers (400, 800), not 0.40 gates.
+    assert "400" in text and "800" in text
+    assert "0.40" not in text
+
+
+def test_render_sweep_json_carries_axis():
+    r = _Result(name="rec.wav", sample_rate=16000, duration_s=5.0, segments=[_Seg(0.0, 1.0)])
+    payload = json.loads(
+        gv.render_vad_sweep_json([400.0], [r], name="rec.wav", axis="min_silence_ms")
+    )
+    assert payload["axis"] == "min_silence_ms"
+    assert payload["sweep"] == [
+        {"min_silence_ms": 400.0, "num_segments": 1, "speech_s": 1.0}
+    ]
+
+
+def test_render_sweep_json_axis_defaults_to_threshold():
+    r = _Result(name="rec.wav", sample_rate=16000, duration_s=5.0, segments=[_Seg(0.0, 1.0)])
+    payload = json.loads(gv.render_vad_sweep_json([0.5], [r], name="rec.wav"))
+    assert payload["axis"] == "threshold"
+
+
+def test_render_sweep_csv_header_is_axis_name():
+    r = _Result(name="rec.wav", sample_rate=16000, duration_s=5.0, segments=[_Seg(0.0, 1.0)])
+    text = gv.render_vad_sweep_csv([400.0], [r], name="rec.wav", axis="min_silence_ms")
+    rows = list(csv.reader(io.StringIO(text)))
+    assert rows[0] == ["min_silence_ms", "num_segments", "speech_s"]
+    assert rows[1] == ["400.0", "1", "1.0"]
+
+
+# ---- cmd_vad_sweep: silence axis end-to-end ----------------------------
+
+
+def test_cmd_vad_sweep_silence_axis_sweeps_hangover():
+    # When --min-silences is set, the segmenter sees the SWEPT min_silence_ms and
+    # the gate held at scalar --threshold; --min-silence-ms is then ignored.
+    pytest.importorskip("vad.silero")
+    captured = []
+
+    def seg(wav, params=None):
+        captured.append(params)
+        # Longer hangover merges regions → fewer segments.
+        n = 3 if params.min_silence_ms < 600 else 1
+        return _Result(
+            name="rec.wav",
+            sample_rate=16000,
+            duration_s=10.0,
+            segments=[_Seg(float(i), i + 0.5) for i in range(n)],
+        )
+
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(min_silences=[400.0, 800.0], threshold=0.7, min_silence_ms=999.0),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert [p.min_silence_ms for p in captured] == [400.0, 800.0]
+    # Gate held at scalar --threshold for every run; the shared --min-silence-ms
+    # scalar (999) is NOT used as a swept value.
+    assert {p.threshold for p in captured} == {0.7}
+    text = "\n".join(lines)
+    assert "min_silence" in text
+    assert "400" in text and "800" in text
+
+
+def test_cmd_vad_sweep_silence_axis_json_branch():
+    def seg(wav, params=None):
+        n = 3 if params.min_silence_ms < 600 else 1
+        return _Result(
+            name="rec.wav",
+            sample_rate=16000,
+            duration_s=10.0,
+            segments=[_Seg(float(i), i + 0.5) for i in range(n)],
+        )
+
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(min_silences=[400.0, 800.0], json=True),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert len(lines) == 1
+    payload = json.loads(lines[0])
+    assert payload["axis"] == "min_silence_ms"
+    assert [row["min_silence_ms"] for row in payload["sweep"]] == [400.0, 800.0]
+    assert payload["sweep"][0]["num_segments"] == 3
+    assert payload["sweep"][1]["num_segments"] == 1
+
+
+def test_cmd_vad_sweep_silence_axis_csv_branch():
+    def seg(wav, params=None):
+        return _Result(
+            name="rec.wav",
+            sample_rate=16000,
+            duration_s=10.0,
+            segments=[_Seg(0.0, 1.0)],
+        )
+
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(min_silences=[400.0, 800.0], csv=True),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert len(lines) == 1
+    rows = list(csv.reader(io.StringIO(lines[0])))
+    assert rows[0] == ["min_silence_ms", "num_segments", "speech_s"]
+    assert [row[0] for row in rows[1:]] == ["400.0", "800.0"]
+
+
+def test_cmd_vad_sweep_silence_axis_unavailable_uses_axis_label():
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(min_silences=[400.0, 800.0], json=True),
+        log=lines.append,
+        segmenter=lambda *a, **k: (_ for _ in ()).throw(AssertionError("no")),
+        availability=lambda: False,
+    )
+    assert len(lines) == 1
+    assert json.loads(lines[0])["available"] is False
