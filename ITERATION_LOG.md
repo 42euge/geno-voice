@@ -19147,3 +19147,109 @@ fixed-rate default path.
    grid shows pre-roll improves the typical opening, the tail, AND the
    consistency simultaneously; pick a value (256–512ms) and gate on a
    busier/newly-synced corpus.
+
+---
+
+## iter-218 — `gv simulate-mirror`: offline WPM-mirror simulator subcommand
+
+**Branch:** `iter-218-simulate-mirror` (merged ff to main, commit `1e8986b`)
+**Date:** 2026-06-18
+
+**Improvement (the user-facing CLI surface for the offline WPM-mirror
+analysis built in iter-216/217):**
+This lap advances the named follow-on present in *both* the iter-216 and
+iter-217 backlogs: "Optionally expose [the simulator] as a `gv`/`mic_chat
+--simulate-mirror` sub-command for offline operator validation." iter-213
+shipped the pure `user_wpm → bot speed` mirror; iter-214 wired it into the
+live TTS path behind an off-by-default gate; iter-215 surfaced the per-session
+start→end drift in the summary; iter-216 shipped `simulate_speed_trajectory`
+(the single-config offline twin of the live `SpeedController` fold); iter-217
+shipped `sweep_mirror_grid` / `pick_best_mirror_config` (the base_wpm ×
+strength grid sweep + data-driven picker). The loop now **adapts**,
+**measures**, **simulates**, and **sweeps** the rate — but all of that offline
+analysis lived in `session/wpm_mirror.py` with no user-facing entrypoint: an
+operator had to write Python to run it. This lap adds the missing CLI surface
+(`gv`, a named mission source), so an operator can validate a mirror config
+offline with no audio and no live session.
+
+What changed (`examples/gv.py`):
+- **New `simulate-mirror` subcommand.** Trajectory mode by default; `--grid`
+  switches to the base_wpm × strength sweep with a data-driven best pick.
+  Wired into `DEFAULT_HANDLERS` and `build_parser`.
+- **`--wpms` (required):** comma-separated per-turn user-WPM arc, e.g.
+  `120,140,200,140,120`. A `<=0` entry is the iter-064 "no measurement that
+  turn" marker, replayed faithfully (speed holds) so an operator can model a
+  silent / one-word turn in the arc.
+- **`--initial-speed` / `--base-wpm` / `--strength`** tune the single-config
+  run; **`--base-wpms` / `--strengths`** are the grid axes. The single-config
+  seed defaults (165 / 0.5) are sourced **live** from the engine
+  (`DEFAULT_BASE_WPM` / `DEFAULT_STRENGTH`) so the CLI can never drift from the
+  live `SpeedController` config.
+- **New arg types `wpm_list_type`** (allows the `<=0` no-measurement marker)
+  and **`positive_floats_type`** (grid axes; rejects non-positive / NaN), both
+  pure and unit-tested like the existing `speed_type` / `voice_type` /
+  `model_type` validators (iter-182/183/184) — garbage closed at the parser
+  with the usual `SystemExit(2)`.
+- **Pure render helpers `render_trajectory` / `render_grid`** return line lists
+  (no I/O, no ANSI — presentation owned by the entrypoint, per the GENO.md
+  mic_chat extraction convention). The handler takes an injectable `log`
+  (default `print`), so tests capture into a list.
+- **`_load_wpm_mirror`** loads `session/wpm_mirror.py` by file path (registering
+  it in `sys.modules` *before* `exec_module` so the module's frozen-dataclass
+  `cls.__module__` lookups resolve), bypassing the pipecat-dependent
+  `session/__init__.py` — the same bypass the `wpm_mirror` unit tests use. Keeps
+  the simulator importable and runnable on x86_64 Linux with no audio deps.
+
+**Off-by-default invariant untouched.** The subcommand is a read-only offline
+analysis tool. Nothing in the live `mic_chat` / `pipecat_server` path imports
+it, so it cannot change runtime behavior or the proven fixed-rate default path.
+It only ever builds `enabled` configs for offline scoring, exactly like the
+iter-216/217 engine it wraps.
+
+**Verification:**
+- New tests: `python -m pytest tests/unit/test_gv_simulate_mirror.py
+  tests/unit/test_gv_cli.py` → **130 passed** (34 new + the updated
+  handler-map assertion + 95 existing). Coverage: parser
+  defaults/overrides/required-`--wpms`/grid axes; both arg types (parse, strip
+  whitespace+blanks, `<=0` marker allowed for `wpms` / rejected for axes,
+  empty/non-number/NaN rejection, end-to-end `SystemExit(2)`); render helpers
+  (all fields, n/a paths for disabled/no-measurable, row count, no-scorable-cell
+  path); handler trajectory + grid modes with injected `log`; handler output
+  equals a direct engine fold; default-`print` path; `main()` dispatch.
+- Full Python unit suite: `python -m pytest tests/unit/` → **3002 passed**
+  (2965 prior + 37 new), run on the feature branch before ff-merge. GATE
+  command: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/`.
+  Re-verified `test_gv_simulate_mirror.py` + `test_gv_cli.py` (130 passed) on
+  main after merge.
+- `python -W error::SyntaxWarning -m py_compile examples/gv.py
+  tests/unit/test_gv_simulate_mirror.py` clean.
+- Manual smoke (worktree): `gv simulate-mirror --wpms 120,140,200,230,200,140,120`
+  reports the trajectory; `--grid` reports the 3×3 sweep table and picks
+  `base_wpm=180 strength=0.5` over the demo arc (the same iter-217 result,
+  now operator-runnable).
+- (`tests/test_session.py` still errors on collection — pre-existing missing
+  `pipecat` dep, not a regression.)
+
+**Next planned items:**
+1. **[wpm-mirroring, follow-on] Render a varied-pacing corpus that stays in the
+   intelligibility band and run the grid sweep on it for real.** The simulator,
+   the grid sweep, AND now the CLI all exist; the remaining blocker is a corpus
+   whose per-turn `user_wpm` arc varies *within* 0.8–1.3 (≈130–215 WPM at base
+   165) so `final_gap` measures tracking, not the `min_speed`/`max_speed` clamp
+   (the iter-217 demo arc's slow tail clamps at the floor). Render slow↔fast
+   turns inside the band, run `gv simulate-mirror --grid` over it, and either
+   change the seed defaults from the verdict or document why 165/0.5 stand.
+2. **[silence] Run the actual `--sweep silence_ms` over a newly-synced corpus**
+   — the sweep harness carries the full floor/typical/ceiling/spread shape on
+   all three axes from one shared renderer (iter-207). Gate a real `silence_ms`
+   default change on a corpus that exercises real mid-utterance pauses *and*
+   two-turns-one-pause cases (the seed corpus is flat in both windows).
+3. **[latency, highest value] Pre-warm the capture pipeline** — still the top
+   user-facing bug (3–5s `click_to_capture_ms`). Needs an on-device timing
+   harness; cannot be replayed. The iter-208..212 sentinels now make
+   playback-side, recording-loop, mid-stream-LLM, and end-to-end TTFS slowdowns
+   visible in session summaries.
+4. **[preroll-default] Bump the client `prerollMs` default above 0** — iter-200's
+   grid shows pre-roll improves the typical opening, the tail, AND the
+   consistency simultaneously; pick a value (256–512ms) and gate on a
+   busier/newly-synced corpus.
