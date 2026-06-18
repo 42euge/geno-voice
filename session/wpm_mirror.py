@@ -49,6 +49,10 @@ __all__ = [
     "WpmMirror",
     "SpeedTrajectory",
     "simulate_speed_trajectory",
+    "MirrorGridPoint",
+    "sweep_mirror_grid",
+    "pick_best_mirror_config",
+    "DEFAULT_LURCH_WEIGHT",
     "DEFAULT_BASE_WPM",
     "DEFAULT_STRENGTH",
     "DEFAULT_MIN_SPEED",
@@ -335,3 +339,167 @@ def simulate_speed_trajectory(
         max_step=max_step,
         moves=moves,
     )
+
+
+# --------------------------------------------------------------------------
+# iter-217 — offline base_wpm × strength grid sweep + data-driven picker.
+#
+# iter-216 shipped ``simulate_speed_trajectory`` — the single-config offline
+# twin of the live ``SpeedController`` fold. Its backlog item #1 is the natural
+# next hop: *run* it over a realistic varied-pacing arc across a grid of
+# ``base_wpm`` × ``strength`` candidates, read each cell's convergence
+# (``final_gap``) / lurch (``max_step``) / churn (``moves``) diagnostics, and
+# pick the pair that tracks the user without lurching — so the seed defaults
+# (``base_wpm`` 165, ``strength`` 0.5) can be replaced from data (or kept with
+# a documented reason) rather than by assertion.
+#
+# This is the same shape as the VAD ``sweep_param`` harness
+# (``fixtures/replay_vad.py``): fold a parameter grid over a fixed corpus into
+# one machine-readable comparison row per cell, then aggregate into a verdict.
+# Here the "corpus" is the per-turn ``user_wpm`` arc and the "replay" is the
+# pure trajectory fold — no audio, no clock, no live session.
+#
+# Pure: each cell is one ``simulate_speed_trajectory`` call; the sweep and the
+# picker mutate nothing and read no I/O. The picker's verdict transfers to the
+# live path because it scores the *same* fold the live ``SpeedController`` runs.
+# --------------------------------------------------------------------------
+
+
+#: Default weight on the lurch term (``max_step``) relative to the convergence
+#: term (``|final_gap|``) in :meth:`MirrorGridPoint.score`. Both terms are in
+#: speed-multiplier units, so a weight of ``1.0`` would treat a 0.1 residual gap
+#: and a 0.1 single-turn jump as equally bad. The default ``0.5`` says a smooth
+#: approach matters, but converging to the user's rate matters twice as much —
+#: a bot that lags the user slightly is less jarring than one that lurches every
+#: turn, but a bot that never reaches the user's pace defeats the whole mirror.
+DEFAULT_LURCH_WEIGHT: float = 0.5
+
+
+@dataclass(frozen=True)
+class MirrorGridPoint:
+    """One ``(base_wpm, strength)`` cell of a tuning grid sweep.
+
+    Carries the cell's tunables alongside the convergence / lurch / churn
+    diagnostics of replaying the shared arc through it. ``score`` folds the two
+    that matter for tuning — residual gap and lurch — into a single
+    lower-is-better number so a grid can be ranked.
+
+    Attributes mirror the :class:`SpeedTrajectory` fields the cell produced:
+      base_wpm, strength: the tunables under test (the grid axes).
+      final_speed: the speed after the last turn of the arc.
+      ideal_final_speed: the band-clamped target the arc converges toward
+        (``None`` when no measurable turn — the cell is unscorable).
+      final_gap: ``final_speed - ideal_final_speed`` (``None`` when unscorable).
+      max_step: the largest single-turn speed change (the lurch diagnostic).
+      moves: how many turns changed the speed (the churn diagnostic).
+    """
+
+    base_wpm: float
+    strength: float
+    final_speed: float
+    ideal_final_speed: float | None
+    final_gap: float | None
+    max_step: float
+    moves: int
+
+    @property
+    def abs_final_gap(self) -> float | None:
+        """``|final_gap|`` — the unsigned residual distance to the target."""
+        return None if self.final_gap is None else abs(self.final_gap)
+
+    def score(self, lurch_weight: float = DEFAULT_LURCH_WEIGHT) -> float | None:
+        """Lower-is-better tuning score: ``|final_gap| + lurch_weight*max_step``.
+
+        ``None`` when the cell is unscorable (no measurable turn / disabled), so
+        a picker can skip it. A cell that both converges (small ``|final_gap|``)
+        and stays smooth (small ``max_step``) scores low; one that lags the user
+        (large gap) or jumps every turn (large step) scores high.
+        """
+        if self.abs_final_gap is None:
+            return None
+        return self.abs_final_gap + lurch_weight * self.max_step
+
+
+def sweep_mirror_grid(
+    user_wpms,
+    base_wpms,
+    strengths,
+    initial_speed: float = 1.0,
+    template: WpmMirrorConfig | None = None,
+) -> list:
+    """Replay one ``user_wpm`` arc through every ``base_wpm`` × ``strength`` cell.
+
+    The grid analogue of :func:`simulate_speed_trajectory`: for each
+    ``(base_wpm, strength)`` pair it builds an **enabled** config (cloning the
+    non-grid tunables — ``min_speed`` / ``max_speed`` / ``min_delta`` — from
+    ``template``, defaulting to the seed values) and folds the shared arc
+    through it, collecting one :class:`MirrorGridPoint` per cell.
+
+    Args:
+      user_wpms: the per-turn arc replayed identically through every cell (e.g.
+        a slow → fast → slow conversation). The fixed "corpus".
+      base_wpms: candidate ``base_wpm`` calibrations (the first grid axis).
+      strengths: candidate ``strength`` damping values (the second axis).
+      initial_speed: the speed before any turn (the ``mic_chat`` start speed).
+      template: a :class:`WpmMirrorConfig` whose ``min_speed`` / ``max_speed`` /
+        ``min_delta`` (and ``enabled``-overridden) are reused for every cell, so
+        the sweep varies only the two grid axes against a fixed band/deadband.
+        ``None`` uses the seed defaults.
+
+    Returns one ``MirrorGridPoint`` per cell in row-major order (outer loop
+    ``base_wpms``, inner loop ``strengths``) — the machine-readable comparison
+    table a tuning lap reads. Pure: no I/O, no mutation of inputs.
+    """
+    tmpl = template or WpmMirrorConfig()
+    points: list = []
+    for base_wpm in base_wpms:
+        for strength in strengths:
+            cfg = WpmMirrorConfig(
+                enabled=True,
+                base_wpm=float(base_wpm),
+                strength=float(strength),
+                min_speed=tmpl.min_speed,
+                max_speed=tmpl.max_speed,
+                min_delta=tmpl.min_delta,
+            )
+            traj = simulate_speed_trajectory(user_wpms, initial_speed, cfg)
+            points.append(
+                MirrorGridPoint(
+                    base_wpm=cfg.base_wpm,
+                    strength=cfg.strength,
+                    final_speed=traj.final_speed,
+                    ideal_final_speed=traj.ideal_final_speed,
+                    final_gap=traj.final_gap,
+                    max_step=traj.max_step,
+                    moves=traj.moves,
+                )
+            )
+    return points
+
+
+def pick_best_mirror_config(
+    points,
+    lurch_weight: float = DEFAULT_LURCH_WEIGHT,
+) -> MirrorGridPoint | None:
+    """Pick the lowest-:meth:`~MirrorGridPoint.score` cell from a grid sweep.
+
+    Scores every cell with the shared ``lurch_weight`` and returns the one with
+    the smallest (best) score — the ``(base_wpm, strength)`` pair that converges
+    to the user's pace without lurching across the arc. Unscorable cells (no
+    measurable turn) are skipped. ``None`` when the grid is empty or every cell
+    is unscorable.
+
+    Earliest-tie rule (matching ``_longest_consecutive_run`` and the VAD sweep):
+    on an exact score tie the earlier cell in row-major order wins, so a stable
+    grid ordering yields a stable pick. Pure — reads nothing, mutates nothing.
+    """
+    best: MirrorGridPoint | None = None
+    best_score: float | None = None
+    for p in points:
+        s = p.score(lurch_weight)
+        if s is None:
+            continue
+        if best_score is None or s < best_score:
+            best = p
+            best_score = s
+    return best
