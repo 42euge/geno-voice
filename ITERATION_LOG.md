@@ -17249,3 +17249,78 @@ What changed:
    reachable as client knobs.
 4. **[gain] Add a gain×preroll grid finding** — quantify whether amplifying the
    pre-roll audio changes the recovered soft-attack quality.
+
+---
+
+## iter-197 — add a `mean_first_onset_ms` onset-timing aggregate to the VAD sweep
+
+**Branch:** `iter-197-onset-timing-aggregate` (merged ff to main, commit `ced7f69`)
+**Date:** 2026-06-17
+
+**Improvement (iter-196 next-planned #2):** iter-196 shipped the client
+`debounceMs` knob but left its key follow-up open: *validate onset **timing**
+(first `onset_ms`) moves earlier at debounce 100ms* before lowering the shipped
+default below 200. That validation was blocked by a gap in the replay harness —
+`SweepPoint` only aggregated onset *counts* (`total_onsets`, `min_onsets`), so
+checking that an onset-shaping knob (`debounce_ms`, `preroll_ms`) pulls speech
+capture *earlier* meant hand-reading each recording's `onset_ms` out of `--json`
+(the research doc literally said "inspect `onset_ms` (`--json`) rather than the
+aggregate sweep totals"). This lap adds the missing timing aggregate so the
+lever is visible in one sweep pass.
+
+What changed:
+- **`fixtures/replay_vad.py`** — `SweepPoint` gains a `mean_first_onset_ms`
+  field: the mean of each recording's **first** segment `onset_ms`, averaged
+  **only over recordings that detected at least one segment**. A missed
+  recording has no onset time; folding in a `0.0` would falsely pull the mean
+  toward "earliest possible" and mask the miss as great timing — so misses are
+  excluded (empty → `0.0` sentinel, documented). `aggregate_results` computes
+  it; `summary_line` and `_grid_summary_line` surface it as an `onset1=…ms`
+  column in the human sweep/grid tables; it rides along in the `--json` output
+  for free (it's a dataclass field).
+- **`tests/unit/test_replay_vad.py`** — +6 tests (61 → 67):
+  `mean_first_onset_ms` averages only detected recordings (hand-computed),
+  excludes a missed recording at threshold 0.015 (reflects only the hit, > 0),
+  is `0.0` when nothing detected, a `preroll_ms` sweep pulls the aggregate
+  earlier **without** changing onset count (the timing-vs-count distinction the
+  field exists to expose), the CLI human table prints the `onset1=` column, and
+  the `--json` payload includes `mean_first_onset_ms > 0`. Existing empty/full
+  aggregate tests extended to assert the new field.
+- **`docs/research/voice-capture-tuning.md`** — new "Onset-timing aggregate
+  over the seed corpus (iter-197)" section with the real-corpus sweep tables;
+  the "Each row reports" legend documents the `onset1` column; backlog item 5
+  marked timing-validated.
+
+**Corpus evidence (the iter-196 question, now answered in one pass):** run
+against the real 4-recording corpus at threshold 0.006, frame 1024:
+- `--sweep debounce_ms 100,200,300`: `onset1` = **1271.3ms** (100) /
+  **1532.5ms** (200) / **2190.4ms** (300). Lowering debounce 200→100ms pulls
+  the mean first onset **~261ms earlier** while keeping `trig=4/4` and gaining
+  one onset (11 vs 10). 300ms is the cliff (`trig=3/4`, `min_onsets=0`).
+- `--sweep preroll_ms 0,256,512`: `onset1` = 1532.5 / 1282.9 / 1091.3ms —
+  onset *count* stays 10 across all three (pre-roll is timing-only), aggregate
+  pulls ~250ms earlier per 256ms of pre-roll.
+
+**Verification:**
+- `python -m pytest tests/unit/test_replay_vad.py` → **67 passed** (61 + 6 new).
+- Full Python unit suite: `python -m pytest tests/unit/` → **2663 passed**
+  (2657 prior + 6 new).
+- Integration `tests/integration/test_vad_recordings.py` → 12 skipped in the
+  worktree (the uncommitted binary corpus lives only in the main checkout); the
+  CLI runs above exercised the new aggregate against the real corpus directly.
+- (`tests/test_session.py` still errors on collection — pre-existing missing
+  `pipecat` dep, not a regression.)
+
+**Next planned items (from the research-doc backlog):**
+1. **[latency, highest value] Pre-warm the capture pipeline** — still the top
+   user-facing bug (3–5s `click_to_capture_ms`). Needs an on-device timing
+   harness; cannot be replayed.
+2. **[debounce-default] Lower the client `debounceMs` default 200→100** — the
+   timing evidence now supports it (iter-197: ~261ms earlier, no detection
+   cost). Gate before changing the shipped default: confirm it holds on a
+   busier/newly-synced corpus (one bad recording at 100ms would matter).
+3. **[grid] Add a `--grid debounce_ms,preroll_ms` finding** in the research
+   doc — both onset-timing axes are now reachable as client knobs AND the
+   `onset1` aggregate makes the joint timing effect readable per grid cell.
+4. **[gain] Add a gain×preroll grid finding** — quantify whether amplifying
+   the pre-roll audio changes the recovered soft-attack quality.
