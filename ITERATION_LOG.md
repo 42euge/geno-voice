@@ -19838,3 +19838,114 @@ line in the session summary and touches nothing in the live
    and `context_tokens` (iter-077, late-session creep) remain
    un-sentineled per-turn metrics that fit the same diversity-check
    template.
+
+## iter-225 — sentence-split-coverage consistency sentinel
+
+**Branch:** `iter-225-split-coverage-sentinel` (merged ff to main, commit `a4d8870`)
+**Date:** 2026-06-18
+
+**Improvement (a session-summary diversity-check sentinel over
+iter-059's per-turn `sentence_split_coverage`):** The backlog's top
+items (on-device base_wpm render, real `silence_ms` sweep, capture
+pre-warm timing harness) all gate on real hardware/synth that can't
+run in a headless lap. This lap instead closes a coverage gap in the
+well-established GENO.md "Session-summary diversity-check pattern":
+`sentence_split_coverage` — iter-059's fraction of submitted chars
+that landed inside a complete sentence (and so overlapped synth with
+the LLM stream) versus the trailing remainder flushed at end-of-stream
+— had **no sentinel**. iter-059 surfaces the metric only as a per-turn
+`"% complete"` suffix when <1.0; a **sustained** low-coverage run (the
+splitter systematically failing to close sentences, e.g. an LLM that
+rarely emits terminal punctuation) never reaches the summary, yet it
+defeats the iter-008 streaming-overlap design turn after turn, eroding
+the TTFS the VISION optimizes for.
+
+This is the latest instance of the diversity-check pattern after the
+original eight (iter-114..143) plus the iter-208..224 sentinels. A
+continuous-metric instance (bucket first, then scan), and the **THIRD
+inverted-direction bucketer** after iter-142 (llm-tps) and iter-143
+(streaming-overlap): `sentence_split_coverage` is bigger-is-better, so
+the fine state is a HIGH value (close to 1.0) and the problematic end
+is a small coverage. The filter rule absorbs the inversion; the
+run-scan stays direction-agnostic.
+
+What changed (`examples/_chat_metrics.py`):
+- **`_split_coverage_bucket(coverage)`** maps the `[0,1]` metric to
+  `full` (>=0.90) / `partial` (0.70-0.90) / `poor` (<0.70).
+  Non-positive input (no chars submitted this turn — the
+  "no measurement" state) returns `""` and is filtered out by the
+  consumer. Like iter-142/143 and UNLIKE iter-140/141/224, the fine
+  bucket is a HIGH value, so the boundaries ARE inverted.
+- **`_emit_split_coverage_consistency_line(emit, list, threshold=5)`**
+  drops the `"full"` bucket, runs the shared iter-116
+  `_longest_consecutive_run`, and emits a per-value suggestion
+  (`poor`: a large remainder flushes after the LLM stream so synth
+  runs sequentially, check the sentence splitter / terminal
+  punctuation; `partial`: a noticeable remainder flushes each turn,
+  overlap is leaking, the LLM may rarely end on punctuation) plus a
+  defensive `else` fallback. Threshold 5, matching the other
+  continuous-metric sentinels. Names iter-059 in the warning text.
+- **Wired into `print_session_summary`** right after the iter-224
+  STT-preview sentinel. Distinct from iter-143's
+  `streaming_overlap_ratio` sentinel: that measures how much synth
+  DID overlap; this measures whether the splitter even GAVE synth
+  full sentences to overlap with. Low coverage is an upstream cause
+  of low overlap.
+
+**Read-only invariant untouched.** Emits at most one extra advisory
+line in the session summary and touches nothing in the live
+`mic_chat` / `pipecat_server` path, so it cannot regress the runtime.
+
+**Verification:**
+- New tests:
+  `python -m pytest tests/unit/test_emit_split_coverage_consistency_line.py`
+  → **22 passed**. Coverage: bucket boundaries (zero/negative→`""`,
+  full/partial/poor edges, float granularity around the inverted
+  boundaries), empty/all-zero suppression, long-full + perfect-1.0
+  silence, alternating-full filter, threshold (5 fires, 4 silent,
+  custom 3/10), full-interleaving doesn't break a run, `poor` breaks
+  a `partial` run (phase change), longest-of-multiple, 4-space indent,
+  iter-059 attribution, 1000-element scale.
+- Full Python unit suite: `python -m pytest tests/unit/` → **3147
+  passed** (3125 prior + 22 new), run on the feature branch before
+  ff-merge. GATE command:
+  `cd ~/code-purp/geno-voice && python -m pytest tests/unit/`.
+  Re-verified `test_emit_split_coverage_consistency_line.py` +
+  `test_diversity_pattern_doc.py` (32 passed) — the doc-sync test
+  stays green, confirming the iter-208+ post-freeze precedent (new
+  sentinels need no GENO.md `_DIVERSITY_HELPERS` update).
+- `python -W error::SyntaxWarning -m py_compile examples/_chat_metrics.py
+  tests/unit/test_emit_split_coverage_consistency_line.py` clean.
+- Operator smoke (worktree): `[0.5]*5` → `Split coverage: 5
+  consecutive 'poor' turns …`; `[0.8]*5` → `… 'partial' …`;
+  `[0.98]*9` → silent.
+- (`tests/test_session.py` still errors on collection — pre-existing
+  missing `pipecat` dep, not a regression.)
+
+**Next planned items:**
+1. **[wpm-mirroring, follow-on, last offline piece] On-device render that
+   produces the calibration samples.** The arithmetic core (iter-220),
+   CLI (iter-221), verdict engine (iter-222), and verdict CLI surface
+   (iter-223) all exist; the remaining work is the gated on-device
+   piece: synthesize a fixed known-length script through the real
+   Kokoro voice at `speed=1.0` (plus a couple other speeds to
+   cross-check), measure the rendered `audio_seconds`, and feed the
+   durations into `gv calibrate-base-wpm --verdict` so a deployment
+   reads an adopt/keep call for `base_wpm` from its own voice. Gate on
+   a real synth.
+2. **[silence] Run the actual `--sweep silence_ms` over a newly-synced
+   corpus** — the sweep harness carries the full floor/typical/ceiling/
+   spread shape on all three axes from one shared renderer (iter-207).
+   Gate a real `silence_ms` default change on a corpus that exercises
+   real mid-utterance pauses *and* two-turns-one-pause cases (the seed
+   corpus is flat in both windows).
+3. **[latency, highest value] Pre-warm the capture pipeline** — still
+   the top user-facing bug (3–5s `click_to_capture_ms`). Needs an
+   on-device timing harness; cannot be replayed. The iter-208..212
+   sentinels (and now iter-224/225) make playback-side, recording-loop,
+   mid-stream-LLM, end-to-end TTFS, preview-quality, and split-coverage
+   slowdowns visible in session summaries.
+4. **[metrics] Continue the sentinel sweep** — `worker_idle_gap_total`
+   (iter-044, LLM not keeping up with synth) and `context_tokens`
+   (iter-077, late-session creep) remain un-sentineled per-turn metrics
+   that fit the same diversity-check template.
