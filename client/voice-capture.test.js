@@ -200,3 +200,189 @@ test("encodeWav writes a 44-byte RIFF/WAVE header", () => {
   assert.equal(ascii(36, 4), "data");
   assert.equal(wav.length, 44 + 3 * 2); // header + 3 int16 samples
 });
+
+// ---------------------------------------------------------------------------
+// iter-194 — rest of the ContinuousListener state machine.
+//
+// iter-193 covered the pre-roll ring buffer; these tests drive the remaining
+// transitions: silence timeout → onSpeechEnd, the minSpeechMs / empty-chunks
+// drops, the mute/unmute gate, the raw-frame callback, and the onStateChange
+// sequence. The silence path normally fires off a real setTimeout, so instead
+// of waiting on wall-clock time we install a controllable clock that stays
+// live across the whole scenario and invoke `_onSilence()` directly — the same
+// method the timer would call — after advancing the clock by the desired gap.
+// ---------------------------------------------------------------------------
+
+// Run `body(advance)` with `performance.now()` driven by a controllable clock.
+// `advance(ms)` moves the clock forward; the returned `feedFrames(listener, n)`
+// pushes frames while advancing one FRAME_MS per frame. Unlike `feed` above,
+// the clock survives until the body returns, so a test can commit speech, jump
+// the clock past silenceDurationMs, then call `_onSilence()` deterministically.
+function withClock(body) {
+  const orig = performance.now;
+  let clock = 1000; // positive offset (candidate timestamp is truthiness-checked)
+  performance.now = () => clock;
+  const advance = (ms) => {
+    clock += ms;
+  };
+  const feedFrames = (listener, frames) => {
+    listener.active = true;
+    if (listener._muted === undefined) listener._muted = false;
+    for (const f of frames) {
+      listener._handleFrame(f);
+      clock += FRAME_MS;
+    }
+  };
+  try {
+    return body(advance, feedFrames);
+  } finally {
+    performance.now = orig;
+  }
+}
+
+// Commit a listener into the speaking state via a held-loud candidate.
+function commitSpeech(listener, feedFrames, loudFrames = COMMIT_FRAMES) {
+  feedFrames(listener, Array.from({ length: loudFrames }, () => frame(0.5)));
+  assert.equal(listener.speaking, true, "expected listener to commit to speaking");
+}
+
+test("silence after speech commits the segment via onSpeechEnd", () => {
+  const events = [];
+  let wav = null;
+  const l = newListener({
+    minSpeechMs: 100,
+    silenceDurationMs: 800,
+    onStateChange: (s) => events.push(s),
+    onSpeechEnd: (w) => {
+      wav = w;
+    },
+  });
+  withClock((advance, feedFrames) => {
+    commitSpeech(l, feedFrames);
+    advance(900); // past silenceDurationMs; well past minSpeechMs
+    l._onSilence();
+  });
+  assert.equal(l.speaking, false);
+  assert.ok(wav instanceof Uint8Array, "onSpeechEnd should receive a WAV byte array");
+  // RIFF header → a real encoded segment, not an empty buffer.
+  assert.equal(String.fromCharCode(...wav.subarray(0, 4)), "RIFF");
+  assert.ok(wav.length > 44, "WAV should carry PCM samples beyond the header");
+  // chunks are cleared so the next utterance starts fresh.
+  assert.equal(l.chunks.length, 0);
+  // State walked listening → speaking → processing.
+  assert.deepEqual(events, ["speaking", "processing"]);
+});
+
+test("a too-short utterance is dropped (minSpeechMs gate, no onSpeechEnd)", () => {
+  const events = [];
+  let ended = false;
+  const l = newListener({
+    minSpeechMs: 5000, // unreachably long for this scenario
+    silenceDurationMs: 800,
+    onStateChange: (s) => events.push(s),
+    onSpeechEnd: () => {
+      ended = true;
+    },
+  });
+  withClock((advance, feedFrames) => {
+    commitSpeech(l, feedFrames);
+    advance(900); // silence fires, but elapsed < minSpeechMs
+    l._onSilence();
+  });
+  assert.equal(l.speaking, false);
+  assert.equal(ended, false, "short utterance must not commit");
+  // State returned to listening rather than processing.
+  assert.deepEqual(events, ["speaking", "listening"]);
+});
+
+test("_onSilence is a no-op when not currently speaking", () => {
+  let ended = false;
+  const l = newListener({ onSpeechEnd: () => (ended = true) });
+  l.speaking = false;
+  l.chunks = [frame(0.5)];
+  l._onSilence(); // must bail immediately
+  assert.equal(ended, false);
+  // chunks untouched — it returned before the encode path.
+  assert.equal(l.chunks.length, 1);
+});
+
+test("muted frames advance the meter but never trigger speech", () => {
+  const events = [];
+  const l = newListener({ onStateChange: (s) => events.push(s) });
+  l.frameCount = 0; // start() does this; the direct-drive harness skips start()
+  withClock((advance, feedFrames) => {
+    l.mute();
+    assert.equal(l._muted, true);
+    feedFrames(l, Array.from({ length: COMMIT_FRAMES * 2 }, () => frame(0.5)));
+  });
+  // Loud frames while muted: no candidate, no commit, no state change.
+  assert.equal(l.speaking, false);
+  assert.equal(l._speechCandidate, undefined);
+  assert.deepEqual(events, []);
+  // The frame meter still ran (frameCount/lastRms updated before the mute gate).
+  assert.equal(l.frameCount, COMMIT_FRAMES * 2);
+  assert.ok(l.lastRms > 0.4);
+});
+
+test("unmute restores the speech path after a muted stretch", () => {
+  const l = newListener();
+  withClock((advance, feedFrames) => {
+    l.mute();
+    feedFrames(l, Array.from({ length: 5 }, () => frame(0.5)));
+    assert.equal(l.speaking, false);
+    l.unmute();
+    assert.equal(l._muted, false);
+    commitSpeech(l, feedFrames);
+  });
+  assert.equal(l.speaking, true);
+});
+
+test("the raw-recording callback fires for every frame, even while muted", () => {
+  const seen = [];
+  const l = newListener();
+  l.setRawRecordingCallback((buf, rms) => seen.push({ len: buf.length, rms }));
+  withClock((advance, feedFrames) => {
+    l.mute();
+    feedFrames(l, [frame(0.5), frame(0.0001)]);
+  });
+  assert.equal(seen.length, 2, "raw callback should see both frames despite mute");
+  assert.equal(seen[0].len, FRAME);
+  assert.ok(seen[0].rms > 0.4, "loud frame rms reported");
+  assert.ok(seen[1].rms < 0.01, "quiet frame rms reported");
+});
+
+test("frames are ignored entirely once the listener is inactive", () => {
+  const events = [];
+  const l = newListener({ onStateChange: (s) => events.push(s) });
+  const orig = performance.now;
+  performance.now = () => 1000;
+  try {
+    l.active = false;
+    for (let i = 0; i < COMMIT_FRAMES; i++) l._handleFrame(frame(0.5));
+  } finally {
+    performance.now = orig;
+  }
+  assert.equal(l.speaking, false);
+  assert.equal(l.frameCount, undefined, "no frame should have been metered");
+  assert.deepEqual(events, []);
+});
+
+test("a sustained utterance accumulates frames across the speaking state", () => {
+  const l = newListener();
+  withClock((advance, feedFrames) => {
+    commitSpeech(l, feedFrames);
+    const committed = l.chunks.length;
+    // Keep talking: each loud frame while speaking appends to the segment.
+    feedFrames(l, Array.from({ length: 6 }, () => frame(0.5)));
+    assert.equal(l.chunks.length, committed + 6);
+  });
+});
+
+test("stop() tears down the speaking state and clears chunks state", async () => {
+  const l = newListener();
+  withClock((advance, feedFrames) => commitSpeech(l, feedFrames));
+  assert.equal(l.speaking, true);
+  await l.stop();
+  assert.equal(l.active, false);
+  assert.equal(l.speaking, false);
+});
