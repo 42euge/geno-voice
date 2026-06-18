@@ -17046,3 +17046,63 @@ What changed:
 4. **[js-tests] Extend `client/voice-capture.test.js`** to the rest of the
    state machine (silence timeout → `onSpeechEnd`, `minSpeechMs` drop, mute/
    unmute, raw callback) now that the JS test harness exists.
+
+---
+
+## iter-194 — extend the client JS test suite to the full ContinuousListener state machine
+
+**Branch:** `iter-194-js-state-tests` (merged ff to main, commit `3801825`)
+**Date:** 2026-06-17
+
+**Improvement (iter-193 next-planned #4):** iter-193 introduced the repo's first
+browser-client unit suite (`client/voice-capture.test.js`, 11 tests) but scoped
+it to the pre-roll ring buffer. The rest of the `ContinuousListener` VAD state
+machine — silence timeout → `onSpeechEnd`, the `minSpeechMs` / empty-chunks
+drops, the mute/unmute gate, the raw-frame callback, the active/inactive guard,
+and the `onStateChange` transition sequence — had no JS coverage. This lap fills
+that gap so future client edits (the queued `gainNode` knob, the 200ms→100ms
+debounce change) have a regression net.
+
+What changed:
+- **`client/voice-capture.test.js`** — 9 new tests (11 → 20 total). New
+  `withClock(body)` harness keeps a controllable `performance.now()` live across
+  a whole scenario so a test can commit speech, advance the clock past
+  `silenceDurationMs`, then invoke `_onSilence()` directly (the same method the
+  real `setTimeout` would call) — deterministic, no wall-clock waiting. A
+  `commitSpeech` helper holds loud frames past the 200ms debounce. Coverage:
+  - **silence → onSpeechEnd**: committed segment encodes a real RIFF WAV
+    (`>44` bytes), `chunks` cleared, state walks `speaking → processing`.
+  - **minSpeechMs drop**: an utterance shorter than `minSpeechMs` fires no
+    `onSpeechEnd`; state returns `speaking → listening`.
+  - **_onSilence no-op** when not speaking (chunks untouched).
+  - **mute gate**: loud frames while muted meter `frameCount`/`lastRms` but
+    never form a candidate or change state.
+  - **unmute** restores the commit path after a muted stretch.
+  - **raw callback** fires for every frame (loud + quiet) even while muted,
+    reporting the per-frame buffer length and RMS.
+  - **inactive guard**: frames before `active` are dropped entirely (no metering).
+  - **sustained speech** appends each loud frame to the segment.
+  - **stop()** tears down the speaking state.
+  - NOTE: the mute test seeds `frameCount = 0` (the direct-drive harness skips
+    `start()`, where the client initialises it; `undefined++` → NaN otherwise).
+
+**Verification:**
+- JS suite: `cd client && npm test` (`node --test`, node v22) → **20 passed,
+  0 failed** (11 prior + 9 new).
+- Full Python unit suite: `python -m pytest tests/unit/` → **2657 passed**
+  (unchanged — no Python touched this lap).
+- (`tests/test_session.py` still errors on collection — pre-existing missing
+  `pipecat` dep, not a regression.)
+
+**Next planned items (from the research-doc backlog):**
+1. **[latency, highest value] Pre-warm the capture pipeline** — still the top
+   user-facing bug (3–5s `click_to_capture_ms`). Needs an on-device timing
+   harness; cannot be replayed.
+2. **[gain] Wire a `gainNode` into `ContinuousListener`** (default 1.0) — the
+   iter-192 threshold×gain grid documents the operating envelope; now the JS
+   suite (iter-194) can cover the new knob's parity + recovery behaviour.
+3. **[debounce] Validate onset *timing* moves earlier at 100ms** before
+   lowering the client's hard-coded 200ms — pairs with the now-wired pre-roll
+   and the new state-machine tests.
+4. **[grid] Add a `--grid` finding for `debounce_ms × preroll_ms`** in the
+   replay harness — the two axes that both touch onset *timing*.
