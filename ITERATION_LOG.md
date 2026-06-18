@@ -20908,3 +20908,82 @@ speech-seconds vs threshold — the single-file analogue of
 4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
    --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
    refresh the comparison table.
+
+## iter-237 — `gv vad-sweep --csv`: flat spreadsheet/plot-friendly sweep table
+
+**Branch:** `iter-237-gv-vad-sweep-csv` (merged ff to main, commit `c3b763a`)
+**Date:** 2026-06-18
+
+**No STEER.md this lap.** The two top-priority next items carried since
+iter-227 (wire `ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()`
+in the desktop app) both need a Mac + mic + browser and can't run headless on
+the loop host. The recording corpus is unchanged since iter-231 (same 6 WAVs),
+so the "ingest new recordings" item had nothing to do. I took the first
+headless-doable item from the iter-236 backlog: `gv vad-sweep --csv` (item #3)
+— a CSV emitter beside `--json` so the sweep feeds a spreadsheet/plot directly.
+
+**The gap.** iter-236 shipped `gv vad-sweep`, which tabulates Silero
+segmentation over N P(speech) thresholds as either a human table or a `--json`
+document. The JSON nests the rows under a `sweep` key — ideal for a
+programmatic consumer, but awkward to feed straight into a spreadsheet or a
+plotting tool, each of which must first parse JSON and dig the rows out. There
+was no flat tabular surface.
+
+**What changed.**
+1. **`examples/gv.py`** — new `render_vad_sweep_csv(thresholds, results, *,
+   name)`: the spreadsheet/plot-friendly twin of `render_vad_sweep_json`.
+   - Emits a flat `threshold,num_segments,speech_s` grid via the stdlib `csv`
+     writer (RFC-4180 quoting), trailing row terminator stripped so the caller
+     logs it as one blob.
+   - The WAV `name` is accepted for signature parity with the other
+     `render_vad_sweep_*` twins but is deliberately NOT a column — a CSV is a
+     pure data grid and a repeated name column would be noise (unlike the human
+     table's title line / the JSON `name` key).
+   - Shared unavailable path degrades to a single `# silero VAD unavailable: …`
+     comment line so a degraded run stays self-describing, not silently empty.
+   - `cmd_vad_sweep` gains an `as_csv` branch beside `as_json`; the new `--csv`
+     parser flag lives in a mutually-exclusive group with `--json` (two output
+     formats can't both win). `csv` + `io` added to the module imports.
+2. **Tests.**
+   - `tests/unit/test_gv_vad.py` (**+10**, now 117 in-file): the `--csv` parser
+     flag (default false / set true) and its mutual exclusivity with `--json`;
+     `render_vad_sweep_csv` (unavailable comment, any-none unavailable, header +
+     rows, no trailing newline, round-trips to the same rows as the JSON twin);
+     `cmd_vad_sweep` `--csv` branch (unavailable comment, populated grid, name
+     absent from the body). NO torch import — driven through the injected
+     segmenter seam.
+   - `tests/integration/test_gv_vad_cli.py` (**+1**): over THE GATE recording,
+     `vad-sweep --csv` describes the same segmentation (thresholds, counts,
+     speech-seconds) as `--json`. Skips without corpus/package.
+3. **Docs** (`docs/research/voice-capture-tuning.md`) — `--csv` documented in
+   the `gv vad-sweep` section: invocation, the flat grid shape (verified
+   against `voice-20260618-110355.wav`), the no-name-column / mutual-exclusivity
+   notes, and the degraded-path comment line.
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3359 passed** (3349 prior + 10 new), run on the feature branch before
+  ff-merge. Re-confirmed on main: `pytest tests/unit/test_gv_vad.py
+  tests/unit/test_gv_cli.py` → **210 passed**.
+- Integration: `python -m pytest tests/integration/test_gv_vad_cli.py` →
+  **22 passed** (corpus symlinked into the worktree; symlink removed before
+  commit so it is not tracked). silero-vad IS installed on this host, so these
+  ran against the real model.
+- Manual smoke on the branch: `python examples/gv.py vad-sweep
+  fixtures/recordings/voice-20260618-110355.wav --csv` → a 4-row CSV
+  (`0.3,5,17.3 … 0.9,4,15.2`), matching the iter-236 human table exactly.
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] `gv vad-sweep` second sweep axis** — sweep `--min-silence-ms` (the
+   hangover) instead of just the P(speech) gate, mirroring
+   `fixtures/replay_silero.py --sweep <axis>`; the renderers/CSV emitter already
+   generalise once the swept dimension is parameterised.
+4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
+   --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
+   refresh the comparison table.
