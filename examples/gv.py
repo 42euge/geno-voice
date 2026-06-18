@@ -8,6 +8,7 @@ Usage:
     gv chat               # chat mode — STT → LLM (litellm) → TTS
     gv simulate-mirror …  # offline WPM-mirror trajectory / grid-sweep simulator
     gv calibrate-base-wpm … # offline base_wpm calibration (--verdict for an adopt/keep call)
+    gv vad recording.wav  # offline Silero VAD — segment a WAV into speech regions
     gv <cmd> --model ...  # override STT model
 """
 
@@ -115,6 +116,77 @@ def model_type(raw):
             f"model must not contain whitespace, got {raw!r}"
         )
     return raw
+
+
+def unit_interval_type(raw):
+    """Argparse ``type`` for ``gv vad --threshold``: a P(speech) gate in [0, 1].
+
+    Silero emits a per-window speech probability in ``[0, 1]`` and the
+    ``threshold`` knob gates on it (default 0.5, the model's own operating
+    point). This is NOT an energy threshold — it is the neural confidence, so
+    values outside ``[0, 1]`` are meaningless. Pure and side-effect-free for
+    direct unit testing; raises :class:`argparse.ArgumentTypeError` (rendered by
+    argparse as ``SystemExit(2)``) on a non-number, NaN, or out-of-range value.
+    """
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(f"threshold must be a number, got {raw!r}")
+    if value != value:  # NaN is unordered.
+        raise argparse.ArgumentTypeError("threshold must be a number, got nan")
+    if not (0.0 <= value <= 1.0):
+        raise argparse.ArgumentTypeError(
+            f"threshold must be between 0 and 1, got {value}"
+        )
+    return value
+
+
+def nonneg_float_type(raw):
+    """Argparse ``type`` for the ``gv vad`` millisecond knobs (``--min-speech-ms``
+    / ``--min-silence-ms`` / ``--speech-pad-ms``).
+
+    Each is a duration in milliseconds passed straight to ``SileroParams``; a
+    negative duration is nonsensical, while ``0`` is legitimate (disable the
+    minimum / no padding). Pure and side-effect-free for direct unit testing;
+    raises :class:`argparse.ArgumentTypeError` on a non-number, NaN, or negative
+    value.
+    """
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(f"value must be a number, got {raw!r}")
+    if value != value:  # NaN is unordered.
+        raise argparse.ArgumentTypeError("value must be a number, got nan")
+    if value < 0:
+        raise argparse.ArgumentTypeError(f"value must be >= 0, got {value}")
+    return value
+
+
+def max_speech_type(raw):
+    """Argparse ``type`` for ``gv vad --max-speech-s``: force-split bound.
+
+    Silero's ``max_speech_duration_s`` splits any region longer than this; the
+    :class:`SileroParams` default is ``inf`` (never force-split). Accepts a
+    positive float OR a sentinel (``inf`` / ``none`` / ``off``) meaning "never
+    split". ``float('inf')`` parses natively, so the sentinels are a nicety;
+    ``0`` and negatives are rejected (a zero-length cap would split forever).
+    Pure and side-effect-free for direct unit testing.
+    """
+    if isinstance(raw, str) and raw.strip().lower() in ("none", "off"):
+        return float("inf")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(
+            f"max-speech-s must be a number or 'inf', got {raw!r}"
+        )
+    if value != value:  # NaN is unordered.
+        raise argparse.ArgumentTypeError("max-speech-s must be a number, got nan")
+    if value <= 0:
+        raise argparse.ArgumentTypeError(
+            f"max-speech-s must be positive (or 'inf'), got {value}"
+        )
+    return value
 
 
 def wpm_list_type(raw):
@@ -341,6 +413,40 @@ def render_grid(points, best):
     return lines
 
 
+def render_vad_segments(result, *, threshold=None):
+    """Render a Silero ``SileroResult`` (iter-231) as plain-text report lines.
+
+    Pure: returns a list of strings (no I/O, no ANSI) so it is testable in
+    isolation — the handler joins and prints them, mirroring the other
+    ``render_*`` helpers. ``result`` of ``None`` (no segmenter available) yields
+    a single explanatory line so the handler can degrade cleanly on a host
+    without ``silero-vad`` installed.
+    """
+    if result is None:
+        return [
+            "silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        ]
+    lines = [
+        f"silero VAD segmentation — {result.name}",
+        f"  sample rate:  {result.sample_rate} Hz",
+        f"  duration:     {result.duration_s:.1f}s",
+        f"  segments:     {result.num_segments}",
+        f"  speech total: {result.speech_s:.1f}s",
+    ]
+    if threshold is not None:
+        lines.append(f"  threshold:    {threshold:.2f} (P(speech) gate)")
+    if result.num_segments == 0:
+        lines.append("  (no speech regions detected)")
+    else:
+        for i, seg in enumerate(result.segments, start=1):
+            lines.append(
+                f"  [{i:>2}] {seg.start_s:7.2f}s – {seg.end_s:7.2f}s "
+                f"({seg.duration_s:5.2f}s)"
+            )
+    return lines
+
+
 def _load_wpm_mirror():
     """Load ``session/wpm_mirror.py`` directly by file path.
 
@@ -441,6 +547,48 @@ def cmd_calibrate_base_wpm(args, *, log=print):
             log(line)
 
 
+def cmd_vad(args, *, log=print, segmenter=None, availability=None):
+    """Segment a WAV file offline through Silero VAD and print the regions.
+
+    The iter-231 Silero batch segmenter was reachable only via the :5111
+    HTTP endpoint (``POST /vad/silero``) and the ``fixtures/replay_silero.py``
+    script. This brings it to the gv CLI: ``gv vad recording.wav`` prints the
+    detected speech regions (start/end/duration) for any 16-bit PCM WAV, no
+    server required — the headless offline analogue of the live mic path.
+
+    Dependencies are injected for testability (mirrors ``dispatch``'s handler
+    injection): ``segmenter`` is the ``segment_recording`` callable and
+    ``availability`` is the ``silero_available`` probe. Both default to the real
+    :mod:`vad.silero` functions, imported lazily here so the parser stays
+    audio/torch-free and importable on any platform. When ``silero-vad`` is
+    absent the handler prints a clean install hint and returns rather than
+    crashing — the same degrade-don't-die contract the server's 503 follows.
+    """
+    if segmenter is None or availability is None:
+        from vad.silero import segment_recording, silero_available
+
+        segmenter = segment_recording if segmenter is None else segmenter
+        availability = silero_available if availability is None else availability
+
+    if not availability():
+        for line in render_vad_segments(None):
+            log(line)
+        return
+
+    from vad.silero import SileroParams
+
+    params = SileroParams(
+        threshold=args.threshold,
+        min_speech_ms=args.min_speech_ms,
+        min_silence_ms=args.min_silence_ms,
+        speech_pad_ms=args.speech_pad_ms,
+        max_speech_s=args.max_speech_s,
+    )
+    result = segmenter(args.wav, params=params)
+    for line in render_vad_segments(result, threshold=args.threshold):
+        log(line)
+
+
 def cmd_bench(args):
     # bench is a legacy argv-driven entrypoint: it parses its own sys.argv
     # rather than taking kwargs, so we rebuild argv here. Only forward
@@ -477,6 +625,7 @@ DEFAULT_HANDLERS = {
     "chat": cmd_chat,
     "simulate-mirror": cmd_simulate_mirror,
     "calibrate-base-wpm": cmd_calibrate_base_wpm,
+    "vad": cmd_vad,
 }
 
 # Seed mirror tunables, mirrored as the CLI defaults so the simulator's
@@ -654,6 +803,74 @@ def build_parser():
         dest="min_samples",
         help="Verdict gate: min sample count for a robust median "
         f"(default: {calib_min_samples_default})",
+    )
+
+    # gv vad — offline Silero segmentation of a WAV file. Defaults mirror
+    # SileroParams (sourced from the engine so the CLI tracks the real knobs);
+    # fall back to the documented constants if vad.silero can't be imported
+    # (keeps the parser construction audio/torch-free on any host).
+    try:
+        from vad.silero import SileroParams as _SP
+
+        _sp = _SP()
+        vad_threshold_default = _sp.threshold
+        vad_min_speech_default = _sp.min_speech_ms
+        vad_min_silence_default = _sp.min_silence_ms
+        vad_speech_pad_default = _sp.speech_pad_ms
+        vad_max_speech_default = _sp.max_speech_s
+    except Exception:  # pragma: no cover - defensive fallback
+        vad_threshold_default = 0.5
+        vad_min_speech_default = 250.0
+        vad_min_silence_default = 800.0
+        vad_speech_pad_default = 30.0
+        vad_max_speech_default = float("inf")
+
+    vad = sub.add_parser(
+        "vad",
+        help="Offline Silero VAD — segment a WAV file into speech regions "
+        "(no server / no mic; the headless analogue of the live mic path)",
+    )
+    vad.add_argument(
+        "wav",
+        help="Path to a 16-bit PCM WAV file to segment",
+    )
+    vad.add_argument(
+        "--threshold",
+        type=unit_interval_type,
+        default=vad_threshold_default,
+        help=f"P(speech) gate in [0, 1] (default: {vad_threshold_default})",
+    )
+    vad.add_argument(
+        "--min-speech-ms",
+        type=nonneg_float_type,
+        default=vad_min_speech_default,
+        dest="min_speech_ms",
+        help="Drop speech regions shorter than this, in ms "
+        f"(default: {vad_min_speech_default})",
+    )
+    vad.add_argument(
+        "--min-silence-ms",
+        type=nonneg_float_type,
+        default=vad_min_silence_default,
+        dest="min_silence_ms",
+        help="Trailing silence before a region ends, in ms — matches the "
+        f"pipecat stop_secs=0.8 live default (default: {vad_min_silence_default})",
+    )
+    vad.add_argument(
+        "--speech-pad-ms",
+        type=nonneg_float_type,
+        default=vad_speech_pad_default,
+        dest="speech_pad_ms",
+        help="Symmetric padding added to each region, in ms "
+        f"(default: {vad_speech_pad_default})",
+    )
+    vad.add_argument(
+        "--max-speech-s",
+        type=max_speech_type,
+        default=vad_max_speech_default,
+        dest="max_speech_s",
+        help="Force-split regions longer than this, in seconds; 'inf'/'none' "
+        "never splits (default: inf)",
     )
 
     return parser

@@ -77,6 +77,28 @@ python fixtures/replay_silero.py --compare       # Silero vs energy-VAD counts
 python fixtures/replay_silero.py --json          # machine-readable
 ```
 
+### `gv vad` — single-file CLI segmentation (iter-233)
+
+For ad-hoc inspection of one WAV (no server, no whole-corpus replay), the gv
+CLI exposes the same batch segmenter:
+
+```
+gv vad recording.wav                             # speech regions for one WAV
+gv vad recording.wav --threshold 0.7             # stricter P(speech) gate
+gv vad recording.wav --min-silence-ms 500        # shorter end-of-turn hangover
+```
+
+The defaults track `SileroParams` (`threshold=0.5`, `min_speech_ms=250`,
+`min_silence_ms=800` = the pipecat `stop_secs=0.8`, `speech_pad_ms=30`,
+`max_speech_s=inf`); `--max-speech-s none` (or `inf`/`off`) never force-splits.
+The report prints the sample rate, duration, segment count, total speech, and
+the per-region `start–end (duration)` table. When `silero-vad` is not installed
+the command prints a one-line install hint and exits cleanly (the same
+degrade-don't-die contract as the server's 503). `cmd_vad` takes injected
+`segmenter`/`availability`/`log` seams so `tests/unit/test_gv_vad.py` covers it
+without torch; `tests/integration/test_gv_vad_cli.py` runs it over the real
+corpus and re-pins the 31s ≥2-segment gate through the CLI.
+
 ### Silero vs energy-VAD segment counts (the headless proof)
 
 Measured over the seed corpus with `min_silence_ms=800` (the pipecat
