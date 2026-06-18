@@ -3258,6 +3258,144 @@ def _emit_stt_preview_divergence_consistency_line(
     )
 
 
+def _split_coverage_bucket(coverage: float) -> str:
+    """iter-225: bucket a per-turn ``sentence_split_coverage``
+    (iter-059's fraction of submitted chars that landed inside a
+    complete sentence — chars that overlapped synth with the LLM
+    stream — versus the trailing remainder flushed at end-of-stream)
+    into a coarse category. Used by
+    ``_emit_split_coverage_consistency_line`` to detect runs of turns
+    where the sentence splitter kept flushing a large remainder, so
+    the iter-008 streaming-overlap design can't mask synth latency.
+
+    A continuous-metric instance like iter-128/140/141/142/143/208.
+    Like iter-142 ``llm_tps`` and iter-143 ``streaming_overlap_ratio``
+    — and UNLIKE the iter-140/141 RTF bucketers —
+    ``sentence_split_coverage`` is "bigger is better": the fine state
+    is a HIGH value (close to 1.0 = every char overlapped), so the
+    boundaries invert and the problematic end is a small coverage.
+    This is the THIRD inverted-direction continuous bucketer.
+
+    Buckets (chosen against iter-059's semantics, where 1.0 = the LLM
+    always ended on punctuation so every char overlapped the next
+    sentence, and <1.0 = some chars were forced through as the
+    trailing remainder which synthesizes only AFTER the stream is
+    done, defeating overlap):
+
+        ``full``    — >= 0.90: the splitter caught essentially all
+            chars inside complete sentences; the remainder flush was
+            negligible. The desired state.
+        ``partial`` — 0.70-0.90: a noticeable remainder flushed each
+            turn — overlap is leaking, but most chars still overlap.
+        ``poor``    — < 0.70 (but > 0): a large remainder flushes at
+            end-of-stream, so a big share of synth runs sequentially
+            after the LLM finishes. The iter-008 overlap design is
+            being defeated — check the sentence splitter / punctuation
+            handling.
+
+    Returns ``""`` when ``coverage`` is non-positive (no chars
+    submitted this turn — the "no measurement" state) — empty-string
+    filter applies in the consumer, mirroring
+    iter-114/115/120/126/128/140/141/142/143/208/224.
+    """
+    if coverage <= 0:
+        return ""
+    if coverage >= 0.90:
+        return "full"
+    if coverage >= 0.70:
+        return "partial"
+    return "poor"
+
+
+def _emit_split_coverage_consistency_line(
+    emit, coverage_list: list[float], threshold: int = 5,
+) -> None:
+    """iter-225: detect consecutive runs of turns where the sentence
+    splitter flushed a large trailing remainder, so the iter-008
+    streaming-overlap design couldn't mask synth latency. Latest
+    instance of the diversity-check pattern after iter-114 (filler),
+    iter-115/126 (naturalness), iter-120 (barge-phase), iter-128
+    (sentence-length), iter-140 (stt-rtf), iter-141 (tts-rtf),
+    iter-142 (llm-tps), iter-143 (streaming-overlap), iter-208
+    (synth-dispatch), iter-209 (eot-overhead), iter-210 (bot-wpm),
+    iter-211 (max-token-gap), iter-212 (ttfs), iter-224
+    (stt-preview-divergence). Buckets the per-turn
+    ``sentence_split_coverage`` via ``_split_coverage_bucket`` before
+    running the scan (same continuous-metric shape as
+    iter-128/140/141/142/143/208/224).
+
+    The iter-059 metric exists because remainder flushing is
+    otherwise silent at the session level: each turn's per-turn line
+    shows the "% complete" suffix only when <1.0, but a *sustained*
+    low-coverage run — the splitter systematically failing to close
+    sentences, e.g. an LLM that rarely emits terminal punctuation —
+    never surfaces in the summary. A sustained run is the actionable
+    signal that overlap is being defeated turn after turn, directly
+    eroding the TTFS the VISION optimizes for. Distinct from iter-143's
+    ``streaming_overlap_ratio`` sentinel: that measures how much synth
+    DID overlap; this measures whether the splitter even GAVE synth
+    full sentences to overlap with. Low coverage is an upstream cause
+    of low overlap.
+
+    Filter rule: drop the ``"full"`` bucket before the scan. It's the
+    "fine" state; only "partial" and "poor" warrant warning. Empty
+    buckets (turns with no submitted chars) also drop. Like iter-142
+    and iter-143 and UNLIKE iter-140/141, the fine bucket is a HIGH
+    value ("full") because coverage is bigger-is-better — the THIRD
+    inverted-direction instance. The filter rule absorbs the
+    inversion; the run-scan stays direction-agnostic.
+
+    Threshold = 5: same as iter-115/128/140/141/142/143/208/224.
+    Coverage varies turn to turn with how the LLM happens to end a
+    response (a one-word answer with no period legitimately flushes a
+    remainder); a single low-coverage turn is normal, a sustained run
+    is the real signal.
+
+    Output:
+
+        Split coverage:   5 consecutive 'poor' turns — a large
+                          remainder flushes after the LLM stream so
+                          synth runs sequentially; check the sentence
+                          splitter / terminal punctuation
+                          (iter-059 sentence_split_coverage)
+    """
+    # Bucketize, then drop the "uninteresting" bucket (empty, full).
+    interesting = {"partial", "poor"}
+    filtered = [
+        b for b in (
+            _split_coverage_bucket(c) for c in coverage_list
+        )
+        if b in interesting
+    ]
+    if not filtered:
+        return
+
+    longest_run, longest_bucket = _longest_consecutive_run(filtered)
+    if longest_run < threshold:
+        return
+
+    if longest_bucket == "poor":
+        suggestion = (
+            "a large remainder flushes after the LLM stream so synth "
+            "runs sequentially; check the sentence splitter / terminal "
+            "punctuation"
+        )
+    elif longest_bucket == "partial":
+        suggestion = (
+            "a noticeable remainder flushes each turn; overlap is "
+            "leaking, the LLM may rarely end on punctuation"
+        )
+    else:
+        # Defensive: future buckets that pass the filter rule.
+        suggestion = "investigate recurring sentence-split remainder flushing"
+
+    emit(
+        f"    Split coverage:   {longest_run} consecutive "
+        f"{longest_bucket!r} turns — {suggestion} "
+        f"(iter-059 sentence_split_coverage)"
+    )
+
+
 def _emit_bargeable_line(emit, bargeable_values: list[float]) -> None:
     """iter-104: extracted from print_session_summary's iter-074
     bargeable line. Reports the WORST bargeable fraction across
@@ -4039,6 +4177,21 @@ def print_session_summary(
     _emit_stt_preview_divergence_consistency_line(
         _emit,
         [m.stt_preview_divergence for m in metrics_list],
+    )
+    # iter-225: sentence-split-coverage consistency check. Only fires
+    # when 5+ consecutive turns flushed a large trailing remainder
+    # (partial 0.70-0.90 / poor < 0.70). iter-059 added the per-turn
+    # metric but it only shows a "% complete" suffix on a single
+    # turn's line — a SUSTAINED low-coverage run (the splitter
+    # systematically failing to close sentences) never surfaces in the
+    # summary, yet it defeats the iter-008 streaming-overlap design
+    # turn after turn. Distinct from iter-143's streaming_overlap_ratio
+    # sentinel: that measures how much synth DID overlap; this measures
+    # whether the splitter even gave synth full sentences to overlap
+    # with. Low coverage is an upstream cause of low overlap.
+    _emit_split_coverage_consistency_line(
+        _emit,
+        [m.sentence_split_coverage for m in metrics_list],
     )
     # iter-090: barge block extracted to _emit_barge_block helper.
     # ~76 lines of co-emitted lines (count, interruption rate,
