@@ -19642,3 +19642,94 @@ fixed-rate default path.
 4. **[latency, highest value] Pre-warm the capture pipeline** — still the top
    user-facing bug (3–5s `click_to_capture_ms`). Needs an on-device timing
    harness; cannot be replayed.
+
+## iter-223 — Surface the calibration verdict on `gv calibrate-base-wpm` (backlog #1)
+
+**Branch:** `iter-223-calib-verdict-cli` (merged ff to main, commit `5db9c92`)
+**Date:** 2026-06-18
+
+**Improvement (expose the iter-222 verdict engine on the CLI — the
+iter-218/221 CLI-later split applied to the verdict track, closing iter-222
+backlog item #1):** iter-220 shipped the audio-free calibration core
+(`CalibrationSample` / `calibrate_base_wpm` → `BaseWpmCalibration`), iter-221
+surfaced the raw spread/drift numbers on `gv calibrate-base-wpm`, and iter-222
+added the adopt/keep DECISION engine (`calibration_verdict` →
+`CalibrationVerdict`). But the CLI still stopped at the raw numbers and left the
+operator to eyeball whether to actually re-seed `DEFAULT_BASE_WPM`. This lap
+adds a `--verdict` flag that prints the decision directly.
+
+What changed (`examples/gv.py`):
+- **`render_calibration_verdict(verdict)`** — pure formatter (no I/O, no ANSI)
+  returning plain-text report lines for the decision (`re-seed base_wpm to N`
+  vs `keep the current nominal`), the engine's `reason`, and the three gate
+  thresholds (`spread<=…, |drift|>=…, samples>=…`). A `None` verdict (no
+  samples) yields a single "no verdict" line, mirroring `render_calibration`'s
+  empty contract.
+- **`cmd_calibrate_base_wpm`** now folds the calibration into
+  `wm.calibration_verdict(...)` and prints `render_calibration_verdict` AFTER
+  the raw report when `--verdict` is passed. The raw report is unchanged and
+  always printed first, so the flag is purely additive.
+- **New parser args** on the `calibrate-base-wpm` subparser: `--verdict`
+  (`store_true`), and `--spread-max` / `--drift-min` / `--min-samples` (the
+  three verdict gates), with defaults sourced from the engine seeds
+  (`DEFAULT_CALIB_SPREAD_MAX` 10.0 / `DEFAULT_CALIB_DRIFT_MIN` 5.0 /
+  `DEFAULT_CALIB_MIN_SAMPLES` 3) plus documented `_MIRROR_DEFAULT_CALIB_*`
+  fallback constants for when the engine can't be loaded — the same lazy-source
+  pattern the `--nominal` / `--base-wpm` defaults already use.
+- Usage docstring updated to note the `--verdict` mode.
+
+**Off-by-default invariant untouched.** A pure read-only analysis subcommand;
+nothing in the live `mic_chat` / `pipecat_server` path imports or changes, so
+it cannot regress the proven fixed-rate default path. The verdict is also
+off-by-default *within* the subcommand (`--verdict` opt-in), so existing
+`calibrate-base-wpm` invocations are byte-identical.
+
+**Verification:**
+- New tests: `python -m pytest tests/unit/test_gv_calibrate_base_wpm.py` →
+  **42 passed** (31 prior + 11 new). New coverage: parser defaults (`--verdict`
+  off, gates from engine seeds) and overrides; `render_calibration_verdict`
+  (None→no-verdict line, recommend path, keep path); handler omits the verdict
+  by default, emits it (raw report first) when flagged, equals a direct engine
+  fold (`render_calibration + render_calibration_verdict`), threads gate
+  overrides through (`--min-samples 1` recommends; `--drift-min 100` keeps), and
+  dispatches via `main()`.
+- Full Python unit suite: `python -m pytest tests/unit/` → **3104 passed**
+  (3093 prior + 11 new), run on the feature branch before ff-merge. GATE
+  command: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/`.
+  Re-verified `test_gv_calibrate_base_wpm.py` + `test_gv_cli.py` (136 passed)
+  on main after merge.
+- `python -W error::SyntaxWarning -m py_compile examples/gv.py
+  tests/unit/test_gv_calibrate_base_wpm.py` clean.
+- Operator smoke (worktree): `gv calibrate-base-wpm --samples 50:14.0 50:14.0
+  50:14.0 --verdict` reports implied base_wpm **214.3** then
+  `decision: re-seed base_wpm to 214.3` (3 agreeing renders, +49.3 WPM drift —
+  all gates pass); the same samples without `--verdict` print only the raw
+  report; only 2 samples → `decision: keep the current nominal` (below the
+  3-sample gate).
+- (`tests/test_session.py` still errors on collection — pre-existing missing
+  `pipecat` dep, not a regression.)
+
+**Next planned items:**
+1. **[wpm-mirroring, follow-on, last offline piece] On-device render that
+   produces the calibration samples.** The arithmetic core (iter-220), CLI
+   (iter-221), verdict engine (iter-222), and now the verdict CLI surface
+   (iter-223) all exist; the remaining work is the gated on-device piece:
+   synthesize a fixed known-length script through the real Kokoro voice at
+   `speed=1.0` (and a couple of other speeds to cross-check), measure the
+   rendered `audio_seconds`, and feed the durations into
+   `gv calibrate-base-wpm --verdict` so a deployment reads an adopt/keep call
+   for `base_wpm` from its own voice. Gate on a real synth.
+2. **[silence] Run the actual `--sweep silence_ms` over a newly-synced corpus**
+   — the sweep harness carries the full floor/typical/ceiling/spread shape on
+   all three axes from one shared renderer (iter-207). Gate a real `silence_ms`
+   default change on a corpus that exercises real mid-utterance pauses *and*
+   two-turns-one-pause cases (the seed corpus is flat in both windows).
+3. **[latency, highest value] Pre-warm the capture pipeline** — still the top
+   user-facing bug (3–5s `click_to_capture_ms`). Needs an on-device timing
+   harness; cannot be replayed. The iter-208..212 sentinels now make
+   playback-side, recording-loop, mid-stream-LLM, and end-to-end TTFS slowdowns
+   visible in session summaries.
+4. **[preroll-default] Bump the client `prerollMs` default above 0** — iter-200's
+   grid shows pre-roll improves the typical opening, the tail, AND the
+   consistency simultaneously; pick a value (256–512ms) and gate on a
+   busier/newly-synced corpus.
