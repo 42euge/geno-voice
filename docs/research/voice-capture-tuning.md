@@ -78,7 +78,16 @@ short segments, the signature of a too-short `silence_ms`), `max_seg` (iter-202
 `max_seg` reads a too-*long* `silence_ms` fusing two real turns into one run-on
 segment — a failure that leaves the onset count flat and is invisible to every
 count aggregate, showing up only as a single segment's duration ballooning, so
-the two ceilings bracket both ends of the silence lever),
+the two ceilings bracket both ends of the silence lever), `min_seg` (iter-203 —
+`min_segment_ms`, the shortest single committed segment across the corpus: the
+*over-split floor* on the duration axis, the symmetric companion to `max_seg` as
+`min_onsets` is to `max_onsets`. It confirms by *duration* what `max_onsets`
+catches by *count* — a too-short `silence_ms` chops one utterance into many short
+fragments, so the shortest emitted segment collapses toward the `min_speech`
+gate. Reading both per axis — `min_onsets`/`max_onsets` on count,
+`min_seg`/`max_seg` on duration — a `--sweep silence_ms` brackets both failures
+on both axes in one pass; a committed segment can never be shorter than the
+`min_speech` gate, so this floor is bounded below by it),
 `onsets`/`speak_frames` totals, `mean_over` (mean %-of-frames-over-threshold),
 and `onset1`
 (iter-197 — the onset-*timing* aggregate: the mean of each recording's
@@ -492,6 +501,38 @@ running together — telling the operator the timeout *ceiling*, the same way
 `max_onsets` reads the floor. The seed corpus has no two-turns-one-pause case in
 the relevant window, so revisit when a newly-synced recording exercises it.
 
+### Over-split floor on the duration axis (iter-203)
+
+`max_segment_ms` (iter-202) closed the over-*merge* end of the silence lever on
+the duration axis, but left that axis with only a ceiling. The matching floor
+was still missing: where `min_onsets`/`max_onsets` bracket the *count* axis
+(floor catches a miss, ceiling catches a fragment), the duration axis had only
+`max_seg`. iter-203 adds `min_segment_ms` (the `min_seg` column): the shortest
+single committed segment across the corpus, the symmetric companion to `max_seg`
+as `min_onsets` is to `max_onsets`. It confirms over-splitting by *duration* —
+the same failure `max_onsets` reads by *count*. When a too-short `silence_ms`
+chops one utterance into many short fragments, the count ceiling climbs *and* the
+shortest emitted segment collapses toward the `min_speech` gate; the two are the
+count- and duration-axis fingerprints of the same fragmentation.
+
+The same synthetic gap recording, read on the duration axis, shows the floor and
+ceiling moving in opposite directions as `silence_ms` crosses the gap length:
+
+| silence_ms | min_seg | max_seg | reading |
+|-----------:|--------:|--------:|---------|
+| 100        | **1152.0ms** | 1152.0ms | gap (300ms) > timeout → **splits**: two short halves, the floor drops |
+| 400        | 2304.0ms | 2304.0ms | gap < timeout → **merges**: one long segment, floor = ceiling |
+| 800        | 2304.0ms | 2304.0ms | the production default — merged |
+
+As `silence_ms` rises past the gap the floor *climbs* (the fragments fuse into
+one long segment) while a low `silence_ms` pulls it down toward the `min_speech`
+gate (more, shorter fragments). All four bracket aggregates now read in one
+`--sweep silence_ms` pass: `min_onsets` (count floor, a miss), `max_onsets`
+(count ceiling, a fragment), `min_seg` (duration floor, a fragment), `max_seg`
+(duration ceiling, a merge). The seed corpus is flat in both windows, so gate
+the actual `silence_ms` default change on a newly-synced corpus that exercises
+real mid-utterance pauses and two-turns-one-pause cases.
+
 ## Findings & backlog (prioritized)
 
 1. **[latency] Pre-warm the capture pipeline.** The 3–5s `click_to_capture_ms`
@@ -590,7 +631,13 @@ the relevant window, so revisit when a newly-synced recording exercises it.
    over-merging — so a `--sweep silence_ms` brackets both failures at once: a
    `max_onsets` jump at low values means fragmentation, a `max_seg` climbing
    toward multiples of one turn's length at high values means turns are running
-   together (see "Over-merge ceiling" above)._
+   together (see "Over-merge ceiling" above). iter-203: the `min_segment_ms`
+   aggregate adds the over-split floor on the duration axis, so all four bracket
+   aggregates now read in one pass — `min_onsets`/`max_onsets` on count,
+   `min_seg`/`max_seg` on duration. A `min_seg` collapsing toward the
+   `min_speech` gate at low `silence_ms` confirms by duration the fragmentation
+   `max_onsets` reads by count (see "Over-split floor on the duration axis"
+   above)._
 
 ## Methodology notes
 

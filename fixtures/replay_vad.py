@@ -490,6 +490,30 @@ class SweepPoint:
                          real over-merge produces, and a ``silence_ms`` sweep
                          holds pre-roll fixed anyway. ``0.0`` when nothing
                          detected.
+    ``min_segment_ms`` — the shortest single committed segment's ``duration_ms``
+                         across the whole corpus (the over-*split* floor on the
+                         duration axis). This is to ``max_segment_ms`` what
+                         ``min_onsets`` is to ``max_onsets``: the symmetric
+                         companion on the same axis. ``max_segment_ms`` reads
+                         over-merging (a duration ballooning); the opposite
+                         failure — a too-short ``silence_ms`` shattering one
+                         utterance into many *short* fragments — is what the
+                         onset-count ceiling (``max_onsets``) catches by *count*,
+                         and ``min_segment_ms`` confirms by *duration*: the
+                         shortest emitted segment collapses toward the
+                         ``min_speech_ms`` gate as fragments get chopped ever
+                         shorter, the duration-axis fingerprint of over-splitting.
+                         Reading both per axis — ``min_onsets``/``max_onsets`` on
+                         count, ``min_segment_ms``/``max_segment_ms`` on duration
+                         — a ``--sweep silence_ms`` brackets both failure modes
+                         on both axes in one pass: the count floor catches a
+                         miss, the count ceiling and duration floor catch a
+                         fragment, the duration ceiling catches a merge. It is
+                         the ``min`` of each emitted segment's ``duration_ms``;
+                         a committed segment can never be shorter than the
+                         ``min_speech_ms`` gate (anything shorter is dropped
+                         before it is emitted), so this floor is bounded below by
+                         that gate. ``0.0`` when nothing detected.
     """
 
     params: VadParams
@@ -505,6 +529,7 @@ class SweepPoint:
     min_first_onset_ms: float
     std_first_onset_ms: float
     max_segment_ms: float
+    min_segment_ms: float
 
     def summary_line(self, label_key: str = "threshold") -> str:
         value = getattr(self.params, label_key)
@@ -520,6 +545,7 @@ class SweepPoint:
             f"onset1={self.mean_first_onset_ms:6.1f}ms "
             f"onset1_max={self.max_first_onset_ms:6.1f}ms "
             f"onset1_std={self.std_first_onset_ms:6.1f}ms "
+            f"min_seg={self.min_segment_ms:7.1f}ms "
             f"max_seg={self.max_segment_ms:7.1f}ms"
         )
 
@@ -564,6 +590,12 @@ def aggregate_results(params: VadParams, results: List[ReplayResult]) -> SweepPo
     # balloons. Measures duration_ms (onset→end) over every detected segment.
     seg_durations = [s.duration_ms for r in results for s in r.segments]
     max_segment = max(seg_durations) if seg_durations else 0.0
+    # Over-split floor: the shortest single committed segment across the corpus.
+    # The symmetric companion to max_segment on the *duration* axis (as min_onsets
+    # is to max_onsets on the count axis). A too-short silence_ms chops one
+    # utterance into many short fragments; the shortest emitted segment collapses
+    # toward the min_speech gate, the duration-axis fingerprint of over-splitting.
+    min_segment = min(seg_durations) if seg_durations else 0.0
     return SweepPoint(
         params=params,
         recordings=n,
@@ -578,6 +610,7 @@ def aggregate_results(params: VadParams, results: List[ReplayResult]) -> SweepPo
         min_first_onset_ms=min_first_onset,
         std_first_onset_ms=std_first_onset,
         max_segment_ms=max_segment,
+        min_segment_ms=min_segment,
     )
 
 
@@ -734,6 +767,7 @@ def _grid_summary_line(p: SweepPoint, param_a: str, param_b: str) -> str:
         f"onset1={p.mean_first_onset_ms:6.1f}ms "
         f"onset1_max={p.max_first_onset_ms:6.1f}ms "
         f"onset1_std={p.std_first_onset_ms:6.1f}ms "
+        f"min_seg={p.min_segment_ms:7.1f}ms "
         f"max_seg={p.max_segment_ms:7.1f}ms"
     )
 

@@ -332,6 +332,7 @@ class TestAggregateResults:
         assert point.min_first_onset_ms == 0.0
         assert point.std_first_onset_ms == 0.0
         assert point.max_segment_ms == 0.0
+        assert point.min_segment_ms == 0.0
 
     def test_aggregates_across_corpus(self, tmp_path):
         corpus = _make_corpus(tmp_path)
@@ -578,6 +579,65 @@ class TestAggregateResults:
         assert all(not r.segments for r in results)
         point = aggregate_results(VadParams(threshold=0.006), results)
         assert point.max_segment_ms == 0.0
+        assert point.min_segment_ms == 0.0
+
+    def test_min_segment_is_shortest_committed_segment(self, tmp_path):
+        corpus = _make_corpus(tmp_path)
+        results = replay_all(corpus, VadParams(threshold=0.006))
+        point = aggregate_results(VadParams(threshold=0.006), results)
+        # The over-split floor is the shortest single segment's duration across
+        # every detected segment in the corpus.
+        all_durations = [s.duration_ms for r in results for s in r.segments]
+        assert all_durations, "fixture should detect at least one segment"
+        assert point.min_segment_ms == pytest.approx(min(all_durations))
+        # A committed segment can never be shorter than the min_speech gate
+        # (shorter ones are dropped before emission), so the floor is bounded
+        # below by that gate, and never above the ceiling.
+        assert point.min_segment_ms >= VadParams().min_speech_ms
+        assert point.min_segment_ms <= point.max_segment_ms
+
+    def test_min_segment_falls_when_short_silence_oversplits(self, tmp_path):
+        # The over-SPLIT failure mode, read on the duration axis. The same
+        # gap recording max_segment uses: under a tiny silence_ms the 300ms gap
+        # splits the utterance into two short halves; under a large silence_ms
+        # they fuse into one long segment. min_segment_ms is the duration-axis
+        # fingerprint of the split — the shortest segment collapses toward the
+        # min_speech gate as the utterance fragments, while max_segment balloons
+        # under the merge. The two move in opposite directions across the lever.
+        corpus = tmp_path / "gap"
+        corpus.mkdir()
+        gap = np.concatenate([
+            _tone(SR, 0.3),
+            _silence(int(SR * 0.3)),
+            _tone(SR, 0.3),
+        ])
+        _write_wav(corpus / "gap.wav", gap)
+        (corpus / "gap.json").write_text('{"peak_rms": 0.05}')
+
+        split = aggregate_results(
+            VadParams(silence_ms=100.0),
+            replay_all(corpus, VadParams(silence_ms=100.0)),
+        )
+        merged = aggregate_results(
+            VadParams(silence_ms=800.0),
+            replay_all(corpus, VadParams(silence_ms=800.0)),
+        )
+        # Splitting produces short fragments; the floor drops well below the
+        # merged single run-on segment — the over-split signal on the duration
+        # axis (symmetric to max_segment ballooning under the merge).
+        assert split.min_segment_ms < merged.min_segment_ms
+        # And the floor is still a real committed segment, never below the gate.
+        assert split.min_segment_ms >= VadParams().min_speech_ms
+
+    def test_min_segment_zero_when_nothing_detected(self, tmp_path):
+        corpus = tmp_path / "silent"
+        corpus.mkdir()
+        _write_wav(corpus / "a.wav", _silence(SR))
+        (corpus / "a.json").write_text('{"peak_rms": 0.0001}')
+        results = replay_all(corpus, VadParams(threshold=0.006))
+        assert all(not r.segments for r in results)
+        point = aggregate_results(VadParams(threshold=0.006), results)
+        assert point.min_segment_ms == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -821,8 +881,10 @@ class TestSweepCli:
         # ...and the onset-count floor and over-split ceiling.
         assert "min_onsets=" in out
         assert "max_onsets=" in out
-        # ...and the over-merge ceiling (longest committed segment).
+        # ...and the over-merge ceiling (longest committed segment) plus the
+        # over-split floor (shortest committed segment) on the duration axis.
         assert "max_seg=" in out
+        assert "min_seg=" in out
 
     def test_sweep_json_includes_mean_first_onset(self, tmp_path, capsys):
         corpus = _make_corpus(tmp_path)
@@ -884,6 +946,19 @@ class TestSweepCli:
         # min_speech gate long when anything detected.
         assert payload[0]["max_segment_ms"] >= 0.0
 
+    def test_sweep_json_includes_min_segment(self, tmp_path, capsys):
+        corpus = _make_corpus(tmp_path)
+        rc = main(["--sweep", "threshold", "--sweep-values", "0.006", "--dir", str(corpus), "--json"])
+        assert rc == 0
+        import json as _json
+
+        payload = _json.loads(capsys.readouterr().out)
+        assert "min_segment_ms" in payload[0]
+        # The over-split floor bounds the duration spread from below and is a
+        # real committed segment (>= the min_speech gate when anything detected).
+        assert payload[0]["min_segment_ms"] >= 0.0
+        assert payload[0]["min_segment_ms"] <= payload[0]["max_segment_ms"]
+
 
 # ---------------------------------------------------------------------------
 # CLI — main() with --grid (2-D grid sweep)
@@ -915,8 +990,9 @@ class TestGridCli:
         # ...and the onset-count floor + over-split ceiling per cell.
         assert out.count("min_onsets=") == 4
         assert out.count("max_onsets=") == 4
-        # ...and the over-merge ceiling per cell.
+        # ...and the over-merge ceiling + over-split floor (duration axis) per cell.
         assert out.count("max_seg=") == 4
+        assert out.count("min_seg=") == 4
 
     def test_grid_json_row_major(self, tmp_path, capsys):
         corpus = _make_corpus(tmp_path)
