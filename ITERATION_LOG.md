@@ -18289,3 +18289,83 @@ What changed:
    busier/newly-synced corpus.
 4. **[gain] Add a gain×preroll grid finding** — quantify whether amplifying the
    pre-roll audio changes the recovered soft-attack quality.
+
+---
+
+## iter-209 — EoT-overhead consistency sentinel
+
+**Branch:** `iter-209-eot-overhead-consistency` (merged ff to main, commit `1841776`)
+**Date:** 2026-06-18
+
+**Improvement (observability — sentinel on the EoT-overhead leg):**
+End-of-turn latency (iter-063 `eot_latency`) is metric 1.2 in the perf-metrics
+taxonomy — the one that "dominates 'the agent feels slow' complaints." iter-065
+decomposed it into the *knob budget* (the configured `silence_duration` the VAD
+must wait) and the *overhead* (`eot_overhead = max(0, eot_latency -
+silence_duration_used)` — the part NOT explained by the knob: chunk granularity,
+recording-loop processing). The session summary already prints a **median**
+overhead, but a high median can hide behind one cold-start turn, and the median
+alone doesn't tell the operator which lever to pull. This lap adds a **run
+sentinel**: 5+ consecutive turns dominated by overhead is the actionable signal
+that the recording loop itself — not `chat.vad.silence_duration` — is the
+recurring cause, so tuning the knob lower WON'T recover the latency. The warning
+explicitly steers the operator off the wrong knob.
+
+This is the **TENTH** instance of the session-summary diversity-check pattern
+(after iter-114 filler, iter-115/126 naturalness, iter-120 barge-phase, iter-128
+sentence-length, iter-140 stt-rtf, iter-141 tts-rtf, iter-142 llm-tps, iter-143
+streaming-overlap, iter-208 synth-dispatch) and the **SEVENTH** applied to a
+continuous metric.
+
+What changed:
+- **`examples/_chat_metrics.py`**:
+  - `_eot_overhead_bucket(seconds)` — maps per-turn overhead to
+    `fast` (< 0.10s, the fine state — the knob is the right lever) /
+    `slow` (0.10–0.25s) / `very_slow` (> 0.25s); returns `""` for non-positive
+    input. **Smaller-is-better** like iter-140/141/208 and UNLIKE the inverted
+    iter-142/143, so the boundaries are NOT flipped. Thresholds chosen against
+    iter-065's own ">100ms = something else is slow" guidance.
+  - `_emit_eot_overhead_consistency_line(emit, list, threshold=5)` — filters out
+    `fast`/`""` before the scan, reuses iter-116 `_longest_consecutive_run`, and
+    emits a per-value suggestion (`very_slow` → recording loop dominates, profile
+    chunk granularity + processing; `slow` → overhead eating the wait, profile
+    the loop; defensive `else`). Warning text names iter-065 so operators can
+    grep the full context.
+  - Wired into `print_session_summary` immediately after the iter-208
+    synth-dispatch line, fed `[m.eot_overhead for m in metrics_list]`.
+- **`tests/unit/test_emit_eot_overhead_consistency_line.py`** — 21 tests covering
+  the full pattern matrix: bucket boundaries (zero/negative/fast/slow/very_slow +
+  float edges at 0.10/0.25), empty + all-zero suppression, long-fast-run never
+  fires, filter semantics (a `fast` interleaving doesn't break a slow run; a
+  `very_slow` phase-change DOES break a slow run), at/above threshold per value,
+  below threshold, custom threshold, longest-of-multiple, 4-space indent,
+  iter-065 attribution, 1000-element scaling.
+
+**Verification:**
+- `python -m pytest tests/unit/test_emit_eot_overhead_consistency_line.py`
+  → **21 passed**.
+- Full Python unit suite: `python -m pytest tests/unit/` → **2743 passed**
+  (2722 prior + 21 new), run on the feature branch before ff-merge. GATE command:
+  `cd ~/code-purp/geno-voice && python -m pytest tests/unit/`.
+- (`tests/test_session.py` still errors on collection — pre-existing missing
+  `pipecat` dep, not a regression.)
+
+**Next planned items (from the research-doc backlog):**
+1. **[silence] Run the actual `--sweep silence_ms` over a newly-synced corpus**
+   — the sweep harness carries the full floor/typical/ceiling/spread shape on all
+   three axes from one shared renderer (iter-207). Gate a real `silence_ms`
+   default change on a corpus that exercises real mid-utterance pauses *and*
+   two-turns-one-pause cases (the seed corpus is flat in both windows); prefer
+   the value that minimizes `onset_std` and `seg_std` among those with an
+   acceptable `mean_seg`.
+2. **[latency, highest value] Pre-warm the capture pipeline** — still the top
+   user-facing bug (3–5s `click_to_capture_ms`). Needs an on-device timing
+   harness; cannot be replayed. NOTE: the new iter-209 EoT-overhead sentinel now
+   makes a *recording-loop* slowdown visible in session summaries, complementing
+   the iter-208 playback-side synth/dispatch sentinel.
+3. **[preroll-default] Bump the client `prerollMs` default above 0** — iter-200's
+   grid shows pre-roll improves the typical opening, the tail, AND the
+   consistency simultaneously; pick a value (256–512ms) and gate on a
+   busier/newly-synced corpus.
+4. **[gain] Add a gain×preroll grid finding** — quantify whether amplifying the
+   pre-roll audio changes the recovered soft-attack quality.
