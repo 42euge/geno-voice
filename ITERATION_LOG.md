@@ -17572,3 +17572,87 @@ over `100,200,300 × 0,256,512`:
    the pre-roll audio changes the recovered soft-attack quality.
 4. **[silence] Right-size the silence timeout** — 800ms may over-split or
    over-merge turns; sweep `silence_ms` and inspect segment counts.
+
+---
+
+## iter-201 — add `max_onsets` over-split ceiling aggregate to the VAD sweep
+
+**Branch:** `iter-201-max-onsets` (merged ff to main, commit `8eb681a`)
+**Date:** 2026-06-17
+
+**Improvement (backlog item 4 enabler — the silence-timeout aggregate):** the
+replay sweep's `SweepPoint` already tracked the per-recording onset *count*
+floor (`min_onsets`, iter-190 — a recording dropping to a miss) and the full
+onset-*timing* spread (`onset1_min`/`mean`/`max`/`std`, iter-197..200). What it
+lacked was the symmetric companion to `min_onsets` on the count axis: the
+**ceiling**. This lap adds `max_onsets` — the most onsets any single recording
+got — which is to `total_onsets` what `max_first_onset_ms` is to
+`mean_first_onset_ms`, and what `min_onsets` is on the opposite end.
+
+Why it matters: it is the aggregate that finally makes the silence-timeout
+backlog item readable. `silence_ms` decides when a pause inside one utterance
+ends a segment. Too long merges two real turns; too short *fragments* one
+continuous utterance into many short segments. Under fragmentation the corpus
+total barely moves (same speech, just chopped) and `min_onsets` is blind to it
+(it watches the floor, where a recording goes to *zero*). The signature of
+over-splitting lives at the *other* end — a single recording's onset count
+climbing above the rest — which is exactly what `max_onsets` surfaces. Paired
+with `min_onsets` it brackets the per-recording count: the floor catches a
+*miss*, the ceiling catches a *fragment*, so a `--sweep silence_ms` reads both
+the under-merge and over-split ends in one pass.
+
+What changed:
+- **`fixtures/replay_vad.py`** — `SweepPoint` gains a `max_onsets` int field
+  (`max` over per-recording `r.onsets`, default `0` for an empty corpus);
+  `aggregate_results` computes it; `summary_line` and `_grid_summary_line`
+  surface a `max_onsets=` column right after `min_onsets` in the human
+  sweep/grid tables; it rides along in `--json` for free (dataclass field).
+- **`tests/unit/test_replay_vad.py`** — +2 dedicated tests (77 → 79):
+  `test_max_onsets_is_busiest_single_recording` (equals `max` over `r.onsets`;
+  brackets `min_onsets <= max_onsets <= total_onsets`) and
+  `test_max_onsets_rises_when_short_silence_oversplits` (a 1s-tone / 300ms-gap /
+  1s-tone recording reads as 1 segment at `silence_ms=800` but splits to 2 at
+  `silence_ms=100` — the ceiling climbs, the over-split signal). Plus assertions
+  folded into the empty-corpus zero test, the JSON sweep test (`max_onsets`
+  present and `>= min_onsets`), the human-table column test, and the grid
+  human-table test (4 cells each carry `max_onsets=`).
+- **`docs/research/voice-capture-tuning.md`** — `max_onsets` documented in the
+  "Each row reports" legend; new "Over-split ceiling, and reading the silence
+  timeout (iter-201)" section with the synthetic gap illustration table; backlog
+  item 6 updated to reference the new aggregate.
+
+**Corpus evidence (the over-split signal, on a synthetic gap):** the seed corpus
+has no mid-utterance gap in the sub-800ms window, so a `--sweep silence_ms` over
+it is flat there today. A synthetic illustration (one recording: 1s tone — 300ms
+gap — 1s tone, all loud) makes the lever visible:
+- `silence_ms=100`: the 300ms gap exceeds the 100ms timeout → the utterance
+  **splits** (`max_onsets=2`).
+- `silence_ms=400` and `800`: the gap is under the timeout → stays merged
+  (`max_onsets=1`).
+The ceiling climbing 1→2 as `silence_ms` drops below the gap length is exactly
+the over-split signal a real-corpus `silence_ms` sweep will read.
+
+**Verification:**
+- `python -m pytest tests/unit/test_replay_vad.py` → **79 passed** (77 + 2 new).
+- Full Python unit suite: `python -m pytest tests/unit/` → **2675 passed**
+  (2673 prior + 2 new).
+- Integration `tests/integration/test_vad_recordings.py` → skipped in the
+  worktree (the binary corpus lives only in the main checkout); the synthetic
+  gap demo above exercised the new aggregate directly.
+- (`tests/test_session.py` still errors on collection — pre-existing missing
+  `pipecat` dep, not a regression.)
+
+**Next planned items (from the research-doc backlog):**
+1. **[silence] Run the actual `--sweep silence_ms` over a newly-synced corpus**
+   — now that `max_onsets` makes over-splitting legible, gate a real `silence_ms`
+   default change on a corpus that exercises real mid-utterance pauses (the seed
+   corpus is flat in the sub-800ms window).
+2. **[latency, highest value] Pre-warm the capture pipeline** — still the top
+   user-facing bug (3–5s `click_to_capture_ms`). Needs an on-device timing
+   harness; cannot be replayed.
+3. **[preroll-default] Bump the client `prerollMs` default above 0** — iter-200's
+   grid shows pre-roll improves the typical opening, the tail, AND the
+   consistency simultaneously; pick a value (256–512ms) and gate on a
+   busier/newly-synced corpus.
+4. **[gain] Add a gain×preroll grid finding** — quantify whether amplifying the
+   pre-roll audio changes the recovered soft-attack quality.
