@@ -2830,6 +2830,135 @@ def _emit_bot_wpm_consistency_line(
     )
 
 
+def _max_token_gap_bucket(seconds: float) -> str:
+    """iter-211: bucket a per-turn ``max_token_gap`` (iter-085's
+    maximum inter-token gap during the LLM stream, excluding the
+    first-token wait) into a coarse category. Used by
+    ``_emit_max_token_gap_consistency_line`` to detect runs where the
+    LLM stalled mid-response — a failure mode that, as iter-085's field
+    comment notes, is "currently invisible to operators because the
+    user just hears a long pause and no signal fires." Metric 3.21 in
+    the perf-metrics taxonomy.
+
+    TWELFTH instance of the diversity-check pattern, and the NINTH
+    applied to a continuous metric. Like iter-140/141/208/209 and
+    UNLIKE the inverted iter-142/143, the fine bucket is a LOW value —
+    a smaller worst-case gap is better, so the boundaries are NOT
+    inverted. (Note the contrast with iter-142's ``llm_tps``: that
+    bucketer is bigger-is-better because *average* throughput is good
+    when high; this one watches the *worst* single stall, which is bad
+    when high — different statistic, opposite direction.)
+
+    Buckets (chosen against iter-085's own guidance —
+    ">500ms = the LLM stalled noticeably mid-response"; ">2s = the
+    user definitely thought the bot was broken"):
+
+        ``fast``     — < 0.50s: no perceptible mid-stream stall; the
+            LLM kept feeding the splitter. The desired state.
+        ``slow``     — 0.50-2.0s: a noticeable mid-stream stall; the
+            user heard a gap and may have wondered if the bot was
+            still working.
+        ``very_slow``— > 2.0s: a severe stall; the user likely thought
+            the bot was broken.
+
+    Returns ``""`` when ``seconds`` is non-positive (single-token turn,
+    or no measurable inter-token gap) — empty-string filter applies in
+    the consumer, mirroring
+    iter-114/115/120/126/128/140/141/208/209/210.
+    """
+    if seconds <= 0:
+        return ""
+    if seconds < 0.50:
+        return "fast"
+    if seconds <= 2.0:
+        return "slow"
+    return "very_slow"
+
+
+def _emit_max_token_gap_consistency_line(
+    emit, max_token_gap_list: list[float], threshold: int = 5,
+) -> None:
+    """iter-211: detect consecutive runs of turns where the LLM
+    stalled mid-stream (iter-085 ``max_token_gap`` — the worst
+    inter-token gap that turn, excluding the first-token wait).
+    TWELFTH instance of the diversity-check pattern after iter-114
+    (filler), iter-115/126 (naturalness), iter-120 (barge-phase),
+    iter-128 (sentence-length), iter-140 (stt-rtf), iter-141
+    (tts-rtf), iter-142 (llm-tps), iter-143 (streaming-overlap),
+    iter-208 (synth-dispatch), iter-209 (eot-overhead), iter-210
+    (bot-wpm). NINTH instance applied to a CONTINUOUS metric — buckets
+    it via ``_max_token_gap_bucket`` before running the scan (same
+    shape as iter-128/140/141/142/143/208/209).
+
+    iter-085 added the per-turn metric precisely because mid-stream
+    stalls are otherwise *silent*: the user hears a long pause and no
+    signal fires. A single stalled turn is normal jitter (GC pause,
+    a heavy token, a momentary load spike); a *sustained run* of
+    stalled turns is the actionable signal that the LLM backend is
+    consistently struggling to keep the stream fed — distinct from
+    iter-142's ``llm_tps`` sentinel, which watches *average*
+    throughput. A model can post a healthy mean TPS yet still stall
+    badly once per turn; this sentinel catches that worst-case shape
+    the average smooths over.
+
+    Filter rule: drop the ``"fast"`` bucket before the scan. It's the
+    "fine" state (no perceptible stall); only "slow" and "very_slow"
+    warrant warning. Empty buckets (single-token turns, no measurable
+    gap) also drop. Like iter-140/141/208/209 and UNLIKE iter-142/143,
+    the fine bucket is a LOW value (small gap) — the worst-case gap is
+    smaller-is-better.
+
+    Threshold = 5: same as iter-115/128/140/141/142/143/208/209/210.
+    Inter-token timing is jittery turn to turn, and a single stalled
+    turn is normal; a sustained run is the real signal.
+
+    Output:
+
+        Max token gap:    5 consecutive 'slow' turns — the LLM keeps
+                          stalling mid-stream; the user hears repeated
+                          pauses — check the LLM backend
+                          (iter-085 max_token_gap)
+    """
+    # Bucketize, then drop the "uninteresting" bucket (empty, fast).
+    interesting = {"slow", "very_slow"}
+    filtered = [
+        b for b in (
+            _max_token_gap_bucket(s) for s in max_token_gap_list
+        )
+        if b in interesting
+    ]
+    if not filtered:
+        return
+
+    longest_run, longest_bucket = _longest_consecutive_run(filtered)
+    if longest_run < threshold:
+        return
+
+    if longest_bucket == "very_slow":
+        suggestion = (
+            "the LLM stalls severely mid-stream (>2s gaps); the user "
+            "likely thinks the bot is broken — check the LLM backend "
+            "load, model size, and host contention"
+        )
+    elif longest_bucket == "slow":
+        suggestion = (
+            "the LLM keeps stalling mid-stream; the user hears "
+            "repeated pauses — check the LLM backend (a healthy mean "
+            "TPS can still hide these worst-case stalls)"
+        )
+    else:
+        # Defensive: future buckets that pass the filter rule.
+        suggestion = (
+            "investigate recurring mid-stream LLM stalls"
+        )
+
+    emit(
+        f"    Max token gap:    {longest_run} consecutive "
+        f"{longest_bucket!r} turns — {suggestion} "
+        f"(iter-085 max_token_gap)"
+    )
+
+
 def _emit_bargeable_line(emit, bargeable_values: list[float]) -> None:
     """iter-104: extracted from print_session_summary's iter-074
     bargeable line. Reports the WORST bargeable fraction across
@@ -3548,6 +3677,17 @@ def print_session_summary(
     _emit_bot_wpm_consistency_line(
         _emit,
         [m.bot_wpm for m in metrics_list],
+    )
+    # iter-211: max-token-gap consistency check. Only fires when 5+
+    # consecutive turns suffered a noticeable worst-case mid-stream LLM
+    # stall (slow 0.50-2.0s / very_slow > 2.0s). iter-085 added the
+    # per-turn metric because these stalls are otherwise silent — the
+    # user just hears a pause and no signal fires. Distinct from the
+    # iter-142 llm-tps sentinel: that watches AVERAGE throughput, this
+    # watches the WORST single gap, which a healthy mean TPS can hide.
+    _emit_max_token_gap_consistency_line(
+        _emit,
+        [m.max_token_gap for m in metrics_list],
     )
     # iter-090: barge block extracted to _emit_barge_block helper.
     # ~76 lines of co-emitted lines (count, interruption rate,
