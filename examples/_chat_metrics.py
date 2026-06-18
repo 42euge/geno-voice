@@ -2959,6 +2959,131 @@ def _emit_max_token_gap_consistency_line(
     )
 
 
+def _ttfs_bucket(seconds: float) -> str:
+    """iter-212: bucket a per-turn ``ttfs`` (time-to-first-speech =
+    speech-stop → first-audio-to-speaker, the headline latency metric
+    behind the VISION's "sub-500ms / latency is the feature" goal) into
+    a coarse category. Used by ``_emit_ttfs_consistency_line`` to detect
+    runs where the bot was consistently slow to start talking back.
+    Metric 2.x in the perf-metrics taxonomy.
+
+    THIRTEENTH instance of the diversity-check pattern, and the TENTH
+    applied to a continuous metric. Like
+    iter-140/141/208/209/211 and UNLIKE the inverted iter-142/143, the
+    fine bucket is a LOW value — a smaller TTFS is better, so the
+    boundaries are NOT inverted.
+
+    Buckets (the ``snappy`` boundary is aligned with the existing
+    per-turn green display, which colors TTFS green below 3.0s — see
+    ``TurnMetrics.print``'s ``ttfs_color``):
+
+        ``snappy``   — < 3.0s: the bot starts talking back promptly;
+            matches the per-turn green display. The desired state.
+        ``slow``     — 3.0-6.0s: the bot takes a noticeable beat before
+            speaking; the conversation feels laggy.
+        ``very_slow``— > 6.0s: the bot takes so long the user wonders
+            whether it heard them at all.
+
+    Returns ``""`` when ``seconds`` is non-positive (no audio played
+    that turn — error turn or pure barge) — empty-string filter applies
+    in the consumer, mirroring
+    iter-114/115/120/126/128/140/141/208/209/210/211.
+    """
+    if seconds <= 0:
+        return ""
+    if seconds < 3.0:
+        return "snappy"
+    if seconds <= 6.0:
+        return "slow"
+    return "very_slow"
+
+
+def _emit_ttfs_consistency_line(
+    emit, ttfs_list: list[float], threshold: int = 5,
+) -> None:
+    """iter-212: detect consecutive runs of turns where the bot was
+    slow to start speaking (``ttfs`` — time-to-first-speech, the
+    headline latency metric). THIRTEENTH instance of the
+    diversity-check pattern after iter-114 (filler), iter-115/126
+    (naturalness), iter-120 (barge-phase), iter-128 (sentence-length),
+    iter-140 (stt-rtf), iter-141 (tts-rtf), iter-142 (llm-tps), iter-143
+    (streaming-overlap), iter-208 (synth-dispatch), iter-209
+    (eot-overhead), iter-210 (bot-wpm), iter-211 (max-token-gap). TENTH
+    instance applied to a CONTINUOUS metric — buckets it via
+    ``_ttfs_bucket`` before running the scan (same shape as
+    iter-128/140/141/142/143/208/209/211).
+
+    TTFS is *the* number the VISION optimizes for ("latency is the
+    feature"; "sub-500ms on a MacBook"). The session summary already
+    reports the TTFS median and a first-turn-warmup penalty
+    (``_emit_ttfs_block``), but a healthy median can hide a sustained
+    stretch of slow turns: a few snappy turns early pull the median
+    down while the back half of the session crawls. This sentinel
+    catches that run shape the median smooths over — distinct from the
+    iter-211 max-token-gap sentinel (a mid-stream stall AFTER the bot
+    started) and the iter-209 eot-overhead sentinel (end-of-turn
+    detection wait BEFORE TTFS starts): this watches the whole
+    speech-stop → speaker latency end to end.
+
+    Filter rule: drop the ``"snappy"`` bucket before the scan. It's the
+    "fine" state (prompt response, matches the green display); only
+    "slow" and "very_slow" warrant warning. Empty buckets (no audio
+    that turn — error/barge) also drop. Like
+    iter-140/141/208/209/211 and UNLIKE iter-142/143, the fine bucket
+    is a LOW value (small TTFS) — TTFS is smaller-is-better.
+
+    Threshold = 5: same as
+    iter-115/128/140/141/142/143/208/209/210/211. TTFS jitters turn to
+    turn (model warmup, GC, context growth); a single slow turn is
+    normal, a sustained run is the real signal.
+
+    Output:
+
+        TTFS:             6 consecutive 'slow' turns — the bot is
+                          consistently slow to start speaking; the
+                          conversation feels laggy — profile the STT /
+                          LLM-first-sentence / synth-dispatch split
+                          (iter-212 ttfs)
+    """
+    # Bucketize, then drop the "uninteresting" bucket (empty, snappy).
+    interesting = {"slow", "very_slow"}
+    filtered = [
+        b for b in (_ttfs_bucket(s) for s in ttfs_list)
+        if b in interesting
+    ]
+    if not filtered:
+        return
+
+    longest_run, longest_bucket = _longest_consecutive_run(filtered)
+    if longest_run < threshold:
+        return
+
+    if longest_bucket == "very_slow":
+        suggestion = (
+            "the bot takes so long to start speaking (>6s) the user "
+            "wonders whether it heard them — profile the STT / "
+            "LLM-first-sentence / synth-dispatch split and check host "
+            "contention"
+        )
+    elif longest_bucket == "slow":
+        suggestion = (
+            "the bot is consistently slow to start speaking; the "
+            "conversation feels laggy — profile the STT / "
+            "LLM-first-sentence / synth-dispatch split"
+        )
+    else:
+        # Defensive: future buckets that pass the filter rule.
+        suggestion = (
+            "investigate recurring slow time-to-first-speech"
+        )
+
+    emit(
+        f"    TTFS:             {longest_run} consecutive "
+        f"{longest_bucket!r} turns — {suggestion} "
+        f"(iter-212 ttfs)"
+    )
+
+
 def _emit_bargeable_line(emit, bargeable_values: list[float]) -> None:
     """iter-104: extracted from print_session_summary's iter-074
     bargeable line. Reports the WORST bargeable fraction across
@@ -3688,6 +3813,18 @@ def print_session_summary(
     _emit_max_token_gap_consistency_line(
         _emit,
         [m.max_token_gap for m in metrics_list],
+    )
+    # iter-212: TTFS consistency check. Only fires when 5+ consecutive
+    # turns were slow to start speaking (slow 3.0-6.0s / very_slow >
+    # 6.0s). TTFS is the headline latency metric the VISION optimizes
+    # for; the median + warmup-penalty block (_emit_ttfs_block) can read
+    # healthy while a sustained slow run hides in the back half of the
+    # session. Distinct from iter-211 (mid-stream stall AFTER the bot
+    # starts) and iter-209 (EoT wait BEFORE TTFS starts): this watches
+    # the whole speech-stop → speaker latency end to end.
+    _emit_ttfs_consistency_line(
+        _emit,
+        [m.ttfs for m in metrics_list],
     )
     # iter-090: barge block extracted to _emit_barge_block helper.
     # ~76 lines of co-emitted lines (count, interruption rate,
