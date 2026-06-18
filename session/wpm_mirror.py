@@ -52,6 +52,9 @@ __all__ = [
     "MirrorGridPoint",
     "sweep_mirror_grid",
     "pick_best_mirror_config",
+    "TUNING_CORPUS_WPMS",
+    "TUNING_STRENGTH_AXIS",
+    "tune_strength",
     "DEFAULT_LURCH_WEIGHT",
     "DEFAULT_BASE_WPM",
     "DEFAULT_STRENGTH",
@@ -503,3 +506,93 @@ def pick_best_mirror_config(
             best = p
             best_score = s
     return best
+
+
+# --------------------------------------------------------------------------
+# iter-219 — the canonical in-band tuning corpus + the data-driven strength
+# verdict (the backlog item repeated across iter-216/217/218).
+#
+# iter-216 shipped the trajectory simulator, iter-217 the grid sweep + picker,
+# and iter-218 the `gv simulate-mirror` CLI. The named follow-on in all three
+# backlogs was the same: *run* the sweep on a corpus whose per-turn rates stay
+# inside the intelligibility band so ``final_gap`` measures real pacing-tracking
+# rather than the ``min_speed``/``max_speed`` clamp — then either change the seed
+# defaults from the verdict or document why they stand. The iter-217 demo arc
+# ``[120,140,200,230,200,140,120]`` could not do that: its slow tail (120 WPM)
+# clamps below the 0.8 ``min_speed`` floor at every base, so its verdict was an
+# artifact of *which base pushed the clamped final speed lowest*, not of tracking.
+#
+# Two findings from running the real sweep close the item:
+#
+# 1. **``base_wpm`` is NOT tunable offline — only ``strength`` is.** ``base_wpm``
+#    is the hardware calibration ``bot_wpm at speed 1.0``; the simulator's own
+#    ``ideal = user_wpm / base_wpm`` *uses* it to define the convergence target,
+#    so a sweep that varies ``base_wpm`` is scoring each cell against its own
+#    moving target — circular. The right ``base_wpm`` is whatever a deployment's
+#    Kokoro voice actually clocks at speed 1.0 (an on-device measurement, not a
+#    replay). ``strength``, by contrast, is pure convergence dynamics at a fixed
+#    base and *is* answerable offline: does the speed track a varied-pacing arc
+#    without lurching or churning?
+#
+# 2. **The seed ``strength=0.5`` wins the fair test.** On ``TUNING_CORPUS_WPMS``
+#    (a slow→fast→slow arc, every rate inside the band at base 150/165/180, with
+#    a sustained tail so every candidate has converged) the lowest-``score`` cell
+#    at the seed base 165 is ``strength=0.5``: ``0.3``/``0.4`` lag (the deadband
+#    blocks the small early nudges so the speed never catches the user), and
+#    ``0.6``/``0.7`` lurch (a single noisy turn jumps the rate further than is
+#    comfortable). 0.5 is the knee. So the seed default STANDS, now from data.
+#
+# ``tune_strength`` is the in-tree, audio-free reproduction of that verdict; the
+# unit tests pin both the corpus's in-band invariant and the 0.5 winner so a
+# later change to the mirror map that would shift the knee fails loudly.
+# --------------------------------------------------------------------------
+
+
+#: Canonical varied-pacing tuning corpus: a slow→fast→slow per-turn ``user_wpm``
+#: arc whose every rate sits inside ``[144, 195]`` — the intersection of the
+#: intelligibility band (``[0.8·base, 1.3·base]``) across base_wpm 150/165/180 —
+#: so ``simulate_speed_trajectory``'s ``final_gap`` measures pacing-tracking, not
+#: the ``min_speed``/``max_speed`` clamp. The sustained slow tail (three turns at
+#: 150) lets every ``strength`` candidate converge, so the ranking turns on lurch
+#: and churn rather than residual gap. Unlike the iter-217 demo arc (whose 120-WPM
+#: tail clamps below the floor at every base), this corpus produces a *fair*
+#: ``strength`` verdict. See the iter-219 log entry.
+TUNING_CORPUS_WPMS: tuple = (165.0, 150.0, 190.0, 195.0, 170.0, 150.0, 150.0, 150.0)
+
+#: The ``strength`` candidates swept by :func:`tune_strength`. Spans the seed
+#: default (0.5) with one step either side at 0.1 resolution, so the verdict
+#: shows the knee, not just a binary.
+TUNING_STRENGTH_AXIS: tuple = (0.3, 0.4, 0.5, 0.6, 0.7)
+
+
+def tune_strength(
+    user_wpms=TUNING_CORPUS_WPMS,
+    base_wpm: float = DEFAULT_BASE_WPM,
+    strengths=TUNING_STRENGTH_AXIS,
+    initial_speed: float = 1.0,
+    lurch_weight: float = DEFAULT_LURCH_WEIGHT,
+) -> MirrorGridPoint | None:
+    """Pick the best ``strength`` at a *fixed* ``base_wpm`` over a tuning arc.
+
+    The offline ``strength`` tuner. Unlike :func:`sweep_mirror_grid` (which
+    varies ``base_wpm`` too), this holds ``base_wpm`` fixed because ``base_wpm``
+    is a hardware calibration that cannot be tuned by replay — the simulator
+    *uses* it to define the convergence target, so sweeping it scores each cell
+    against its own moving target. ``strength`` is pure convergence dynamics and
+    *is* answerable offline, which is what this returns.
+
+    Folds ``user_wpms`` (defaulting to :data:`TUNING_CORPUS_WPMS`) through a
+    one-row grid of ``strengths`` at the single ``base_wpm`` and returns the
+    lowest-:meth:`~MirrorGridPoint.score` cell — the damping that converges to
+    the user's pace without lurching. ``None`` if no candidate is scorable.
+
+    Pure — a thin wrapper over :func:`sweep_mirror_grid` /
+    :func:`pick_best_mirror_config`; reads nothing, mutates nothing.
+    """
+    points = sweep_mirror_grid(
+        user_wpms,
+        [float(base_wpm)],
+        strengths,
+        initial_speed=initial_speed,
+    )
+    return pick_best_mirror_config(points, lurch_weight=lurch_weight)
