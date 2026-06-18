@@ -15,6 +15,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   ContinuousListener,
+  VoiceRecorder,
   mergeFloat32Chunks,
   downsampleBuffer,
   encodeWav,
@@ -558,5 +559,234 @@ test("a single below-threshold frame breaks the debounce candidate", () => {
     feedFrames(l, [frame(0.0001)]); // quiet → clears the candidate
     feedFrames(l, [frame(0.5), frame(0.5)]); // fresh candidate, still < 50ms
     assert.equal(l.speaking, false, "broken candidate must not commit");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// iter-227 — VoiceRecorder pre-warm.
+//
+// The 3-5s click-to-capture stall is the cold-start cost of getUserMedia +
+// AudioContext.resume() + worklet addModule() inside start(). prewarm() pays
+// that cost ahead of the click so start() is a pure flag flip. These are the
+// first tests to drive VoiceRecorder.start() at all, so they install a minimal
+// fake Web Audio environment (navigator.mediaDevices, window.AudioContext, the
+// ScriptProcessor fallback path) that COUNTS the expensive cold-start calls and
+// lets a test inject captured frames through the processor's onaudioprocess
+// handler. The proof obligations from the operator steering:
+//   * prewarm-then-start produces identical capture to start-alone;
+//   * start works with and without a prior prewarm;
+//   * the expensive calls happen during prewarm(), not start().
+// ---------------------------------------------------------------------------
+
+// Build a fake Web Audio environment and install it on the globals the
+// recorder reads (navigator, window, performance). Returns the install handle
+// with the live call counters and a `frames` hook so a test can push captured
+// audio through whichever processor the recorder wired. `restore()` puts the
+// originals back. Uses the ScriptProcessor fallback (no AudioWorkletNode) to
+// keep the fake small; the recording-gated handler is identical on both paths.
+function installFakeAudio() {
+  const counts = { getUserMedia: 0, ctor: 0, resume: 0, addModule: 0 };
+  let liveProcessor = null;
+  const tracks = [{ stopped: false, stop() { this.stopped = true; } }];
+
+  class FakeAudioContext {
+    constructor() {
+      counts.ctor += 1;
+      this.sampleRate = 48000;
+      this.destination = { tag: "destination" };
+      this.closed = false;
+      // No audioWorklet member → tryLoadWorklet returns false → fallback path.
+      this.audioWorklet = null;
+    }
+    async resume() { counts.resume += 1; }
+    createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
+    createGain() {
+      return { gain: { value: 1 }, connect() {}, disconnect() {} };
+    }
+    createScriptProcessor() {
+      const node = {
+        onaudioprocess: null,
+        connect() {},
+        disconnect() {},
+      };
+      liveProcessor = node;
+      return node;
+    }
+    async close() { this.closed = true; }
+  }
+
+  const origNavigator = globalThis.navigator;
+  const origWindow = globalThis.window;
+  // navigator is a read-only accessor in modern Node — define it explicitly.
+  Object.defineProperty(globalThis, "navigator", {
+    value: {
+      mediaDevices: {
+        async getUserMedia() {
+          counts.getUserMedia += 1;
+          return { getTracks: () => tracks };
+        },
+      },
+    },
+    configurable: true,
+    writable: true,
+  });
+  globalThis.window = { AudioContext: FakeAudioContext };
+
+  return {
+    counts,
+    tracks,
+    // Push a captured frame through the live processor handler, mimicking the
+    // browser delivering an audio buffer. No-op if the recorder has not wired
+    // a processor (e.g. before _setup ran).
+    pushFrame(value, n = FRAME) {
+      if (!liveProcessor || !liveProcessor.onaudioprocess) return;
+      const data = new Float32Array(n).fill(value);
+      liveProcessor.onaudioprocess({ inputBuffer: { getChannelData: () => data } });
+    },
+    restore() {
+      Object.defineProperty(globalThis, "navigator", {
+        value: origNavigator,
+        configurable: true,
+        writable: true,
+      });
+      globalThis.window = origWindow;
+    },
+  };
+}
+
+// Run `body(fake)` inside the fake-audio environment with a positive
+// performance.now() clock, restoring globals afterwards.
+async function withFakeAudio(body) {
+  const fake = installFakeAudio();
+  const origNow = performance.now;
+  performance.now = () => 5000;
+  try {
+    return await body(fake);
+  } finally {
+    performance.now = origNow;
+    fake.restore();
+  }
+}
+
+test("prewarm pays the cold-start cost; start then only flips recording", async () => {
+  await withFakeAudio(async (fake) => {
+    const r = new VoiceRecorder();
+    assert.equal(r._ready, false);
+
+    await r.prewarm();
+    // The expensive calls all happened during prewarm, before any click.
+    assert.equal(fake.counts.getUserMedia, 1);
+    assert.equal(fake.counts.ctor, 1);
+    assert.equal(fake.counts.resume, 1);
+    assert.equal(r._ready, true);
+    assert.equal(r.recording, false, "prewarm must not begin recording");
+
+    await r.start();
+    // start() reused the warmed graph — no second cold start.
+    assert.equal(fake.counts.getUserMedia, 1, "start must not re-open the mic");
+    assert.equal(fake.counts.ctor, 1, "start must not build a second context");
+    assert.equal(r.recording, true);
+
+    await r.cancel();
+  });
+});
+
+test("prewarm is idempotent — a second call rebuilds nothing", async () => {
+  await withFakeAudio(async (fake) => {
+    const r = new VoiceRecorder();
+    await r.prewarm();
+    await r.prewarm();
+    await r.prewarm();
+    assert.equal(fake.counts.getUserMedia, 1);
+    assert.equal(fake.counts.ctor, 1);
+    assert.equal(fake.counts.resume, 1);
+    await r.cancel();
+  });
+});
+
+test("start with no prior prewarm lazily stands up the graph (default off)", async () => {
+  await withFakeAudio(async (fake) => {
+    const r = new VoiceRecorder();
+    assert.equal(r._ready, false);
+    await r.start();
+    // Cold start() did the full setup itself — identical to the historical path.
+    assert.equal(fake.counts.getUserMedia, 1);
+    assert.equal(fake.counts.ctor, 1);
+    assert.equal(fake.counts.resume, 1);
+    assert.equal(r.recording, true);
+    await r.cancel();
+  });
+});
+
+test("frames before start() are discarded; the segment begins at the click", async () => {
+  await withFakeAudio(async (fake) => {
+    const r = new VoiceRecorder();
+    await r.prewarm();
+    // A pre-warmed graph is silent: frames delivered before start() are gated
+    // out by the `if (!this.recording) return` guard in the handler.
+    fake.pushFrame(0.5);
+    fake.pushFrame(0.5);
+    assert.equal(r.chunks.length, 0, "no frames should accumulate before start");
+
+    await r.start();
+    fake.pushFrame(0.5);
+    fake.pushFrame(0.5);
+    fake.pushFrame(0.5);
+    assert.equal(r.chunks.length, 3, "only post-start frames are captured");
+    await r.cancel();
+  });
+});
+
+test("prewarm-then-start captures identically to start-alone (parity)", async () => {
+  // Same injected frame sequence through both entry paths must yield byte-for-
+  // byte identical WAV output — prewarm changes WHEN the graph is built, never
+  // WHAT it captures.
+  async function captureVia(prewarmFirst) {
+    return withFakeAudio(async (fake) => {
+      const r = new VoiceRecorder();
+      if (prewarmFirst) await r.prewarm();
+      await r.start();
+      // ~0.5s of speech at 48k: enough to clear the MIN_TRANSCRIBE_SECONDS and
+      // 200ms-elapsed floors in stop(). 25 frames * 1024 / 48000 ≈ 0.53s.
+      for (let i = 0; i < 25; i++) fake.pushFrame(0.4);
+      performance.now = () => 6000; // 1000ms elapsed > 200ms floor
+      return r.stop();
+    });
+  }
+  const viaPrewarm = await captureVia(true);
+  const viaCold = await captureVia(false);
+  assert.ok(viaPrewarm instanceof Uint8Array, "prewarm path should yield a WAV");
+  assert.ok(viaCold instanceof Uint8Array, "cold path should yield a WAV");
+  assert.deepEqual([...viaPrewarm], [...viaCold], "capture must be identical");
+});
+
+test("cleanup resets _ready so the recorder can be re-warmed after stop", async () => {
+  await withFakeAudio(async (fake) => {
+    const r = new VoiceRecorder();
+    await r.prewarm();
+    await r.start();
+    for (let i = 0; i < 25; i++) fake.pushFrame(0.4);
+    performance.now = () => 6000;
+    await r.stop();
+    assert.equal(r._ready, false, "stop/cleanup must clear readiness");
+    assert.equal(r.audioContext, null);
+
+    // A fresh prewarm rebuilds the graph (second cold start).
+    await r.prewarm();
+    assert.equal(fake.counts.getUserMedia, 2);
+    assert.equal(r._ready, true);
+    await r.cancel();
+    assert.equal(r._ready, false, "cancel/cleanup must clear readiness too");
+  });
+});
+
+test("a double start() is a no-op (idempotent recording flag)", async () => {
+  await withFakeAudio(async (fake) => {
+    const r = new VoiceRecorder();
+    await r.start();
+    assert.equal(r.recording, true);
+    await r.start(); // already recording → returns immediately
+    assert.equal(fake.counts.getUserMedia, 1, "second start must not re-setup");
+    await r.cancel();
   });
 });

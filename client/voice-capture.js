@@ -103,10 +103,31 @@ export class VoiceRecorder {
     this.chunks = [];
     this.recording = false;
     this.startedAt = 0;
+    // Pre-warm latency fix (iter-227): the 3-5s click-to-capture stall is the
+    // cold-start cost of getUserMedia + AudioContext.resume() + worklet
+    // addModule() inside start(). `_ready` flips true once _setup() has paid
+    // that cost so start() can begin recording instantly. No frames accumulate
+    // until `recording` is true (the worklet/processor handlers gate on it), so
+    // a pre-warmed graph stays silent until start() flips it.
+    this._ready = false;
   }
 
-  async start() {
-    if (this.recording) return;
+  // Pay the expensive cold-start cost ahead of the user's click: open the mic
+  // stream, build + resume the AudioContext, load the worklet, and wire the
+  // (silent, recording-gated) capture graph. Idempotent — a second call while
+  // already set up is a no-op. Calling this before start() collapses the
+  // click-to-capture latency to a flag flip. Optional: start() lazily runs the
+  // same _setup() when prewarm() was never called, so behaviour is identical
+  // either way (default off).
+  async prewarm() {
+    await this._setup();
+  }
+
+  // Build the capture graph if it is not already standing. Extracted from the
+  // old start() body so both prewarm() and a cold start() share one path. Safe
+  // to call repeatedly: returns early once `_ready`.
+  async _setup() {
+    if (this._ready) return;
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       throw new Error("Microphone capture is not available in this environment.");
     }
@@ -151,6 +172,19 @@ export class VoiceRecorder {
     }
     this.silentGain.connect(this.audioContext.destination);
 
+    this._ready = true;
+  }
+
+  async start() {
+    if (this.recording) return;
+
+    // Stand up the graph if prewarm() did not already. When prewarm() ran
+    // ahead of time this returns immediately and start() is a pure flag flip —
+    // the latency win. Discard any frames that slipped through before this
+    // start so the segment begins at the click.
+    await this._setup();
+    this.chunks = [];
+
     this.startedAt = performance.now();
     this.recording = true;
     if (this.onStateChange) this.onStateChange(true);
@@ -185,6 +219,9 @@ export class VoiceRecorder {
   }
 
   async cleanup() {
+    // The graph is being torn down, so a future start()/prewarm() must rebuild
+    // it. Reset readiness before releasing the nodes.
+    this._ready = false;
     if (this.inputNode) {
       this.inputNode.disconnect();
       this.inputNode = null;
