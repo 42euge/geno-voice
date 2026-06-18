@@ -18948,3 +18948,98 @@ on. Measuring the adaptation cannot regress the proven fixed-rate summary.
    grid shows pre-roll improves the typical opening, the tail, AND the
    consistency simultaneously; pick a value (256–512ms) and gate on a
    busier/newly-synced corpus.
+
+---
+
+## iter-216 — Offline WPM-mirror speed-trajectory simulator (backlog #1)
+
+**Branch:** `iter-216-mirror-sim` (merged ff to main, commit `24befca`)
+**Date:** 2026-06-18
+
+**Improvement (a pure offline tool to *validate* the mirror's tunables before
+trusting them in a live session):**
+This lap advances iter-215 backlog item #1 — "tune `base_wpm`/`strength`
+against a corpus with varied user pacing." iter-213 shipped the pure
+`user_wpm → bot speed` mirror; iter-214 wired it into the live TTS path so the
+Kokoro `speed` adapts turn-to-turn behind an off-by-default gate; iter-215
+surfaced the per-session start→end drift in the session summary. The full loop
+now **adapts** *and* **measures** the rate — but the tunables (`base_wpm` 165,
+`strength` 0.5) are still the seed defaults, never validated against a sequence
+of varied user pacing. There was no way to ask "does this config converge /
+track / lurch over a slow→fast→slow arc?" without a live mic session and real
+audio. This lap builds the missing tool — the standard codebase rhythm
+(ship the measurement/validation harness one reviewable lap before the lap that
+acts on it).
+
+What changed:
+- **`session/wpm_mirror.py`**: new `simulate_speed_trajectory(user_wpms,
+  initial_speed=1.0, config=None)` + frozen `SpeedTrajectory` result dataclass.
+  - The simulator replays a sequence of per-turn `user_wpm` values through the
+    **exact same** fold the live `SpeedController.observe` (iter-214) runs:
+    each turn's clamped/deadbanded output speed is threaded in as the next
+    turn's `current_speed`. Because it is the same `mirrored_speed` map the
+    live path runs, its verdict transfers.
+  - `SpeedTrajectory` carries: `speeds` (per-turn speed the synth path would
+    use next), `initial_speed`/`final_speed`, `ideal_final_speed` (the
+    band-clamped `user_wpm / base_wpm` the trajectory converges toward at the
+    end — set by the LAST *measurable* rate, `None` when disabled or no
+    measurable turn), `final_gap` (residual distance to that target — the
+    convergence diagnostic), `max_step` (largest single-turn change — the lurch
+    diagnostic), and `moves` (turns that actually changed the speed — the churn
+    diagnostic).
+  - Pure: no I/O, no clock, no mutation of config or input — a thin
+    deterministic loop over `mirrored_speed`. The iter-064 `user_wpm <= 0`
+    "no measurement" guard is replayed faithfully (the speed holds that turn).
+  - Added `SpeedTrajectory` / `simulate_speed_trajectory` to `__all__`.
+
+**The off-by-default invariant carries through.** A disabled config (the
+default) yields a flat trajectory at `initial_speed` with `ideal_final_speed`
+and `final_gap` both `None` — so the simulator cannot mislead about the proven
+fixed-rate path. It is a read-only analysis tool: nothing in the live
+`mic_chat` / `pipecat_server` path imports it, so it cannot change runtime
+behavior.
+
+**Verification:**
+- New tests: `python -m pytest tests/unit/test_simulate_speed_trajectory.py
+  tests/unit/test_wpm_mirror.py` → **71 passed** (20 new + 51 existing).
+  Coverage: disabled-config flat trajectory + no target; empty /
+  all-non-measurable sequences; the fold matches a hand-rolled `mirrored_speed`
+  loop turn-by-turn; sustained-rate monotone convergence with a small final
+  gap; non-measurable turns hold mid-sequence; convergence target tracks the
+  last measurable rate (clamped, skips trailing non-measurable); lurch
+  (`max_step`) and churn (`moves`) diagnostics; deadband suppression;
+  strength=1 lurches more than strength=0.5; a realistic slow→fast→slow arc
+  stays in band and tracks pacing; higher `base_wpm` yields slower speeds;
+  purity (no config/input mutation), determinism, int/float WPM.
+- Full Python unit suite: `python -m pytest tests/unit/` → **2947 passed**
+  (2927 prior + 20 new), run on the feature branch before ff-merge AND re-run
+  on main after merge. GATE command:
+  `cd ~/code-purp/geno-voice && python -m pytest tests/unit/`.
+- `python -W error::SyntaxWarning -m py_compile session/wpm_mirror.py
+  tests/unit/test_simulate_speed_trajectory.py` clean.
+- (`tests/test_session.py` still errors on collection — pre-existing missing
+  `pipecat` dep, not a regression.)
+
+**Next planned items:**
+1. **[wpm-mirroring, follow-on] Use the simulator to pick `base_wpm`/`strength`
+   from data.** The validation tool now exists; the natural next hop is to run
+   it over a realistic varied-pacing arc (slow → fast → slow), read the
+   `final_gap` / `max_step` / `moves` diagnostics across a small grid of
+   `base_wpm` (150/165/180) × `strength` (0.3/0.5/0.7), and pick the pair that
+   converges without lurching — then change the seed defaults (or document why
+   165/0.5 stand). Optionally expose the simulator as a `gv`/`mic_chat
+   --simulate-mirror` sub-command so an operator can validate a config offline.
+2. **[silence] Run the actual `--sweep silence_ms` over a newly-synced corpus**
+   — the sweep harness carries the full floor/typical/ceiling/spread shape on
+   all three axes from one shared renderer (iter-207). Gate a real `silence_ms`
+   default change on a corpus that exercises real mid-utterance pauses *and*
+   two-turns-one-pause cases (the seed corpus is flat in both windows).
+3. **[latency, highest value] Pre-warm the capture pipeline** — still the top
+   user-facing bug (3–5s `click_to_capture_ms`). Needs an on-device timing
+   harness; cannot be replayed. The iter-208..212 sentinels now make
+   playback-side, recording-loop, mid-stream-LLM, and end-to-end TTFS slowdowns
+   visible in session summaries.
+4. **[preroll-default] Bump the client `prerollMs` default above 0** — iter-200's
+   grid shows pre-roll improves the typical opening, the tail, AND the
+   consistency simultaneously; pick a value (256–512ms) and gate on a
+   busier/newly-synced corpus.
