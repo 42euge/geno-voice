@@ -584,9 +584,14 @@ test("a single below-threshold frame breaks the debounce candidate", () => {
 // audio through whichever processor the recorder wired. `restore()` puts the
 // originals back. Uses the ScriptProcessor fallback (no AudioWorkletNode) to
 // keep the fake small; the recording-gated handler is identical on both paths.
-function installFakeAudio() {
+function installFakeAudio({ gestureGated = false } = {}) {
   const counts = { getUserMedia: 0, ctor: 0, resume: 0, addModule: 0 };
   let liveProcessor = null;
+  // Models the browser user-gesture gate: when `gestureGated`, resume() leaves
+  // the context "suspended" until a gesture has been granted (iter-230). When
+  // not gated, every resume() promotes the context to "running" like a normal
+  // page that already has a gesture.
+  const gesture = { granted: !gestureGated };
   const tracks = [{ stopped: false, stop() { this.stopped = true; } }];
 
   class FakeAudioContext {
@@ -595,10 +600,16 @@ function installFakeAudio() {
       this.sampleRate = 48000;
       this.destination = { tag: "destination" };
       this.closed = false;
+      // Real contexts begin suspended and only run once resume() succeeds under
+      // a user gesture. Modelling `state` lets _ensureRunning() be exercised.
+      this.state = "suspended";
       // No audioWorklet member → tryLoadWorklet returns false → fallback path.
       this.audioWorklet = null;
     }
-    async resume() { counts.resume += 1; }
+    async resume() {
+      counts.resume += 1;
+      if (gesture.granted) this.state = "running";
+    }
     createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
     createGain() {
       return { gain: { value: 1 }, connect() {}, disconnect() {} };
@@ -635,6 +646,9 @@ function installFakeAudio() {
   return {
     counts,
     tracks,
+    // Simulate the user gesture (the start() click) arriving: a later resume()
+    // will now promote a suspended context to "running" (iter-230).
+    grantGesture() { gesture.granted = true; },
     // Push a captured frame through the live processor handler, mimicking the
     // browser delivering an audio buffer. No-op if the recorder has not wired
     // a processor (e.g. before _setup ran).
@@ -656,8 +670,8 @@ function installFakeAudio() {
 
 // Run `body(fake)` inside the fake-audio environment with a positive
 // performance.now() clock, restoring globals afterwards.
-async function withFakeAudio(body) {
-  const fake = installFakeAudio();
+async function withFakeAudio(body, opts) {
+  const fake = installFakeAudio(opts);
   const origNow = performance.now;
   performance.now = () => 5000;
   try {
@@ -780,6 +794,43 @@ test("cleanup resets _ready so the recorder can be re-warmed after stop", async 
   });
 });
 
+// iter-230 — a context prewarmed before any user gesture (e.g. on page load)
+// stays "suspended" even though resume() resolved, and delivers NO frames. The
+// start() click is the gesture, so start() must re-resume. Without the
+// _ensureRunning() fix the context would still be suspended after start() and
+// capture would be silent on real hardware.
+test("prewarm before a gesture leaves the context suspended; start resumes it", async () => {
+  await withFakeAudio(async (fake) => {
+    const r = new VoiceRecorder();
+    await r.prewarm();
+    // resume() ran during prewarm but the gesture gate kept it suspended.
+    assert.equal(fake.counts.resume, 1);
+    assert.equal(r.audioContext.state, "suspended", "prewarm cannot grant a gesture");
+
+    // The click arrives: start() must re-resume so capture is live.
+    fake.grantGesture();
+    await r.start();
+    assert.equal(fake.counts.resume, 2, "start must re-resume a suspended context");
+    assert.equal(r.audioContext.state, "running", "context must be running after start");
+    assert.equal(r.recording, true);
+    await r.cancel();
+  }, { gestureGated: true });
+});
+
+test("start does not re-resume an already-running context (no redundant resume)", async () => {
+  await withFakeAudio(async (fake) => {
+    const r = new VoiceRecorder();
+    // No gesture gate → prewarm's resume() promotes straight to running.
+    await r.prewarm();
+    assert.equal(r.audioContext.state, "running");
+    assert.equal(fake.counts.resume, 1);
+
+    await r.start();
+    assert.equal(fake.counts.resume, 1, "running context needs no second resume");
+    await r.cancel();
+  });
+});
+
 test("a double start() is a no-op (idempotent recording flag)", async () => {
   await withFakeAudio(async (fake) => {
     const r = new VoiceRecorder();
@@ -810,8 +861,8 @@ test("a double start() is a no-op (idempotent recording flag)", async () => {
 // installFakeAudio + a mutable performance.now() clock. `advance(ms)` moves the
 // clock forward so debounce/silence timing behaves like real time. Pushing a
 // frame does NOT advance the clock — callers step it explicitly between frames.
-async function withFakeAudioClock(body) {
-  const fake = installFakeAudio();
+async function withFakeAudioClock(body, opts) {
+  const fake = installFakeAudio(opts);
   const origNow = performance.now;
   let clock = 1000; // positive offset (candidate timestamp is truthiness-checked)
   performance.now = () => clock;
@@ -951,4 +1002,41 @@ test("CL: prewarm-then-start captures identically to start-alone (parity)", asyn
   assert.ok(viaPrewarm instanceof Uint8Array, "prewarm path should emit a WAV");
   assert.ok(viaCold instanceof Uint8Array, "cold path should emit a WAV");
   assert.deepEqual([...viaPrewarm], [...viaCold], "capture must be identical");
+});
+
+// iter-230 — the continuous/conversational path has the same suspended-context
+// hazard as VoiceRecorder: a listener prewarmed before any user gesture stays
+// "suspended" (resume() resolved but did nothing) and would meter silence
+// forever. start() (the voice-enable click) is the gesture, so it must
+// re-resume — and once running, frames must actually commit speech.
+test("CL: prewarm before a gesture leaves the context suspended; start resumes it", async () => {
+  await withFakeAudioClock(async (fake, advance) => {
+    const l = new ContinuousListener({ silenceThreshold: 0.015 });
+    await l.prewarm();
+    assert.equal(fake.counts.resume, 1);
+    assert.equal(l.audioContext.state, "suspended", "prewarm cannot grant a gesture");
+
+    fake.grantGesture();
+    await l.start();
+    assert.equal(fake.counts.resume, 2, "start must re-resume a suspended context");
+    assert.equal(l.audioContext.state, "running", "context must run after start");
+
+    // Proof the resumed graph is live: held-loud frames commit speech.
+    pushLoud(fake, advance, COMMIT_FRAMES);
+    assert.equal(l.speaking, true, "a resumed listener must capture frames");
+    await l.stop();
+  }, { gestureGated: true });
+});
+
+test("CL: start does not re-resume an already-running context", async () => {
+  await withFakeAudioClock(async (fake) => {
+    const l = new ContinuousListener();
+    await l.prewarm();
+    assert.equal(l.audioContext.state, "running");
+    assert.equal(fake.counts.resume, 1);
+
+    await l.start();
+    assert.equal(fake.counts.resume, 1, "running context needs no second resume");
+    await l.stop();
+  });
 });

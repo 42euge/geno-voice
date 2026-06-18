@@ -175,6 +175,17 @@ export class VoiceRecorder {
     this._ready = true;
   }
 
+  // Resume the AudioContext if it is still suspended. Browsers gate audio on a
+  // user gesture: a context built by prewarm() before any gesture (e.g. on page
+  // load) resolves its resume() yet stays `suspended`, delivering NO frames. The
+  // start() click IS that gesture, so re-resume here — otherwise a pre-warmed
+  // graph would capture silence (iter-230). Cheap no-op when already running.
+  async _ensureRunning() {
+    if (this.audioContext && this.audioContext.state === "suspended") {
+      await this.audioContext.resume();
+    }
+  }
+
   async start() {
     if (this.recording) return;
 
@@ -183,6 +194,9 @@ export class VoiceRecorder {
     // the latency win. Discard any frames that slipped through before this
     // start so the segment begins at the click.
     await this._setup();
+    // The click is the user gesture: resume a context prewarmed while still
+    // suspended so capture actually receives frames (iter-230).
+    await this._ensureRunning();
     this.chunks = [];
 
     this.startedAt = performance.now();
@@ -409,6 +423,18 @@ export class ContinuousListener {
     this._ready = true;
   }
 
+  // Resume the AudioContext if it is still suspended. Browsers gate audio on a
+  // user gesture: a context built by prewarm() before any gesture (e.g. on page
+  // load) resolves its resume() yet stays `suspended`, delivering NO frames. The
+  // start() (voice-enable) click IS that gesture, so re-resume here — otherwise
+  // a pre-warmed listener would meter silence forever (iter-230). Cheap no-op
+  // when the context is already running.
+  async _ensureRunning() {
+    if (this.audioContext && this.audioContext.state === "suspended") {
+      await this.audioContext.resume();
+    }
+  }
+
   async start() {
     if (this.active) return;
     this._muted = false;
@@ -419,6 +445,9 @@ export class ContinuousListener {
     // latency win. When prewarm() was never called this lazily runs the same
     // _setup(), so the default cold path is byte-for-byte the historical one.
     await this._setup();
+    // The voice-enable click is the user gesture: resume a context prewarmed
+    // while still suspended so capture actually receives frames (iter-230).
+    await this._ensureRunning();
 
     this.active = true;
     if (this.onStateChange) this.onStateChange("listening");
