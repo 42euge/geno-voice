@@ -59,6 +59,11 @@ __all__ = [
     "CalibrationSample",
     "BaseWpmCalibration",
     "calibrate_base_wpm",
+    "CalibrationVerdict",
+    "calibration_verdict",
+    "DEFAULT_CALIB_SPREAD_MAX",
+    "DEFAULT_CALIB_DRIFT_MIN",
+    "DEFAULT_CALIB_MIN_SAMPLES",
     "DEFAULT_LURCH_WEIGHT",
     "DEFAULT_BASE_WPM",
     "DEFAULT_STRENGTH",
@@ -747,4 +752,155 @@ def calibrate_base_wpm(
         spread=hi - lo,
         default_base_wpm=float(default_base_wpm),
         drift=median - float(default_base_wpm),
+    )
+
+
+# --------------------------------------------------------------------------
+# iter-222 — data-driven verdict over a base_wpm calibration.
+#
+# iter-220 measured ``implied_base_wpm`` and iter-221 surfaced it on the CLI,
+# but both stop at raw numbers (median, spread, drift) and leave the operator to
+# eyeball whether to actually re-seed ``DEFAULT_BASE_WPM``. That is the same gap
+# iter-219 closed for ``strength`` with a data-driven *verdict* rather than a
+# bare grid. This is the calibration's verdict: a re-seed is worth doing only
+# when the renders AGREE (small spread ⇒ the median is trustworthy), there are
+# ENOUGH of them (a single render is one timing, not a calibration), AND the
+# drift from nominal is large enough to MATTER (a ±2 WPM drift is noise the
+# damped mirror absorbs; re-seeding for it just churns config). All three gates
+# must pass to recommend adoption — otherwise keep the current nominal seed.
+# Pure arithmetic over an existing ``BaseWpmCalibration``; no I/O, no clock.
+# --------------------------------------------------------------------------
+
+#: Max per-sample range (``max_base_wpm - min_base_wpm``, in WPM) for the
+#: calibration to be trusted. Above this the renders disagree (inconsistent
+#: synth or a bad sample), so the median is not a reliable base.
+DEFAULT_CALIB_SPREAD_MAX: float = 10.0
+
+#: Minimum absolute ``drift`` (measured median − nominal, in WPM) worth
+#: re-seeding for. Below this the measured base is close enough to the nominal
+#: that the damped mirror absorbs the difference, so re-seeding only churns the
+#: config without changing behavior.
+DEFAULT_CALIB_DRIFT_MIN: float = 5.0
+
+#: Minimum number of samples for the median to be robust. A single render is
+#: one timing, not a calibration; a couple of renders can still be a fluke.
+DEFAULT_CALIB_MIN_SAMPLES: int = 3
+
+
+@dataclass(frozen=True)
+class CalibrationVerdict:
+    """Data-driven recommendation over a :class:`BaseWpmCalibration`.
+
+    Attributes:
+      recommend: ``True`` iff all three gates pass — the renders agree
+        (``spread <= spread_max``), there are enough of them
+        (``n_samples >= min_samples``), and the drift is large enough to matter
+        (``abs(drift) >= drift_min``). When ``True`` the operator should re-seed
+        ``DEFAULT_BASE_WPM`` to ``implied_base_wpm``; when ``False`` keep the
+        current nominal.
+      reason: a short human-readable explanation of the decision — which gate
+        failed, or that all passed.
+      implied_base_wpm: the calibration's measured median (echoed for the
+        caller's convenience; the value to adopt when ``recommend`` is ``True``).
+      drift: the calibration's drift from nominal (echoed).
+      spread: the calibration's per-sample range (echoed).
+      n_samples: how many samples backed the calibration (echoed).
+      spread_max / drift_min / min_samples: the thresholds the verdict was
+        computed against (echoed so the decision is self-describing).
+    """
+
+    recommend: bool
+    reason: str
+    implied_base_wpm: float
+    drift: float
+    spread: float
+    n_samples: int
+    spread_max: float
+    drift_min: float
+    min_samples: int
+
+
+def calibration_verdict(
+    calibration: "BaseWpmCalibration | None",
+    *,
+    spread_max: float = DEFAULT_CALIB_SPREAD_MAX,
+    drift_min: float = DEFAULT_CALIB_DRIFT_MIN,
+    min_samples: int = DEFAULT_CALIB_MIN_SAMPLES,
+) -> CalibrationVerdict | None:
+    """Decide whether to re-seed ``DEFAULT_BASE_WPM`` from a calibration.
+
+    Folds the three trust/significance gates over an existing
+    :class:`BaseWpmCalibration` (the iter-220 measurement). A re-seed is
+    recommended only when **all** of:
+
+    - **enough samples** — ``n_samples >= min_samples`` (a single render is one
+      timing, not a calibration);
+    - **renders agree** — ``spread <= spread_max`` (a wide spread means the
+      median is not trustworthy);
+    - **drift matters** — ``abs(drift) >= drift_min`` (a tiny drift is noise the
+      damped mirror absorbs, so re-seeding only churns config).
+
+    The gates are checked in that order so ``reason`` names the *first* failure
+    (sample count is the most fundamental, then trust, then significance).
+
+    Args:
+      calibration: a :class:`BaseWpmCalibration`, or ``None`` (no samples ⇒
+        nothing to decide ⇒ this function returns ``None``, mirroring
+        :func:`calibrate_base_wpm`'s empty contract).
+      spread_max: max trusted per-sample range (defaults to
+        :data:`DEFAULT_CALIB_SPREAD_MAX`).
+      drift_min: min absolute drift worth re-seeding for (defaults to
+        :data:`DEFAULT_CALIB_DRIFT_MIN`).
+      min_samples: min sample count for a robust median (defaults to
+        :data:`DEFAULT_CALIB_MIN_SAMPLES`).
+
+    Pure — reads only the calibration's fields, mutates nothing.
+    """
+    if calibration is None:
+        return None
+
+    spread_max = float(spread_max)
+    drift_min = float(drift_min)
+    min_samples = int(min_samples)
+
+    n = calibration.n_samples
+    spread = calibration.spread
+    drift = calibration.drift
+
+    if n < min_samples:
+        recommend = False
+        reason = (
+            f"only {n} sample(s) — need {min_samples}+ for a robust median; "
+            "keep the current nominal"
+        )
+    elif spread > spread_max:
+        recommend = False
+        reason = (
+            f"renders disagree (spread {spread:.1f} > {spread_max:.1f} WPM) — "
+            "the median is not trustworthy; re-render more consistently"
+        )
+    elif abs(drift) < drift_min:
+        recommend = False
+        reason = (
+            f"drift {drift:+.1f} WPM is below the {drift_min:.1f} WPM threshold "
+            "— the damped mirror absorbs it; keep the current nominal"
+        )
+    else:
+        recommend = True
+        reason = (
+            f"renders agree (spread {spread:.1f} <= {spread_max:.1f}) over "
+            f"{n} samples and drift {drift:+.1f} WPM is significant — "
+            f"re-seed base_wpm to {calibration.implied_base_wpm:.1f}"
+        )
+
+    return CalibrationVerdict(
+        recommend=recommend,
+        reason=reason,
+        implied_base_wpm=calibration.implied_base_wpm,
+        drift=drift,
+        spread=spread,
+        n_samples=n,
+        spread_max=spread_max,
+        drift_min=drift_min,
+        min_samples=min_samples,
     )
