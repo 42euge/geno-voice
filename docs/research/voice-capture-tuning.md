@@ -87,8 +87,16 @@ fragments, so the shortest emitted segment collapses toward the `min_speech`
 gate. Reading both per axis — `min_onsets`/`max_onsets` on count,
 `min_seg`/`max_seg` on duration — a `--sweep silence_ms` brackets both failures
 on both axes in one pass; a committed segment can never be shorter than the
-`min_speech` gate, so this floor is bounded below by it),
-`onsets`/`speak_frames` totals, `mean_over` (mean %-of-frames-over-threshold),
+`min_speech` gate, so this floor is bounded below by it), `mean_seg` (iter-204 —
+`mean_segment_ms`, the mean committed segment duration across the corpus: the
+*center* of the duration axis, to it what `onset1` is to the timing axis. Where
+`min_seg`/`max_seg` each read one worst-case recording (the over-split floor and
+over-merge ceiling), `mean_seg` reads the corpus as a whole, so it shows whether
+the *typical* turn is lengthening (turns merging across the board) or shortening
+(fragmenting across the board), not just whether one outlier did. Averaged over
+every emitted segment, so a recording that fragments into many short segments
+rightly pulls it down; bounded below by the `min_speech` gate and within
+`[min_seg, max_seg]`), `onsets`/`speak_frames` totals, `mean_over` (mean %-of-frames-over-threshold),
 and `onset1`
 (iter-197 — the onset-*timing* aggregate: the mean of each recording's
 **first** emitted `onset_ms`, averaged only over recordings that detected
@@ -533,6 +541,43 @@ gate (more, shorter fragments). All four bracket aggregates now read in one
 the actual `silence_ms` default change on a newly-synced corpus that exercises
 real mid-utterance pauses and two-turns-one-pause cases.
 
+### Center of the duration axis (iter-204)
+
+iter-202/203 bracketed the segment-*duration* axis with a ceiling (`max_seg`,
+over-merge) and a floor (`min_seg`, over-split), but left it with no *center* —
+the onset-*timing* axis already carried its full floor/typical/ceiling shape
+(`onset1_min`/`onset1`/`onset1_max`), so the duration axis was a statistic short.
+iter-204 adds `mean_segment_ms` (the `mean_seg` column): the mean committed
+segment duration across the corpus, the typical-turn-length aggregate. It is to
+the duration axis what `onset1` is to the timing axis.
+
+The floor and ceiling each read *one* worst-case recording — the single shortest
+or longest segment in the whole corpus. That makes them sensitive to a lone
+outlier: one recording fragmenting can drop `min_seg` to the gate while every
+other turn is untouched. `mean_seg` reads the corpus as a whole, so it answers
+the complementary question — is the *typical* turn lengthening or shortening? It
+is averaged over every emitted segment (not per-recording-then-averaged), so a
+recording that shatters into many short fragments rightly pulls the mean down by
+contributing many short durations, not just one.
+
+The same synthetic gap recording, read on all three duration statistics:
+
+| silence_ms | min_seg | mean_seg | max_seg | reading |
+|-----------:|--------:|---------:|--------:|---------|
+| 100        | 1024.0ms | **1088.0ms** | 1152.0ms | gap (300ms) > timeout → **splits**: two short halves, typical turn is short |
+| 400        | 2304.0ms | **2304.0ms** | 2304.0ms | gap < timeout → **merges**: one long run-on, typical turn doubles |
+| 800        | 2304.0ms | **2304.0ms** | 2304.0ms | the production default — merged |
+
+`mean_seg` moves the same direction as `max_seg` under the merge (the typical
+turn lengthens), confirming the *whole corpus* shifted rather than one outlier;
+on a real corpus a `mean_seg` climbing alongside `max_seg` at high `silence_ms`
+is the strongest signal that turns are merging broadly, while `max_seg` alone
+climbing with a flat `mean_seg` would point to a single run-on recording. The
+duration axis now carries the same floor/typical/ceiling shape the onset-timing
+axis does. The seed corpus is flat in both silence windows, so gate the actual
+`silence_ms` default change on a newly-synced corpus that exercises real
+mid-utterance pauses and two-turns-one-pause cases.
+
 ## Findings & backlog (prioritized)
 
 1. **[latency] Pre-warm the capture pipeline.** The 3–5s `click_to_capture_ms`
@@ -637,7 +682,11 @@ real mid-utterance pauses and two-turns-one-pause cases.
    `min_seg`/`max_seg` on duration. A `min_seg` collapsing toward the
    `min_speech` gate at low `silence_ms` confirms by duration the fragmentation
    `max_onsets` reads by count (see "Over-split floor on the duration axis"
-   above)._
+   above). iter-204: the `mean_segment_ms` aggregate fills in the *center* of the
+   duration axis — where `min_seg`/`max_seg` each read one worst-case recording,
+   `mean_seg` reads the whole corpus, so a `mean_seg` climbing alongside `max_seg`
+   at high `silence_ms` means turns are merging *broadly*, not just in one
+   recording (see "Center of the duration axis" above)._
 
 ## Methodology notes
 

@@ -514,6 +514,28 @@ class SweepPoint:
                          ``min_speech_ms`` gate (anything shorter is dropped
                          before it is emitted), so this floor is bounded below by
                          that gate. ``0.0`` when nothing detected.
+    ``mean_segment_ms`` — the mean committed segment ``duration_ms`` across the
+                         whole corpus (the *typical* segment duration). This is
+                         to the duration axis what ``mean_first_onset_ms`` is to
+                         the timing axis: ``min_segment_ms``/``max_segment_ms``
+                         bracket the duration spread (the over-split floor and
+                         over-merge ceiling), and this fills in its *center* so
+                         the duration axis now carries the same floor/typical/
+                         ceiling shape the onset-timing axis does
+                         (``onset1_min``/``onset1``/``onset1_max``). The floor
+                         and ceiling each read one worst-case recording; the mean
+                         reads the corpus as a whole, so a ``--sweep silence_ms``
+                         shows whether the *typical* turn is lengthening (turns
+                         starting to merge across the board) or shortening
+                         (fragmenting across the board), not just whether one
+                         outlier recording did. Averaged over every emitted
+                         segment (not per-recording-then-averaged): a recording
+                         that fragments into many short segments rightly pulls the
+                         corpus mean down by contributing many short durations.
+                         A committed segment can never be shorter than the
+                         ``min_speech_ms`` gate, so the mean is bounded below by
+                         it and lies within ``[min_segment_ms, max_segment_ms]``.
+                         ``0.0`` when nothing detected.
     """
 
     params: VadParams
@@ -530,6 +552,7 @@ class SweepPoint:
     std_first_onset_ms: float
     max_segment_ms: float
     min_segment_ms: float
+    mean_segment_ms: float
 
     def summary_line(self, label_key: str = "threshold") -> str:
         value = getattr(self.params, label_key)
@@ -546,6 +569,7 @@ class SweepPoint:
             f"onset1_max={self.max_first_onset_ms:6.1f}ms "
             f"onset1_std={self.std_first_onset_ms:6.1f}ms "
             f"min_seg={self.min_segment_ms:7.1f}ms "
+            f"mean_seg={self.mean_segment_ms:7.1f}ms "
             f"max_seg={self.max_segment_ms:7.1f}ms"
         )
 
@@ -596,6 +620,14 @@ def aggregate_results(params: VadParams, results: List[ReplayResult]) -> SweepPo
     # utterance into many short fragments; the shortest emitted segment collapses
     # toward the min_speech gate, the duration-axis fingerprint of over-splitting.
     min_segment = min(seg_durations) if seg_durations else 0.0
+    # Typical segment duration: the corpus-wide mean over every emitted segment.
+    # The center of the duration axis — min/max bracket the spread (each reads one
+    # worst-case recording), this reads the corpus as a whole, so a silence_ms
+    # sweep shows the typical turn lengthening (merging) or shortening (fragmenting)
+    # across the board. Averaged over every segment (not per-recording-then-
+    # averaged) so a recording fragmenting into many short segments rightly pulls
+    # the mean down. Bounded below by the min_speech gate, within [min, max].
+    mean_segment = (sum(seg_durations) / len(seg_durations)) if seg_durations else 0.0
     return SweepPoint(
         params=params,
         recordings=n,
@@ -611,6 +643,7 @@ def aggregate_results(params: VadParams, results: List[ReplayResult]) -> SweepPo
         std_first_onset_ms=std_first_onset,
         max_segment_ms=max_segment,
         min_segment_ms=min_segment,
+        mean_segment_ms=mean_segment,
     )
 
 
@@ -768,6 +801,7 @@ def _grid_summary_line(p: SweepPoint, param_a: str, param_b: str) -> str:
         f"onset1_max={p.max_first_onset_ms:6.1f}ms "
         f"onset1_std={p.std_first_onset_ms:6.1f}ms "
         f"min_seg={p.min_segment_ms:7.1f}ms "
+        f"mean_seg={p.mean_segment_ms:7.1f}ms "
         f"max_seg={p.max_segment_ms:7.1f}ms"
     )
 

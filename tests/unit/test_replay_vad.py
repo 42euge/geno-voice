@@ -333,6 +333,7 @@ class TestAggregateResults:
         assert point.std_first_onset_ms == 0.0
         assert point.max_segment_ms == 0.0
         assert point.min_segment_ms == 0.0
+        assert point.mean_segment_ms == 0.0
 
     def test_aggregates_across_corpus(self, tmp_path):
         corpus = _make_corpus(tmp_path)
@@ -427,6 +428,7 @@ class TestAggregateResults:
         assert point.min_first_onset_ms == 0.0
         assert point.std_first_onset_ms == 0.0
         assert point.max_segment_ms == 0.0
+        assert point.mean_segment_ms == 0.0
 
     def test_max_first_onset_is_latest_detected_recording(self, tmp_path):
         corpus = _make_corpus(tmp_path)
@@ -638,6 +640,63 @@ class TestAggregateResults:
         assert all(not r.segments for r in results)
         point = aggregate_results(VadParams(threshold=0.006), results)
         assert point.min_segment_ms == 0.0
+
+    def test_mean_segment_is_corpus_mean_of_committed_segments(self, tmp_path):
+        corpus = _make_corpus(tmp_path)
+        results = replay_all(corpus, VadParams(threshold=0.006))
+        point = aggregate_results(VadParams(threshold=0.006), results)
+        # The typical-duration aggregate is the mean over EVERY emitted segment
+        # in the corpus (not per-recording-then-averaged).
+        all_durations = [s.duration_ms for r in results for s in r.segments]
+        assert all_durations, "fixture should detect at least one segment"
+        assert point.mean_segment_ms == pytest.approx(
+            sum(all_durations) / len(all_durations)
+        )
+        # The center lies within the floor/ceiling envelope and never below the
+        # min_speech gate (no committed segment is shorter than it).
+        assert point.min_segment_ms <= point.mean_segment_ms <= point.max_segment_ms
+        assert point.mean_segment_ms >= VadParams().min_speech_ms
+
+    def test_mean_segment_rises_when_long_silence_overmerges(self, tmp_path):
+        # The typical segment lengthens across the corpus as turns merge — the
+        # same gap recording the floor/ceiling tests use, read on the mean. Under
+        # a tiny silence_ms the utterance fragments into short halves (low mean);
+        # under a large silence_ms it fuses into one long run-on (high mean). The
+        # mean moves the same direction as max_seg under the merge, confirming the
+        # whole corpus shifted, not just one outlier recording.
+        corpus = tmp_path / "gap"
+        corpus.mkdir()
+        gap = np.concatenate([
+            _tone(SR, 0.3),
+            _silence(int(SR * 0.3)),
+            _tone(SR, 0.3),
+        ])
+        _write_wav(corpus / "gap.wav", gap)
+        (corpus / "gap.json").write_text('{"peak_rms": 0.05}')
+
+        split = aggregate_results(
+            VadParams(silence_ms=100.0),
+            replay_all(corpus, VadParams(silence_ms=100.0)),
+        )
+        merged = aggregate_results(
+            VadParams(silence_ms=800.0),
+            replay_all(corpus, VadParams(silence_ms=800.0)),
+        )
+        # Merging fuses the halves into one long segment → the typical duration
+        # climbs; splitting leaves short fragments → it falls.
+        assert merged.mean_segment_ms > split.mean_segment_ms
+        # And it stays bracketed by the floor and ceiling on both sides.
+        assert split.min_segment_ms <= split.mean_segment_ms <= split.max_segment_ms
+
+    def test_mean_segment_zero_when_nothing_detected(self, tmp_path):
+        corpus = tmp_path / "silent"
+        corpus.mkdir()
+        _write_wav(corpus / "a.wav", _silence(SR))
+        (corpus / "a.json").write_text('{"peak_rms": 0.0001}')
+        results = replay_all(corpus, VadParams(threshold=0.006))
+        assert all(not r.segments for r in results)
+        point = aggregate_results(VadParams(threshold=0.006), results)
+        assert point.mean_segment_ms == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -885,6 +944,9 @@ class TestSweepCli:
         # over-split floor (shortest committed segment) on the duration axis.
         assert "max_seg=" in out
         assert "min_seg=" in out
+        # ...and the typical (mean) committed segment duration — the center of
+        # the duration axis.
+        assert "mean_seg=" in out
 
     def test_sweep_json_includes_mean_first_onset(self, tmp_path, capsys):
         corpus = _make_corpus(tmp_path)
@@ -959,6 +1021,19 @@ class TestSweepCli:
         assert payload[0]["min_segment_ms"] >= 0.0
         assert payload[0]["min_segment_ms"] <= payload[0]["max_segment_ms"]
 
+    def test_sweep_json_includes_mean_segment(self, tmp_path, capsys):
+        corpus = _make_corpus(tmp_path)
+        rc = main(["--sweep", "threshold", "--sweep-values", "0.006", "--dir", str(corpus), "--json"])
+        assert rc == 0
+        import json as _json
+
+        payload = _json.loads(capsys.readouterr().out)
+        assert "mean_segment_ms" in payload[0]
+        # The typical (mean) segment duration sits within the floor/ceiling
+        # envelope on the duration axis.
+        assert payload[0]["min_segment_ms"] <= payload[0]["mean_segment_ms"]
+        assert payload[0]["mean_segment_ms"] <= payload[0]["max_segment_ms"]
+
 
 # ---------------------------------------------------------------------------
 # CLI — main() with --grid (2-D grid sweep)
@@ -993,6 +1068,8 @@ class TestGridCli:
         # ...and the over-merge ceiling + over-split floor (duration axis) per cell.
         assert out.count("max_seg=") == 4
         assert out.count("min_seg=") == 4
+        # ...and the typical (mean) committed segment duration per cell.
+        assert out.count("mean_seg=") == 4
 
     def test_grid_json_row_major(self, tmp_path, capsys):
         corpus = _make_corpus(tmp_path)
