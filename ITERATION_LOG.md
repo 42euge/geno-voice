@@ -18369,3 +18369,89 @@ What changed:
    busier/newly-synced corpus.
 4. **[gain] Add a gain×preroll grid finding** — quantify whether amplifying the
    pre-roll audio changes the recovered soft-attack quality.
+
+---
+
+## iter-210 — bot-speech-rate consistency sentinel
+
+**Branch:** `iter-210-bot-wpm-consistency` (merged ff to main, commit `1b2883c`)
+**Date:** 2026-06-18
+
+**Improvement (observability — sentinel on synthesized speaking rate):**
+iter-046's `bot_wpm` (bot speaking rate = `word_count_total /
+audio_seconds_total`, metric 1.13) has had a colored per-turn display since it
+landed (green inside 130-200 WPM) and a median in the iter-094 WPM block, but no
+*run* sentinel. A healthy median can hide a sustained stretch of turns that were
+all too fast or all too slow — a mis-set kokoro `speed` knob. This lap adds the
+run sentinel: 5+ consecutive turns outside the comprehension sweet spot is the
+actionable signal to retune the knob.
+
+This is the **ELEVENTH** instance of the session-summary diversity-check pattern
+(after iter-114 filler, iter-115/126 naturalness, iter-120 barge-phase, iter-128
+sentence-length, iter-140 stt-rtf, iter-141 tts-rtf, iter-142 llm-tps, iter-143
+streaming-overlap, iter-208 synth-dispatch, iter-209 eot-overhead) and the
+**EIGHTH** applied to a continuous metric.
+
+**It is the FIRST instance with a TWO-SIDED (band) sweet spot.** Every prior
+continuous bucketer was monotonic — either smaller-is-better
+(iter-140/141/208/209, fine state = LOW) or bigger-is-better (iter-142/143, fine
+state = HIGH) — so the filter dropped exactly one extreme. Here the fine state
+is the MIDDLE band (`natural`, 130-200 WPM), and BOTH extremes are flagged.
+Critically they are NOT interchangeable: `rushed` (> 200 WPM) needs the kokoro
+`speed` knob LOWERED while `sluggish` (< 130 WPM) needs it RAISED. The per-value
+suggestion branch therefore carries real directional signal (not a severity
+gradient like iter-208/209), and the run scan keeps the two flagged buckets as
+distinct phases so a rushed run and a sluggish run never merge.
+
+What changed:
+- **`examples/_chat_metrics.py`**:
+  - `_bot_wpm_bucket(wpm)` — maps per-turn WPM to `natural` (130-200, the sweet
+    spot — boundaries aligned with the existing per-turn green display) /
+    `rushed` (> 200, lower the speed knob) / `sluggish` (0 < wpm < 130, raise the
+    speed knob); returns `""` for non-positive input (no audio this turn).
+  - `_emit_bot_wpm_consistency_line(emit, list, threshold=5)` — filters out
+    `natural`/`""` before the scan, reuses iter-116 `_longest_consecutive_run`,
+    and emits opposite-direction per-value suggestions (`rushed` → lower the
+    kokoro speed knob; `sluggish` → raise it; defensive `else` → tune toward
+    150-180 WPM). Warning text names iter-046 so operators can grep the context.
+  - Wired into `print_session_summary` immediately after the iter-209
+    eot-overhead line, fed `[m.bot_wpm for m in metrics_list]`.
+- **`tests/unit/test_emit_bot_wpm_consistency_line.py`** — 22 tests covering the
+  full pattern matrix plus the new two-sided invariants: band boundaries
+  (zero/negative/natural/rushed/sluggish + float edges at 130/200), empty +
+  all-zero suppression, long-natural-run never fires, filter semantics (a
+  `natural` interleaving doesn't break a rushed run),
+  **rushed-and-sluggish-runs-do-not-merge** (3 rushed + 3 sluggish stays below
+  threshold), **sluggish-breaks-rushed-run**, longest-of-multiple picks the
+  correct direction, at/above threshold per value, below threshold, custom
+  threshold, 4-space indent, iter-046 attribution, 1000-element scaling.
+
+**Verification:**
+- `python -m pytest tests/unit/test_emit_bot_wpm_consistency_line.py`
+  → **22 passed**.
+- Full Python unit suite: `python -m pytest tests/unit/` → **2765 passed**
+  (2743 prior + 22 new), run on the feature branch before ff-merge. GATE command:
+  `cd ~/code-purp/geno-voice && python -m pytest tests/unit/`.
+- (`tests/test_session.py` still errors on collection — pre-existing missing
+  `pipecat` dep, not a regression.)
+
+**Next planned items (from the research-doc backlog):**
+1. **[silence] Run the actual `--sweep silence_ms` over a newly-synced corpus**
+   — the sweep harness carries the full floor/typical/ceiling/spread shape on all
+   three axes from one shared renderer (iter-207). Gate a real `silence_ms`
+   default change on a corpus that exercises real mid-utterance pauses *and*
+   two-turns-one-pause cases (the seed corpus is flat in both windows); prefer
+   the value that minimizes `onset_std` and `seg_std` among those with an
+   acceptable `mean_seg`.
+2. **[latency, highest value] Pre-warm the capture pipeline** — still the top
+   user-facing bug (3–5s `click_to_capture_ms`). Needs an on-device timing
+   harness; cannot be replayed. The iter-208/209 sentinels already make
+   playback-side and recording-loop slowdowns visible in session summaries.
+3. **[wpm-mirroring] Adapt bot WPM toward the measured user WPM** — iter-210's
+   sentinel surfaces a mis-set rate; the natural follow-up is the iter-064
+   mirroring effect (match bot_wpm to user_wpm for higher rapport / lower
+   interruption). Gate on a corpus with varied user pacing.
+4. **[preroll-default] Bump the client `prerollMs` default above 0** — iter-200's
+   grid shows pre-roll improves the typical opening, the tail, AND the
+   consistency simultaneously; pick a value (256–512ms) and gate on a
+   busier/newly-synced corpus.
