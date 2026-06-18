@@ -386,3 +386,92 @@ test("stop() tears down the speaking state and clears chunks state", async () =>
   assert.equal(l.active, false);
   assert.equal(l.speaking, false);
 });
+
+// ---------------------------------------------------------------------------
+// iter-195 — software gain stage.
+//
+// `gain` pre-amplifies every captured frame before RMS detection and storage,
+// mirroring the replay harness `gain` model (fixtures/replay_vad.py
+// `frame_rms`: `samples * gain`) whose threshold×gain interaction the iter-192
+// grid characterised. A louder signal lifts quiet far-field speech over a
+// fixed RMS gate. gain=1.0 (the default) must be exact unity-gain parity.
+// ---------------------------------------------------------------------------
+
+test("default gain is 1.0 and _applyGain is a zero-copy no-op", () => {
+  const l = newListener();
+  assert.equal(l.gain, 1.0);
+  const f = frame(0.5);
+  // Unity gain returns the SAME array (no allocation, exact parity).
+  assert.strictEqual(l._applyGain(f), f);
+});
+
+test("non-finite or non-positive gain falls back to unity", () => {
+  assert.equal(newListener({ gain: 0 }).gain, 1.0);
+  assert.equal(newListener({ gain: -2 }).gain, 1.0);
+  assert.equal(newListener({ gain: NaN }).gain, 1.0);
+  assert.equal(newListener({ gain: Infinity }).gain, 1.0);
+});
+
+test("_applyGain scales every sample by the configured factor", () => {
+  const l = newListener({ gain: 2.0 });
+  const out = l._applyGain(frame(0.25));
+  for (const v of out) assert.ok(Math.abs(v - 0.5) < 1e-6, `expected 0.5, got ${v}`);
+});
+
+test("gain lifts a sub-threshold signal over the RMS gate (far-field recovery)", () => {
+  // A 0.01 frame sits UNDER the 0.015 gate, so at unity gain it never commits.
+  const quietValue = 0.01;
+  const unity = newListener({ gain: 1.0 });
+  withClock((advance, feedFrames) =>
+    feedFrames(unity, Array.from({ length: COMMIT_FRAMES * 2 }, () => frame(quietValue))),
+  );
+  assert.equal(unity.speaking, false, "unity gain must not detect the quiet signal");
+
+  // 2× gain lifts rms to 0.02 > 0.015 → the same signal now commits.
+  const boosted = newListener({ gain: 2.0 });
+  withClock((advance, feedFrames) =>
+    feedFrames(boosted, Array.from({ length: COMMIT_FRAMES }, () => frame(quietValue))),
+  );
+  assert.equal(boosted.speaking, true, "2x gain should recover the quiet signal");
+});
+
+test("gain=1.0 stores the segment at the original amplitude (parity)", () => {
+  const l = newListener({ gain: 1.0 });
+  withClock((advance, feedFrames) => commitSpeech(l, feedFrames));
+  // Committed frames keep their original 0.5 amplitude.
+  for (const c of l.chunks) {
+    for (const v of c) assert.ok(Math.abs(v - 0.5) < 1e-6, `expected 0.5, got ${v}`);
+  }
+});
+
+test("gain>1 amplifies the stored segment so STT sees the louder signal", () => {
+  const l = newListener({ gain: 2.0 });
+  withClock((advance, feedFrames) => commitSpeech(l, feedFrames));
+  assert.equal(l.speaking, true);
+  // Every retained frame is amplified to 1.0 (0.5 * 2), not the raw 0.5.
+  for (const c of l.chunks) {
+    for (const v of c) assert.ok(Math.abs(v - 1.0) < 1e-6, `expected amplified 1.0, got ${v}`);
+  }
+});
+
+test("the raw callback reports the post-gain frame and RMS", () => {
+  const seen = [];
+  const l = newListener({ gain: 3.0 });
+  l.setRawRecordingCallback((buf, rms) => seen.push({ buf, rms }));
+  withClock((advance, feedFrames) => feedFrames(l, [frame(0.1)]));
+  assert.equal(seen.length, 1);
+  // 0.1 * 3 = 0.3 in both the buffer samples and the reported RMS.
+  assert.ok(Math.abs(seen[0].rms - 0.3) < 1e-6, `expected rms 0.3, got ${seen[0].rms}`);
+  for (const v of seen[0].buf) assert.ok(Math.abs(v - 0.3) < 1e-6, `expected 0.3, got ${v}`);
+});
+
+test("gain folds amplified frames into the pre-roll ring", () => {
+  // Pre-roll ring stores post-gain audio: a sub-onset frame buffered while
+  // listening carries the amplified amplitude, consistent with the segment.
+  const l = newListener({ gain: 2.0, prerollMs: 200 });
+  withClock((advance, feedFrames) => feedFrames(l, [frame(0.001)]));
+  assert.equal(l._prerollChunks.length, 1);
+  for (const v of l._prerollChunks[0]) {
+    assert.ok(Math.abs(v - 0.002) < 1e-6, `expected amplified 0.002, got ${v}`);
+  }
+});

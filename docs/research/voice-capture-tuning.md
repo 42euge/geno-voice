@@ -263,9 +263,21 @@ onsets), pinned by `TestGridSweep` in
    far-field recording misses at gain 1.0 but **1.5× gain recovers it**
    (`trig` 3/4 → 4/4). So a future gain stage would let the threshold rise
    back toward 0.010–0.015 without losing far-field speech. Detection is
-   monotone along both axes, pinned by `TestGridSweep`. Next: wire a
-   `gainNode` (or worklet multiply) into `ContinuousListener` so this is
-   tunable in the client, defaulting to 1.0._
+   monotone along both axes, pinned by `TestGridSweep`. **iter-195: wired
+   into the client.** `ContinuousListener` now takes a `gain` option
+   (default `1.0` = exact unity-gain no-op; non-finite/non-positive falls
+   back to unity). `_handleFrame` pre-amplifies each frame via `_applyGain`
+   before RMS detection, the raw callback, segment storage, and the pre-roll
+   ring — equivalent to a `gainNode` sitting upstream, and a faithful mirror
+   of the replay harness `frame_rms(samples * gain)` model. Amplified audio
+   also flows into the committed WAV so STT sees the louder signal. The JS
+   suite (`client/voice-capture.test.js`, +8 tests) covers unity-gain parity
+   + zero-copy, the unity fallback for bad values, per-sample scaling, the
+   sub-threshold→over-threshold far-field recovery (0.01 frame: misses at 1×,
+   commits at 2×), segment/raw-callback/pre-roll amplification. The chosen
+   client operating point stays gain 1.0 (the grid shows unity already gives
+   `trig=4/4` on the seed corpus); the knob is the documented hedge if a
+   busier corpus ever needs a stricter threshold._
 5. **[debounce] Tune onset debounce against clipping.** _iter-190: swept
    100→300ms at threshold 0.006. 100–200ms all keep `trig=4/4`; 300ms drops
    a recording. 100ms recovers slightly more speaking frames (less clipped

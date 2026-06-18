@@ -215,13 +215,24 @@ export class VoiceRecorder {
 }
 
 export class ContinuousListener {
-  constructor({ onSpeechEnd, onStateChange, workletUrl, silenceThreshold = 0.015, silenceDurationMs = 800, minSpeechMs = 500, prerollMs = 0 } = {}) {
+  constructor({ onSpeechEnd, onStateChange, workletUrl, silenceThreshold = 0.015, silenceDurationMs = 800, minSpeechMs = 500, prerollMs = 0, gain = 1.0 } = {}) {
     this.onSpeechEnd = onSpeechEnd;
     this.onStateChange = onStateChange;
     this._workletUrl = workletUrl || null;
     this.silenceThreshold = silenceThreshold;
     this.silenceDurationMs = silenceDurationMs;
     this.minSpeechMs = minSpeechMs;
+    // Software gain stage (iter-195): pre-amplify every captured frame before
+    // RMS detection AND storage, mirroring the replay harness `gain` model
+    // (fixtures/replay_vad.py `frame_rms`: `samples * gain`) whose threshold×
+    // gain interaction the iter-192 grid characterised. A louder signal lifts
+    // quiet far-field speech over a fixed RMS gate, so raising `gain` lets a
+    // stricter `silenceThreshold` still catch it. 1.0 (the default) is an exact
+    // no-op — the historical unity-gain path allocates nothing extra. Amplified
+    // audio also flows into the committed segment, so STT sees the louder
+    // signal too (a real upstream gainNode would do the same). Non-finite or
+    // non-positive values fall back to unity.
+    this.gain = Number.isFinite(gain) && gain > 0 ? gain : 1.0;
     // Pre-roll ring buffer (iter-193): keep the last `prerollMs` of pre-onset
     // audio so the committed segment recovers the quiet soft attack the RMS
     // gate would otherwise clip. 0 (the default) reproduces the historical
@@ -262,6 +273,16 @@ export class ContinuousListener {
     ) {
       this._prerollSamples -= this._prerollChunks.shift().length;
     }
+  }
+
+  // Pre-amplify a frame by the configured software gain, returning a new
+  // Float32Array. Unity gain (the default) returns the input untouched so the
+  // historical path allocates nothing. Mirrors the replay harness `gain` model.
+  _applyGain(input) {
+    if (this.gain === 1.0) return input;
+    const out = new Float32Array(input.length);
+    for (let i = 0; i < input.length; i++) out[i] = input[i] * this.gain;
+    return out;
   }
 
   mute() { this._muted = true; }
@@ -322,6 +343,10 @@ export class ContinuousListener {
 
   _handleFrame(input) {
     if (!this.active) return;
+    // Apply the software gain stage first so RMS detection, the raw callback,
+    // and the stored segment all see the same amplified signal — equivalent to
+    // a gainNode sitting upstream in the audio graph. Unity gain is a no-op.
+    input = this._applyGain(input);
     const rms = Math.sqrt(input.reduce((sum, s) => sum + s * s, 0) / input.length);
 
     this.frameCount++;
