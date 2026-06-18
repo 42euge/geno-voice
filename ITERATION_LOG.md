@@ -17835,3 +17835,190 @@ the merge.
    busier/newly-synced corpus.
 4. **[gain] Add a gain×preroll grid finding** — quantify whether amplifying the
    pre-roll audio changes the recovered soft-attack quality.
+
+---
+
+## iter-204 — add `mean_segment_ms` center aggregate to the VAD sweep
+
+**Branch:** `iter-204-mean-segment-ms` (merged ff to main, commit `d5cc6da`)
+**Date:** 2026-06-17
+
+**Improvement (backlog item 6 — the center of the segment-duration axis):**
+the replay sweep's `SweepPoint` had bracketed the segment-*duration* axis with
+a floor (`min_segment_ms`, iter-203, over-split) and a ceiling
+(`max_segment_ms`, iter-202, over-merge), but left it with no *center*. The
+onset-*timing* axis already carried its full floor/typical/ceiling shape
+(`onset1_min`/`onset1`/`onset1_max`), so the duration axis was a statistic
+short of symmetry. This lap adds `mean_segment_ms` — the mean committed
+segment duration across the whole corpus, the typical-turn-length aggregate.
+It is to the duration axis exactly what `mean_first_onset_ms` (`onset1`) is to
+the timing axis.
+
+Why it matters: the floor and ceiling each read *one* worst-case recording —
+the single shortest or longest segment in the corpus — so a lone outlier moves
+them (one recording fragmenting drops `min_seg` to the gate while every other
+turn is untouched). `mean_seg` reads the corpus as a whole and answers the
+complementary question: is the *typical* turn lengthening or shortening? On a
+`--sweep silence_ms` a `mean_seg` climbing alongside `max_seg` at high values
+means turns are merging *broadly*; `max_seg` climbing with a flat `mean_seg`
+points to a single run-on recording instead. It is averaged over every emitted
+segment (not per-recording-then-averaged), so a recording that shatters into
+many short fragments rightly pulls the mean down, and is bounded below by the
+`min_speech` gate and within `[min_seg, max_seg]`.
+
+What changed:
+- **`fixtures/replay_vad.py`** — `SweepPoint` gains a `mean_segment_ms` float
+  field (mean over every detected segment's `duration_ms` across the corpus,
+  `0.0` for an empty/all-miss corpus); `aggregate_results` computes it
+  (`sum(seg_durations) / len(seg_durations)`); `summary_line` and
+  `_grid_summary_line` surface a `mean_seg=` column between `min_seg=` and
+  `max_seg=` in the human sweep/grid tables; it rides along in `--json` for
+  free (dataclass field via `asdict`).
+- **`tests/unit/test_replay_vad.py`** — +4 dedicated tests (87 → 91):
+  `test_mean_segment_is_corpus_mean_of_committed_segments` (equals the mean
+  over all detected durations; within `[min, max]`; never below the
+  `min_speech` gate), `test_mean_segment_rises_when_long_silence_overmerges`
+  (the same 1s-tone / 300ms-gap / 1s-tone recording iter-201/202/203 used — the
+  mean climbs 1088ms→2304ms as `silence_ms` crosses the gap and the halves
+  fuse, moving the same direction as `max_seg` under the merge, and stays
+  bracketed by floor/ceiling), `test_mean_segment_zero_when_nothing_detected`,
+  and `test_sweep_json_includes_mean_segment`. Plus assertions folded into the
+  empty-corpus and nothing-detected zero tests, the human-table column test
+  (`mean_seg=`), and the grid human-table test (4 cells each carry `mean_seg=`).
+- **`docs/research/voice-capture-tuning.md`** — `mean_seg` documented in the
+  "Each row reports" legend; new "Center of the duration axis (iter-204)"
+  section with the synthetic-gap table; backlog item 6 updated.
+
+**Corpus evidence (the center moving with the merge, on the synthetic gap):**
+the same 1s-tone / 300ms-gap / 1s-tone recording, swept across `silence_ms`
+and read on all three duration statistics:
+- `silence_ms=100`: gap (300ms) > timeout → **splits** into two short halves
+  (`min_seg=1024.0ms`, `mean_seg=1088.0ms`, `max_seg=1152.0ms`).
+- `silence_ms=400` and `800`: gap < timeout → **merges** into one 2304ms run-on
+  (`min_seg=mean_seg=max_seg=2304.0ms`).
+As `silence_ms` rises past the gap the typical turn (`mean_seg`) lengthens
+alongside the ceiling — the whole-corpus signal that turns are merging broadly,
+distinct from a single outlier moving only the ceiling. The duration axis now
+carries the same floor/typical/ceiling shape the onset-timing axis does.
+
+**Verification:**
+- `python -m pytest tests/unit/test_replay_vad.py` → **91 passed** (87 + 4 new).
+- Full Python unit suite: `python -m pytest tests/unit/` → **2687 passed**
+  (2683 prior + 4 new). GATE command:
+  `cd ~/code-purp/geno-voice && python -m pytest tests/unit/`.
+- Integration `tests/integration/test_vad_recordings.py` → skipped in the
+  worktree (the binary corpus lives only in the main checkout); the synthetic
+  over-merge demo above exercised the new aggregate directly.
+- (`tests/test_session.py` still errors on collection — pre-existing missing
+  `pipecat` dep, not a regression.)
+
+**Next planned items (from the research-doc backlog):**
+1. **[silence] Run the actual `--sweep silence_ms` over a newly-synced corpus**
+   — the silence lever is now fully legible (`min_onsets`/`max_onsets` on count;
+   `min_seg`/`mean_seg`/`max_seg` floor/typical/ceiling on duration), so gate a
+   real `silence_ms` default change on a corpus that exercises real
+   mid-utterance pauses *and* two-turns-one-pause cases (the seed corpus is flat
+   in both windows).
+2. **[latency, highest value] Pre-warm the capture pipeline** — still the top
+   user-facing bug (3–5s `click_to_capture_ms`). Needs an on-device timing
+   harness; cannot be replayed.
+3. **[preroll-default] Bump the client `prerollMs` default above 0** — iter-200's
+   grid shows pre-roll improves the typical opening, the tail, AND the
+   consistency simultaneously; pick a value (256–512ms) and gate on a
+   busier/newly-synced corpus.
+4. **[gain] Add a gain×preroll grid finding** — quantify whether amplifying the
+   pre-roll audio changes the recovered soft-attack quality.
+
+---
+
+## iter-205 — add `std_segment_ms` consistency aggregate to the VAD sweep
+
+**Branch:** `iter-205-std-segment-ms` (merged ff to main, commit `aa2095f`)
+**Date:** 2026-06-17
+
+**Improvement (backlog item 6 — the spread of the segment-duration axis):**
+iter-202/203/204 gave the replay sweep's segment-*duration* axis its over-merge
+ceiling (`max_segment_ms`), over-split floor (`min_segment_ms`), and typical
+center (`mean_segment_ms`). But the onset-*timing* axis carried a *fourth*
+statistic the duration axis lacked: `std_first_onset_ms` (`onset1_std`, iter-200)
+— the consistency/spread of the distribution. So the duration axis was a
+statistic short of the timing axis's full floor/typical/ceiling/spread shape.
+This lap closes that asymmetry with `std_segment_ms` — the population standard
+deviation of every committed segment's `duration_ms` across the corpus. It is to
+the duration axis exactly what `onset1_std` is to the timing axis.
+
+Why it matters: min/mean/max cannot express *spread*, and spread is the only
+thing that distinguishes two `silence_ms` values that share a `mean_seg` but
+segment completely differently — one emitting uniformly medium turns (low std),
+the other mixing short fragments with long run-ons (high std), the over-split
+*and* over-merge mix a borderline timeout produces. The mean is identical for
+both; only `seg_std` tells them apart. So a `--sweep silence_ms` should prefer
+the value that *minimizes* `seg_std` among those with an acceptable `mean_seg`,
+not just the one with the best mean. Population (ddof=0) std so a single
+committed segment reads as `0.0` ("perfectly consistent given one point") rather
+than the undefined sample std; bounded above by the `max_seg - min_seg` range.
+
+What changed:
+- **`fixtures/replay_vad.py`** — `SweepPoint` gains a `std_segment_ms` float
+  field (population std over every detected segment's `duration_ms` across the
+  corpus, `0.0` for an empty/all-miss corpus); `aggregate_results` computes it
+  via `np.std(seg_durations)`; `summary_line` and `_grid_summary_line` surface a
+  `seg_std=` column after `max_seg=` in the human sweep/grid tables; it rides
+  along in `--json` for free (dataclass field via `asdict`).
+- **`tests/unit/test_replay_vad.py`** — +5 dedicated tests (91 → 96):
+  `test_std_segment_is_population_std_of_committed_segments` (equals `np.std`
+  over every detected duration; non-negative; ≤ `max-min` range; strictly
+  positive when durations differ), `test_std_segment_zero_for_single_committed_segment`,
+  `test_std_segment_separates_mixed_from_uniform` (a 1s+gap+1s recording split
+  by a sub-gap `silence_ms` into two slightly-unequal committed halves gives a
+  positive spread `64.0ms`; a corpus of two identical tones gives `0.0` spread
+  despite *also* emitting two segments — the std is what tells them apart),
+  `test_std_segment_zero_when_nothing_detected`, and
+  `test_sweep_json_includes_std_segment`. Plus assertions folded into the
+  empty-corpus and nothing-detected zero tests, the sweep human-table column
+  test (`seg_std=`), and the grid human-table test (4 cells each carry
+  `seg_std=`).
+- **`docs/research/voice-capture-tuning.md`** — `seg_std` documented in the
+  "Each row reports" legend; new "Consistency of the duration axis (iter-205)"
+  section with the uniform-vs-mixed table; backlog item 6 updated.
+
+**Synthetic evidence (the spread separating uniform from mixed segmentation):**
+- two identical 1s tones → committed durations `1024.0ms`, `1024.0ms` →
+  `mean_seg=1024.0ms`, **`seg_std=0.0ms`** (uniform turns, no spread).
+- a 1s tone / 300ms gap / 1s tone recording, split at `silence_ms=100` → two
+  committed halves `1152.0ms`, `1024.0ms` → `mean_seg=1088.0ms`,
+  **`seg_std=64.0ms`** (unequal committed halves, real spread).
+Same multi-segment shape, different `seg_std`: the std is the aggregate that
+separates a cleanly-segmenting parameter set from one that is unstable. The
+duration axis now carries the same floor/typical/ceiling/spread shape the
+onset-timing axis does (`onset1_min`/`onset1`/`onset1_max`/`onset1_std`).
+
+**Verification:**
+- `python -m pytest tests/unit/test_replay_vad.py` → **96 passed** (91 + 5 new).
+- Full Python unit suite: `python -m pytest tests/unit/` → **2692 passed**
+  (2687 prior + 5 new). GATE command:
+  `cd ~/code-purp/geno-voice && python -m pytest tests/unit/`.
+- Integration `tests/integration/test_vad_recordings.py` → skipped in the
+  worktree (the binary corpus lives only in the main checkout); the synthetic
+  uniform-vs-mixed demo above exercised the new aggregate directly.
+- (`tests/test_session.py` still errors on collection — pre-existing missing
+  `pipecat` dep, not a regression.)
+
+**Next planned items (from the research-doc backlog):**
+1. **[silence] Run the actual `--sweep silence_ms` over a newly-synced corpus**
+   — the silence lever is now fully legible on both axes: `min_onsets`/
+   `max_onsets` on count; `min_seg`/`mean_seg`/`max_seg`/`seg_std`
+   (floor/typical/ceiling/spread) on duration. Gate a real `silence_ms` default
+   change on a corpus that exercises real mid-utterance pauses *and*
+   two-turns-one-pause cases (the seed corpus is flat in both windows), and
+   prefer the value that minimizes `seg_std` among those with an acceptable
+   `mean_seg`.
+2. **[latency, highest value] Pre-warm the capture pipeline** — still the top
+   user-facing bug (3–5s `click_to_capture_ms`). Needs an on-device timing
+   harness; cannot be replayed.
+3. **[preroll-default] Bump the client `prerollMs` default above 0** — iter-200's
+   grid shows pre-roll improves the typical opening, the tail, AND the
+   consistency simultaneously; pick a value (256–512ms) and gate on a
+   busier/newly-synced corpus.
+4. **[gain] Add a gain×preroll grid finding** — quantify whether amplifying the
+   pre-roll audio changes the recovered soft-attack quality.
