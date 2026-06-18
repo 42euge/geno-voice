@@ -119,15 +119,54 @@ So the desktop client can adopt it:
 - `/health` now reports `"silero_vad": true|false` so a client can probe
   availability before choosing the endpoint over local RMS.
 
+### Streaming endpoint contract (`WS /vad/silero/stream`, iter-232)
+
+The `POST /vad/silero` above is **batch**: it needs the whole utterance buffered
+before it returns a single segment list. For live capture the desktop client
+wants *incremental* decisions — a turn cut the instant Silero sees
+`min_silence_ms` of trailing silence, not after the user stops AND a whole-WAV
+round-trip. `WS /vad/silero/stream` exposes the `silero-vad` `VADIterator`
+"stream imitation" for exactly this:
+
+- **Config (optional first text frame):** JSON overriding `SileroParams` —
+  `{"threshold":0.5,"min_silence_ms":800,"speech_pad_ms":30,"sample_rate":16000}`.
+  Send before any audio; a binary frame sent first arms a default (16 kHz)
+  stream. **`min_speech_ms` / `max_speech_s` do NOT apply** on the streaming path
+  — `VADIterator` has no look-back to retroactively drop a region that turns out
+  too short, so the stream is a **superset** of the batch path (it may emit
+  sub-`min_speech_ms` blips the batch `get_speech_timestamps` would filter). The
+  integration test pins this: stream output filtered to `>= min_speech_ms`
+  reconstructs the batch segmentation exactly.
+- **Audio (binary frames):** little-endian float32 mono PCM at `sample_rate` (no
+  server-side resampling — feed it the model's 16 kHz). Any length; sub-window
+  remainders are buffered across frames, so a mic callback's frame size is fine.
+- **Per-frame reply:** `{"events":[{"type":"start"|"end","time_s":...}, ...]}`
+  (possibly empty) — `start` when speech opens, `end` when it closes after the
+  silence hangover. Timestamps match the batch path's seconds.
+- **`{"cmd":"flush"}`:** closes a region still open because the audio ended
+  mid-speech → `{"events":[...],"flushed":true}`. (The batch path gets this for
+  free; a live stream must flush explicitly — see `SileroStream.flush`.)
+- **`{"cmd":"reset"}`:** re-arms the same stream for a new utterance without
+  reloading the model → `{"events":[],"reset":true}`.
+- **1011 close** when the Silero model is unavailable.
+
+The window quantum is **512 samples @ 16 kHz** (32 ms) / 256 @ 8 kHz — the only
+sizes `VADIterator` accepts; `SileroStream` buffers to it internally. The
+message-protocol state machine is `vad.StreamProtocol` (unit-tested without a
+socket); the server endpoint is thin transport glue with `push` off-loaded to
+the executor.
+
 ### Desktop integration (backlog — operator wires + GUI-tests on the Mac)
 
-The browser `ContinuousListener` should send mic audio to `/vad/silero` for
-speech/silence decisions instead of (or alongside) local RMS — OR the app uses
-the existing pipecat `:8765` WS path, which already runs Silero. The cleanest
-contract is the `/vad/silero` POST above for batch/segment decisions; for live
-streaming the pipecat WS path is preferable since it runs the model frame-by-
-frame. Energy VAD (threshold / gain / preroll, below) stays as the documented
-**fallback** path for hosts without `silero-vad`.
+The browser `ContinuousListener` should send mic audio to `/vad/silero` (batch)
+or **`/vad/silero/stream`** (live, iter-232) for speech/silence decisions
+instead of (or alongside) local RMS — OR the app uses the existing pipecat
+`:8765` WS path, which already runs Silero. For live capture prefer
+`/vad/silero/stream` (or the pipecat WS): both run the model frame-by-frame so a
+turn cuts without buffering the whole utterance. The batch `POST /vad/silero`
+stays the simplest contract for whole-clip segmentation. Energy VAD (threshold /
+gain / preroll, below) stays as the documented **fallback** path for hosts
+without `silero-vad`.
 
 A **pre-roll buffer** (`--preroll-ms`, iter-191 — backlog item 2) recovers
 the soft attack of an utterance that the live client discards: every

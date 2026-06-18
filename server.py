@@ -274,6 +274,81 @@ async def vad_silero(request: Request):
     return result.to_dict()
 
 
+@app.websocket("/vad/silero/stream")
+async def vad_silero_stream(ws: WebSocket):
+    """Frame-by-frame Silero VAD over a live audio stream (iter-232).
+
+    The batch ``POST /vad/silero`` needs the whole utterance buffered before it
+    emits a single segment. This WebSocket gives the desktop ContinuousListener
+    *incremental* decisions: push raw audio, get ``{"type":"start"|"end",
+    "time_s":...}`` events the instant Silero opens/closes a region (the latter
+    after ``min_silence_ms`` of trailing silence) — so a turn cuts without
+    waiting for the user to stop AND a whole-WAV round-trip.
+
+    Contract:
+      * First text message (optional) is JSON overriding ``SileroParams``:
+        ``{"threshold":0.5,"min_silence_ms":800,"speech_pad_ms":30,
+        "sample_rate":16000}``. Send it before any audio; a binary frame first
+        uses the defaults (16 kHz). ``min_speech_ms``/``max_speech_s`` do NOT
+        apply on the streaming path (the iterator has no look-back).
+      * Binary frames: little-endian float32 mono PCM at ``sample_rate`` (no
+        resampling server-side — feed it the model's rate). Any length; the
+        stream buffers sub-window remainders.
+      * The server replies with one JSON message ``{"events":[...]}`` per binary
+        frame (possibly empty), and a final ``{"events":[...],"flushed":true}``
+        when the client sends the text command ``{"cmd":"flush"}`` (closes a
+        segment still open because the audio ended mid-speech). ``{"cmd":"reset"}``
+        re-arms for a new utterance.
+      * 1011 close when the Silero model is unavailable.
+
+    All message-protocol branching lives in ``vad.StreamProtocol`` (unit-tested
+    without a live socket); this endpoint is thin transport glue: receive,
+    dispatch, send, with the blocking ``push`` off-loaded to the executor.
+    """
+    import json
+    from vad import SileroParams as _SP, SileroStream as _SS, StreamProtocol
+
+    await ws.accept()
+    if silero_model is None:
+        await ws.close(code=1011, reason="silero VAD unavailable")
+        return
+
+    def _make_stream(cfg_msg):
+        sr = int(cfg_msg.get("sample_rate", 16000))
+        params = _SP(
+            threshold=float(cfg_msg.get("threshold", SileroParams.threshold)),
+            min_silence_ms=float(cfg_msg.get("min_silence_ms", SileroParams.min_silence_ms)),
+            speech_pad_ms=float(cfg_msg.get("speech_pad_ms", SileroParams.speech_pad_ms)),
+        )
+        return _SS(params=params, model=silero_model, sample_rate=sr)
+
+    proto = StreamProtocol(_make_stream)
+    loop = asyncio.get_event_loop()
+
+    try:
+        while True:
+            msg = await ws.receive()
+            if msg.get("type") == "websocket.disconnect":
+                break
+
+            text = msg.get("text")
+            if text is not None:
+                reply = proto.handle_text(json.loads(text))
+                await ws.send_text(json.dumps(reply))
+                continue
+
+            data = msg.get("bytes")
+            if not data:
+                continue
+            # Silero inference is blocking torch work — keep the loop responsive.
+            reply = await loop.run_in_executor(None, lambda: proto.handle_binary(data))
+            await ws.send_text(json.dumps(reply))
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:  # pragma: no cover - defensive
+        log.error("Silero stream WebSocket error: %s", e)
+
+
 @app.get("/activation")
 async def get_activation():
     s = activation_tracker.state
