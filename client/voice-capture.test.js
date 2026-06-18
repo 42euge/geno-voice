@@ -475,3 +475,88 @@ test("gain folds amplified frames into the pre-roll ring", () => {
     assert.ok(Math.abs(v - 0.002) < 1e-6, `expected amplified 0.002, got ${v}`);
   }
 });
+
+// ---------------------------------------------------------------------------
+// iter-196 — speech-onset debounce knob.
+//
+// `debounceMs` is how long RMS must hold strictly over `silenceThreshold`
+// before a candidate commits to "speaking". It was hard-coded at 200ms; it now
+// mirrors the replay harness `debounce_ms` field (fixtures/replay_vad.py
+// `VadParams`). debounceMs=200 (the default) is exact parity. The candidate
+// commits on the first frame whose elapsed-since-first-candidate exceeds
+// debounceMs; each fed frame advances the clock by FRAME_MS (~21.33ms), so a
+// commit needs ceil(debounceMs / FRAME_MS) + 1 loud frames.
+// ---------------------------------------------------------------------------
+
+// Feed `n` held-loud frames and report whether the listener committed.
+function committedAfter(listener, feedFrames, n) {
+  feedFrames(listener, Array.from({ length: n }, () => frame(0.5)));
+  return listener.speaking;
+}
+
+test("default debounceMs is 200 (exact historical parity)", () => {
+  assert.equal(newListener().debounceMs, 200);
+});
+
+test("default debounce commits only after the 200ms hold elapses", () => {
+  // (k-1)*FRAME_MS > 200 ⇒ k ≥ 11; 10 loud frames stay under the gate.
+  const justUnder = newListener();
+  withClock((advance, feedFrames) =>
+    assert.equal(committedAfter(justUnder, feedFrames, 10), false, "10 frames < 200ms hold"),
+  );
+  const justOver = newListener();
+  withClock((advance, feedFrames) =>
+    assert.equal(committedAfter(justOver, feedFrames, 11), true, "11 frames > 200ms hold"),
+  );
+});
+
+test("a shorter debounce commits the onset on fewer frames", () => {
+  // debounceMs=50 ⇒ (k-1)*FRAME_MS > 50 ⇒ k ≥ 4. Four loud frames suffice
+  // here but would NOT commit a default (200ms) listener.
+  const fast = newListener({ debounceMs: 50 });
+  withClock((advance, feedFrames) =>
+    assert.equal(committedAfter(fast, feedFrames, 4), true, "4 frames > 50ms hold"),
+  );
+  const slow = newListener(); // default 200ms
+  withClock((advance, feedFrames) =>
+    assert.equal(committedAfter(slow, feedFrames, 4), false, "4 frames < 200ms hold"),
+  );
+});
+
+test("a longer debounce demands a longer hold before committing", () => {
+  // debounceMs=400 ⇒ k ≥ 20. The usual 14-frame commit burst is not enough.
+  const strict = newListener({ debounceMs: 400 });
+  withClock((advance, feedFrames) =>
+    assert.equal(committedAfter(strict, feedFrames, COMMIT_FRAMES), false, "14 frames < 400ms hold"),
+  );
+  const strict2 = newListener({ debounceMs: 400 });
+  withClock((advance, feedFrames) =>
+    assert.equal(committedAfter(strict2, feedFrames, 21), true, "21 frames > 400ms hold"),
+  );
+});
+
+test("debounceMs=0 commits as soon as a candidate survives one more frame", () => {
+  // elapsed > 0 is satisfied on the 2nd over-threshold frame.
+  const instant = newListener({ debounceMs: 0 });
+  withClock((advance, feedFrames) =>
+    assert.equal(committedAfter(instant, feedFrames, 2), true, "2 frames > 0ms hold"),
+  );
+});
+
+test("non-finite or negative debounceMs falls back to 200", () => {
+  assert.equal(newListener({ debounceMs: -50 }).debounceMs, 200);
+  assert.equal(newListener({ debounceMs: NaN }).debounceMs, 200);
+  assert.equal(newListener({ debounceMs: Infinity }).debounceMs, 200);
+});
+
+test("a single below-threshold frame breaks the debounce candidate", () => {
+  // The hold must be *consecutive*: a quiet frame mid-candidate resets it, so
+  // even a short debounce never commits across an interruption.
+  const l = newListener({ debounceMs: 50 });
+  withClock((advance, feedFrames) => {
+    feedFrames(l, [frame(0.5), frame(0.5)]); // candidate building (< 50ms so far)
+    feedFrames(l, [frame(0.0001)]); // quiet → clears the candidate
+    feedFrames(l, [frame(0.5), frame(0.5)]); // fresh candidate, still < 50ms
+    assert.equal(l.speaking, false, "broken candidate must not commit");
+  });
+});

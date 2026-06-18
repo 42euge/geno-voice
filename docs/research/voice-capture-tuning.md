@@ -281,9 +281,14 @@ onsets), pinned by `TestGridSweep` in
 5. **[debounce] Tune onset debounce against clipping.** _iter-190: swept
    100→300ms at threshold 0.006. 100–200ms all keep `trig=4/4`; 300ms drops
    a recording. 100ms recovers slightly more speaking frames (less clipped
-   opening). Next: validate onset **timing** moves earlier (not just the
-   count) before lowering the client's hard-coded 200ms — this pairs
-   naturally with item 2 (pre-roll buffer)._
+   opening)._ **iter-196: the client `ContinuousListener` now accepts a
+   `debounceMs` option (default 200 = exact historical parity), mirroring the
+   replay harness `debounce_ms` field — previously the onset debounce was a
+   hard-coded `200` literal in `_handleFrame`. The knob is validated, non-finite/
+   negative values fall back to 200, and `0` commits on the first surviving
+   candidate frame. Next: validate onset **timing** moves earlier (not just the
+   count) on the seed corpus before lowering the *default* below 200 — this
+   pairs naturally with item 2 (pre-roll buffer, wired iter-193)._
 6. **[silence] Right-size the silence timeout.** 800ms may over-split or
    over-merge turns. The seed corpus shows clean multi-segment splits;
    revisit if new recordings show truncated or run-on turns.

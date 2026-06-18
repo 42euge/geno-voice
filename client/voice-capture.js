@@ -215,13 +215,23 @@ export class VoiceRecorder {
 }
 
 export class ContinuousListener {
-  constructor({ onSpeechEnd, onStateChange, workletUrl, silenceThreshold = 0.015, silenceDurationMs = 800, minSpeechMs = 500, prerollMs = 0, gain = 1.0 } = {}) {
+  constructor({ onSpeechEnd, onStateChange, workletUrl, silenceThreshold = 0.015, silenceDurationMs = 800, minSpeechMs = 500, prerollMs = 0, gain = 1.0, debounceMs = 200 } = {}) {
     this.onSpeechEnd = onSpeechEnd;
     this.onStateChange = onStateChange;
     this._workletUrl = workletUrl || null;
     this.silenceThreshold = silenceThreshold;
     this.silenceDurationMs = silenceDurationMs;
     this.minSpeechMs = minSpeechMs;
+    // Speech-onset debounce (iter-196): how long RMS must hold *strictly over*
+    // `silenceThreshold` before we commit a candidate to "speaking". This knob
+    // was hard-coded at 200ms; it now mirrors the replay harness `debounce_ms`
+    // field (fixtures/replay_vad.py `VadParams`) so the offline grid can guide
+    // it. 200 (the default) is exact parity with the historical behaviour.
+    // A shorter debounce commits onsets earlier (less clipped attack) at the
+    // cost of admitting more transient noise; longer is stricter. Non-finite or
+    // negative values fall back to 200. `0` is allowed: any candidate that
+    // survives one more over-threshold frame commits immediately.
+    this.debounceMs = Number.isFinite(debounceMs) && debounceMs >= 0 ? debounceMs : 200;
     // Software gain stage (iter-195): pre-amplify every captured frame before
     // RMS detection AND storage, mirroring the replay harness `gain` model
     // (fixtures/replay_vad.py `frame_rms`: `samples * gain`) whose threshold×
@@ -365,7 +375,7 @@ export class ContinuousListener {
           this._candidateChunks = [new Float32Array(input)];
         } else {
           this._candidateChunks.push(new Float32Array(input));
-          if (performance.now() - this._speechCandidate > 200) {
+          if (performance.now() - this._speechCandidate > this.debounceMs) {
             this.speaking = true;
             // Prepend the pre-roll ring (pre-onset audio) so the committed
             // segment keeps the quiet soft attack the RMS gate clipped. With
