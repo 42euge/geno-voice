@@ -2579,6 +2579,139 @@ def _emit_synth_dispatch_consistency_line(
     )
 
 
+def _eot_overhead_bucket(seconds: float) -> str:
+    """iter-209: bucket a per-turn ``eot_overhead`` (iter-065's
+    "trailing-silence wall" — the part of end-of-turn latency NOT
+    explained by the configured ``silence_duration``:
+    ``max(0, eot_latency - silence_duration_used)``) into a coarse
+    category. Used by ``_emit_eot_overhead_consistency_line`` to
+    detect runs where the recording loop itself — not the
+    silence_duration knob — is the recurring cause of "the agent
+    feels slow" (metric 1.2 in the perf-metrics taxonomy, which
+    dominates that complaint).
+
+    The decomposition matters because it tells the operator WHICH
+    lever to pull. If overhead is ~0, the whole EoT wait is the
+    ``silence_duration`` we asked for, and the fix is to tune
+    ``chat.vad.silence_duration`` lower. If overhead is sustained
+    and large, there's something else slow in the recording loop
+    (chunk granularity, processing) and tuning the knob WON'T help.
+
+    Buckets (chosen against iter-065's own ">100ms = something
+    else is slow" guidance):
+
+        ``fast``     — < 0.10s: overhead is negligible; the EoT
+            wait is essentially the configured silence_duration, so
+            reduce latency by tuning the knob. The desired state.
+        ``slow``     — 0.10-0.25s: recording-loop overhead is a
+            noticeable slice of the EoT wait; tuning silence_duration
+            alone won't recover it.
+        ``very_slow``— > 0.25s: the recording loop dominates the EoT
+            wait; the user is left hanging well past the knob budget
+            regardless of how low silence_duration is set.
+
+    Like iter-140/141/208 and UNLIKE the inverted iter-142/143, the
+    fine bucket is a LOW value — smaller overhead is better, so the
+    boundaries are NOT inverted.
+
+    Returns ``""`` when ``seconds`` is non-positive (turn with no
+    measurable EoT overhead — DONE_TOO_SHORT / no-transcription
+    path, or the wait was fully explained by silence_duration) —
+    empty-string filter applies in the consumer, mirroring
+    iter-114/115/120/126/128/140/141/208.
+    """
+    if seconds <= 0:
+        return ""
+    if seconds < 0.10:
+        return "fast"
+    if seconds <= 0.25:
+        return "slow"
+    return "very_slow"
+
+
+def _emit_eot_overhead_consistency_line(
+    emit, eot_overhead_list: list[float], threshold: int = 5,
+) -> None:
+    """iter-209: detect consecutive runs of turns where the
+    end-of-turn latency was dominated by recording-loop *overhead*
+    (iter-065 ``eot_overhead``) rather than the configured
+    ``silence_duration``. TENTH instance of the diversity-check
+    pattern after iter-114 (filler), iter-115/126 (naturalness),
+    iter-120 (barge-phase), iter-128 (sentence-length), iter-140
+    (stt-rtf), iter-141 (tts-rtf), iter-142 (llm-tps), iter-143
+    (streaming-overlap), iter-208 (synth-dispatch). SEVENTH instance
+    applied to a CONTINUOUS metric — buckets it via
+    ``_eot_overhead_bucket`` before running the scan (same shape as
+    iter-128/140/141/142/143/208).
+
+    The session-summary already prints the *median* EoT overhead
+    (iter-065), but a high median can hide behind one cold-start
+    turn; a *sustained run* in the slow bucket is the actionable
+    signal that the recording loop — not the silence_duration knob
+    — is the recurring cause of "the agent feels slow" (metric 1.2,
+    which dominates that complaint). It tells the operator NOT to
+    chase the knob: tuning ``chat.vad.silence_duration`` lower won't
+    recover overhead the VAD wait never owned.
+
+    Filter rule: drop the ``"fast"`` bucket before the scan. It's
+    the "fine" state (overhead negligible; the knob is the right
+    lever); only "slow" and "very_slow" warrant warning. Empty
+    buckets (turns with no measurable EoT overhead) also drop. Like
+    iter-140/141/208 and UNLIKE iter-142/143, the fine bucket is a
+    LOW value (small overhead) — overhead is smaller-is-better.
+
+    Threshold = 5: same as iter-115/128/140/141/142/143/208. The
+    overhead varies turn to turn with chunk alignment and
+    processing jitter, and a single slow turn (e.g. first turn
+    cold-start) is normal; a sustained run is the real signal.
+
+    Output:
+
+        EoT overhead:     5 consecutive 'slow' turns — recording-loop
+                          overhead is eating the end-of-turn wait;
+                          tuning silence_duration won't recover it,
+                          profile the recording loop (iter-065 eot_overhead)
+    """
+    # Bucketize, then drop the "uninteresting" bucket (empty, fast).
+    interesting = {"slow", "very_slow"}
+    filtered = [
+        b for b in (
+            _eot_overhead_bucket(s) for s in eot_overhead_list
+        )
+        if b in interesting
+    ]
+    if not filtered:
+        return
+
+    longest_run, longest_bucket = _longest_consecutive_run(filtered)
+    if longest_run < threshold:
+        return
+
+    if longest_bucket == "very_slow":
+        suggestion = (
+            "the recording loop dominates the end-of-turn wait; "
+            "tuning silence_duration won't help — profile chunk "
+            "granularity and recording-loop processing"
+        )
+    elif longest_bucket == "slow":
+        suggestion = (
+            "recording-loop overhead is eating the end-of-turn "
+            "wait; tuning silence_duration won't recover it, "
+            "profile the recording loop"
+        )
+    else:
+        # Defensive: future buckets that pass the filter rule.
+        suggestion = (
+            "investigate recording-loop overhead beyond silence_duration"
+        )
+
+    emit(
+        f"    EoT overhead:     {longest_run} consecutive "
+        f"{longest_bucket!r} turns — {suggestion} "
+        f"(iter-065 eot_overhead)"
+    )
+
+
 def _emit_bargeable_line(emit, bargeable_values: list[float]) -> None:
     """iter-104: extracted from print_session_summary's iter-074
     bargeable line. Reports the WORST bargeable fraction across
@@ -3273,6 +3406,18 @@ def print_session_summary(
     _emit_synth_dispatch_consistency_line(
         _emit,
         [m.synth_dispatch_seconds for m in metrics_list],
+    )
+    # iter-209: EoT-overhead consistency check. Only fires when 5+
+    # consecutive turns left the end-of-turn wait dominated by
+    # recording-loop overhead (slow 0.10-0.25s / very_slow > 0.25s)
+    # rather than the configured silence_duration — surfaces the
+    # case where tuning chat.vad.silence_duration WON'T recover the
+    # latency (the recording loop itself is slow), so the operator
+    # doesn't chase the wrong knob. EoT latency is metric 1.2, which
+    # dominates "the agent feels slow" complaints.
+    _emit_eot_overhead_consistency_line(
+        _emit,
+        [m.eot_overhead for m in metrics_list],
     )
     # iter-090: barge block extracted to _emit_barge_block helper.
     # ~76 lines of co-emitted lines (count, interruption rate,
