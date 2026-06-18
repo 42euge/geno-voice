@@ -41,12 +41,14 @@ entries.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 __all__ = [
     "WpmMirrorConfig",
     "mirrored_speed",
     "WpmMirror",
+    "SpeedTrajectory",
+    "simulate_speed_trajectory",
     "DEFAULT_BASE_WPM",
     "DEFAULT_STRENGTH",
     "DEFAULT_MIN_SPEED",
@@ -194,3 +196,142 @@ class WpmMirror:
 
     def speed(self, *, user_wpm: float, current_speed: float) -> float:
         return mirrored_speed(user_wpm, current_speed, self.config)
+
+
+# --------------------------------------------------------------------------
+# iter-216 — offline trajectory simulator for tuning base_wpm / strength.
+#
+# iter-213 shipped the pure mirror, iter-214 wired it into the live TTS path,
+# and iter-215 surfaced the per-session start→end drift in the summary. The
+# loop now *adapts* and *measures* the rate — but the tunables (``base_wpm``
+# 165, ``strength`` 0.5) are still the seed defaults, never validated against
+# a sequence of varied user pacing.
+#
+# ``simulate_speed_trajectory`` is the offline tool that closes that gap. Given
+# a config and a sequence of per-turn ``user_wpm`` values (e.g. a slow → fast
+# → slow arc, the case the live ``SpeedController`` would see across a real
+# conversation), it replays the *exact same* turn-by-turn fold the live
+# ``SpeedController.observe`` does — feeding each turn's clamped/deadbanded
+# output speed as the next turn's ``current_speed`` — and reports the resulting
+# speed trajectory plus convergence diagnostics. That lets a later lap pick
+# ``base_wpm`` / ``strength`` from data (does the speed track the user's pacing
+# without lurching? how fast does a sustained rate converge?) rather than from
+# the seed defaults, with no live session and no audio.
+#
+# Pure: no I/O, no clock, no state — a thin deterministic loop over
+# ``mirrored_speed``. The whole point is that it is the *same* map the live
+# path runs, so its verdict transfers.
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SpeedTrajectory:
+    """Result of replaying a ``user_wpm`` sequence through the mirror.
+
+    Every field is derived purely from the input sequence and config so the
+    same inputs always yield the same trajectory (the simulator is the offline
+    twin of the live ``SpeedController`` fold).
+
+    Attributes:
+      speeds: the speed *after* each turn's observation, in turn order. Length
+        equals the number of input ``user_wpm`` values. ``speeds[i]`` is the
+        speed the synth path would use for turn ``i+1``'s sentences.
+      initial_speed: the speed the trajectory started from (before any turn).
+      final_speed: the speed after the last turn (``speeds[-1]``, or
+        ``initial_speed`` for an empty sequence).
+      ideal_final_speed: the speed that would make ``bot_wpm`` exactly match
+        the *last measurable* ``user_wpm`` (``user_wpm / base_wpm``, clamped to
+        the intelligibility band), i.e. the rate the trajectory is converging
+        toward at the end. ``None`` when no turn carried a measurable rate or
+        mirroring is disabled (nothing to converge to).
+      final_gap: ``final_speed - ideal_final_speed`` — the residual distance to
+        the converged target after the whole sequence. ``None`` when
+        ``ideal_final_speed`` is ``None``. A small ``|final_gap|`` means the
+        chosen ``strength`` converged within the sequence length.
+      max_step: the largest single-turn absolute speed change across the
+        sequence (``0.0`` for a held / empty / disabled trajectory) — the
+        "lurch" diagnostic. A large ``max_step`` on noisy input means
+        ``strength`` is too aggressive.
+      moves: how many turns actually changed the speed (a deadband hold or a
+        no-measurement turn does not count) — the churn diagnostic.
+    """
+
+    speeds: list = field(default_factory=list)
+    initial_speed: float = 1.0
+    final_speed: float = 1.0
+    ideal_final_speed: float | None = None
+    final_gap: float | None = None
+    max_step: float = 0.0
+    moves: int = 0
+
+
+def simulate_speed_trajectory(
+    user_wpms,
+    initial_speed: float = 1.0,
+    config: WpmMirrorConfig | None = None,
+) -> SpeedTrajectory:
+    """Replay a per-turn ``user_wpm`` sequence through the mirror.
+
+    Deterministically folds each ``user_wpm`` through :func:`mirrored_speed`,
+    threading each turn's output speed in as the next turn's ``current_speed``
+    — the exact loop the live ``SpeedController.observe`` runs, but offline over
+    a whole sequence. Returns a :class:`SpeedTrajectory` carrying the per-turn
+    speeds and the convergence / lurch / churn diagnostics a tuning lap reads.
+
+    Args:
+      user_wpms: iterable of per-turn measured user speaking rates (WPM). A
+        ``<= 0`` value (the iter-064 "no measurement" guard) is replayed
+        faithfully — it carries no signal so the speed holds for that turn.
+      initial_speed: the speed before any turn (the ``mic_chat`` CLI / config
+        value, historically ``1.0``).
+      config: the :class:`WpmMirrorConfig` under test. With a disabled config
+        (the default) the speed never moves — the trajectory is flat at
+        ``initial_speed`` and ``ideal_final_speed`` is ``None``.
+
+    Pure — no I/O, no clock, no mutation of ``config`` or the input.
+    """
+    cfg = config or WpmMirrorConfig()
+    wpms = [float(w) for w in user_wpms]
+
+    speeds: list = []
+    speed = float(initial_speed)
+    max_step = 0.0
+    moves = 0
+    for w in wpms:
+        new_speed = mirrored_speed(w, speed, cfg)
+        step = abs(new_speed - speed)
+        if step > max_step:
+            max_step = step
+        if new_speed != speed:
+            moves += 1
+        speed = new_speed
+        speeds.append(speed)
+
+    final_speed = speed if speeds else float(initial_speed)
+
+    # The target the trajectory is converging toward is set by the last
+    # *measurable* user rate (the same one the live path would be tracking at
+    # the end). With mirroring disabled or no measurable turn, there is nothing
+    # to converge to.
+    ideal_final_speed: float | None = None
+    final_gap: float | None = None
+    if cfg.enabled:
+        last_measurable = next((w for w in reversed(wpms) if w > 0), None)
+        if last_measurable is not None:
+            ideal = last_measurable / cfg.base_wpm
+            if ideal < cfg.min_speed:
+                ideal = cfg.min_speed
+            elif ideal > cfg.max_speed:
+                ideal = cfg.max_speed
+            ideal_final_speed = ideal
+            final_gap = final_speed - ideal
+
+    return SpeedTrajectory(
+        speeds=speeds,
+        initial_speed=float(initial_speed),
+        final_speed=final_speed,
+        ideal_final_speed=ideal_final_speed,
+        final_gap=final_gap,
+        max_step=max_step,
+        moves=moves,
+    )
