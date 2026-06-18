@@ -791,3 +791,299 @@ def test_cmd_vad_diff_shares_knobs_across_both_runs():
     # Shared knobs identical across both runs.
     assert captured[0].min_speech_ms == captured[1].min_speech_ms == 120.0
     assert captured[0].max_speech_s == captured[1].max_speech_s == 20.0
+
+
+# ====================================================================
+# iter-236 — gv vad-sweep: tabulate segmentation over N thresholds
+# ====================================================================
+
+
+def _sweep_args(**over):
+    base = dict(
+        wav="rec.wav",
+        thresholds=[0.3, 0.5, 0.7, 0.9],
+        min_speech_ms=250.0,
+        min_silence_ms=800.0,
+        speech_pad_ms=30.0,
+        max_speech_s=float("inf"),
+        json=False,
+    )
+    base.update(over)
+    return argparse.Namespace(**base)
+
+
+# ---- unit_interval_list_type: the --thresholds validator ---------------
+
+
+def test_threshold_list_parses_comma_separated():
+    values = gv.unit_interval_list_type("0.3,0.5,0.7,0.9")
+    assert values == [0.3, 0.5, 0.7, 0.9]
+    assert all(isinstance(v, float) for v in values)
+
+
+def test_threshold_list_strips_whitespace_and_blanks():
+    assert gv.unit_interval_list_type(" 0.2 , 0.8 ,") == [0.2, 0.8]
+
+
+def test_threshold_list_preserves_order_and_duplicates():
+    # The operator picks the column order; we don't sort or dedupe.
+    assert gv.unit_interval_list_type("0.9,0.1,0.9") == [0.9, 0.1, 0.9]
+
+
+@pytest.mark.parametrize("raw", ["", "  ", ",", " , "])
+def test_threshold_list_rejects_empty(raw):
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.unit_interval_list_type(raw)
+
+
+@pytest.mark.parametrize("raw", ["0.3,1.5", "0.3,-0.1", "2"])
+def test_threshold_list_rejects_out_of_range_member(raw):
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.unit_interval_list_type(raw)
+
+
+@pytest.mark.parametrize("raw", ["0.3,high", "x,0.5", "0.3,nan"])
+def test_threshold_list_rejects_non_number_member(raw):
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.unit_interval_list_type(raw)
+
+
+def test_threshold_list_rejects_non_string():
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.unit_interval_list_type(0.5)
+
+
+# ---- parser: registration & defaults -----------------------------------
+
+
+def test_vad_sweep_in_handler_map():
+    assert gv.DEFAULT_HANDLERS["vad-sweep"] is gv.cmd_vad_sweep
+
+
+def test_vad_sweep_defaults():
+    args = gv.build_parser().parse_args(["vad-sweep", "rec.wav"])
+    assert args.command == "vad-sweep"
+    assert args.wav == "rec.wav"
+    assert args.thresholds == [0.3, 0.5, 0.7, 0.9]
+    # Shared knobs default to the same SileroParams values as `gv vad`.
+    assert args.min_speech_ms == 250.0
+    assert args.min_silence_ms == 800.0
+    assert args.speech_pad_ms == 30.0
+    assert args.max_speech_s == float("inf")
+    assert args.json is False
+
+
+def test_vad_sweep_overrides_thresholds():
+    args = gv.build_parser().parse_args(
+        ["vad-sweep", "rec.wav", "--thresholds", "0.1,0.6,0.95"]
+    )
+    assert args.thresholds == [0.1, 0.6, 0.95]
+
+
+def test_vad_sweep_rejects_out_of_range_threshold():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(["vad-sweep", "rec.wav", "--thresholds", "0.5,1.5"])
+
+
+def test_vad_sweep_json_flag():
+    args = gv.build_parser().parse_args(["vad-sweep", "rec.wav", "--json"])
+    assert args.json is True
+
+
+# ---- vad_segmentation_sweep: pure core ---------------------------------
+
+
+def test_sweep_pairs_each_threshold_with_summary():
+    r_lo = _Result(
+        name="r.wav",
+        sample_rate=16000,
+        duration_s=10.0,
+        segments=[_Seg(0.0, 1.0), _Seg(2.0, 3.0), _Seg(5.0, 6.0)],
+    )
+    r_hi = _Result(
+        name="r.wav", sample_rate=16000, duration_s=10.0, segments=[_Seg(0.0, 1.0)]
+    )
+    rows = gv.vad_segmentation_sweep([0.3, 0.9], [r_lo, r_hi])
+    assert rows == [
+        {"threshold": 0.3, "num_segments": 3, "speech_s": 3.0},
+        {"threshold": 0.9, "num_segments": 1, "speech_s": 1.0},
+    ]
+
+
+def test_sweep_rounds_speech_to_three_places():
+    r = _Result(
+        name="r.wav", sample_rate=16000, duration_s=5.0, segments=[_Seg(0.0, 0.123456)]
+    )
+    rows = gv.vad_segmentation_sweep([0.5], [r])
+    assert rows[0]["speech_s"] == 0.123
+
+
+def test_sweep_length_mismatch_raises():
+    r = _Result(name="r.wav", sample_rate=16000, duration_s=5.0)
+    with pytest.raises(ValueError):
+        gv.vad_segmentation_sweep([0.3, 0.5], [r])
+
+
+# ---- render_vad_sweep: human-readable ----------------------------------
+
+
+def test_render_sweep_none_marks_unavailable():
+    lines = gv.render_vad_sweep([], [None], name="rec.wav")
+    assert len(lines) == 1
+    assert "silero-vad" in lines[0]
+
+
+def test_render_sweep_any_none_marks_unavailable():
+    r = _Result(name="r.wav", sample_rate=16000, duration_s=5.0, segments=[_Seg(0.0, 1.0)])
+    lines = gv.render_vad_sweep([0.3, 0.9], [r, None], name="rec.wav")
+    assert "silero-vad" in lines[0]
+
+
+def test_render_sweep_tabulates_each_threshold():
+    r_lo = _Result(
+        name="rec.wav",
+        sample_rate=16000,
+        duration_s=10.0,
+        segments=[_Seg(0.0, 1.0), _Seg(2.0, 3.0), _Seg(5.0, 6.0)],
+    )
+    r_hi = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=10.0, segments=[_Seg(0.0, 1.0)]
+    )
+    lines = gv.render_vad_sweep([0.3, 0.9], [r_lo, r_hi], name="rec.wav")
+    text = "\n".join(lines)
+    assert "rec.wav" in text
+    assert "threshold" in text and "segments" in text and "speech" in text
+    # one header line, one column-label line, one row per threshold
+    assert len(lines) == 4
+    assert "0.30" in text and "0.90" in text
+    assert "3" in text and "1" in text
+
+
+# ---- render_vad_sweep_json: machine-readable ---------------------------
+
+
+def test_render_sweep_json_none_marks_unavailable():
+    payload = json.loads(gv.render_vad_sweep_json([], [None], name="rec.wav"))
+    assert payload["available"] is False
+    assert "silero-vad" in payload["hint"]
+    assert "sweep" not in payload
+
+
+def test_render_sweep_json_carries_rows():
+    r_lo = _Result(
+        name="rec.wav",
+        sample_rate=16000,
+        duration_s=10.0,
+        segments=[_Seg(0.0, 1.0), _Seg(2.0, 3.0), _Seg(5.0, 6.0)],
+    )
+    r_hi = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=10.0, segments=[_Seg(0.0, 1.0)]
+    )
+    payload = json.loads(gv.render_vad_sweep_json([0.3, 0.9], [r_lo, r_hi], name="rec.wav"))
+    assert payload["available"] is True
+    assert payload["name"] == "rec.wav"
+    assert payload["sweep"] == [
+        {"threshold": 0.3, "num_segments": 3, "speech_s": 3.0},
+        {"threshold": 0.9, "num_segments": 1, "speech_s": 1.0},
+    ]
+
+
+# ---- cmd_vad_sweep: the handler ----------------------------------------
+
+
+def test_cmd_vad_sweep_unavailable_emits_hint():
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(),
+        log=lines.append,
+        segmenter=lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("must not segment when unavailable")
+        ),
+        availability=lambda: False,
+    )
+    assert len(lines) == 1
+    assert "silero-vad" in lines[0]
+
+
+def test_cmd_vad_sweep_unavailable_json():
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(json=True),
+        log=lines.append,
+        segmenter=lambda *a, **k: (_ for _ in ()).throw(AssertionError("no")),
+        availability=lambda: False,
+    )
+    assert len(lines) == 1
+    assert json.loads(lines[0])["available"] is False
+
+
+def test_cmd_vad_sweep_runs_every_threshold_in_order():
+    seen = []
+
+    def seg(wav, params=None):
+        seen.append(params.threshold)
+        # Higher threshold → fewer segments (subset behaviour).
+        n = 3 if params.threshold < 0.6 else 1
+        return _Result(
+            name="rec.wav",
+            sample_rate=16000,
+            duration_s=10.0,
+            segments=[_Seg(float(i), i + 0.5) for i in range(n)],
+        )
+
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(thresholds=[0.2, 0.5, 0.8]),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert seen == [0.2, 0.5, 0.8]  # swept in order
+    text = "\n".join(lines)
+    assert "0.20" in text and "0.50" in text and "0.80" in text
+
+
+def test_cmd_vad_sweep_json_branch():
+    def seg(wav, params=None):
+        n = 3 if params.threshold < 0.6 else 1
+        return _Result(
+            name="rec.wav",
+            sample_rate=16000,
+            duration_s=10.0,
+            segments=[_Seg(float(i), i + 0.5) for i in range(n)],
+        )
+
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(thresholds=[0.3, 0.9], json=True),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert len(lines) == 1
+    payload = json.loads(lines[0])
+    assert [row["threshold"] for row in payload["sweep"]] == [0.3, 0.9]
+    assert payload["sweep"][0]["num_segments"] == 3
+    assert payload["sweep"][1]["num_segments"] == 1
+
+
+def test_cmd_vad_sweep_shares_knobs_across_all_runs():
+    # Every run must carry the SAME min_speech_ms / max_speech_s — only the
+    # threshold differs. Build genuine SileroParams to lock field names.
+    pytest.importorskip("vad.silero")
+    captured = []
+
+    def seg(wav, params=None):
+        captured.append(params)
+        return _Result(name="rec.wav", sample_rate=16000, duration_s=1.0)
+
+    gv.cmd_vad_sweep(
+        _sweep_args(thresholds=[0.2, 0.6, 0.95], min_speech_ms=120.0, max_speech_s=20.0),
+        log=lambda *_: None,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert len(captured) == 3
+    assert [p.threshold for p in captured] == [0.2, 0.6, 0.95]
+    assert {p.min_speech_ms for p in captured} == {120.0}
+    assert {p.max_speech_s for p in captured} == {20.0}

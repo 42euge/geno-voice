@@ -135,6 +135,46 @@ applies. `cmd_vad_diff` reuses the iter-233 injected-dependency seams;
 `tests/unit/test_gv_vad.py`, and `tests/integration/test_gv_vad_cli.py` proves
 the diff equals two independent `gv vad --json` runs over the real corpus.
 
+### `gv vad-sweep` — tabulate N thresholds (iter-236)
+
+`gv vad-diff` compares the P(speech) gate at exactly two points; `gv vad-sweep`
+generalises that to a sweep over N thresholds (the single-file analogue of
+`fixtures/replay_silero.py`'s sweep over the corpus), so the gate's *elbow* —
+where recovered speech falls off as the gate tightens — is visible at a glance
+rather than as a single A-vs-B delta:
+
+```
+gv vad-sweep recording.wav                                  # 0.3,0.5,0.7,0.9 (defaults)
+gv vad-sweep recording.wav --thresholds 0.1,0.3,0.5,0.7,0.9 # custom gates
+gv vad-sweep recording.wav --json                           # machine-readable rows
+```
+
+The human report is a small table — the WAV name, a `threshold / segments /
+speech` column header, then one row per threshold:
+
+```
+silero VAD sweep — voice-20260618-110355.wav
+  threshold  segments  speech
+       0.30         5   17.3s
+       0.50         5   16.2s
+       0.70         4   15.5s
+       0.90         4   15.2s
+```
+
+Because a stricter gate can only keep or shrink recovered speech, reading down
+an ascending-threshold sweep the segment count / speech total are non-increasing
+(an integration test pins this monotonicity over the corpus's hardest
+recording). The `--thresholds` list is parsed by `unit_interval_list_type`
+(comma-separated gates in `[0, 1]`, order preserved, empty list rejected) and
+all other knobs are shared across runs. The `--json` payload carries
+`{"available": true, "name", "sweep": [{"threshold", "num_segments",
+"speech_s"}, …]}`, so a plotting/tuning script can consume it directly. The same
+degrade-to-`{"available": false}` contract as `gv vad` applies. `cmd_vad_sweep`
+reuses the iter-233 injected-dependency seams; `vad_segmentation_sweep` is the
+pure core, tested without torch in `tests/unit/test_gv_vad.py`, and
+`tests/integration/test_gv_vad_cli.py` proves each sweep row equals an
+independent `gv vad --json` run over the real corpus.
+
 ### Silero vs energy-VAD segment counts (the headless proof)
 
 Measured over the seed corpus with `min_silence_ms=800` (the pipecat

@@ -11,6 +11,7 @@ Usage:
     gv vad recording.wav  # offline Silero VAD — segment a WAV into speech regions
     gv vad recording.wav --json # machine-readable segmentation (SileroResult.to_dict shape)
     gv vad-diff recording.wav --threshold-a 0.5 --threshold-b 0.7  # compare two P(speech) gates
+    gv vad-sweep recording.wav --thresholds 0.3,0.5,0.7,0.9  # sweep N gates, tabulate the elbow
     gv <cmd> --model ...  # override STT model
 """
 
@@ -142,6 +143,27 @@ def unit_interval_type(raw):
             f"threshold must be between 0 and 1, got {value}"
         )
     return value
+
+
+def unit_interval_list_type(raw):
+    """Argparse ``type`` for ``gv vad-sweep --thresholds``: a list of gates.
+
+    iter-235 ``gv vad-diff`` compares the P(speech) gate at exactly two points;
+    iter-236 generalises that to a sweep over N thresholds, so this parses a
+    comma-separated list (e.g. ``"0.3,0.5,0.7,0.9"``) into ``[0.3, 0.5, 0.7,
+    0.9]`` at the parser. Each token must be a valid :func:`unit_interval_type`
+    value (a number in ``[0, 1]``, not NaN); duplicates and unsorted input are
+    preserved as given (the operator may want a specific column order). Rejects
+    an empty list. Pure and side-effect-free for direct unit testing.
+    """
+    if not isinstance(raw, str):
+        raise argparse.ArgumentTypeError(f"thresholds must be a string, got {raw!r}")
+    tokens = [t.strip() for t in raw.split(",") if t.strip()]
+    if not tokens:
+        raise argparse.ArgumentTypeError(
+            f"thresholds must be a non-empty comma-separated list, got {raw!r}"
+        )
+    return [unit_interval_type(tok) for tok in tokens]
 
 
 def nonneg_float_type(raw):
@@ -583,6 +605,91 @@ def render_vad_diff_json(result_a, result_b, *, label_a, label_b):
     return json.dumps(payload, indent=2)
 
 
+def vad_segmentation_sweep(thresholds, results):
+    """Pair each threshold with its segmentation summary for a sweep table.
+
+    iter-235 ``gv vad-diff`` quantifies the segmentation delta between exactly
+    two thresholds; iter-236 generalises that to a sweep over N thresholds so
+    the gate's elbow is visible at a glance rather than as a single A-vs-B pair
+    (the analogue of ``fixtures/replay_silero.py``'s sweep over the corpus).
+
+    Pure: takes the parallel ``thresholds`` list and ``results`` list (each a
+    ``SileroResult``-shaped object segmented at the matching threshold) and
+    returns a list of per-threshold rows ``{"threshold", "num_segments",
+    "speech_s"}``, ``speech_s`` rounded to 3 places like
+    :func:`vad_segmentation_delta`. No I/O, no torch import, so it is testable
+    in isolation. Raises :class:`ValueError` if the two lists differ in length.
+    """
+    if len(thresholds) != len(results):
+        raise ValueError(
+            f"thresholds ({len(thresholds)}) and results ({len(results)}) "
+            "must be the same length"
+        )
+    return [
+        {
+            "threshold": t,
+            "num_segments": r.num_segments,
+            "speech_s": round(r.speech_s, 3),
+        }
+        for t, r in zip(thresholds, results)
+    ]
+
+
+def render_vad_sweep(thresholds, results, *, name):
+    """Render a threshold sweep as a plain-text table.
+
+    The human-readable twin of :func:`render_vad_sweep_json`, mirroring the
+    other ``render_*`` helpers. ``name`` is the WAV being swept. Any ``None`` in
+    ``results`` (segmenter unavailable) yields the shared install hint. Pure:
+    returns a list of strings. Higher gates admit less speech, so reading down
+    the table the segment count / speech total are typically non-increasing —
+    the elbow where they fall off marks the gate getting too strict.
+    """
+    if any(r is None for r in results):
+        return [
+            "silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        ]
+    rows = vad_segmentation_sweep(thresholds, results)
+    lines = [
+        f"silero VAD sweep — {name}",
+        "  threshold  segments  speech",
+    ]
+    for row in rows:
+        lines.append(
+            f"  {row['threshold']:>9.2f}  {row['num_segments']:>8}  "
+            f"{row['speech_s']:>5.1f}s"
+        )
+    return lines
+
+
+def render_vad_sweep_json(thresholds, results, *, name):
+    """Render a threshold sweep as a JSON string.
+
+    Machine-readable twin of :func:`render_vad_sweep`, so the sweep can feed a
+    plotting/tuning script. Any ``None`` in ``results`` →
+    ``{"available": false}`` + install hint, mirroring :func:`render_vad_json`.
+    Pure: returns a single JSON string built from the results' attributes.
+    """
+    if any(r is None for r in results):
+        return json.dumps(
+            {
+                "available": False,
+                "hint": (
+                    "install 'silero-vad' (pulls torch + torchaudio) to enable "
+                    "offline neural segmentation"
+                ),
+            },
+            indent=2,
+        )
+    payload = {
+        "available": True,
+        "name": name,
+        "sweep": vad_segmentation_sweep(thresholds, results),
+    }
+    return json.dumps(payload, indent=2)
+
+
 def _signed(n):
     """Format an int delta with an explicit sign (``+3`` / ``0`` / ``-2``)."""
     return f"+{n}" if n > 0 else str(n)
@@ -798,6 +905,61 @@ def cmd_vad_diff(args, *, log=print, segmenter=None, availability=None):
             log(line)
 
 
+def cmd_vad_sweep(args, *, log=print, segmenter=None, availability=None):
+    """Segment one WAV at N thresholds and print a sweep table.
+
+    Generalises the iter-235 two-point ``gv vad-diff`` to a sweep over a list of
+    P(speech) gates (the analogue of ``fixtures/replay_silero.py``'s sweep over
+    the corpus): ``gv vad-sweep recording.wav --thresholds 0.3,0.5,0.7,0.9``
+    segments once per threshold (all other knobs shared) and tabulates the
+    segment count / speech seconds vs threshold, so the gate's elbow is visible
+    at a glance instead of as a single A-vs-B delta.
+
+    Same injected-dependency contract as :func:`cmd_vad` / :func:`cmd_vad_diff`:
+    ``segmenter`` / ``availability`` default to the real :mod:`vad.silero`
+    functions, imported lazily so the parser stays torch-free. When
+    ``silero-vad`` is absent the handler prints the install hint and returns,
+    never crashing.
+    """
+    if segmenter is None or availability is None:
+        from vad.silero import segment_recording, silero_available
+
+        segmenter = segment_recording if segmenter is None else segmenter
+        availability = silero_available if availability is None else availability
+
+    as_json = getattr(args, "json", False)
+
+    if not availability():
+        if as_json:
+            log(render_vad_sweep_json([], [None], name=args.wav))
+        else:
+            for line in render_vad_sweep([], [None], name=args.wav):
+                log(line)
+        return
+
+    from vad.silero import SileroParams
+
+    def _seg(threshold):
+        params = SileroParams(
+            threshold=threshold,
+            min_speech_ms=args.min_speech_ms,
+            min_silence_ms=args.min_silence_ms,
+            speech_pad_ms=args.speech_pad_ms,
+            max_speech_s=args.max_speech_s,
+        )
+        return segmenter(args.wav, params=params)
+
+    results = [_seg(t) for t in args.thresholds]
+    # Use the segmenter's own name (basename) so the sweep matches `gv vad`'s
+    # report; fall back to the raw path only if the sweep is empty.
+    name = results[0].name if results else args.wav
+    if as_json:
+        log(render_vad_sweep_json(args.thresholds, results, name=name))
+    else:
+        for line in render_vad_sweep(args.thresholds, results, name=name):
+            log(line)
+
+
 def cmd_bench(args):
     # bench is a legacy argv-driven entrypoint: it parses its own sys.argv
     # rather than taking kwargs, so we rebuild argv here. Only forward
@@ -836,6 +998,7 @@ DEFAULT_HANDLERS = {
     "calibrate-base-wpm": cmd_calibrate_base_wpm,
     "vad": cmd_vad,
     "vad-diff": cmd_vad_diff,
+    "vad-sweep": cmd_vad_sweep,
 }
 
 # Seed mirror tunables, mirrored as the CLI defaults so the simulator's
@@ -1152,6 +1315,63 @@ def build_parser():
         "--json",
         action="store_true",
         help="Emit machine-readable JSON instead of the human-readable report",
+    )
+
+    # gv vad-sweep — segment one WAV at N thresholds and tabulate the result.
+    # Generalises iter-235's two-point vad-diff to a sweep so the gate's elbow
+    # is visible at a glance. All knobs but threshold are shared across runs.
+    vad_sweep = sub.add_parser(
+        "vad-sweep",
+        help="Offline Silero VAD — segment a WAV at N thresholds and tabulate "
+        "segment-count / speech-seconds vs threshold (find the gate's elbow)",
+    )
+    vad_sweep.add_argument(
+        "wav",
+        help="Path to a 16-bit PCM WAV file to segment at each threshold",
+    )
+    vad_sweep.add_argument(
+        "--thresholds",
+        type=unit_interval_list_type,
+        default=[0.3, 0.5, 0.7, 0.9],
+        help="Comma-separated P(speech) gates in [0, 1] to sweep "
+        "(default: 0.3,0.5,0.7,0.9)",
+    )
+    vad_sweep.add_argument(
+        "--min-speech-ms",
+        type=nonneg_float_type,
+        default=vad_min_speech_default,
+        dest="min_speech_ms",
+        help="Drop speech regions shorter than this, in ms — shared by all "
+        f"runs (default: {vad_min_speech_default})",
+    )
+    vad_sweep.add_argument(
+        "--min-silence-ms",
+        type=nonneg_float_type,
+        default=vad_min_silence_default,
+        dest="min_silence_ms",
+        help="Trailing silence before a region ends, in ms — shared by all "
+        f"runs (default: {vad_min_silence_default})",
+    )
+    vad_sweep.add_argument(
+        "--speech-pad-ms",
+        type=nonneg_float_type,
+        default=vad_speech_pad_default,
+        dest="speech_pad_ms",
+        help="Symmetric padding added to each region, in ms — shared by all "
+        f"runs (default: {vad_speech_pad_default})",
+    )
+    vad_sweep.add_argument(
+        "--max-speech-s",
+        type=max_speech_type,
+        default=vad_max_speech_default,
+        dest="max_speech_s",
+        help="Force-split regions longer than this, in seconds — shared by "
+        "all runs; 'inf'/'none' never splits (default: inf)",
+    )
+    vad_sweep.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON instead of the human-readable table",
     )
 
     return parser

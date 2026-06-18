@@ -1,4 +1,4 @@
-"""iter-233 — End-to-end ``gv vad`` over the real recording corpus.
+"""iter-233/234/235/236 — End-to-end ``gv vad`` family over the real corpus.
 
 The companion to ``test_silero_recordings.py``: that module pins the Silero
 segmenter directly; this one drives it through the gv CLI surface
@@ -215,3 +215,72 @@ def test_gv_vad_diff_human_report_is_well_formed():
     assert CONTINUOUS_31S in text
     assert "0.50" in text and "0.70" in text
     assert "→" in text
+
+
+# ---- iter-236: gv vad-sweep over the real corpus -----------------------
+
+
+def _sweep_args(wav: Path, **over):
+    base = dict(
+        wav=str(wav),
+        thresholds=[0.3, 0.5, 0.7, 0.9],
+        min_speech_ms=250.0,
+        min_silence_ms=800.0,
+        speech_pad_ms=30.0,
+        max_speech_s=float("inf"),
+        json=False,
+    )
+    base.update(over)
+    return argparse.Namespace(**base)
+
+
+def _run_sweep(wav: Path, **over) -> list[str]:
+    lines: list[str] = []
+    gv.cmd_vad_sweep(_sweep_args(wav, **over), log=lines.append)
+    return lines
+
+
+def test_gv_vad_sweep_json_matches_independent_vad_runs():
+    """Each sweep row must equal an independent ``gv vad --json`` run at that
+    threshold — proving the sweep segments once per gate with the real engine."""
+    wav = RECORDINGS_DIR / CONTINUOUS_31S
+    if not wav.exists():
+        pytest.skip(f"{CONTINUOUS_31S} not present")
+
+    thresholds = [0.3, 0.5, 0.9]
+    sweep = json.loads(_run_sweep(wav, thresholds=thresholds, json=True)[0])
+    assert sweep["available"] is True
+    assert sweep["name"] == CONTINUOUS_31S
+    assert [row["threshold"] for row in sweep["sweep"]] == thresholds
+
+    for t, row in zip(thresholds, sweep["sweep"]):
+        single = json.loads(_run(wav, threshold=t, json=True)[0])
+        assert row["num_segments"] == single["num_segments"]
+        assert abs(row["speech_s"] - single["speech_s"]) <= 0.01
+
+
+def test_gv_vad_sweep_speech_is_monotone_non_increasing():
+    """Reading down an ascending-threshold sweep, recovered speech never grows
+    — a stricter gate can only keep or shrink it. The elbow is where it falls."""
+    wav = RECORDINGS_DIR / CONTINUOUS_31S
+    if not wav.exists():
+        pytest.skip(f"{CONTINUOUS_31S} not present")
+    sweep = json.loads(_run_sweep(wav, thresholds=[0.3, 0.5, 0.7, 0.9], json=True)[0])
+    speech = [row["speech_s"] for row in sweep["sweep"]]
+    for lo, hi in zip(speech, speech[1:]):
+        assert hi <= lo + 1e-6, f"speech rose across rising thresholds: {speech}"
+
+
+def test_gv_vad_sweep_human_table_is_well_formed():
+    """The human-readable table names the file, has a column header, and one
+    row per threshold."""
+    wav = RECORDINGS_DIR / CONTINUOUS_31S
+    if not wav.exists():
+        pytest.skip(f"{CONTINUOUS_31S} not present")
+    lines = _run_sweep(wav, thresholds=[0.3, 0.7, 0.9])
+    text = "\n".join(lines)
+    assert CONTINUOUS_31S in text
+    assert "threshold" in text and "segments" in text and "speech" in text
+    # header + column labels + 3 threshold rows
+    assert len(lines) == 5
+    assert "0.30" in text and "0.70" in text and "0.90" in text
