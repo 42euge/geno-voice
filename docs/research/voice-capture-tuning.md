@@ -227,6 +227,40 @@ lever** that backlog item 4 proposed — the sweep now quantifies it.
 (Equivalent to lowering the threshold proportionally; gain is the knob
 the worklet can apply directly.)
 
+**Auto-gain recommendation** (iter-228, `--recommend-gain`). The sweep
+above maximizes *onsets*, but STEER.md item #2 asks a stricter question:
+the largest gain that lifts the quietest real speech over the threshold
+*without lifting silence over a hard 0.0003 ceiling*. The `recommend_gain`
+analyzer answers it directly — it measures each recording's silence floor
+(median per-frame RMS, robust because speech is sparse) and quiet-speech
+level (low percentile of over-threshold frames) at gain=1.0, takes the
+*loudest* floor as the binding constraint and the *softest* speech as the
+target, and picks the largest gain keeping the binding floor under the
+ceiling:
+
+```
+python fixtures/replay_vad.py --recommend-gain
+# recommended_gain=1.00x  OK  silence_floor=0.00036 (ceiling=0.00030,
+#   headroom=0.82x)  quiet_speech=0.00642 -> 0.00642 (target=0.00600)
+```
+
+**Verdict: gain=1.0 — no amplification is safe on this corpus.** The
+binding silence floor measured per-recording is **0.00036** (the median
+RMS of the noisiest recording), already *above* the 0.0003 ceiling
+(headroom 0.82×). The sweep's "~0.0003 floor" was the corpus *minimum*;
+the analyzer uses the *binding* (loudest) floor, which is what a safe
+recommendation must respect. Because every recording already triggers at
+gain=1.0 and the quietest speech (0.00642) already clears the 0.006 gate,
+amplification has nothing to recover and would only push silence further
+over the ceiling — consistent with the gain sweep's monotonically rising
+`onset_std` (1.50→11.16 over 1.0→8.0×), the signature of clean utterances
+fragmenting. **The 1.5–2.0× recommendation above held silence below the
+*detection gate* (0.006); it does not hold silence below the stricter
+0.0003 ceiling the steering sets.** The analyzer remains the live tool for
+future quiet recordings: a recording with a genuinely low floor and
+sub-threshold speech *will* yield a `recommended_gain > 1.0` with an `OK`
+verdict (covered by `tests/unit/test_recommend_gain.py`).
+
 **Onset debounce** (`--sweep debounce_ms`, threshold 0.006):
 
 | debounce_ms | trig | total onsets | speak frames |

@@ -802,6 +802,194 @@ def sweep_grid(
     return points
 
 
+# ---------------------------------------------------------------------------
+# Auto-gain recommendation (STEER.md item #2). The steering asks for a gain
+# that lifts the quietest real speech clearly over the detection threshold
+# WITHOUT lifting silence over a hard ceiling. A blind gain sweep cannot answer
+# that: it maximizes onsets, but every recording in the corpus already triggers
+# at gain=1.0 and the corpus silence floor already sits at/above the silence
+# ceiling, so any gain >1.0 only amplifies the noise floor and shatters clean
+# utterances (the sweep's onset_std climbs monotonically with gain). This
+# analyzer encodes the constraint as code: it picks the LARGEST gain that keeps
+# every recording's silence floor under the ceiling, then reports whether that
+# safe gain actually clears the speech target — so a future quiet recording
+# gets a principled recommendation and today's corpus is proven to need 1.0.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class GainRecommendation:
+    """The auto-gain verdict for one corpus (STEER.md item #2).
+
+    ``recommended_gain``  — the largest gain (≤ ``max_gain``, ≥ 1.0) that keeps
+                            EVERY recording's silence floor strictly under
+                            ``silence_ceiling`` after amplification. Capped at
+                            1.0 below when the corpus floor already exceeds the
+                            ceiling at unity gain (raising gain would only lift
+                            silence further — never recommend cutting real
+                            signal to chase a noise target).
+    ``silence_floor``     — the loudest per-recording silence floor across the
+                            corpus at gain=1.0 (the binding constraint: the
+                            recommendation must keep THIS recording's silence
+                            under the ceiling, so the noisiest room sets the cap).
+    ``quiet_speech``      — the softest per-recording quiet-speech level across
+                            the corpus at gain=1.0 (the weakest real utterance
+                            the gain must lift; the floor we are trying to rescue).
+    ``silence_ceiling``   — the hard cap on amplified silence (default 0.0003,
+                            the steering's number; silence maxes ~0.0003 in the
+                            ground-truth corpus, so this is the do-not-cross line).
+    ``speech_target``     — the level the quietest speech should clear after
+                            gain (default ``threshold``: a gain that lifts quiet
+                            speech over the detection gate is the whole point).
+    ``clears_speech_target`` — whether ``quiet_speech * recommended_gain`` reaches
+                            ``speech_target``. ``False`` means even the safe gain
+                            cannot rescue the quietest speech without breaching
+                            the silence ceiling — i.e. gain alone is insufficient
+                            and the threshold/mic placement must change instead.
+    ``headroom``          — ``silence_ceiling / silence_floor`` at gain=1.0: the
+                            multiplicative slack before silence breaches the
+                            ceiling. ``<= 1.0`` means there is no room to amplify
+                            at all (the corpus is already at/over the ceiling).
+    ``per_recording``     — ``{name: (silence_floor, quiet_speech)}`` at unity
+                            gain, so an operator can see which recording binds.
+    """
+
+    recommended_gain: float
+    silence_floor: float
+    quiet_speech: float
+    silence_ceiling: float
+    speech_target: float
+    clears_speech_target: bool
+    headroom: float
+    per_recording: Dict[str, tuple] = field(default_factory=dict)
+
+    def summary_line(self) -> str:
+        verdict = "OK" if self.clears_speech_target else "INSUFFICIENT"
+        return (
+            f"recommended_gain={self.recommended_gain:.2f}x  {verdict}  "
+            f"silence_floor={self.silence_floor:.5f} "
+            f"(ceiling={self.silence_ceiling:.5f}, headroom={self.headroom:.2f}x)  "
+            f"quiet_speech={self.quiet_speech:.5f} "
+            f"-> {self.quiet_speech * self.recommended_gain:.5f} "
+            f"(target={self.speech_target:.5f})"
+        )
+
+
+def _silence_floor_rms(rms: np.ndarray, percentile: float = 50.0) -> float:
+    """Estimate the silence floor of one recording from its frame RMS.
+
+    Speech is sparse in a full-session recording (the user clicks, then talks
+    for a few seconds inside a much longer capture), so the low percentiles of
+    the per-frame RMS *are* the silence/noise floor. The median (p50) is a
+    robust floor estimate that ignores the speech tail entirely. ``0.0`` for an
+    empty signal.
+    """
+    if rms.size == 0:
+        return 0.0
+    return float(np.percentile(rms, percentile))
+
+
+def _quiet_speech_rms(rms: np.ndarray, threshold: float, percentile: float = 10.0) -> float:
+    """Estimate the quietest real-speech level of one recording.
+
+    Frames over ``threshold`` are the committed speech candidates; the low
+    percentile of *those* is the soft attack / quietest real utterance the gain
+    must rescue. Falls back to the overall ``percentile`` of all frames when no
+    frame clears the threshold (a recording whose speech sits entirely under the
+    gate — exactly the case auto-gain exists to fix). ``0.0`` for empty.
+    """
+    if rms.size == 0:
+        return 0.0
+    over = rms[rms > threshold]
+    if over.size:
+        return float(np.percentile(over, percentile))
+    # No frame cleared the gate — use the loud tail of the whole recording as
+    # the best available proxy for "the speech that is in here somewhere".
+    return float(np.percentile(rms, 100.0 - percentile))
+
+
+def recommend_gain(
+    recordings_dir: Path = RECORDINGS_DIR,
+    *,
+    base: Optional[VadParams] = None,
+    silence_ceiling: float = 0.0003,
+    speech_target: Optional[float] = None,
+    max_gain: float = 8.0,
+    results: Optional[List[ReplayResult]] = None,
+) -> GainRecommendation:
+    """Recommend the safest auto-gain for a corpus (STEER.md item #2).
+
+    Picks the largest gain in ``[1.0, max_gain]`` that keeps every recording's
+    silence floor strictly under ``silence_ceiling`` after amplification, then
+    reports whether that safe gain lifts the quietest speech over
+    ``speech_target`` (default ``base.threshold``). The corpus floor and quiet-
+    speech levels are measured once at gain=1.0 and scaled linearly (RMS is
+    linear in gain), so this needs a single replay pass, not a sweep.
+
+    Pass ``results`` to reuse an existing ``replay_all`` pass; otherwise the
+    corpus is replayed at gain=1.0. The binding silence floor is the LOUDEST
+    per-recording floor (the noisiest room sets the cap) and the speech target
+    is checked against the SOFTEST per-recording quiet speech (the weakest
+    utterance must still clear), so the recommendation is safe for the whole
+    corpus, not just its average.
+    """
+    base = base or VadParams()
+    threshold = base.threshold
+    target = speech_target if speech_target is not None else threshold
+
+    if results is None:
+        # Measure at unity gain so the floor/speech levels are gain-independent.
+        results = replay_all(recordings_dir, replace(base, gain=1.0))
+
+    per_recording: Dict[str, tuple] = {}
+    floors: List[float] = []
+    quiets: List[float] = []
+    for r in results:
+        wav_path = recordings_dir / r.name
+        samples, _ = load_wav_mono(wav_path)
+        rms = frame_rms(samples, base.frame_size, 1.0)
+        floor = _silence_floor_rms(rms)
+        quiet = _quiet_speech_rms(rms, threshold)
+        per_recording[r.name] = (floor, quiet)
+        floors.append(floor)
+        quiets.append(quiet)
+
+    # The noisiest room binds the cap; the softest utterance must still clear.
+    silence_floor = max(floors) if floors else 0.0
+    quiet_speech = min(quiets) if quiets else 0.0
+    headroom = (silence_ceiling / silence_floor) if silence_floor > 0 else float("inf")
+
+    # Largest gain that keeps the binding silence floor under the ceiling,
+    # clamped to [1.0, max_gain]. Never recommend cutting signal (<1.0) to chase
+    # a noise target — if the floor is already over the ceiling, gain=1.0 stands
+    # and the verdict simply reports that no amplification is safe. An empty
+    # corpus (no recordings → no measured floor) recommends the neutral 1.0
+    # rather than the max: there is nothing to justify amplification.
+    if not floors:
+        recommended_gain = 1.0
+    else:
+        if silence_floor > 0:
+            safe_gain = silence_ceiling / silence_floor
+        else:
+            # A recording with a genuine zero floor (pure-digital silence) has
+            # unbounded headroom; the max_gain cap is the only limit.
+            safe_gain = max_gain
+        recommended_gain = max(1.0, min(max_gain, safe_gain))
+
+    clears = (quiet_speech * recommended_gain) >= target
+
+    return GainRecommendation(
+        recommended_gain=recommended_gain,
+        silence_floor=silence_floor,
+        quiet_speech=quiet_speech,
+        silence_ceiling=silence_ceiling,
+        speech_target=target,
+        clears_speech_target=clears,
+        headroom=headroom,
+        per_recording=per_recording,
+    )
+
+
 def _parse_value_list(raw: str, cast) -> List[float]:
     """Parse a comma-separated CLI value list, casting each entry."""
     out: List[float] = []
@@ -978,6 +1166,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         metavar="V1,V2,...",
         help="comma-separated values for the second --grid axis",
     )
+    parser.add_argument(
+        "--recommend-gain",
+        action="store_true",
+        help="recommend the safest auto-gain for the corpus (STEER.md item #2): "
+        "the largest gain that keeps every recording's silence floor under "
+        "--silence-ceiling, and whether it clears the speech target",
+    )
+    parser.add_argument(
+        "--silence-ceiling",
+        type=float,
+        default=0.0003,
+        help="hard cap on amplified silence for --recommend-gain (default 0.0003)",
+    )
     args = parser.parse_args(argv)
 
     params = VadParams(
@@ -989,6 +1190,23 @@ def main(argv: Optional[List[str]] = None) -> int:
         frame_size=args.frame_size,
         preroll_ms=args.preroll_ms,
     )
+
+    if args.recommend_gain:
+        rec = recommend_gain(
+            args.dir, base=params, silence_ceiling=args.silence_ceiling
+        )
+        if args.json:
+            d = asdict(rec)
+            d["per_recording"] = {k: list(v) for k, v in rec.per_recording.items()}
+            print(json.dumps(d, indent=2))
+            return 0
+        if not rec.per_recording:
+            print(f"No recordings found in {args.dir}")
+            return 1
+        print(f"VAD auto-gain recommendation ({len(rec.per_recording)} recordings)")
+        print("-" * 100)
+        print(rec.summary_line())
+        return 0
 
     if args.sweep:
         return _run_sweep(args, params)

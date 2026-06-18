@@ -20140,3 +20140,96 @@ start-alone (parity)**; cleanup resets readiness for re-warm; double
 3. **[latency, on-device follow-on to this lap] Adopt `prewarm()` in the
    desktop app** and TIME `click_to_capture_ms` before/after to confirm
    the win on real hardware (cannot be done headlessly).
+
+## iter-228 — auto-gain recommendation analyzer (STEER item #2)
+
+**Branch:** `iter-228-recommend-gain` (merged ff to main)
+**Date:** 2026-06-18
+
+**OPERATOR STEERING followed.** `.loops/geno-voice/STEER.md` item #1
+(pre-warm capture) shipped in iter-227; this lap does item #2 — the
+**auto-gain / sensitivity** work, which is replayable. The steering asks
+for "a gain that lifts the quietest real speech clearly over 0.006
+without lifting silence (max ~0.0003)", proven across ALL recordings and
+pinned with a test. "Measure, don't assert."
+
+**What I measured first.** A blind `--sweep gain 1.0..8.0` over the
+4-recording corpus shows every recording already triggers at gain=1.0
+(`trig=4/4`), and raising gain only fragments detection — `onset_std`
+climbs monotonically 1.50 → 11.16 as gain goes 1.0 → 8.0× (the signature
+of clean utterances shattering). Per-recording floor measurement: the
+*binding* (loudest) silence floor is the median-RMS **0.00036**, already
+*above* the steering's 0.0003 ceiling. The softest quiet-speech level is
+**0.00642**, already over the 0.006 gate at gain=1.0. So the honest
+finding is: **no gain >1.0 is safe on this corpus, and none is needed.**
+
+**The artifact (replayable, not an assertion).** Rather than hard-code
+"gain=1.0", I built `recommend_gain()` + `_silence_floor_rms` +
+`_quiet_speech_rms` in `fixtures/replay_vad.py`, which encode the
+steering's constraint as code:
+- Measures each recording's silence floor (median per-frame RMS — robust
+  because speech is sparse in a full-session capture) and quiet-speech
+  level (low percentile of over-threshold frames, with a fallback for
+  recordings whose speech sits entirely under the gate) at gain=1.0.
+- Takes the **loudest** floor as the binding constraint (the noisiest
+  room sets the cap — safe for the whole corpus) and the **softest**
+  speech as the target (the weakest utterance must still clear).
+- Picks the largest gain in `[1.0, max_gain]` keeping the binding floor
+  under `silence_ceiling` (default 0.0003), never recommending a cut
+  (<1.0) to chase a noise target, and reports whether that safe gain
+  clears the speech target. `GainRecommendation` is a dataclass (per the
+  repo's "return a dataclass" convention).
+- CLI surface: `python fixtures/replay_vad.py --recommend-gain
+  [--silence-ceiling X] [--json]`.
+
+On the real corpus: `recommended_gain=1.00x  OK  silence_floor=0.00036
+(ceiling=0.00030, headroom=0.82x)  quiet_speech=0.00642 -> 0.00642
+(target=0.00600)`. So the analyzer **proves** gain=1.0 is correct today,
+and stays the live tool for future quiet recordings — a recording with a
+genuinely low floor + sub-threshold speech yields `recommended_gain>1.0`
+with an `OK` verdict (covered by tests).
+
+**Doc updated.** `docs/research/voice-capture-tuning.md` gains an
+"Auto-gain recommendation (iter-228)" subsection reconciling the new
+0.0003-ceiling verdict with the older sweep's looser 1.5–2.0× note (that
+note held silence below the *detection gate* 0.006, not the stricter
+0.0003 ceiling the steering sets).
+
+**Tests (`tests/unit/test_recommend_gain.py`, 21 new).** Estimators
+(empty, median-floor, low-percentile quiet speech, under-gate fallback);
+core verdict (empty corpus → 1.0; quiet floor allows amplification;
+floor-over-ceiling caps at 1.0; max_gain cap; noisiest recording binds
+the cap; softest speech is the target; clears/insufficient speech target;
+target defaults to threshold; per-recording floor+quiet present);
+`summary_line` OK/INSUFFICIENT; CLI text + JSON + custom ceiling + empty.
+
+**Verification:**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3190 passed** (3169 prior + 21 new), run on the feature branch before
+  ff-merge.
+- Integration: `python -m pytest tests/integration/` → **35 passed, 13
+  skipped** (recording fixtures gitignored / absent in the worktree;
+  present in main — the `--recommend-gain` CLI verified against
+  `/home/eriveraramos/code-purp/geno-voice/fixtures/recordings`).
+- `python -W error::SyntaxWarning -m py_compile fixtures/replay_vad.py
+  tests/unit/test_recommend_gain.py` clean.
+- Recordings check (steering item #3): still 4 WAVs in
+  `fixtures/recordings/`, none new since iter-227, so no replay re-run /
+  per-recording-table refresh needed beyond the gain analysis above.
+
+**Read-only invariant untouched.** Pure offline analysis tool over the
+recording corpus; touches nothing in the live `mic_chat` /
+`pipecat_server` runtime path.
+
+**Next planned items (per STEER.md order):**
+1. **[recordings] Ingest new recordings every lap** — when new WAVs land
+   in `fixtures/recordings/`, re-run `--recommend-gain` + the sweeps and
+   refresh the tuning-doc per-recording table. The analyzer will
+   automatically re-bind to the noisiest new floor.
+2. **[latency, on-device] Adopt `prewarm()` (iter-227) in the desktop
+   app** and TIME `click_to_capture_ms` before/after — the remaining
+   capture-latency work that cannot be done headlessly.
+3. **[gain, client] If a future corpus yields `recommended_gain>1.0`**,
+   wire the `gain` knob through `client/voice-capture.js` (the param
+   already exists in the replay model) and prove parity with node tests,
+   as iter-227 did for `prewarm()`.
