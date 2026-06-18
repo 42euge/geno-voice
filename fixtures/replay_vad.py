@@ -399,6 +399,20 @@ class SweepPoint:
                          worst-case recording for this parameter set; a
                          sweep wants to maximize this floor, not just the
                          total — one missed recording is a real miss).
+    ``max_onsets``     — most onsets any single recording got (the over-split
+                         ceiling). This is to ``total_onsets`` what
+                         ``max_first_onset_ms`` is to ``mean_first_onset_ms``:
+                         the symmetric companion to ``min_onsets``. It exists for
+                         the silence-timeout backlog item — a too-short
+                         ``silence_ms`` shatters one continuous utterance into
+                         many short segments, so its signature is a single
+                         recording's onset count climbing well above the others
+                         while the corpus total barely moves. ``min_onsets`` (the
+                         floor) catches a recording dropping to a *miss*;
+                         ``max_onsets`` (the ceiling) catches the opposite failure
+                         — a recording *fragmenting* — so a ``silence_ms`` sweep
+                         can read the over-split end and the merge end in one
+                         pass. ``0`` for an empty corpus.
     ``mean_first_onset_ms`` — mean of each recording's *first* segment
                          ``onset_ms`` (the emitted speech-start), averaged
                          only over recordings that detected at least one
@@ -462,6 +476,7 @@ class SweepPoint:
     total_speaking_frames: int
     mean_pct_over: float
     min_onsets: int
+    max_onsets: int
     mean_first_onset_ms: float
     max_first_onset_ms: float
     min_first_onset_ms: float
@@ -473,6 +488,7 @@ class SweepPoint:
             f"{label_key}={value:<8} "
             f"trig={self.triggered}/{self.recordings}  "
             f"min_onsets={self.min_onsets:<2} "
+            f"max_onsets={self.max_onsets:<2} "
             f"onsets={self.total_onsets:<3} "
             f"speak_frames={self.total_speaking_frames:<5} "
             f"mean_over={self.mean_pct_over:5.1f}% "
@@ -491,6 +507,11 @@ def aggregate_results(params: VadParams, results: List[ReplayResult]) -> SweepPo
     total_speaking = sum(r.speaking_frames for r in results)
     mean_over = (sum(r.pct_over_threshold for r in results) / n) if n else 0.0
     min_onsets = min((r.onsets for r in results), default=0)
+    # Over-split ceiling: the most onsets any single recording got. Paired with
+    # min_onsets (the miss floor) it brackets the per-recording onset count, so a
+    # silence_ms sweep reads a recording fragmenting (high max) as readily as one
+    # dropping to a miss (zero min), without hand-inspecting each --json.
+    max_onsets = max((r.onsets for r in results), default=0)
     # Onset *timing*: average each recording's first emitted onset, but only
     # over recordings that actually detected speech. A missed recording has
     # no onset time; folding in a 0.0 would falsely pull the mean toward
@@ -519,6 +540,7 @@ def aggregate_results(params: VadParams, results: List[ReplayResult]) -> SweepPo
         total_speaking_frames=total_speaking,
         mean_pct_over=mean_over,
         min_onsets=min_onsets,
+        max_onsets=max_onsets,
         mean_first_onset_ms=mean_first_onset,
         max_first_onset_ms=max_first_onset,
         min_first_onset_ms=min_first_onset,
@@ -671,6 +693,7 @@ def _grid_summary_line(p: SweepPoint, param_a: str, param_b: str) -> str:
         f"{param_a}={va:<8} {param_b}={vb:<8} "
         f"trig={p.triggered}/{p.recordings}  "
         f"min_onsets={p.min_onsets:<2} "
+        f"max_onsets={p.max_onsets:<2} "
         f"onsets={p.total_onsets:<3} "
         f"speak_frames={p.total_speaking_frames:<5} "
         f"mean_over={p.mean_pct_over:5.1f}% "

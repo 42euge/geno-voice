@@ -67,8 +67,13 @@ python fixtures/replay_vad.py --preroll-ms 256 --json          # see onset_ms sh
 Each row reports, across the corpus: `trig` (how many recordings'
 known speech would trigger), `min_onsets` (the worst single recording —
 the floor a sweep wants to *maximize*, since one missed recording is a
-real miss even when the total looks healthy), `onsets`/`speak_frames`
-totals, `mean_over` (mean %-of-frames-over-threshold), and `onset1`
+real miss even when the total looks healthy), `max_onsets` (iter-201 — the
+busiest single recording, the *over-split ceiling*: the symmetric companion
+to `min_onsets`, where `min_onsets` catches a recording dropping to a miss
+and `max_onsets` catches the opposite — a recording *fragmenting* into many
+short segments, the signature of a too-short `silence_ms`),
+`onsets`/`speak_frames` totals, `mean_over` (mean %-of-frames-over-threshold),
+and `onset1`
 (iter-197 — the onset-*timing* aggregate: the mean of each recording's
 **first** emitted `onset_ms`, averaged only over recordings that detected
 speech). A smaller `onset1` means speech is captured earlier in the
@@ -412,6 +417,42 @@ bump" — the grid says pre-roll is doing the real work for both the typical cas
 *and* the consistency, so a pre-roll default bump is the higher-leverage change.
 The 300ms debounce row stays the cliff (`trig=3/4`, widest spread).
 
+### Over-split ceiling, and reading the silence timeout (iter-201)
+
+Every aggregate so far measures the onset *count totals* (`onsets`,
+`speak_frames`) or the *onset timing* (`onset1*`). Neither makes the
+silence-timeout failure mode legible. `silence_ms` decides when a pause inside
+one utterance ends a *segment*: set it too long and two real turns merge into
+one; set it too short and one continuous utterance **fragments** into many short
+segments. The corpus total barely moves under fragmentation (the same speech,
+just chopped), and `min_onsets` is blind to it (it watches the floor, where a
+recording goes to *zero*). The signature of over-splitting lives at the *other*
+end — a single recording's onset count climbing well above the rest.
+
+iter-201 adds `max_onsets`: the most onsets any single recording got, the
+symmetric companion to `min_onsets`. Together they bracket the per-recording
+onset count — `min_onsets` catches a recording dropping to a *miss*,
+`max_onsets` catches one *fragmenting* — so a `silence_ms` sweep reads both the
+under-merge (the floor collapses turns) and the over-split (the ceiling shatters
+one) ends in a single pass, the same way `onset1_min`/`onset1_max` bracket the
+timing spread.
+
+A synthetic illustration (one recording: 1s tone — 300ms gap — 1s tone, all
+loud) makes the lever visible, since the seed corpus has no mid-utterance gap in
+that window:
+
+| silence_ms | min_onsets | max_onsets | onsets | reading |
+|-----------:|-----------:|-----------:|-------:|---------|
+| 100        | 2          | **2**      | 2      | the 300ms gap > 100ms timeout → the utterance **splits** in two |
+| 400        | 1          | 1          | 1      | 300ms gap < 400ms timeout → stays merged |
+| 800        | 1          | 1          | 1      | the production default — merged |
+
+The ceiling climbing from 1 to 2 as `silence_ms` drops below the gap length is
+exactly the over-split signal. Running the same `--sweep silence_ms` over the
+real corpus (backlog item 6) now reads cleanly: a `max_onsets` that jumps at
+low `silence_ms` means turns are fragmenting, telling the operator the timeout
+floor before quality degrades.
+
 ## Findings & backlog (prioritized)
 
 1. **[latency] Pre-warm the capture pipeline.** The 3–5s `click_to_capture_ms`
@@ -500,7 +541,13 @@ The 300ms debounce row stays the cliff (`trig=3/4`, widest spread).
    improve too, not just the mean.
 6. **[silence] Right-size the silence timeout.** 800ms may over-split or
    over-merge turns. The seed corpus shows clean multi-segment splits;
-   revisit if new recordings show truncated or run-on turns.
+   revisit if new recordings show truncated or run-on turns. _iter-201: the
+   `max_onsets` aggregate now makes over-splitting legible — a `--sweep
+   silence_ms` whose ceiling climbs at low values is fragmenting one utterance
+   into many (see "Over-split ceiling" above). The seed corpus has no
+   mid-utterance gap in the sub-800ms window, so the sweep is flat there today;
+   gate the actual default change on a newly-synced corpus that exercises real
+   pauses._
 
 ## Methodology notes
 

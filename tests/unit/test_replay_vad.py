@@ -326,6 +326,7 @@ class TestAggregateResults:
         assert point.total_speaking_frames == 0
         assert point.mean_pct_over == 0.0
         assert point.min_onsets == 0
+        assert point.max_onsets == 0
         assert point.mean_first_onset_ms == 0.0
         assert point.max_first_onset_ms == 0.0
         assert point.min_first_onset_ms == 0.0
@@ -341,6 +342,45 @@ class TestAggregateResults:
         assert point.min_onsets == min(r.onsets for r in results)
         # min_onsets is the worst single recording, never above the total.
         assert point.min_onsets <= point.total_onsets
+
+    def test_max_onsets_is_busiest_single_recording(self, tmp_path):
+        corpus = _make_corpus(tmp_path)
+        results = replay_all(corpus, VadParams(threshold=0.006))
+        point = aggregate_results(VadParams(threshold=0.006), results)
+        # The over-split ceiling is the most onsets any single recording got.
+        assert point.max_onsets == max(r.onsets for r in results)
+        # It brackets the per-recording count from above: min <= max, and the
+        # ceiling never exceeds the corpus total.
+        assert point.min_onsets <= point.max_onsets
+        assert point.max_onsets <= point.total_onsets
+
+    def test_max_onsets_rises_when_short_silence_oversplits(self, tmp_path):
+        # The silence-timeout failure mode: a long utterance with a mid-gap
+        # shorter than the (large) silence timeout reads as ONE segment, but a
+        # tiny silence_ms splits it into TWO. max_onsets is the aggregate that
+        # makes that fragmentation visible across the corpus.
+        corpus = tmp_path / "gap"
+        corpus.mkdir()
+        # speech — 300ms gap — speech, all loud. 300ms < 800ms default silence
+        # (stays merged) but > a 100ms silence timeout (splits).
+        gap = np.concatenate([
+            _tone(SR, 0.3),
+            _silence(int(SR * 0.3)),
+            _tone(SR, 0.3),
+        ])
+        _write_wav(corpus / "gap.wav", gap)
+        (corpus / "gap.json").write_text('{"peak_rms": 0.05}')
+
+        merged = aggregate_results(
+            VadParams(silence_ms=800.0),
+            replay_all(corpus, VadParams(silence_ms=800.0)),
+        )
+        split = aggregate_results(
+            VadParams(silence_ms=100.0),
+            replay_all(corpus, VadParams(silence_ms=100.0)),
+        )
+        # The short timeout fragments the single utterance — the ceiling climbs.
+        assert split.max_onsets > merged.max_onsets
 
     def test_mean_first_onset_averages_detected_recordings(self, tmp_path):
         corpus = _make_corpus(tmp_path)
@@ -653,6 +693,8 @@ class TestSweepCli:
         assert payload[0]["params"]["gain"] == 1.0
         assert payload[1]["params"]["gain"] == 2.0
         assert "min_onsets" in payload[0]
+        assert "max_onsets" in payload[0]
+        assert payload[0]["max_onsets"] >= payload[0]["min_onsets"]
 
     def test_sweep_unknown_field_errors(self, tmp_path, capsys):
         corpus = _make_corpus(tmp_path)
@@ -717,6 +759,9 @@ class TestSweepCli:
         assert "onset1_min=" in out
         # ...and its consistency (spread).
         assert "onset1_std=" in out
+        # ...and the onset-count floor and over-split ceiling.
+        assert "min_onsets=" in out
+        assert "max_onsets=" in out
 
     def test_sweep_json_includes_mean_first_onset(self, tmp_path, capsys):
         corpus = _make_corpus(tmp_path)
@@ -794,6 +839,9 @@ class TestGridCli:
         assert out.count("onset1_max=") == 4
         assert out.count("onset1_min=") == 4
         assert out.count("onset1_std=") == 4
+        # ...and the onset-count floor + over-split ceiling per cell.
+        assert out.count("min_onsets=") == 4
+        assert out.count("max_onsets=") == 4
 
     def test_grid_json_row_major(self, tmp_path, capsys):
         corpus = _make_corpus(tmp_path)
