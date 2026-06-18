@@ -2712,6 +2712,124 @@ def _emit_eot_overhead_consistency_line(
     )
 
 
+def _bot_wpm_bucket(wpm: float) -> str:
+    """iter-210: bucket a per-turn ``bot_wpm`` (iter-046 bot speaking
+    rate in words-per-minute, ``word_count_total / audio_seconds_total``)
+    into a coarse category. Used by ``_emit_bot_wpm_consistency_line``
+    to detect runs where the synthesized speech rate sat outside the
+    human-comprehension sweet spot — too fast to follow or so slow it
+    drags. Metric 1.13 in the perf-metrics taxonomy.
+
+    ELEVENTH instance of the diversity-check pattern, and the EIGHTH
+    applied to a continuous metric. It is the FIRST with a TWO-SIDED
+    (band) sweet spot: every prior continuous bucketer was monotonic —
+    either smaller-is-better (iter-140/141/208/209) or
+    bigger-is-better (iter-142/143). Here the fine state is a BAND in
+    the MIDDLE, and the two problematic buckets sit at OPPOSITE ends
+    and call for OPPOSITE fixes (lower vs raise the kokoro ``speed``
+    knob). That makes the per-value suggestion branch carry real
+    signal rather than a severity gradient.
+
+    Buckets (boundaries aligned with the existing per-turn display,
+    which colors 130-200 WPM green — see ``TurnMetrics`` bot-WPM row;
+    UX research puts the conversational sweet spot ~150-180 WPM):
+
+        ``natural``  — 130-200 WPM inclusive: the comprehension sweet
+            spot; the desired state.
+        ``rushed``   — > 200 WPM: the bot talks faster than listeners
+            comfortably parse — lower the kokoro ``speed`` parameter.
+        ``sluggish`` — 0 < wpm < 130: the pace drags and the bot feels
+            unresponsive — raise the kokoro ``speed`` parameter.
+
+    Returns ``""`` when ``wpm`` is non-positive (no audio played this
+    turn, or alignment produced no word count) — empty-string filter
+    applies in the consumer, mirroring
+    iter-114/115/120/126/128/140/141/142/143/208/209.
+    """
+    if wpm <= 0:
+        return ""
+    if wpm < 130.0:
+        return "sluggish"
+    if wpm <= 200.0:
+        return "natural"
+    return "rushed"
+
+
+def _emit_bot_wpm_consistency_line(
+    emit, bot_wpm_list: list[float], threshold: int = 5,
+) -> None:
+    """iter-210: detect consecutive runs of turns where the bot's
+    synthesized speaking rate sat outside the comprehension sweet
+    spot. ELEVENTH instance of the diversity-check pattern after
+    iter-114 (filler), iter-115/126 (naturalness), iter-120
+    (barge-phase), iter-128 (sentence-length), iter-140 (stt-rtf),
+    iter-141 (tts-rtf), iter-142 (llm-tps), iter-143
+    (streaming-overlap), iter-208 (synth-dispatch), iter-209
+    (eot-overhead). EIGHTH instance applied to a CONTINUOUS metric —
+    buckets it via ``_bot_wpm_bucket`` before running the scan.
+
+    FIRST instance with a TWO-SIDED (band) sweet spot. Prior
+    continuous sentinels filtered out one extreme as the "fine" state
+    (iter-140/141/208/209 keep low; iter-142/143 keep high). Here the
+    fine state is the MIDDLE band (``natural``), and BOTH extremes are
+    flagged — but they are NOT interchangeable: ``rushed`` and
+    ``sluggish`` need OPPOSITE corrections to the same kokoro
+    ``speed`` knob. The per-value suggestion branch is therefore
+    load-bearing (not a severity gradient like iter-208/209), and the
+    run scan still treats the two flagged buckets as distinct phases —
+    a rushed run and a sluggish run never merge.
+
+    Filter rule: drop the ``"natural"`` bucket (the sweet spot) and
+    ``""`` (no audio that turn) before the scan. Only ``rushed`` and
+    ``sluggish`` warrant warning.
+
+    Threshold = 5: same as iter-115/128/140/141/142/143/208/209. WPM
+    varies turn to turn with sentence content and synth jitter, and a
+    single fast or slow turn is normal; a sustained run is the
+    actionable signal that the kokoro ``speed`` knob is mis-set.
+
+    Output:
+
+        Bot speech rate:  5 consecutive 'rushed' turns — the bot
+                          out-paces comfortable listening; lower the
+                          kokoro speed knob (iter-046 bot_wpm)
+    """
+    # Bucketize, then drop the "uninteresting" buckets (empty, natural).
+    interesting = {"rushed", "sluggish"}
+    filtered = [
+        b for b in (
+            _bot_wpm_bucket(w) for w in bot_wpm_list
+        )
+        if b in interesting
+    ]
+    if not filtered:
+        return
+
+    longest_run, longest_bucket = _longest_consecutive_run(filtered)
+    if longest_run < threshold:
+        return
+
+    if longest_bucket == "rushed":
+        suggestion = (
+            "the bot out-paces comfortable listening; lower the "
+            "kokoro speed knob"
+        )
+    elif longest_bucket == "sluggish":
+        suggestion = (
+            "the bot's pace drags and feels unresponsive; raise "
+            "the kokoro speed knob"
+        )
+    else:
+        # Defensive: future buckets that pass the filter rule.
+        suggestion = "tune the kokoro speed knob toward 150-180 WPM"
+
+    emit(
+        f"    Bot speech rate:  {longest_run} consecutive "
+        f"{longest_bucket!r} turns — {suggestion} "
+        f"(iter-046 bot_wpm)"
+    )
+
+
 def _emit_bargeable_line(emit, bargeable_values: list[float]) -> None:
     """iter-104: extracted from print_session_summary's iter-074
     bargeable line. Reports the WORST bargeable fraction across
@@ -3418,6 +3536,18 @@ def print_session_summary(
     _emit_eot_overhead_consistency_line(
         _emit,
         [m.eot_overhead for m in metrics_list],
+    )
+    # iter-210: bot-speech-rate consistency check. Only fires when 5+
+    # consecutive turns synthesized speech outside the comprehension
+    # sweet spot (rushed > 200 WPM / sluggish < 130 WPM). FIRST
+    # two-sided-band sentinel: the fine state is the MIDDLE (130-200
+    # WPM, matching the per-turn green display), and the two flagged
+    # ends need OPPOSITE kokoro `speed`-knob corrections. The median
+    # bot-WPM line (iter-094) can read healthy while a sustained
+    # rushed/sluggish run hides inside it.
+    _emit_bot_wpm_consistency_line(
+        _emit,
+        [m.bot_wpm for m in metrics_list],
     )
     # iter-090: barge block extracted to _emit_barge_block helper.
     # ~76 lines of co-emitted lines (count, interruption rate,
