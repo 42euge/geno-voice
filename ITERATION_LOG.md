@@ -19548,3 +19548,97 @@ it cannot regress the proven fixed-rate default path.
    grid shows pre-roll improves the typical opening, the tail, AND the
    consistency simultaneously; pick a value (256–512ms) and gate on a
    busier/newly-synced corpus.
+
+## iter-222 — Data-driven verdict over a `base_wpm` calibration (backlog #1)
+
+**Branch:** `iter-222-calib-verdict` (merged ff to main, commit `0bb5847`)
+**Date:** 2026-06-18
+
+**Improvement (turn the iter-220/221 raw calibration numbers into an
+adopt/keep DECISION — the iter-219 "data-driven verdict over a bare grid"
+pattern, applied to the calibration track):** iter-220 shipped the audio-free
+calibration core (`CalibrationSample` / `calibrate_base_wpm` →
+`BaseWpmCalibration` with median `implied_base_wpm`, `spread`, `drift`) and
+iter-221 surfaced it on the `gv calibrate-base-wpm` CLI. But both stop at raw
+numbers and leave the operator to eyeball whether to actually re-seed
+`DEFAULT_BASE_WPM`. iter-219 had already closed exactly this gap for `strength`
+(a verdict, not a bare grid); this lap closes it for the calibration.
+
+What changed (`session/wpm_mirror.py`):
+- **`calibration_verdict(calibration, *, spread_max, drift_min, min_samples)`**
+  — folds three trust/significance gates over an existing `BaseWpmCalibration`
+  and returns a frozen `CalibrationVerdict`. A re-seed is recommended only when
+  **all** of:
+  - **enough samples** — `n_samples >= min_samples` (a single render is one
+    timing, not a calibration);
+  - **renders agree** — `spread <= spread_max` (a wide spread ⇒ the median is
+    not trustworthy);
+  - **drift matters** — `abs(drift) >= drift_min` (a tiny drift is noise the
+    damped mirror absorbs, so re-seeding just churns config).
+  The gates are checked **in that order** so `reason` names the *first* failure
+  (sample count most fundamental → trust → significance). `None` calibration
+  (no samples) passes through to `None`, mirroring `calibrate_base_wpm`'s empty
+  contract.
+- **`CalibrationVerdict`** (frozen) — `recommend` (bool), `reason` (short
+  human-readable explanation), and echoes of the calibration's
+  `implied_base_wpm` / `drift` / `spread` / `n_samples` plus the three
+  thresholds (`spread_max` / `drift_min` / `min_samples`) so the decision is
+  self-describing.
+- **New constants:** `DEFAULT_CALIB_SPREAD_MAX` (10.0 WPM),
+  `DEFAULT_CALIB_DRIFT_MIN` (5.0 WPM), `DEFAULT_CALIB_MIN_SAMPLES` (3). All
+  added to `__all__` alongside the two new symbols.
+
+**Why these thresholds.** 10 WPM spread is well under the iter-046 green-band
+width (130–200) — renders disagreeing by more than that point at an
+inconsistent synth, not a stable calibration. 5 WPM drift is the smallest
+change the damped 0.5-`strength` mirror (`DEFAULT_STRENGTH`) does not fully
+absorb within a couple of turns, so re-seeding below it is config churn for no
+behavior change. 3 samples is the minimum for a median to reject a single
+outlier (the robustness `calibrate_base_wpm` was built for).
+
+**Off-by-default invariant untouched.** A pure read-only analysis helper over
+an existing dataclass — no I/O, no clock, no mutation; nothing in the live
+`mic_chat` / `pipecat_server` path imports it, so it cannot regress the proven
+fixed-rate default path.
+
+**Verification:**
+- New tests: `python -m pytest tests/unit/test_calibration_verdict.py` →
+  **23 passed**. Coverage: defaults sanity; `None`→`None` passthrough;
+  recommend-true (positive and negative drift); each gate's rejection; gate
+  ordering (sample > spread > drift, asserted with all-three-failing inputs);
+  boundary values (exactly `min_samples` / `spread_max` / `drift_min` all
+  pass); custom thresholds per gate; echoed fields; frozen result; end-to-end
+  over the real `calibrate_base_wpm` fold (a ~185-WPM voice recommends a
+  re-seed; a 165-nominal voice keeps the seed); no input mutation; determinism.
+- Full Python unit suite: `python -m pytest tests/unit/` → **3093 passed**
+  (3070 prior + 23 new), run on the feature branch before ff-merge. GATE
+  command: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/`.
+  Re-verified `test_calibration_verdict.py` + `test_calibrate_base_wpm.py`
+  (47 passed) on main after merge.
+- `python -W error::SyntaxWarning -m py_compile session/wpm_mirror.py
+  tests/unit/test_calibration_verdict.py` clean.
+- (`tests/test_session.py` still errors on collection — pre-existing missing
+  `pipecat` dep, not a regression.)
+
+**Next planned items:**
+1. **[wpm-mirroring, follow-on] Surface the verdict on the `gv` CLI.** The
+   verdict engine now exists; the iter-218/221 CLI-later split says the next
+   hop is to fold the verdict into `render_calibration` (or a `--verdict` flag
+   on `gv calibrate-base-wpm`) so the operator sees "re-seed to 185.0" /
+   "keep nominal" directly, not just the raw spread/drift numbers.
+2. **[wpm-mirroring, follow-on, last offline piece] On-device render that
+   produces the calibration samples.** The arithmetic core (iter-220), CLI
+   (iter-221), and now the verdict (iter-222) all exist; the remaining work is
+   the gated on-device piece: synthesize a fixed known-length script through
+   the real Kokoro voice at `speed=1.0` (and a couple of other speeds to
+   cross-check), measure the rendered `audio_seconds`, and feed the durations
+   into `gv calibrate-base-wpm` so a deployment sets `base_wpm` from its own
+   voice. Gate on a real synth.
+3. **[silence] Run the actual `--sweep silence_ms` over a newly-synced corpus**
+   — the sweep harness carries the full floor/typical/ceiling/spread shape on
+   all three axes from one shared renderer (iter-207). Gate a real `silence_ms`
+   default change on a corpus that exercises real mid-utterance pauses *and*
+   two-turns-one-pause cases (the seed corpus is flat in both windows).
+4. **[latency, highest value] Pre-warm the capture pipeline** — still the top
+   user-facing bug (3–5s `click_to_capture_ms`). Needs an on-device timing
+   harness; cannot be replayed.
