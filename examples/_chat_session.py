@@ -112,6 +112,7 @@ def _record_completed_turn(
     log: Callable[[str], None],
     trim_messages: Callable[[list[dict], int], list[dict]],
     max_user_assistant: int,
+    on_turn_complete: Optional[Callable[[Any], None]] = None,
 ) -> int:
     """Fold one completed turn's metrics into the session state.
 
@@ -125,6 +126,14 @@ def _record_completed_turn(
     advances the turn counter, runs the context-cap trim and records any
     eviction. Returns the new turn count (the caller threads it back into the
     loop local).
+
+    iter-214: after the metrics are recorded, the optional ``on_turn_complete``
+    hook is invoked with the just-completed turn's ``metrics`` so a caller can
+    react to per-turn measurements (the WPM mirror folds ``metrics.user_wpm``
+    into the next turn's TTS speed). Fired here — in the shared helper — so both
+    a mic turn and a spoken flushed fragment adapt the rate identically. Wrapped
+    in ``try/except`` so a misbehaving hook can never break the turn loop. When
+    ``None`` (the default) nothing fires — byte-for-byte the pre-iter-214 path.
     """
     log("")  # newline after streamed bot text
     metrics.print(turn + 1)
@@ -138,6 +147,12 @@ def _record_completed_turn(
     if evicted > 0:
         state.trim_events += 1
         state.trim_messages_evicted += evicted
+    if on_turn_complete is not None:
+        try:
+            on_turn_complete(metrics)
+        except Exception:
+            # A misbehaving hook must not break the live loop.
+            pass
     return turn
 
 
@@ -150,6 +165,7 @@ def _speak_flushed_fragment(
     log: Callable[[str], None],
     trim_messages: Callable[[list[dict], int], list[dict]],
     max_user_assistant: int,
+    on_turn_complete: Optional[Callable[[Any], None]] = None,
 ) -> int:
     """iter-169: speak a mid-session flushed fragment as its own turn.
 
@@ -188,6 +204,7 @@ def _speak_flushed_fragment(
         log=log,
         trim_messages=trim_messages,
         max_user_assistant=max_user_assistant,
+        on_turn_complete=on_turn_complete,
     )
 
 
@@ -283,6 +300,7 @@ def run_session(
     idle_timeout: Optional[float] = None,
     flush_decider: Optional[Callable[[str, float], bool]] = None,
     respond_fn: Optional[Callable[[list[dict], str], Any]] = None,
+    on_turn_complete: Optional[Callable[[Any], None]] = None,
 ) -> SessionState:
     """Run the chat loop until KeyboardInterrupt.
 
@@ -345,6 +363,17 @@ def run_session(
             is recorded but not spoken — byte-for-byte the pre-iter-169 path.
             Kept injected (not imported) for the same decoupling reason as
             `flush_decider`.
+        on_turn_complete: injected per-turn observer (iter-214), or None
+            (default). A callable `(metrics) -> None` invoked with each
+            completed turn's `TurnMetrics` right after it is recorded — for both
+            mic turns and spoken flushed fragments (it lives in the shared
+            `_record_completed_turn` helper). Production wires it to
+            `SpeedController.observe(metrics.user_wpm)` so the WPM mirror
+            (iter-213) folds the just-measured user rate into the *next* turn's
+            TTS speed. The hook is fired inside a `try/except`, so a misbehaving
+            observer can never break the live loop. When None (default) nothing
+            fires — byte-for-byte the pre-iter-214 path. Kept injected (not
+            imported) for the same decoupling reason as `flush_decider`.
 
     Returns:
         Populated SessionState. The caller is responsible for
@@ -453,6 +482,7 @@ def run_session(
                             log=log,
                             trim_messages=trim_messages,
                             max_user_assistant=max_user_assistant,
+                            on_turn_complete=on_turn_complete,
                         )
                 elif getattr(result, "held", False):
                     state.utterances_held += 1
@@ -464,6 +494,7 @@ def run_session(
                 log=log,
                 trim_messages=trim_messages,
                 max_user_assistant=max_user_assistant,
+                on_turn_complete=on_turn_complete,
             )
     except KeyboardInterrupt:
         # Expected exit path — the caller knows to dump the summary.

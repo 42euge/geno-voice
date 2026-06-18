@@ -243,3 +243,70 @@ def test_no_pyaudio_module_kwarg_uses_lazy_import():
     # CI — the import is inside speaker_factory.
     audio_io = build_audio_io(pa, "tts_stub", "voice_a", 1.0)
     assert isinstance(audio_io, AudioIO)
+
+
+# ---- iter-214: callable speed (WPM-mirroring live wiring) -----------------
+
+
+def test_synth_fn_accepts_callable_speed_and_resolves_per_call():
+    """A zero-arg callable for `speed` is invoked fresh on every synth, so a
+    speed updated between turns takes effect on the next sentence."""
+    pa = _RecordingPyAudio()
+    speeds = iter([1.0, 1.2, 0.9])
+    audio_io = build_audio_io(
+        pa, "tts_stub", "voice_a", lambda: next(speeds),
+        pyaudio_module=_PyAudioModule(),
+    )
+    with patch(
+        "examples._chat_audio_io.synthesize_with_alignment",
+    ) as mock_synth:
+        mock_synth.return_value = (None, None)
+        audio_io.synth_fn("one")
+        audio_io.synth_fn("two")
+        audio_io.synth_fn("three")
+    # The 4th positional arg (speed) tracks the callable's successive returns.
+    seen = [call.args[3] for call in mock_synth.call_args_list]
+    assert seen == [1.0, 1.2, 0.9]
+
+
+def test_synth_fn_float_speed_is_constant_per_sentence():
+    """A plain float for `speed` (the historical shape) is used unchanged on
+    every sentence — the proven constant-rate path."""
+    pa = _RecordingPyAudio()
+    audio_io = build_audio_io(
+        pa, "tts_stub", "voice_a", 1.1, pyaudio_module=_PyAudioModule(),
+    )
+    with patch(
+        "examples._chat_audio_io.synthesize_with_alignment",
+    ) as mock_synth:
+        mock_synth.return_value = (None, None)
+        audio_io.synth_fn("a")
+        audio_io.synth_fn("b")
+    seen = [call.args[3] for call in mock_synth.call_args_list]
+    assert seen == [1.1, 1.1]
+
+
+def test_callable_speed_reflects_live_mutation_via_controller():
+    """End-to-end with the real SpeedController: mutating the controller
+    between synth calls changes the speed the synth path sees."""
+    from examples._chat_speed import SpeedController
+
+    class _Mirror:
+        def speed(self, *, user_wpm, current_speed):
+            return 1.3
+
+    controller = SpeedController(1.0, mirror=_Mirror())
+    pa = _RecordingPyAudio()
+    audio_io = build_audio_io(
+        pa, "tts_stub", "voice_a", controller.current,
+        pyaudio_module=_PyAudioModule(),
+    )
+    with patch(
+        "examples._chat_audio_io.synthesize_with_alignment",
+    ) as mock_synth:
+        mock_synth.return_value = (None, None)
+        audio_io.synth_fn("before")   # speed 1.0
+        controller.observe(220.0)     # mirror bumps to 1.3
+        audio_io.synth_fn("after")    # speed 1.3
+    seen = [call.args[3] for call in mock_synth.call_args_list]
+    assert seen == [1.0, 1.3]

@@ -32,7 +32,7 @@ instance, which is the threshold for documenting it as the
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Union
 
 # Re-imports that match the original mic_chat closures. We import
 # at module level — both are pure-Python and don't pull in
@@ -60,7 +60,7 @@ def build_audio_io(
     pa: Any,
     tts_engine: Any,
     voice: str,
-    speed: float,
+    speed: Union[float, Callable[[], float]],
     *,
     pyaudio_module: Optional[Any] = None,
     speaker_chunk: int = 1024,
@@ -75,7 +75,15 @@ def build_audio_io(
         tts_engine: a TTS engine ready to synthesize (already
             ``_load()``-ed).
         voice: voice id passed through to synth.
-        speed: speech-rate multiplier passed through to synth.
+        speed: speech-rate multiplier passed through to synth. Either a
+            **constant float** (the historical shape — baked into the
+            ``synth_fn`` closure once) OR a **zero-arg callable** returning
+            the current speed (iter-214). The callable form lets the
+            WPM-mirroring path (``SpeedController.current``) adapt the rate
+            turn-to-turn: ``synth_fn`` resolves it fresh on every sentence, so
+            a speed updated between turns takes effect on the next sentence
+            synthesized. A plain float is read once and used unchanged — the
+            proven constant-speed behavior.
         pyaudio_module: defaults to the runtime ``pyaudio``
             module. Tests pass a stub exposing ``paInt16`` so
             the module is importable without pyaudio installed
@@ -109,8 +117,17 @@ def build_audio_io(
             frames_per_buffer=speaker_chunk,
         )
 
+    # iter-214: resolve `speed` per sentence. A callable is invoked fresh each
+    # synth (the WPM-mirroring path, where SpeedController.current returns the
+    # live per-session speed); a plain number is used as-is. `callable(...)`
+    # cleanly distinguishes the two — floats/ints aren't callable.
+    speed_is_callable = callable(speed)
+
     def synth_fn(sentence: str):
-        return synthesize_with_alignment(tts_engine, sentence, voice, speed)
+        current_speed = speed() if speed_is_callable else speed
+        return synthesize_with_alignment(
+            tts_engine, sentence, voice, current_speed,
+        )
 
     def play_fn(speaker, audio_np, tokens, *, is_first_sentence=False,
                 cancel_event=None, lag_out=None):

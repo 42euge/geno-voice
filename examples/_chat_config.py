@@ -482,3 +482,90 @@ def parse_max_user_assistant(chat_cfg: Any) -> int:
     if isinstance(raw, int) and raw >= 0:
         return raw
     return MAX_USER_ASSISTANT_DEFAULT
+
+
+# iter-214: optional ``wpm_mirror`` config — the live wiring of the iter-213
+# WPM-mirroring seam (``session.wpm_mirror``). The parser is intentionally
+# decoupled from that module (it would pull the ``session`` package's eager
+# pipecat import, absent on the x86_64 test runner): it returns a plain dict of
+# validated kwargs, and the caller (``mic_chat`` on a real Mac) splats them into
+# ``WpmMirrorConfig``. The only always-present key is ``enabled`` — every numeric
+# tunable is omitted unless it is present-and-valid, so ``WpmMirrorConfig``'s own
+# defaults backfill the rest and any future tunable added there needs no change
+# here. The float tunables this parser recognizes (mirrors the iter-213
+# ``WpmMirrorConfig`` fields):
+WPM_MIRROR_FLOAT_KEYS = (
+    "base_wpm", "strength", "min_speed", "max_speed", "min_delta",
+)
+
+
+def parse_wpm_mirror_config(chat_cfg: Any, warn: Any = None) -> dict:
+    """Extract the optional ``wpm_mirror`` section of a parsed chat config.
+
+    Returns a dict of kwargs for ``session.wpm_mirror.WpmMirrorConfig``. The
+    result ALWAYS carries ``enabled`` (a bool); each numeric tunable
+    (``base_wpm`` / ``strength`` / ``min_speed`` / ``max_speed`` /
+    ``min_delta``) is included ONLY when present-and-valid, leaving
+    ``WpmMirrorConfig`` to backfill its own default otherwise.
+
+    Off-by-default to the bone: a missing section, a non-mapping section, or
+    ``enabled`` absent / non-bool all yield ``{"enabled": False}`` — so the
+    mirror stays the identity on the current speed (iter-213's invariant) unless
+    the operator explicitly writes ``wpm_mirror: {enabled: true}``. ``enabled``
+    must be a real ``bool`` (a truthy ``1`` / ``"yes"`` does NOT enable it) so a
+    typo can never silently turn rate-adaptation on.
+
+    Tolerant in the same shape as ``parse_vad_config`` (iter-187): a malformed
+    section or value falls back rather than raising, and when ``warn`` is
+    supplied (a callable taking one string) it is invoked once per
+    present-but-rejected entry, naming the key and the offending value. Missing
+    keys are silent — backfilling an absent tunable is normal.
+
+    NOTE the validation here is only structural (type + positivity); the
+    *semantic* cross-field validation (``max_speed >= min_speed``,
+    ``strength`` in ``[0, 1]``) lives in ``WpmMirrorConfig.__post_init__``
+    (iter-213), which raises loudly on a bad combination. This parser
+    deliberately does not duplicate it — a misconfigured mirror should surface
+    the iter-213 ``ValueError`` at construction, not be silently clamped here.
+    """
+    out: dict = {"enabled": False}
+    if not isinstance(chat_cfg, Mapping):
+        return out
+    mirror = chat_cfg.get("wpm_mirror")
+    if not isinstance(mirror, Mapping):
+        if warn is not None and "wpm_mirror" in chat_cfg:
+            warn(
+                f"wpm_mirror config ignored: expected a mapping, got "
+                f"{type(mirror).__name__} ({mirror!r}); mirroring stays off"
+            )
+        return out
+
+    # `enabled` must be a genuine bool — not a truthy int/str — so a typo can't
+    # silently flip rate-adaptation on.
+    raw_enabled = mirror.get("enabled", False)
+    if isinstance(raw_enabled, bool):
+        out["enabled"] = raw_enabled
+    elif "enabled" in mirror and warn is not None:
+        warn(
+            f"wpm_mirror.enabled ignored: expected true/false, got "
+            f"{raw_enabled!r}; mirroring stays off"
+        )
+
+    for key in WPM_MIRROR_FLOAT_KEYS:
+        present = key in mirror
+        val = mirror.get(key)
+        # bool is an int subclass — reject it so True/False can't become 1.0/0.0
+        # (matches the parse_vad_config guard). min_delta may legitimately be 0
+        # (the iter-213 "deadband off" sentinel), so it accepts >= 0; every
+        # other tunable requires > 0.
+        is_number = isinstance(val, (int, float)) and not isinstance(val, bool)
+        accepted = is_number and (val >= 0 if key == "min_delta" else val > 0)
+        if accepted:
+            out[key] = float(val)
+        elif present and warn is not None:
+            bound = ">= 0" if key == "min_delta" else "a positive number"
+            warn(
+                f"wpm_mirror.{key} ignored: expected {bound}, got "
+                f"{val!r}; using default"
+            )
+    return out

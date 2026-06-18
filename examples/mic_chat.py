@@ -293,13 +293,44 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
     mic = pa.open(format=pyaudio.paInt16, channels=CHANNELS,
                   rate=RATE, input=True, frames_per_buffer=CHUNK)
 
+    # iter-214: WPM-mirroring live wiring (iter-213 seam, backlog #1). Build a
+    # SpeedController holding the initial `speed`. When the operator turns
+    # `chat.wpm_mirror.enabled` on, the controller carries a live WpmMirror
+    # (iter-213) and adapts the Kokoro speed toward the user's measured rate
+    # turn-to-turn; otherwise mirror=None makes `observe` inert and the speed is
+    # the constant `speed` for the whole session — byte-for-byte the proven
+    # fixed-rate path. The mirror is lazy-imported from the `session` package
+    # only when actually enabled, so the eager pipecat import isn't paid (and
+    # never reached on the half-duplex default).
+    # iter-188-style warn adapter: a typo'd wpm_mirror knob surfaces a YELLOW
+    # one-liner instead of silently falling back.
+    from examples._chat_config import parse_wpm_mirror_config
+    from examples._chat_speed import SpeedController
+
+    wpm_mirror_cfg = parse_wpm_mirror_config(
+        chat_cfg, warn=lambda line: print(f"  {YELLOW}{line}{RESET}")
+    )
+    speed_mirror = None
+    if wpm_mirror_cfg.get("enabled"):
+        from session.wpm_mirror import WpmMirror, WpmMirrorConfig
+        speed_mirror = WpmMirror(config=WpmMirrorConfig(**wpm_mirror_cfg))
+        print(
+            f"  {DIM}wpm-mirror: on "
+            f"(base {wpm_mirror_cfg.get('base_wpm', 165):.0f} WPM, "
+            f"strength {wpm_mirror_cfg.get('strength', 0.5):.2f}){RESET}"
+        )
+    speed_controller = SpeedController(speed, mirror=speed_mirror)
+
     # iter-109: speaker_factory + synth + play closures moved to
     # examples/_chat_audio_io. ChatLoop is dep-injected (iter-015);
     # build_audio_io produces the production wiring (pyaudio +
     # synthesize_with_alignment + _play_aligned_core).
+    # iter-214: hand the controller's `current` accessor (a zero-arg callable)
+    # instead of the bare float so the synth path reads the live, possibly
+    # WPM-adapted speed on every sentence.
     from examples._chat_audio_io import build_audio_io
 
-    audio_io = build_audio_io(pa, tts_engine, voice, speed)
+    audio_io = build_audio_io(pa, tts_engine, voice, speed_controller.current)
 
     # iter-088: optional aggressive first-sentence splitter. Reduces
     # TTFS on long-preamble responses at the cost of some prosody.
@@ -409,6 +440,15 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
         # never holds). None there keeps the proven path byte-for-byte.
         respond_fn=(
             chat_loop.respond_to_text if flush_decider is not None else None
+        ),
+        # iter-214: after each completed turn, feed the measured user_wpm
+        # (iter-064) to the SpeedController so the WPM mirror (iter-213) adapts
+        # the NEXT turn's TTS speed. With mirroring off the controller's mirror
+        # is None and observe() is a no-op, so the speed never moves — the
+        # proven fixed-rate path. Always wired (the no-op cost is negligible);
+        # the gate lives in the controller, not here.
+        on_turn_complete=lambda m: speed_controller.observe(
+            getattr(m, "user_wpm", 0.0)
         ),
     )
 

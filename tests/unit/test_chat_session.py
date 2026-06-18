@@ -1362,3 +1362,108 @@ def test_real_organic_flush_spoken_end_to_end():
     assert respond.calls and respond.calls[0][1] == "I was about to"
     assert len(state.all_metrics) == 1  # the spoken flush turn
     assert state.stranded_utterance is None
+
+
+# ---- iter-214: on_turn_complete per-turn observer hook --------------------
+
+
+def _metrics_with_wpm(user_wpm):
+    """A _StubMetrics carrying a user_wpm field (the iter-064 measurement the
+    WPM mirror reads)."""
+    m = _StubMetrics()
+    m.user_wpm = user_wpm
+    return m
+
+
+def test_on_turn_complete_called_with_each_turns_metrics():
+    """Each completed mic turn fires on_turn_complete with its metrics."""
+    metrics = [_metrics_with_wpm(w) for w in (150.0, 200.0, 120.0)]
+    loop = _StubChatLoop(queue=[_StubResult(metrics=m) for m in metrics])
+    seen = []
+    run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+        on_turn_complete=seen.append,
+    )
+    assert seen == metrics
+
+
+def test_on_turn_complete_not_called_on_false_trigger():
+    """A no-metrics false-trigger turn produces no completed turn → no hook."""
+    loop = _StubChatLoop(queue=[_StubResult(metrics=None)])
+    seen = []
+    run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+        on_turn_complete=seen.append,
+    )
+    assert seen == []
+
+
+def test_on_turn_complete_not_called_on_llm_error():
+    loop = _StubChatLoop(queue=[_StubResult(had_error=True)])
+    seen = []
+    run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+        on_turn_complete=seen.append,
+    )
+    assert seen == []
+
+
+def test_on_turn_complete_default_none_is_noop():
+    """Omitting the hook (the default) leaves the proven path unchanged."""
+    m = _metrics_with_wpm(165.0)
+    loop = _StubChatLoop(queue=[_StubResult(metrics=m)])
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+    )
+    assert state.all_metrics == [m]  # turn still recorded normally
+
+
+def test_on_turn_complete_exception_does_not_break_loop():
+    """A misbehaving hook is swallowed; the turn is still recorded."""
+    def _boom(_m):
+        raise RuntimeError("hook boom")
+
+    m = _metrics_with_wpm(180.0)
+    loop = _StubChatLoop(queue=[_StubResult(metrics=m)])
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+        on_turn_complete=_boom,
+    )
+    assert state.all_metrics == [m]
+
+
+def test_on_turn_complete_fires_after_metrics_recorded():
+    """The hook fires AFTER the turn's metrics are printed (it lives at the
+    tail of _record_completed_turn). At hook time the metric has already had
+    .print(turn) called on it."""
+    m = _metrics_with_wpm(170.0)
+    loop = _StubChatLoop(queue=[_StubResult(metrics=m)])
+    captured = {}
+
+    def _observe(metric):
+        captured["printed_at_hook"] = list(metric.printed_turns)
+
+    run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+        on_turn_complete=_observe,
+    )
+    assert captured["printed_at_hook"] == [1]
+
+
+def test_on_turn_complete_fires_for_spoken_flushed_fragment():
+    """A mid-session flushed fragment spoken via respond_fn also fires the
+    hook (it routes through the shared _record_completed_turn)."""
+    agg = _flushing_agg("trailed off thought")
+    respond = _RespondFn()
+    loop = _StubChatLoop(queue=[_StubResult(metrics=None, idle_timed_out=True)])
+    seen = []
+    state = run_session(
+        loop, "p", log=_silent, prompt_log=_silent, trim_messages=_stub_trim,
+        aggregator=agg, idle_timeout=5.0,
+        flush_decider=lambda held, silence: True,
+        respond_fn=respond,
+        on_turn_complete=seen.append,
+    )
+    # The spoken flush produced one completed turn → one hook fire.
+    assert len(seen) == 1
+    assert seen[0] is respond.metrics_made[0]
