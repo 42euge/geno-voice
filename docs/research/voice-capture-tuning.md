@@ -147,6 +147,7 @@ rather than as a single A-vs-B delta:
 gv vad-sweep recording.wav                                  # 0.3,0.5,0.7,0.9 (defaults)
 gv vad-sweep recording.wav --thresholds 0.1,0.3,0.5,0.7,0.9 # custom gates
 gv vad-sweep recording.wav --json                           # machine-readable rows
+gv vad-sweep recording.wav --csv                            # flat CSV for plots (iter-237)
 ```
 
 The human report is a small table — the WAV name, a `threshold / segments /
@@ -174,6 +175,27 @@ reuses the iter-233 injected-dependency seams; `vad_segmentation_sweep` is the
 pure core, tested without torch in `tests/unit/test_gv_vad.py`, and
 `tests/integration/test_gv_vad_cli.py` proves each sweep row equals an
 independent `gv vad --json` run over the real corpus.
+
+**`--csv` (iter-237)** emits the same rows as `--json` but as a flat
+`threshold,num_segments,speech_s` grid that pipes straight into a spreadsheet
+or plotting script (`pandas.read_csv`, gnuplot, `numpy.loadtxt`) without a
+JSON-parsing step:
+
+```
+threshold,num_segments,speech_s
+0.3,5,17.3
+0.5,5,16.2
+0.7,4,15.5
+0.9,4,15.2
+```
+
+`--csv` and `--json` are mutually exclusive (argparse rejects passing both).
+The CSV body is a pure data grid — the WAV name is *not* a column (it would only
+repeat per row), unlike the human table's title line and the JSON `name` key.
+When `silero-vad` is absent the output is a single `# silero VAD unavailable: …`
+comment line so a degraded run stays self-describing. An integration test pins
+that the `--csv` rows describe the same segmentation as `--json` over the real
+corpus.
 
 ### Silero vs energy-VAD segment counts (the headless proof)
 

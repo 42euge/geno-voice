@@ -16,6 +16,8 @@ Usage:
 """
 
 import argparse
+import csv
+import io
 import json
 import re
 import sys
@@ -690,6 +692,35 @@ def render_vad_sweep_json(thresholds, results, *, name):
     return json.dumps(payload, indent=2)
 
 
+def render_vad_sweep_csv(thresholds, results, *, name):
+    """Render a threshold sweep as CSV text (no trailing newline).
+
+    The spreadsheet/plot-friendly twin of :func:`render_vad_sweep_json`: where
+    JSON nests the rows under a ``sweep`` key for programmatic consumers, CSV
+    emits a flat ``threshold,num_segments,speech_s`` table that pipes straight
+    into a spreadsheet or a plotting script (gnuplot, matplotlib's ``loadtxt``,
+    pandas ``read_csv``) without a JSON-parsing step. ``name`` is accepted for
+    signature parity with the other ``render_vad_sweep_*`` twins but is not part
+    of the tabular body — a CSV is a pure data grid, so the WAV name would only
+    appear as an awkward repeated column. Any ``None`` in ``results`` (segmenter
+    unavailable) yields a single ``# silero VAD unavailable: ...`` comment line
+    so a degraded run is still self-describing rather than silently empty. Pure:
+    returns a single string built with the stdlib :mod:`csv` writer (RFC-4180
+    quoting, ``\\r\\n`` row terminators) with the trailing terminator stripped.
+    """
+    if any(r is None for r in results):
+        return (
+            "# silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        )
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["threshold", "num_segments", "speech_s"])
+    for row in vad_segmentation_sweep(thresholds, results):
+        writer.writerow([row["threshold"], row["num_segments"], row["speech_s"]])
+    return buf.getvalue().rstrip("\r\n")
+
+
 def _signed(n):
     """Format an int delta with an explicit sign (``+3`` / ``0`` / ``-2``)."""
     return f"+{n}" if n > 0 else str(n)
@@ -928,10 +959,13 @@ def cmd_vad_sweep(args, *, log=print, segmenter=None, availability=None):
         availability = silero_available if availability is None else availability
 
     as_json = getattr(args, "json", False)
+    as_csv = getattr(args, "csv", False)
 
     if not availability():
         if as_json:
             log(render_vad_sweep_json([], [None], name=args.wav))
+        elif as_csv:
+            log(render_vad_sweep_csv([], [None], name=args.wav))
         else:
             for line in render_vad_sweep([], [None], name=args.wav):
                 log(line)
@@ -955,6 +989,8 @@ def cmd_vad_sweep(args, *, log=print, segmenter=None, availability=None):
     name = results[0].name if results else args.wav
     if as_json:
         log(render_vad_sweep_json(args.thresholds, results, name=name))
+    elif as_csv:
+        log(render_vad_sweep_csv(args.thresholds, results, name=name))
     else:
         for line in render_vad_sweep(args.thresholds, results, name=name):
             log(line)
@@ -1368,10 +1404,17 @@ def build_parser():
         help="Force-split regions longer than this, in seconds — shared by "
         "all runs; 'inf'/'none' never splits (default: inf)",
     )
-    vad_sweep.add_argument(
+    vad_sweep_fmt = vad_sweep.add_mutually_exclusive_group()
+    vad_sweep_fmt.add_argument(
         "--json",
         action="store_true",
         help="Emit machine-readable JSON instead of the human-readable table",
+    )
+    vad_sweep_fmt.add_argument(
+        "--csv",
+        action="store_true",
+        help="Emit a flat threshold,num_segments,speech_s CSV table for "
+        "spreadsheets/plots (mutually exclusive with --json)",
     )
 
     return parser

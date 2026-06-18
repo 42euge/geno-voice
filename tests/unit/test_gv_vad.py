@@ -17,6 +17,8 @@ x86_64 Linux runner.
 from __future__ import annotations
 
 import argparse
+import csv
+import io
 import json
 import sys
 from dataclasses import dataclass, field
@@ -807,6 +809,7 @@ def _sweep_args(**over):
         speech_pad_ms=30.0,
         max_speech_s=float("inf"),
         json=False,
+        csv=False,
     )
     base.update(over)
     return argparse.Namespace(**base)
@@ -871,6 +874,7 @@ def test_vad_sweep_defaults():
     assert args.speech_pad_ms == 30.0
     assert args.max_speech_s == float("inf")
     assert args.json is False
+    assert args.csv is False
 
 
 def test_vad_sweep_overrides_thresholds():
@@ -888,6 +892,19 @@ def test_vad_sweep_rejects_out_of_range_threshold():
 def test_vad_sweep_json_flag():
     args = gv.build_parser().parse_args(["vad-sweep", "rec.wav", "--json"])
     assert args.json is True
+
+
+def test_vad_sweep_csv_flag():
+    args = gv.build_parser().parse_args(["vad-sweep", "rec.wav", "--csv"])
+    assert args.csv is True
+    assert args.json is False
+
+
+def test_vad_sweep_json_and_csv_are_mutually_exclusive():
+    # Two output formats can't both win; argparse rejects the combination with
+    # the usual SystemExit(2) rather than silently picking one.
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(["vad-sweep", "rec.wav", "--json", "--csv"])
 
 
 # ---- vad_segmentation_sweep: pure core ---------------------------------
@@ -1087,3 +1104,148 @@ def test_cmd_vad_sweep_shares_knobs_across_all_runs():
     assert [p.threshold for p in captured] == [0.2, 0.6, 0.95]
     assert {p.min_speech_ms for p in captured} == {120.0}
     assert {p.max_speech_s for p in captured} == {20.0}
+
+
+# ====================================================================
+# iter-237 — gv vad-sweep --csv: flat spreadsheet/plot-friendly table
+# ====================================================================
+
+
+# ---- render_vad_sweep_csv: machine-readable CSV ------------------------
+
+
+def test_render_sweep_csv_none_marks_unavailable():
+    text = gv.render_vad_sweep_csv([], [None], name="rec.wav")
+    # A degraded run is a single self-describing comment, not empty output.
+    assert text.startswith("#")
+    assert "silero-vad" in text
+
+
+def test_render_sweep_csv_any_none_marks_unavailable():
+    r = _Result(name="r.wav", sample_rate=16000, duration_s=5.0, segments=[_Seg(0.0, 1.0)])
+    text = gv.render_vad_sweep_csv([0.3, 0.9], [r, None], name="rec.wav")
+    assert text.startswith("#")
+    assert "silero-vad" in text
+
+
+def test_render_sweep_csv_header_and_rows():
+    r_lo = _Result(
+        name="rec.wav",
+        sample_rate=16000,
+        duration_s=10.0,
+        segments=[_Seg(0.0, 1.0), _Seg(2.0, 3.0), _Seg(5.0, 6.0)],
+    )
+    r_hi = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=10.0, segments=[_Seg(0.0, 1.0)]
+    )
+    text = gv.render_vad_sweep_csv([0.3, 0.9], [r_lo, r_hi], name="rec.wav")
+    rows = list(csv.reader(io.StringIO(text)))
+    assert rows[0] == ["threshold", "num_segments", "speech_s"]
+    assert rows[1] == ["0.3", "3", "3.0"]
+    assert rows[2] == ["0.9", "1", "1.0"]
+    # exactly the header + one row per threshold, nothing else.
+    assert len(rows) == 3
+
+
+def test_render_sweep_csv_no_trailing_newline():
+    r = _Result(name="rec.wav", sample_rate=16000, duration_s=5.0, segments=[_Seg(0.0, 1.0)])
+    text = gv.render_vad_sweep_csv([0.5], [r], name="rec.wav")
+    # The renderer is pure text the caller logs; it must not carry a trailing
+    # blank line (csv.writer's \r\n terminator stripped).
+    assert not text.endswith("\n")
+    assert not text.endswith("\r")
+
+
+def test_render_sweep_csv_round_trips_to_sweep_rows():
+    # The CSV body must describe the SAME segmentation as the JSON twin, so a
+    # consumer reading either surface sees identical numbers.
+    r_lo = _Result(
+        name="rec.wav",
+        sample_rate=16000,
+        duration_s=10.0,
+        segments=[_Seg(0.0, 1.0), _Seg(2.0, 3.0)],
+    )
+    r_hi = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=10.0, segments=[_Seg(0.0, 1.0)]
+    )
+    thresholds = [0.3, 0.9]
+    results = [r_lo, r_hi]
+    csv_text = gv.render_vad_sweep_csv(thresholds, results, name="rec.wav")
+    json_rows = json.loads(
+        gv.render_vad_sweep_json(thresholds, results, name="rec.wav")
+    )["sweep"]
+    csv_rows = list(csv.DictReader(io.StringIO(csv_text)))
+    assert [
+        {
+            "threshold": float(row["threshold"]),
+            "num_segments": int(row["num_segments"]),
+            "speech_s": float(row["speech_s"]),
+        }
+        for row in csv_rows
+    ] == json_rows
+
+
+# ---- cmd_vad_sweep --csv: the handler ----------------------------------
+
+
+def test_cmd_vad_sweep_csv_unavailable_emits_comment():
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(csv=True),
+        log=lines.append,
+        segmenter=lambda *a, **k: (_ for _ in ()).throw(AssertionError("no")),
+        availability=lambda: False,
+    )
+    assert len(lines) == 1
+    assert lines[0].startswith("#")
+    assert "silero-vad" in lines[0]
+
+
+def test_cmd_vad_sweep_csv_branch():
+    def seg(wav, params=None):
+        n = 3 if params.threshold < 0.6 else 1
+        return _Result(
+            name="rec.wav",
+            sample_rate=16000,
+            duration_s=10.0,
+            segments=[_Seg(float(i), i + 0.5) for i in range(n)],
+        )
+
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(thresholds=[0.3, 0.9], csv=True),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    # One CSV blob logged in a single call (not line-by-line like the table).
+    assert len(lines) == 1
+    rows = list(csv.reader(io.StringIO(lines[0])))
+    assert rows[0] == ["threshold", "num_segments", "speech_s"]
+    assert [row[0] for row in rows[1:]] == ["0.3", "0.9"]
+    assert rows[1][1] == "3"
+    assert rows[2][1] == "1"
+
+
+def test_cmd_vad_sweep_csv_uses_segmenter_name():
+    # CSV body is a pure data grid — the segmenter's basename name does not leak
+    # into the rows (signature parity only). Verify the table is exactly
+    # header + data, no name column.
+    def seg(wav, params=None):
+        return _Result(
+            name="basename.wav",
+            sample_rate=16000,
+            duration_s=10.0,
+            segments=[_Seg(0.0, 1.0)],
+        )
+
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(thresholds=[0.5], csv=True),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert "basename.wav" not in lines[0]
+    rows = list(csv.reader(io.StringIO(lines[0])))
+    assert len(rows) == 2  # header + single threshold row

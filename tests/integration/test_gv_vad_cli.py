@@ -18,6 +18,8 @@ Skips cleanly when the recordings (large binary captures, not committed) or
 from __future__ import annotations
 
 import argparse
+import csv
+import io
 import json
 import sys
 from pathlib import Path
@@ -229,6 +231,7 @@ def _sweep_args(wav: Path, **over):
         speech_pad_ms=30.0,
         max_speech_s=float("inf"),
         json=False,
+        csv=False,
     )
     base.update(over)
     return argparse.Namespace(**base)
@@ -284,3 +287,26 @@ def test_gv_vad_sweep_human_table_is_well_formed():
     # header + column labels + 3 threshold rows
     assert len(lines) == 5
     assert "0.30" in text and "0.70" in text and "0.90" in text
+
+
+def test_gv_vad_sweep_csv_matches_json_sweep():
+    """iter-237: ``gv vad-sweep --csv`` over THE GATE recording describes the
+    same segmentation as ``--json`` — same thresholds, same counts, same
+    speech-seconds — proving the two machine-readable surfaces agree."""
+    wav = RECORDINGS_DIR / CONTINUOUS_31S
+    if not wav.exists():
+        pytest.skip(f"{CONTINUOUS_31S} not present")
+
+    thresholds = [0.3, 0.5, 0.9]
+    csv_lines = _run_sweep(wav, thresholds=thresholds, csv=True)
+    # The whole CSV blob is logged in a single call.
+    assert len(csv_lines) == 1
+    csv_rows = list(csv.DictReader(io.StringIO(csv_lines[0])))
+
+    json_rows = json.loads(_run_sweep(wav, thresholds=thresholds, json=True)[0])[
+        "sweep"
+    ]
+    assert [float(r["threshold"]) for r in csv_rows] == thresholds
+    for csv_row, json_row in zip(csv_rows, json_rows):
+        assert int(csv_row["num_segments"]) == json_row["num_segments"]
+        assert abs(float(csv_row["speech_s"]) - json_row["speech_s"]) <= 0.01
