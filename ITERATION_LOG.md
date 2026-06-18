@@ -18210,3 +18210,82 @@ makes the *next* legitimate column-add a one-place edit.
    busier/newly-synced corpus.
 4. **[gain] Add a gain×preroll grid finding** — quantify whether amplifying the
    pre-roll audio changes the recovered soft-attack quality.
+
+---
+
+## iter-208 — synth/dispatch TTFS-leg consistency sentinel
+
+**Branch:** `iter-208-synth-dispatch-consistency` (merged ff to main, commit `4eab3d6`)
+**Date:** 2026-06-18
+
+**Improvement (observability — complete the TTFS-leg sentinel set):**
+The session summary decomposes time-to-first-sound into three legs
+(iter-076): `STT x% + LLM y% + synth z%`. Two of those legs already have a
+**consistency sentinel** that fires on 5+ consecutive turns stuck in a slow
+bucket — STT via iter-140 `stt_rtf`, the LLM via iter-142 `llm_tps`. The third
+leg, `synth_dispatch_seconds` (synth time + speaker open + queue dispatch +
+audio-device buffering — everything between "first sentence reached the worker"
+and "first audio chunk played"), had a session **median** but no run sentinel.
+A high median can hide behind one cold-start turn; a sustained run in the slow
+bucket is the actionable signal that the FINAL pipeline leg — not STT, not the
+LLM — is the recurring opening-latency bottleneck. That matters directly to
+VISION's sub-500ms TTFS target. This lap closes the gap: every leg of the
+iter-076 decomposition now has its own consistency sentinel.
+
+This is the **NINTH** instance of the session-summary diversity-check pattern
+(after iter-114 filler, iter-115/126 naturalness, iter-120 barge-phase,
+iter-128 sentence-length, iter-140 stt-rtf, iter-141 tts-rtf, iter-142 llm-tps,
+iter-143 streaming-overlap), and the **sixth** applied to a continuous metric.
+
+What changed:
+- **`examples/_chat_metrics.py`**:
+  - `_synth_dispatch_bucket(seconds)` — maps the per-turn residual to
+    `fast` (< 0.15s, the fine state) / `slow` (0.15–0.35s) / `very_slow`
+    (> 0.35s); returns `""` for non-positive input. **Smaller-is-better**, like
+    iter-140/141 and UNLIKE the inverted iter-142/143 — the fine bucket is a LOW
+    value, so the boundaries are NOT flipped.
+  - `_emit_synth_dispatch_consistency_line(emit, list, threshold=5)` — filters
+    out `fast`/`""` before the scan, reuses iter-116 `_longest_consecutive_run`,
+    and emits a per-value suggestion (`very_slow` → switch to a lighter
+    voice/engine or pre-warm the speaker; `slow` → try a lighter voice or warm
+    the speaker; defensive `else` for future buckets). Warning text names
+    iter-076 so operators can grep the full context.
+  - Wired into `print_session_summary` immediately after the iter-143
+    streaming-overlap line, fed `[m.synth_dispatch_seconds for m in metrics_list]`.
+- **`tests/unit/test_emit_synth_dispatch_consistency_line.py`** — 21 tests
+  covering the full pattern matrix: bucket boundaries
+  (zero/negative/fast/slow/very_slow + float edges at 0.15/0.35), empty +
+  all-zero suppression, long-fast-run never fires, filter semantics (a `fast`
+  interleaving doesn't break a slow run; a `very_slow` phase-change DOES break a
+  slow run), at/above threshold per value, below threshold, custom threshold,
+  longest-of-multiple, 4-space indent, iter-076 attribution, 1000-element
+  scaling.
+
+**Verification:**
+- `python -m pytest tests/unit/test_emit_synth_dispatch_consistency_line.py`
+  → **21 passed**.
+- Full Python unit suite: `python -m pytest tests/unit/` → **2722 passed**
+  (2701 prior + 21 new), re-run on `main` post-merge. GATE command:
+  `cd ~/code-purp/geno-voice && python -m pytest tests/unit/`.
+- (`tests/test_session.py` still errors on collection — pre-existing missing
+  `pipecat` dep, not a regression.)
+
+**Next planned items (from the research-doc backlog):**
+1. **[silence] Run the actual `--sweep silence_ms` over a newly-synced corpus**
+   — the sweep harness now carries the full floor/typical/ceiling/spread shape
+   on all three axes from one shared renderer (iter-207). Gate a real
+   `silence_ms` default change on a corpus that exercises real mid-utterance
+   pauses *and* two-turns-one-pause cases (the seed corpus is flat in both
+   windows); prefer the value that minimizes `onset_std` and `seg_std` among
+   those with an acceptable `mean_seg`.
+2. **[latency, highest value] Pre-warm the capture pipeline** — still the top
+   user-facing bug (3–5s `click_to_capture_ms`). Needs an on-device timing
+   harness; cannot be replayed. NOTE: the new iter-208 synth/dispatch sentinel
+   would make a *playback*-side pre-warm regression visible in session
+   summaries.
+3. **[preroll-default] Bump the client `prerollMs` default above 0** — iter-200's
+   grid shows pre-roll improves the typical opening, the tail, AND the
+   consistency simultaneously; pick a value (256–512ms) and gate on a
+   busier/newly-synced corpus.
+4. **[gain] Add a gain×preroll grid finding** — quantify whether amplifying the
+   pre-roll audio changes the recovered soft-attack quality.
