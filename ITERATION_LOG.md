@@ -20818,3 +20818,93 @@ delta.
 4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
    --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
    refresh the comparison table.
+
+## iter-236 — `gv vad-sweep`: tabulate Silero segmentation over N thresholds
+
+**Branch:** `iter-236-gv-vad-sweep` (merged ff to main, commit `8d3466f`)
+**Date:** 2026-06-18
+
+**No STEER.md this lap.** The two top-priority next items carried since
+iter-227 (wire `ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()`
+in the desktop app) both need a Mac + mic + browser and can't run headless on
+the loop host. The recording corpus is unchanged since iter-231 (same 6 WAVs),
+so the "ingest new recordings" item had nothing to do. I took the last
+headless-doable item from the iter-235 backlog: `gv vad-sweep` (item #3) —
+generalize the two-point diff to a sweep over N thresholds.
+
+**The gap.** iter-235 shipped `gv vad-diff`, which compares the Silero
+P(speech) gate at exactly TWO points. Finding the gate's *elbow* (where
+recovered speech falls off as the gate tightens) still meant running `vad-diff`
+across several pairs and stitching the deltas together by hand. There was no
+single command that swept N thresholds and tabulated segment-count /
+speech-seconds vs threshold — the single-file analogue of
+`fixtures/replay_silero.py`'s corpus sweep.
+
+**What changed.**
+1. **`examples/gv.py`** — new `gv vad-sweep <wav>` subcommand: segments one WAV
+   once per threshold (all other knobs shared) and prints a table.
+   - **`vad_segmentation_sweep(thresholds, results)`** — the pure core: pairs
+     each threshold with its `{threshold, num_segments, speech_s}` summary
+     (`speech_s` rounded to 3 places like `vad_segmentation_delta`). Works on
+     any `SileroResult`-shaped object so the unit tests drive it without torch.
+     Raises `ValueError` on a length mismatch.
+   - **`render_vad_sweep` / `render_vad_sweep_json`** — the human and JSON twins
+     (mirroring `render_vad_diff` / `render_vad_diff_json`), with the shared
+     install-hint degrade path when ANY result is `None`. The human report is a
+     `threshold / segments / speech` table; the JSON carries
+     `{"available", "name", "sweep": [...]}`.
+   - **`cmd_vad_sweep`** — same injected `segmenter`/`availability`/`log` seams
+     as the iter-233 `cmd_vad` / iter-235 `cmd_vad_diff`. Uses the segmenter's
+     own (basename) `result.name` so the table matches `gv vad`'s report rather
+     than echoing the raw path. Registered as the `vad-sweep` handler with a new
+     subparser (`--thresholds` default `0.3,0.5,0.7,0.9`, plus the shared
+     min-speech/min-silence/speech-pad/max-speech/`--json` flags).
+   - **`unit_interval_list_type`** — new pure argparse validator: parses a
+     comma-separated threshold list (each member a valid `unit_interval_type`),
+     preserves order/duplicates, rejects an empty list.
+2. **Tests.**
+   - `tests/unit/test_gv_vad.py` (**+32**, now 107 in-file): the
+     `--thresholds` list validator (comma-split / whitespace / order+dupes /
+     empty / out-of-range member / non-number member / non-string); parser
+     registration/defaults/overrides/range-rejection/`--json`;
+     `vad_segmentation_sweep` (pairing / 3-place rounding / length-mismatch
+     raise); `render_vad_sweep` + `render_vad_sweep_json` (unavailable, ANY-none
+     unavailable, tabulation, row payload); `cmd_vad_sweep` (unavailable
+     text+json, runs every threshold IN ORDER, json branch, shares knobs across
+     all runs with a genuine `SileroParams`). NO torch import.
+   - `tests/integration/test_gv_vad_cli.py` (**+3**): over the REAL corpus —
+     each sweep row equals an independent `gv vad --json` run at that threshold;
+     speech is monotone non-increasing across rising thresholds on THE GATE
+     recording; the human table is well-formed. Skips without corpus/package.
+   - `tests/unit/test_gv_cli.py`: handler-map assertion now includes
+     `vad-sweep`.
+3. **Docs** (`docs/research/voice-capture-tuning.md`) — a `gv vad-sweep`
+   subsection beside `gv vad-diff`: invocation, the real-corpus table (verified
+   against `voice-20260618-110355.wav`), the monotonicity property, and the
+   JSON payload keys.
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3349 passed** (3317 prior + 32 new), run on the feature branch before
+  ff-merge.
+- Integration: `python -m pytest tests/integration/test_gv_vad_cli.py` →
+  **21 passed** (corpus symlinked into the worktree; symlink removed before
+  commit so it is not tracked). silero-vad IS installed on this host, so these
+  ran against the real model.
+- Manual smoke on the branch: `python examples/gv.py vad-sweep
+  fixtures/recordings/voice-20260618-110355.wav` → a 4-row table
+  (`0.30→5/17.3s … 0.90→4/15.2s`), matching the iter-231/233 gate proof.
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] `gv vad-sweep --csv`** — a CSV emitter beside `--json` so the sweep
+   feeds a spreadsheet/plot directly; or a `--min-silence-ms` sweep axis (sweep
+   the hangover, not just the P(speech) gate).
+4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
+   --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
+   refresh the comparison table.
