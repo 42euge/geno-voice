@@ -19733,3 +19733,108 @@ off-by-default *within* the subcommand (`--verdict` opt-in), so existing
    grid shows pre-roll improves the typical opening, the tail, AND the
    consistency simultaneously; pick a value (256–512ms) and gate on a
    busier/newly-synced corpus.
+
+## iter-224 — STT-preview-divergence consistency sentinel
+
+**Branch:** `iter-224-stt-preview-divergence-sentinel` (merged ff to main, commit `decf125`)
+**Date:** 2026-06-18
+
+**Improvement (a session-summary diversity-check sentinel over
+iter-072's per-turn `stt_preview_divergence`):** The backlog's top
+items (on-device base_wpm render, real `silence_ms` sweep, capture
+pre-warm timing harness) all gate on real hardware/synth that can't
+run in a headless lap. This lap instead closes a coverage gap in the
+well-established GENO.md "Session-summary diversity-check pattern":
+`stt_preview_divergence` — iter-072's live-preview-vs-final transcript
+distance in `[0.0, 1.0]`, computed via `difflib.SequenceMatcher` in
+`record_utterance_streaming` — had **no sentinel**. iter-072 added the
+metric precisely because a bad preview is otherwise silent: the
+session-summary never surfaced it, so a persistently-wrong read-along
+transcript ("preview UX is broken," per iter-072's own documented
+`>0.3` threshold) goes unnoticed even though it directly degrades the
+hands-free read-along the VISION targets.
+
+This is the latest instance of the diversity-check pattern after the
+original eight (iter-114..143) plus the iter-208..212 TTFS-leg /
+EoT / bot-wpm / token-gap / ttfs sentinels. A continuous-metric
+instance like iter-128/140/141/208: bucket first, then scan.
+
+What changed (`examples/_chat_metrics.py`):
+- **`_stt_preview_divergence_bucket(divergence)`** maps the `[0,1]`
+  metric to `good` (<0.15) / `noisy` (0.15-0.30) / `broken` (>0.30),
+  with the `broken` boundary pinned to iter-072's documented "preview
+  UX is broken" `>0.3` line. Non-positive input (no streaming STT this
+  turn OR a perfect preview match — both the "fine" state) returns
+  `""` and is filtered out by the consumer. Like iter-140/141/208 and
+  UNLIKE iter-142/143, the fine bucket is a LOW value (smaller
+  divergence is better), so the boundaries are NOT inverted.
+- **`_emit_stt_preview_divergence_consistency_line(emit, list,
+  threshold=5)`** drops the `"good"` bucket, runs the shared iter-116
+  `_longest_consecutive_run`, and emits a per-value suggestion
+  (`broken`: check incremental Whisper / hide the preview; `noisy`:
+  steadier preview window) plus a defensive `else` fallback. Threshold
+  5, matching the other continuous-metric sentinels (natural variation
+  is normal; a sustained run is the real signal). Names iter-072 in the
+  warning text so operators can find the metric's context.
+- **Wired into `print_session_summary`** right after the iter-212 TTFS
+  sentinel. Distinct from iter-140's `stt_rtf` sentinel: that watches
+  STT *speed*; STT can be fast (good RTF) yet still produce a preview
+  that keeps changing under the user (bad divergence).
+
+**Read-only invariant untouched.** Emits at most one extra advisory
+line in the session summary and touches nothing in the live
+`mic_chat` / `pipecat_server` path, so it cannot regress the runtime.
+
+**Verification:**
+- New tests:
+  `python -m pytest tests/unit/test_emit_stt_preview_divergence_consistency_line.py`
+  → **21 passed**. Coverage: bucket boundaries (zero/negative→`""`,
+  good/noisy/broken edges, float granularity), empty/all-zero
+  suppression, long-good silence, alternating-good filter, threshold
+  (5 fires, 4 silent, custom 3/10), good-interleaving doesn't break a
+  run, `broken` breaks a `noisy` run (phase change), longest-of-
+  multiple, 4-space indent, iter-072 attribution, 1000-element scale.
+- Full Python unit suite: `python -m pytest tests/unit/` → **3125
+  passed** (3104 prior + 21 new), run on the feature branch before
+  ff-merge. GATE command:
+  `cd ~/code-purp/geno-voice && python -m pytest tests/unit/`.
+  Re-verified `test_emit_stt_preview_divergence_consistency_line.py` +
+  `test_diversity_pattern_doc.py` (31 passed) on main after merge —
+  the doc-sync test stays green, confirming the iter-208+ post-freeze
+  precedent (new sentinels need no GENO.md `_DIVERSITY_HELPERS` update).
+- `python -W error::SyntaxWarning -m py_compile examples/_chat_metrics.py
+  tests/unit/test_emit_stt_preview_divergence_consistency_line.py` clean.
+- Operator smoke (worktree): `[0.5]*5` → `STT preview: 5 consecutive
+  'broken' turns …`; `[0.2]*5` → `… 'noisy' …`; `[0.05]*9` → silent.
+- (`tests/test_session.py` still errors on collection — pre-existing
+  missing `pipecat` dep, not a regression.)
+
+**Next planned items:**
+1. **[wpm-mirroring, follow-on, last offline piece] On-device render that
+   produces the calibration samples.** The arithmetic core (iter-220),
+   CLI (iter-221), verdict engine (iter-222), and verdict CLI surface
+   (iter-223) all exist; the remaining work is the gated on-device
+   piece: synthesize a fixed known-length script through the real
+   Kokoro voice at `speed=1.0` (plus a couple other speeds to
+   cross-check), measure the rendered `audio_seconds`, and feed the
+   durations into `gv calibrate-base-wpm --verdict` so a deployment
+   reads an adopt/keep call for `base_wpm` from its own voice. Gate on
+   a real synth.
+2. **[silence] Run the actual `--sweep silence_ms` over a newly-synced
+   corpus** — the sweep harness carries the full floor/typical/ceiling/
+   spread shape on all three axes from one shared renderer (iter-207).
+   Gate a real `silence_ms` default change on a corpus that exercises
+   real mid-utterance pauses *and* two-turns-one-pause cases (the seed
+   corpus is flat in both windows).
+3. **[latency, highest value] Pre-warm the capture pipeline** — still
+   the top user-facing bug (3–5s `click_to_capture_ms`). Needs an
+   on-device timing harness; cannot be replayed. The iter-208..212
+   sentinels (and now iter-224) make playback-side, recording-loop,
+   mid-stream-LLM, end-to-end TTFS, and preview-quality slowdowns
+   visible in session summaries.
+4. **[metrics] Continue the sentinel sweep** — `sentence_split_coverage`
+   (iter-059, <1.0 = remainder flushing defeats overlap),
+   `worker_idle_gap_total` (iter-044, LLM not keeping up with synth),
+   and `context_tokens` (iter-077, late-session creep) remain
+   un-sentineled per-turn metrics that fit the same diversity-check
+   template.
