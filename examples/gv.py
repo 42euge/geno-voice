@@ -7,7 +7,7 @@ Usage:
     gv talk               # talk mode — STT → NLP → canned response → TTS
     gv chat               # chat mode — STT → LLM (litellm) → TTS
     gv simulate-mirror …  # offline WPM-mirror trajectory / grid-sweep simulator
-    gv calibrate-base-wpm … # offline base_wpm calibration from rendered samples
+    gv calibrate-base-wpm … # offline base_wpm calibration (--verdict for an adopt/keep call)
     gv <cmd> --model ...  # override STT model
 """
 
@@ -257,6 +257,33 @@ def render_calibration(calib):
     return lines
 
 
+def render_calibration_verdict(verdict):
+    """Render a ``CalibrationVerdict`` (iter-222) as plain-text report lines.
+
+    Pure: returns a list of strings (no I/O, no ANSI) so it is testable in
+    isolation — the handler joins and prints them. ``verdict`` of ``None`` (no
+    samples ⇒ nothing to decide) yields a single "no verdict" line, mirroring
+    :func:`render_calibration`'s empty contract. This is the iter-218/221
+    CLI-later surface for the iter-222 verdict engine: it turns the raw
+    spread/drift numbers into an adopt/keep DECISION the operator can act on.
+    """
+    if verdict is None:
+        return ["base_wpm verdict: no samples (nothing to decide)"]
+    decision = (
+        f"re-seed base_wpm to {verdict.implied_base_wpm:.1f}"
+        if verdict.recommend
+        else "keep the current nominal"
+    )
+    lines = [
+        "base_wpm calibration verdict",
+        f"  decision: {decision}",
+        f"  reason:   {verdict.reason}",
+        f"  gates:    spread<={verdict.spread_max:.1f}, "
+        f"|drift|>={verdict.drift_min:.1f}, samples>={verdict.min_samples}",
+    ]
+    return lines
+
+
 def render_trajectory(traj, *, wpms=None):
     """Render a :class:`SpeedTrajectory` as plain-text report lines.
 
@@ -401,6 +428,17 @@ def cmd_calibrate_base_wpm(args, *, log=print):
     calib = calibrate_base_wpm(samples, default_base_wpm=args.nominal)
     for line in render_calibration(calib):
         log(line)
+    if args.verdict:
+        # iter-223: fold the raw calibration into the iter-222 adopt/keep
+        # verdict so the operator sees a DECISION, not just spread/drift.
+        verdict = wm.calibration_verdict(
+            calib,
+            spread_max=args.spread_max,
+            drift_min=args.drift_min,
+            min_samples=args.min_samples,
+        )
+        for line in render_calibration_verdict(verdict):
+            log(line)
 
 
 def cmd_bench(args):
@@ -447,6 +485,9 @@ DEFAULT_HANDLERS = {
 # session package were unavailable; falls back to the documented constants.
 _MIRROR_DEFAULT_BASE_WPM = 165.0
 _MIRROR_DEFAULT_STRENGTH = 0.5
+_MIRROR_DEFAULT_CALIB_SPREAD_MAX = 10.0
+_MIRROR_DEFAULT_CALIB_DRIFT_MIN = 5.0
+_MIRROR_DEFAULT_CALIB_MIN_SAMPLES = 3
 
 
 def build_parser():
@@ -465,9 +506,15 @@ def build_parser():
         wm = _load_wpm_mirror()
         base_wpm_default = wm.DEFAULT_BASE_WPM
         strength_default = wm.DEFAULT_STRENGTH
+        calib_spread_max_default = wm.DEFAULT_CALIB_SPREAD_MAX
+        calib_drift_min_default = wm.DEFAULT_CALIB_DRIFT_MIN
+        calib_min_samples_default = wm.DEFAULT_CALIB_MIN_SAMPLES
     except Exception:  # pragma: no cover - defensive fallback
         base_wpm_default = _MIRROR_DEFAULT_BASE_WPM
         strength_default = _MIRROR_DEFAULT_STRENGTH
+        calib_spread_max_default = _MIRROR_DEFAULT_CALIB_SPREAD_MAX
+        calib_drift_min_default = _MIRROR_DEFAULT_CALIB_DRIFT_MIN
+        calib_min_samples_default = _MIRROR_DEFAULT_CALIB_MIN_SAMPLES
 
     bench = sub.add_parser("bench", help="Batch mode — transcribe after silence")
     bench.add_argument("--model", type=model_type, default=DEFAULT_MODEL)
@@ -577,6 +624,36 @@ def build_parser():
         type=float,
         default=base_wpm_default,
         help=f"Nominal base_wpm to report drift against (default: {base_wpm_default})",
+    )
+    calib.add_argument(
+        "--verdict",
+        action="store_true",
+        help="Also print the iter-222 adopt/keep verdict (re-seed vs keep nominal) "
+        "instead of just the raw spread/drift numbers",
+    )
+    calib.add_argument(
+        "--spread-max",
+        type=float,
+        default=calib_spread_max_default,
+        dest="spread_max",
+        help="Verdict gate: max trusted per-sample spread in WPM "
+        f"(default: {calib_spread_max_default})",
+    )
+    calib.add_argument(
+        "--drift-min",
+        type=float,
+        default=calib_drift_min_default,
+        dest="drift_min",
+        help="Verdict gate: min absolute drift worth re-seeding for in WPM "
+        f"(default: {calib_drift_min_default})",
+    )
+    calib.add_argument(
+        "--min-samples",
+        type=int,
+        default=calib_min_samples_default,
+        dest="min_samples",
+        help="Verdict gate: min sample count for a robust median "
+        f"(default: {calib_min_samples_default})",
     )
 
     return parser

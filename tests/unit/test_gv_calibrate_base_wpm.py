@@ -203,3 +203,125 @@ def test_handler_dispatch_routes(capsys):
     rc = gv.main(["calibrate-base-wpm", "--samples", "50:18.2"])
     assert rc == 0
     assert "calibration from rendered samples" in capsys.readouterr().out
+
+
+# ---- iter-223: --verdict surface (parser, formatter, handler) ----------
+
+
+def test_verdict_flag_defaults_off():
+    # Without --verdict the flag is False and gates default from the engine.
+    args = gv.build_parser().parse_args(["calibrate-base-wpm", "--samples", "50:18.2"])
+    assert args.verdict is False
+    assert args.spread_max == 10.0
+    assert args.drift_min == 5.0
+    assert args.min_samples == 3
+
+
+def test_verdict_flag_and_gate_overrides_parse():
+    args = gv.build_parser().parse_args(
+        [
+            "calibrate-base-wpm", "--samples", "50:18.2",
+            "--verdict",
+            "--spread-max", "20",
+            "--drift-min", "2.5",
+            "--min-samples", "1",
+        ]
+    )
+    assert args.verdict is True
+    assert args.spread_max == 20.0
+    assert args.drift_min == 2.5
+    assert args.min_samples == 1
+
+
+def test_render_calibration_verdict_none():
+    lines = gv.render_calibration_verdict(None)
+    assert lines == ["base_wpm verdict: no samples (nothing to decide)"]
+
+
+def test_render_calibration_verdict_recommend():
+    wm = gv._load_wpm_mirror()
+    # 50 words / 14.0s ≈ 214 wpm — well above the 165 nominal, 3 samples agree.
+    samples = [wm.CalibrationSample(words=50, audio_seconds=14.0)] * 3
+    calib = wm.calibrate_base_wpm(samples, default_base_wpm=165.0)
+    verdict = wm.calibration_verdict(calib)
+    lines = gv.render_calibration_verdict(verdict)
+    text = "\n".join(lines)
+    assert "base_wpm calibration verdict" in text
+    assert "decision: re-seed base_wpm to" in text
+    assert f"{verdict.implied_base_wpm:.1f}" in text
+    assert "reason:" in text
+    assert "gates:" in text
+
+
+def test_render_calibration_verdict_keep():
+    wm = gv._load_wpm_mirror()
+    # A 165-nominal voice with tiny drift → keep.
+    samples = [wm.CalibrationSample(words=50, audio_seconds=18.2)] * 3
+    calib = wm.calibrate_base_wpm(samples, default_base_wpm=165.0)
+    verdict = wm.calibration_verdict(calib)
+    lines = gv.render_calibration_verdict(verdict)
+    text = "\n".join(lines)
+    assert "decision: keep the current nominal" in text
+
+
+def test_handler_omits_verdict_by_default():
+    lines = _run(["calibrate-base-wpm", "--samples", "50:14.0", "50:14.0", "50:14.0"])
+    text = "\n".join(lines)
+    assert "calibration from rendered samples" in text
+    assert "calibration verdict" not in text
+
+
+def test_handler_emits_verdict_when_flagged():
+    lines = _run(
+        ["calibrate-base-wpm", "--samples", "50:14.0", "50:14.0", "50:14.0",
+         "--verdict"]
+    )
+    text = "\n".join(lines)
+    # Both the raw report AND the verdict appear, raw first.
+    assert "calibration from rendered samples" in text
+    assert "calibration verdict" in text
+    assert text.index("from rendered samples") < text.index("calibration verdict")
+    assert "decision: re-seed base_wpm to" in text
+
+
+def test_handler_verdict_matches_engine_directly():
+    # The handler's verdict reflects the same fold the engine runs directly.
+    wm = gv._load_wpm_mirror()
+    samples = [wm.CalibrationSample(words=50, audio_seconds=14.0)] * 3
+    calib = wm.calibrate_base_wpm(samples, default_base_wpm=165.0)
+    verdict = wm.calibration_verdict(calib)
+    expected = gv.render_calibration(calib) + gv.render_calibration_verdict(verdict)
+    lines = _run(
+        ["calibrate-base-wpm", "--samples", "50:14.0", "50:14.0", "50:14.0",
+         "--verdict"]
+    )
+    assert lines == expected
+
+
+def test_handler_verdict_gate_overrides_thread_through():
+    # --min-samples 1 lets a single significant render recommend a re-seed.
+    lines = _run(
+        ["calibrate-base-wpm", "--samples", "50:14.0", "--verdict",
+         "--min-samples", "1"]
+    )
+    text = "\n".join(lines)
+    assert "decision: re-seed base_wpm to" in text
+
+
+def test_handler_verdict_below_threshold_keeps():
+    # A large --drift-min suppresses the re-seed even on a fast voice.
+    lines = _run(
+        ["calibrate-base-wpm", "--samples", "50:14.0", "50:14.0", "50:14.0",
+         "--verdict", "--drift-min", "100"]
+    )
+    text = "\n".join(lines)
+    assert "decision: keep the current nominal" in text
+
+
+def test_handler_verdict_dispatch_routes(capsys):
+    rc = gv.main(
+        ["calibrate-base-wpm", "--samples", "50:14.0", "50:14.0", "50:14.0",
+         "--verdict"]
+    )
+    assert rc == 0
+    assert "calibration verdict" in capsys.readouterr().out
