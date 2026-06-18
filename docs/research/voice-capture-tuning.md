@@ -48,6 +48,87 @@ python fixtures/replay_vad.py --grid debounce_ms,preroll_ms \
     --grid-values-a 100,200 --grid-values-b 0,256,512 --json
 ```
 
+## Silero neural VAD — the primary path (iter-231)
+
+**Energy-RMS VAD is a dead end for continuous speech.** The ground-truth
+recording `voice-20260618-110355.wav` (31s of continuous speaking) proves it:
+its in-speech noise floor is ~0.016 RMS and the speech median is only ~0.023 —
+too close. NO threshold × silence combination (swept 0.006–0.015 × 250–800ms,
+plus hysteresis) breaks it into more than **1** segment, so the utterance never
+closes ("VAD triggered but wouldn't untrigger"). Worse, the count is not even
+monotonic in threshold: on `voice-20260617-161615.wav` the *lower* 0.006 gate
+keeps the inter-utterance gap above threshold and **merges** two turns into one
+segment, while 0.015 splits them — the merging-vs-splitting failure that makes
+energy thresholds unworkable on real rooms.
+
+**Silero VAD (neural) is the fix.** It scores P(speech) per 32ms window with a
+small pretrained model, distinguishing speech from room-tone *regardless of the
+energy floor*. The live mic path already uses it
+(`pipecat_server.py`: `SileroVADAnalyzer(params=VADParams(min_volume=0.01,
+stop_secs=0.8))`); iter-231 brings the same model to the `:5111` server and to a
+headless replay harness so the recording corpus — not a mic — is the proof.
+
+The segmenter lives in `vad/silero.py` (lazy-loaded, dependency-degrading) and
+is replayed over the whole corpus by `fixtures/replay_silero.py`:
+
+```
+python fixtures/replay_silero.py                 # segments per recording
+python fixtures/replay_silero.py --compare       # Silero vs energy-VAD counts
+python fixtures/replay_silero.py --json          # machine-readable
+```
+
+### Silero vs energy-VAD segment counts (the headless proof)
+
+Measured over the seed corpus with `min_silence_ms=800` (the pipecat
+`stop_secs=0.8`), Silero defaults otherwise (`threshold=0.5`,
+`min_speech_ms=250`, `speech_pad_ms=30`):
+
+| recording | dur | energy-VAD onsets | **Silero segments** |
+|-----------|----:|------------------:|--------------------:|
+| voice-20260617-122716.wav | 17.3s | 2 | 2 |
+| voice-20260617-123829.wav | 64.6s | 2 | **4** |
+| voice-20260617-131451.wav |  9.3s | 1 | 1 |
+| voice-20260617-135015.wav | 1115.8s | 5 | 3 |
+| voice-20260617-161615.wav | 12.4s | 1 | **2** |
+| **voice-20260618-110355.wav** | **31.3s** | **1** | **5** |
+
+The gate the steering set: the 31s continuous recording, which energy-VAD
+collapses to a single never-closing segment, splits into **5** sensible Silero
+regions (e.g. `(1.6-2.1) (3.9-4.4) (6.8-7.7) (10.7-18.5) (24.8-31.3)`s). Two
+more recordings (`123829`, `161615`) that energy-VAD under-segments also gain
+correct turn boundaries. `135015` (an 18-minute mostly-silent capture) shows
+the opposite, expected behaviour: Silero reports *fewer* regions because it
+rejects the low-energy noise the RMS gate spuriously committed on. The
+`test_silero_recordings.py` integration suite pins all of this; the pure
+plumbing is covered fast in `tests/unit/test_silero_vad.py`.
+
+### Endpoint contract (`POST /vad/silero`, server :5111)
+
+So the desktop client can adopt it:
+
+- **Request:** `POST /vad/silero` with a 16-bit PCM WAV byte body (any sample
+  rate / channel count; resampled to 16kHz mono internally). Optional query
+  params override the `SileroParams`: `threshold` (speech-probability gate,
+  default 0.5), `min_speech_ms` (250), `min_silence_ms` (800), `speech_pad_ms`
+  (30).
+- **Response (200):** `{"num_segments": N, "speech_s": S, "duration_s": D,
+  "sample_rate": SR, "segments": [{"start_s", "end_s", "duration_s"}, ...]}` —
+  timestamps in seconds relative to the recording start.
+- **503** when the Silero model is unavailable (package not installed) — the
+  caller falls back to the local RMS path.
+- `/health` now reports `"silero_vad": true|false` so a client can probe
+  availability before choosing the endpoint over local RMS.
+
+### Desktop integration (backlog — operator wires + GUI-tests on the Mac)
+
+The browser `ContinuousListener` should send mic audio to `/vad/silero` for
+speech/silence decisions instead of (or alongside) local RMS — OR the app uses
+the existing pipecat `:8765` WS path, which already runs Silero. The cleanest
+contract is the `/vad/silero` POST above for batch/segment decisions; for live
+streaming the pipecat WS path is preferable since it runs the model frame-by-
+frame. Energy VAD (threshold / gain / preroll, below) stays as the documented
+**fallback** path for hosts without `silero-vad`.
+
 A **pre-roll buffer** (`--preroll-ms`, iter-191 — backlog item 2) recovers
 the soft attack of an utterance that the live client discards: every
 sub-threshold frame before a speech onset is thrown away today, so the

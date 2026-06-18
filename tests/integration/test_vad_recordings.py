@@ -91,18 +91,42 @@ class TestProductionParams:
 
 
 class TestThresholdRegression:
-    """Document the threshold lift: 0.006 must detect at least as many
-    recordings as the old 0.015 default did. This guards against anyone
-    silently raising the threshold back toward the under-detecting value.
+    """Document the threshold lift: 0.006 must recover at least as much speech
+    as the old 0.015 default did. This guards against anyone silently raising
+    the threshold back toward the under-detecting value.
+
+    NOTE (iter-231): this asserts monotonicity on *speech recovered*
+    (``frames_over_threshold`` / ``speaking_frames``), NOT on onset *count*.
+    Onset count is NOT monotonic in threshold on real audio: when a recording's
+    inter-utterance noise floor sits between the two thresholds (as
+    ``voice-20260617-161615.wav`` does), the LOWER gate keeps that gap above
+    threshold and *merges* two utterances into one segment, while the higher
+    gate drops the gap below threshold and *splits* them — so the lower
+    threshold can legitimately show FEWER onsets while clearing strictly more
+    frames. That merging-vs-splitting failure of energy-RMS VAD is exactly the
+    dead-end the iter-231 Silero work replaces; counting onsets here was the
+    wrong invariant. A lower gate can only ever let MORE frames clear it, so
+    ``frames_over_threshold`` is the property that is genuinely monotonic and
+    the one this regression guard should pin.
     """
 
-    def test_lower_threshold_never_detects_fewer(self, recording):
+    def test_lower_threshold_recovers_at_least_as_much_speech(self, recording):
         prod = replay_recording(recording, PROD_PARAMS)
         upstream = replay_recording(recording, UPSTREAM_PARAMS)
-        assert prod.onsets >= upstream.onsets, (
-            f"{recording.name}: threshold 0.006 detected {prod.onsets} onsets "
-            f"but 0.015 detected {upstream.onsets} — lowering the gate should "
-            f"never reduce detections"
+        # A lower gate is strictly more permissive: every frame over 0.015 is
+        # also over 0.006, so the count of gate-clearing frames can only grow.
+        assert prod.frames_over_threshold >= upstream.frames_over_threshold, (
+            f"{recording.name}: threshold 0.006 cleared "
+            f"{prod.frames_over_threshold} frames but 0.015 cleared "
+            f"{upstream.frames_over_threshold} — lowering the gate should never "
+            f"reduce the frames over threshold"
+        )
+        # The committed-speaking frames likewise can't drop (the state machine
+        # sees at least as many over-threshold frames to commit on).
+        assert prod.speaking_frames >= upstream.speaking_frames, (
+            f"{recording.name}: threshold 0.006 committed {prod.speaking_frames} "
+            f"speaking frames but 0.015 committed {upstream.speaking_frames} — "
+            f"lowering the gate should never reduce recovered speech"
         )
 
 

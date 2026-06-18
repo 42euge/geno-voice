@@ -6,6 +6,12 @@ pyyaml>=6.0
 requests>=2.31
 soundfile>=0.12
 
+# Neural VAD (iter-231) — Silero distinguishes speech from room-tone regardless
+# of the energy floor, segmenting continuous speech that energy-RMS VAD cannot.
+# Pulls in torch + torchaudio; the /vad/silero endpoint and replay_silero.py
+# degrade cleanly (503 / skip) when this is absent.
+silero-vad>=5.1
+
 # benchmarking
 pytest>=8.0
 pytest-benchmark>=4.0

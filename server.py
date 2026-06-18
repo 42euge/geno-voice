@@ -19,11 +19,13 @@ from tts import get_engine as get_tts_engine
 from session.activation import ActivationTracker
 from session.triggers import filter_noise, detect_triggers
 from session.notes import SessionNoteProcessor
+from vad import SileroParams, segment_wav_bytes, silero_available
 
 log = logging.getLogger("geno-voice")
 
 stt_engine = None
 tts_engine = None
+silero_model = None
 activation_tracker = ActivationTracker()
 session_notes = None
 
@@ -52,11 +54,35 @@ def _init_tts():
     log.info("TTS engine: %s", tts_engine.name)
 
 
+def _init_silero():
+    """Load the Silero neural VAD model once at startup (iter-231).
+
+    Energy-RMS VAD cannot segment continuous speech (the in-speech noise floor
+    sits too close to the speech median); Silero distinguishes speech from
+    room-tone regardless of the energy floor. Loaded eagerly so the first
+    ``/vad/silero`` request doesn't pay the model-load latency. Degrades to a
+    warning (and the endpoint returns 503) when the package is absent, so the
+    server still boots on a host without ``silero-vad`` installed.
+    """
+    global silero_model
+    if not silero_available():
+        log.warning("Silero VAD unavailable (silero-vad not installed); /vad/silero -> 503")
+        return
+    from vad import load_model
+    try:
+        silero_model = load_model()
+        log.info("Silero VAD loaded")
+    except Exception as exc:  # pragma: no cover - defensive
+        log.warning("Silero VAD load failed: %s; /vad/silero -> 503", exc)
+        silero_model = None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global session_notes
     _init_stt()
     _init_tts()
+    _init_silero()
 
     from datetime import datetime
     session_id = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
@@ -92,6 +118,7 @@ async def health():
         "status": "ok",
         "stt_engine": stt_engine.name if stt_engine else None,
         "tts_engine": tts_engine.name if tts_engine else None,
+        "silero_vad": silero_model is not None,
     }
 
 
@@ -184,6 +211,67 @@ async def stt_transcribe(request: Request):
         }
 
     return {"text": filtered, "elapsed": elapsed, "trigger": trigger_info}
+
+
+@app.post("/vad/silero")
+async def vad_silero(request: Request):
+    """Segment a WAV body into Silero speech regions (iter-231).
+
+    Contract (so the desktop ContinuousListener can adopt it):
+      * Request: ``POST /vad/silero`` with a 16-bit PCM WAV byte body
+        (any sample rate / channel count; resampled to 16 kHz mono internally).
+        Optional query params override ``SileroParams``:
+        ``threshold`` (speech-probability gate, default 0.5),
+        ``min_speech_ms`` (default 250), ``min_silence_ms`` (default 800 — the
+        pipecat ``stop_secs=0.8``), ``speech_pad_ms`` (default 30).
+      * Response (200): ``{"num_segments": N, "speech_s": S, "duration_s": D,
+        "sample_rate": SR, "segments": [{"start_s", "end_s", "duration_s"}, ...]}``
+        — timestamps in seconds relative to the recording start.
+      * 503 when the Silero model is unavailable (package not installed) — the
+        caller should fall back to the local RMS path.
+
+    This is the headless-validated replacement for energy-RMS VAD, which cannot
+    segment continuous speech (the in-speech noise floor sits too close to the
+    speech median). Validate with ``fixtures/replay_silero.py``.
+    """
+    if silero_model is None:
+        return JSONResponse(
+            {"error": "silero VAD unavailable"}, status_code=503
+        )
+
+    wav_bytes = await request.body()
+    if not wav_bytes:
+        return JSONResponse({"error": "empty body"}, status_code=400)
+
+    qp = request.query_params
+
+    def _f(name, default):
+        raw = qp.get(name)
+        if raw is None or raw == "":
+            return default
+        try:
+            return float(raw)
+        except ValueError:
+            return default
+
+    params = SileroParams(
+        threshold=_f("threshold", SileroParams.threshold),
+        min_speech_ms=_f("min_speech_ms", SileroParams.min_speech_ms),
+        min_silence_ms=_f("min_silence_ms", SileroParams.min_silence_ms),
+        speech_pad_ms=_f("speech_pad_ms", SileroParams.speech_pad_ms),
+    )
+
+    loop = asyncio.get_event_loop()
+    try:
+        result = await loop.run_in_executor(
+            None,
+            lambda: segment_wav_bytes(wav_bytes, params=params, model=silero_model),
+        )
+    except Exception as exc:
+        log.error("Silero VAD failed: %s", exc)
+        return JSONResponse({"error": f"vad failed: {exc}"}, status_code=500)
+
+    return result.to_dict()
 
 
 @app.get("/activation")
