@@ -18863,3 +18863,88 @@ path.
    grid shows pre-roll improves the typical opening, the tail, AND the
    consistency simultaneously; pick a value (256–512ms) and gate on a
    busier/newly-synced corpus.
+
+---
+
+## iter-215 — Surface WPM-mirror speed adaptation in the session summary (backlog #1)
+
+**Branch:** `iter-215-mirror-summary` (merged ff to main, commit `78c7c0a`)
+**Date:** 2026-06-18
+
+**Improvement (the WPM-mirroring effect is now *measured* in the summary, not
+just enacted):**
+This lap closes iter-214 backlog item #1. iter-213 shipped the pure
+WPM-mirroring primitive (`user_wpm → bot speed`); iter-214 wired it into the
+live TTS path so the Kokoro `speed` now adapts turn-to-turn behind an
+off-by-default gate. The mechanics *adapt* the rate but nothing **measured** it.
+This lap measures it: the session summary now reports the per-session speed
+drift the mirror introduced, so the iter-210 `bot_wpm` consistency sentinel and
+the iter-064 "Mirror gap" WPM line can be seen converging when mirroring is on —
+measured, not asserted. It is the named follow-on iter-214's "Next planned
+items" #1 pointed at, and the standard codebase rhythm (a measurement surface
+shipped one reviewable lap after the mechanism it watches).
+
+What changed:
+- **`examples/_chat_speed.py`**: `SpeedController` gains a read-only `initial`
+  property — the speed it was built with. Frozen at construction; `observe`
+  only ever moves the live `_speed`. `initial → current()` is the net of every
+  per-turn nudge, exactly what the summary reports.
+- **`examples/_chat_metrics.py`**:
+  - `SessionMeta` gains three SessionMeta-only fields:
+    `wpm_mirror_active` (bool), `wpm_mirror_initial_speed`,
+    `wpm_mirror_final_speed`.
+  - New `_emit_wpm_mirror_line(emit, *, active, initial_speed, final_speed)`
+    helper. When active it renders one of two shapes:
+    `WPM mirror: on, speed 1.00 → 1.12 (+0.12) …` when the speed moved, or
+    `WPM mirror: on, speed held at 1.00 …` when start/end are within the 0.005
+    rounding floor (the iter-213 deadband held the rate — reported as *held*
+    rather than a misleading `+0.00`). Emitted right under the iter-094 WPM
+    medians / mirror-gap block it complements.
+  - Wired into `print_session_summary` (meta_eff construction, local rebinds,
+    call site after `_emit_wpm_block`).
+- **`examples/mic_chat.py`**: pass `speed_controller.active` / `.initial` /
+  `.current()` into `SessionMeta` at summary time.
+
+**The off-by-default invariant is the whole point.** With no `wpm_mirror` config
+(the default) the controller's mirror is `None`, `active` is `False`, and
+`_emit_wpm_mirror_line` emits nothing — the summary is byte-for-byte the
+pre-iter-215 output. The line appears only when the operator turned mirroring
+on. Measuring the adaptation cannot regress the proven fixed-rate summary.
+
+**Verification:**
+- New/affected tests:
+  `python -m pytest tests/unit/test_emit_wpm_mirror_line.py
+  tests/unit/test_chat_speed.py tests/integration/test_session_summary_wpm_mirror.py
+  tests/unit/test_emit_wpm_block.py` → **45 passed** (14 + 4 new + 5 new).
+- Full Python unit suite: `python -m pytest tests/unit/` → **2927 passed**
+  (2909 prior + 18 new), run on the feature branch before ff-merge AND re-run
+  on main after merge. GATE command:
+  `cd ~/code-purp/geno-voice && python -m pytest tests/unit/`.
+- `python -W error::SyntaxWarning -m py_compile` clean on all three changed
+  modules + the two new test files.
+- (`tests/test_session.py` still errors on collection — pre-existing missing
+  `pipecat` dep, not a regression.)
+
+**Next planned items:**
+1. **[wpm-mirroring, follow-on] Tune `base_wpm`/`strength` against a corpus with
+   varied user pacing.** The full loop now adapts *and* measures the rate; the
+   natural next hop is to validate the tunables. Render a corpus that varies the
+   user's speaking rate across turns (slow → fast → slow), run the mirror over
+   it, and confirm the summary's `initial → final` drift and the shrinking
+   "Mirror gap" track the intended convergence — then pick `base_wpm` (currently
+   the iter-046 green-band midpoint 165) and `strength` (0.5) from data rather
+   than the seed defaults.
+2. **[silence] Run the actual `--sweep silence_ms` over a newly-synced corpus**
+   — the sweep harness carries the full floor/typical/ceiling/spread shape on all
+   three axes from one shared renderer (iter-207). Gate a real `silence_ms`
+   default change on a corpus that exercises real mid-utterance pauses *and*
+   two-turns-one-pause cases (the seed corpus is flat in both windows).
+3. **[latency, highest value] Pre-warm the capture pipeline** — still the top
+   user-facing bug (3–5s `click_to_capture_ms`). Needs an on-device timing
+   harness; cannot be replayed. The iter-208..212 sentinels now make
+   playback-side, recording-loop, mid-stream-LLM, and end-to-end TTFS slowdowns
+   visible in session summaries.
+4. **[preroll-default] Bump the client `prerollMs` default above 0** — iter-200's
+   grid shows pre-roll improves the typical opening, the tail, AND the
+   consistency simultaneously; pick a value (256–512ms) and gate on a
+   busier/newly-synced corpus.
