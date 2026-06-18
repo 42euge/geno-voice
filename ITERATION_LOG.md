@@ -17484,3 +17484,91 @@ What changed:
    floor+mean+tail timing effect readable per grid cell.
 4. **[gain] Add a gain×preroll grid finding** — quantify whether amplifying
    the pre-roll audio changes the recovered soft-attack quality.
+
+---
+
+## iter-200 — add `std_first_onset_ms` onset-timing consistency aggregate + the debounce×preroll grid finding
+
+**Branch:** `iter-200-onset-timing-std` (merged ff to main, commit `0d8a6b2`)
+**Date:** 2026-06-17
+
+**Improvement (iter-197/198/199 follow-up + backlog item 3):** the last three
+laps built out the onset-timing distribution — iter-197 `mean_first_onset_ms`
+(`onset1`, typical), iter-198 `max_first_onset_ms` (`onset1_max`, worst-case
+ceiling), iter-199 `min_first_onset_ms` (`onset1_min`, best-case floor). Those
+three give the *envelope and center* of the distribution but say nothing about
+how tightly the recordings cluster. This lap adds the missing fourth statistic,
+the *spread* — and uses it to finally write the long-deferred backlog item 3
+(`--grid debounce_ms,preroll_ms` finding), now that all four aggregates make the
+joint timing effect readable per grid cell.
+
+What changed:
+- **`fixtures/replay_vad.py`** — `SweepPoint` gains a `std_first_onset_ms`
+  field: the *population* standard deviation of each recording's first-segment
+  `onset_ms`, over the same detected-recordings subset the mean uses. It is the
+  onset-timing *consistency* — two parameter sets can share an `onset1` mean
+  while one opens at a steady time every recording and the other swings between
+  very early and very late; the std is the only aggregate that tells them apart.
+  Population (ddof=0) so a single detected recording reads as `0.0` (perfectly
+  consistent given one point) rather than an undefined sample std; missed
+  recordings excluded on the same reasoning as min/mean/max (no segment → no
+  onset time); `0.0` when nothing detected. `aggregate_results` computes it
+  (`float(np.std(first_onsets))`); `summary_line` and `_grid_summary_line`
+  surface it as an `onset1_std=…ms` column (after min/mean/max) in the human
+  sweep/grid tables; it rides along in `--json` for free (dataclass field).
+- **`tests/unit/test_replay_vad.py`** — +4 dedicated tests (73 → 77):
+  `test_std_first_onset_is_population_std_of_detected` (equals `np.std` over the
+  same detected onsets; non-negative; strictly positive when onsets differ),
+  `test_std_first_onset_zero_for_single_detected_recording` (one hit at 0.015 →
+  `0.0`, the documented single-point reading), `test_std_first_onset_excludes_missed_recordings`
+  (a miss contributes no phantom 0.0 onset that would inflate the spread), and
+  `test_sweep_json_includes_std_first_onset` (JSON payload includes the field;
+  non-negative; bounded above by the min→max range). Plus assertions folded into
+  the empty-corpus zero test, the all-miss zero test, the human-table column
+  test (`onset1_std=` present), and the grid human-table test (4 cells each
+  carry `onset1_std=`).
+- **`docs/research/voice-capture-tuning.md`** — `onset1_std` documented in the
+  "Each row reports" legend; new "Onset-timing consistency, and the joint
+  debounce×preroll grid (iter-200)" section with the full 3×3 grid table and the
+  consistency reading; backlog item 3 satisfied.
+
+**Corpus evidence (the consistency column reveals what the mean hides),**
+threshold 0.006, frame 1024, real 4-recording corpus, `--grid debounce_ms,preroll_ms`
+over `100,200,300 × 0,256,512`:
+- Lowering debounce 200→100ms (at preroll 0) pulls the *mean* ~261ms earlier
+  (1532.5→1271.3ms) but **widens** the spread (982.0→1081.2ms `onset1_std`) — the
+  earliest recording opens sooner while the late one stays pinned, so debounce
+  buys a better average at the cost of *less* consistency.
+- Pre-roll both shifts the mean earlier *and* tightens the spread
+  (982.0→893.1ms across preroll 0→512 at debounce 200), because it moves every
+  detected recording uniformly.
+- The lowest-std cell still holding `trig=4/4` is **debounce 200 / preroll 512**
+  (`onset1_std=893.1ms`, mean 1091.3ms): the most consistent early opening comes
+  from keeping the default debounce and leaning on pre-roll, *not* from dropping
+  debounce. This sharpens backlog item 5 — pre-roll is the higher-leverage
+  default change for both the typical case and the consistency.
+
+**Verification:**
+- `python -m pytest tests/unit/test_replay_vad.py` → **77 passed** (73 + 4 new).
+- Full Python unit suite: `python -m pytest tests/unit/` → **2673 passed**
+  (2669 prior + 4 new).
+- Integration `tests/integration/test_vad_recordings.py` → skipped in the
+  worktree (the binary corpus lives only in the main checkout); the CLI grid
+  run above exercised the new aggregate against the real corpus directly via
+  `--dir`.
+- (`tests/test_session.py` still errors on collection — pre-existing missing
+  `pipecat` dep, not a regression.)
+
+**Next planned items (from the research-doc backlog):**
+1. **[latency, highest value] Pre-warm the capture pipeline** — still the top
+   user-facing bug (3–5s `click_to_capture_ms`). Needs an on-device timing
+   harness; cannot be replayed.
+2. **[preroll-default] Bump the client `prerollMs` default above 0** — iter-200's
+   grid shows pre-roll is the lever that improves the typical opening, the tail,
+   AND the consistency simultaneously (debounce only the middle). This is now
+   the higher-leverage default change than lowering `debounceMs`; pick a value
+   (256–512ms) and gate on a busier/newly-synced corpus.
+3. **[gain] Add a gain×preroll grid finding** — quantify whether amplifying
+   the pre-roll audio changes the recovered soft-attack quality.
+4. **[silence] Right-size the silence timeout** — 800ms may over-split or
+   over-merge turns; sweep `silence_ms` and inspect segment counts.
