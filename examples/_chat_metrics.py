@@ -3131,6 +3131,133 @@ def _emit_ttfs_consistency_line(
     )
 
 
+def _stt_preview_divergence_bucket(divergence: float) -> str:
+    """iter-224: bucket a per-turn ``stt_preview_divergence``
+    (iter-072's live-preview-vs-final transcript distance in
+    ``[0.0, 1.0]``, computed via ``difflib.SequenceMatcher`` in
+    ``record_utterance_streaming``) into a coarse category. Used by
+    ``_emit_stt_preview_divergence_consistency_line`` to detect runs
+    where the live STT preview consistently diverged from the final
+    transcript — the signal that incremental Whisper output is
+    unreliable, so the live preview is misleading the user rather
+    than helping them.
+
+    Buckets (chosen against the iter-072 semantics, where 0 = the
+    preview matched the final perfectly and ``>0.3`` is documented
+    as "preview UX is broken"):
+
+        ``good``   — < 0.15: the live preview tracked the final
+            closely; the desired state. Incremental STT was useful.
+        ``noisy``  — 0.15-0.30: the preview drifted from the final
+            often enough to be mildly distracting, but the user
+            could still mostly read along.
+        ``broken`` — > 0.30: the preview was so different from the
+            final that the user had to wait for the final transcript
+            to know if they were understood — the live preview added
+            no value (or actively misled).
+
+    Like iter-140/141/208 and UNLIKE iter-142/143, the fine bucket
+    is a LOW value — smaller divergence is better, so the boundaries
+    are NOT inverted.
+
+    Returns ``""`` when ``divergence`` is non-positive (no streaming
+    STT this turn, or a perfect preview match — both the "fine"
+    state) — empty-string filter applies in the consumer, mirroring
+    iter-114/115/120/126/128/140/141/208.
+    """
+    if divergence <= 0:
+        return ""
+    if divergence < 0.15:
+        return "good"
+    if divergence <= 0.30:
+        return "noisy"
+    return "broken"
+
+
+def _emit_stt_preview_divergence_consistency_line(
+    emit, divergence_list: list[float], threshold: int = 5,
+) -> None:
+    """iter-224: detect consecutive runs of turns where the live STT
+    preview diverged from the final transcript. Latest instance of
+    the diversity-check pattern after iter-114 (filler),
+    iter-115/126 (naturalness), iter-120 (barge-phase), iter-128
+    (sentence-length), iter-140 (stt-rtf), iter-141 (tts-rtf),
+    iter-142 (llm-tps), iter-143 (streaming-overlap), iter-208
+    (synth-dispatch), iter-209 (eot-overhead), iter-210 (bot-wpm),
+    iter-211 (max-token-gap), iter-212 (ttfs). Buckets the per-turn
+    ``stt_preview_divergence`` via ``_stt_preview_divergence_bucket``
+    before running the scan (same continuous-metric shape as
+    iter-128/140/141/142/143/208).
+
+    The iter-072 metric exists precisely because a bad preview is
+    otherwise silent: the session-summary never surfaced it, so a
+    persistently-wrong live transcript ("preview UX is broken,"
+    per iter-072) goes unnoticed even though it directly degrades
+    the hands-free read-along experience the VISION targets. A
+    *sustained run* in the noisy/broken bucket is the actionable
+    signal that incremental Whisper output is unreliable on this
+    host — distinct from iter-140's ``stt_rtf`` sentinel, which
+    watches STT *speed*: STT can be fast (good RTF) yet produce a
+    preview that keeps changing under the user (bad divergence).
+
+    Filter rule: drop the ``"good"`` bucket before the scan. It's
+    the "fine" state; only "noisy" and "broken" warrant warning.
+    Empty buckets (turns with no streaming STT / a perfect match)
+    also drop. Like iter-140/141/208, the fine bucket is a LOW value
+    (small divergence) — preview divergence is smaller-is-better.
+
+    Threshold = 5: same as iter-115/128/140/141/142/143/208. The
+    divergence varies turn to turn with utterance length and how
+    incrementally Whisper settles, and a single noisy preview (e.g.
+    a long rambling utterance) is normal; a sustained run is the
+    real signal.
+
+    Output:
+
+        STT preview:      5 consecutive 'broken' turns — the live
+                          preview diverges badly from the final;
+                          users can't trust the read-along, check
+                          incremental Whisper or hide the preview
+                          (iter-072 stt_preview_divergence)
+    """
+    # Bucketize, then drop the "uninteresting" bucket (empty, good).
+    interesting = {"noisy", "broken"}
+    filtered = [
+        b for b in (
+            _stt_preview_divergence_bucket(d) for d in divergence_list
+        )
+        if b in interesting
+    ]
+    if not filtered:
+        return
+
+    longest_run, longest_bucket = _longest_consecutive_run(filtered)
+    if longest_run < threshold:
+        return
+
+    if longest_bucket == "broken":
+        suggestion = (
+            "the live preview diverges badly from the final; users "
+            "can't trust the read-along, check incremental Whisper "
+            "or hide the preview"
+        )
+    elif longest_bucket == "noisy":
+        suggestion = (
+            "the live preview drifts from the final often; "
+            "incremental Whisper output is unreliable on this host, "
+            "consider a steadier preview window"
+        )
+    else:
+        # Defensive: future buckets that pass the filter rule.
+        suggestion = "investigate recurring live-preview divergence"
+
+    emit(
+        f"    STT preview:      {longest_run} consecutive "
+        f"{longest_bucket!r} turns — {suggestion} "
+        f"(iter-072 stt_preview_divergence)"
+    )
+
+
 def _emit_bargeable_line(emit, bargeable_values: list[float]) -> None:
     """iter-104: extracted from print_session_summary's iter-074
     bargeable line. Reports the WORST bargeable fraction across
@@ -3899,6 +4026,19 @@ def print_session_summary(
     _emit_ttfs_consistency_line(
         _emit,
         [m.ttfs for m in metrics_list],
+    )
+    # iter-224: STT-preview-divergence consistency check. Only fires
+    # when 5+ consecutive turns had the live preview drift from the
+    # final transcript (noisy 0.15-0.30 / broken > 0.30). iter-072
+    # added the per-turn metric because a bad preview is otherwise
+    # silent — the session-summary never surfaced it, so a
+    # persistently-wrong read-along transcript ("preview UX is
+    # broken") goes unnoticed. Distinct from iter-140's stt_rtf
+    # sentinel: that watches STT SPEED; STT can be fast yet still
+    # produce a preview that keeps changing under the user.
+    _emit_stt_preview_divergence_consistency_line(
+        _emit,
+        [m.stt_preview_divergence for m in metrics_list],
     )
     # iter-090: barge block extracted to _emit_barge_block helper.
     # ~76 lines of co-emitted lines (count, interruption rate,
