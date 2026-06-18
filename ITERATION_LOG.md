@@ -17401,3 +17401,86 @@ frame 1024, real 4-recording corpus:
    readable per grid cell.
 4. **[gain] Add a gain×preroll grid finding** — quantify whether amplifying
    the pre-roll audio changes the recovered soft-attack quality.
+
+---
+
+## iter-199 — add a `min_first_onset_ms` best-case onset-timing floor to the VAD sweep
+
+**Branch:** `iter-199-onset-timing-bestcase` (merged ff to main, commit `43d0669`)
+**Date:** 2026-06-17
+
+**Improvement (iter-197/198 follow-up):** iter-197 added `mean_first_onset_ms`
+(`onset1`, the *typical* opening) and iter-198 added `max_first_onset_ms`
+(`onset1_max`, the *worst-case* ceiling). The timing distribution was missing
+its third statistic — the *best case*. `SweepPoint` already carried the full
+shape on the *count* axis (`total_onsets` + `min_onsets` worst-case floor), and
+the timing axis now had mean + ceiling but no floor. This lap adds the missing
+companion so a single sweep reports the whole best/typical/worst onset-timing
+spread, and — crucially — exposes the *irreducible* earliest capture an
+onset-shaping knob can't push past (when the floor stops moving, that knob has
+saturated on its best recording).
+
+What changed:
+- **`fixtures/replay_vad.py`** — `SweepPoint` gains a `min_first_onset_ms` field:
+  the *earliest* first-segment `onset_ms` across recordings that detected at
+  least one segment. Missed recordings are excluded on the same reasoning as the
+  mean and max (no segment → no onset time; a `0.0` would falsely read as
+  "earliest possible"); `0.0` when nothing detected. `aggregate_results`
+  computes it (`min(first_onsets)`); `summary_line` and `_grid_summary_line`
+  surface it as an `onset1_min=…ms` column (ordered min/mean/max left-to-right)
+  in the human sweep/grid tables; it rides along in `--json` for free (dataclass
+  field via `asdict`).
+- **`tests/unit/test_replay_vad.py`** — +3 dedicated tests (70 → 73):
+  `test_min_first_onset_is_earliest_detected_recording` (equals `min` over the
+  same detected onsets the mean averages; bounds the spread: `min <= mean <=
+  max`), `test_min_first_onset_excludes_missed_recordings` (only the detected
+  recording counts at threshold 0.015, `> 0`), plus assertions folded into the
+  empty-corpus zero test, the human-table column test (`onset1_min=` present),
+  the grid human-table test (4 cells each carry `onset1_min=`), and a new
+  `test_sweep_json_includes_min_first_onset` (JSON payload includes the field,
+  floor `<= mean` and `<= max`).
+- **`docs/research/voice-capture-tuning.md`** — `onset1_min` documented in the
+  "Each row reports" legend; new "Best-case onset floor (iter-199)" subsection
+  with real-corpus tables; backlog item 5 extended with the iter-198/199 joint
+  takeaway.
+
+**Corpus evidence (the floor confirms what the ceiling implied),** threshold
+0.006, frame 1024, real 4-recording corpus:
+- `--sweep debounce_ms 100,200,300`: `onset1_min` stays **pinned at 232.2ms**
+  across all three values — the earliest recording's real speech starts there
+  and no debounce tuning captures it sooner, mirroring how `onset1_max` stays
+  pinned (debounce moves only the *interior* of the spread, not its edges).
+- `--sweep preroll_ms 0,256,512`: pre-roll drives the floor all the way to
+  **0.0ms** (the recording start, where the clamp stops it) at 256ms — the best
+  recording's soft attack is recovered right back to the file boundary, while
+  the mean (1532.5→1091.3ms) and ceiling (2995.4→2484.5ms) also shift. So the
+  floor confirms from the *bottom* what iter-198's ceiling confirmed from the
+  top: pre-roll shifts the whole distribution uniformly, debounce only the
+  middle — complementary levers.
+
+**Verification:**
+- `python -m pytest tests/unit/test_replay_vad.py` → **73 passed** (70 + 3 new).
+- Full Python unit suite: `python -m pytest tests/unit/` → **2669 passed**
+  (2666 prior + 3 new).
+- Integration `tests/integration/test_vad_recordings.py` → skipped in the
+  worktree (the binary corpus lives only in the main checkout); the CLI runs
+  above exercised the new aggregate against the real corpus directly via `--dir`.
+- (`tests/test_session.py` still errors on collection — pre-existing missing
+  `pipecat` dep, not a regression.)
+
+**Next planned items (from the research-doc backlog):**
+1. **[latency, highest value] Pre-warm the capture pipeline** — still the top
+   user-facing bug (3–5s `click_to_capture_ms`). Needs an on-device timing
+   harness; cannot be replayed.
+2. **[debounce-default] Lower the client `debounceMs` default 200→100 paired
+   with a pre-roll default bump** — the timing aggregates now show the full
+   story: debounce 200→100 helps the *typical* opening (~261ms earlier) but
+   does nothing for the floor (232.2ms) or ceiling (2995ms); pre-roll is the
+   lever that moves both edges. Pair the two default changes; gate on a
+   busier/newly-synced corpus.
+3. **[grid] Add a `--grid debounce_ms,preroll_ms` finding** in the research
+   doc — both onset-timing axes are reachable as client knobs and all three
+   `onset1_min`/`onset1`/`onset1_max` aggregates now make the joint
+   floor+mean+tail timing effect readable per grid cell.
+4. **[gain] Add a gain×preroll grid finding** — quantify whether amplifying
+   the pre-roll audio changes the recovered soft-attack quality.
