@@ -19253,3 +19253,108 @@ iter-216/217 engine it wraps.
    grid shows pre-roll improves the typical opening, the tail, AND the
    consistency simultaneously; pick a value (256–512ms) and gate on a
    busier/newly-synced corpus.
+
+---
+
+## iter-219 — In-band tuning corpus + data-driven strength verdict (backlog #1)
+
+**Branch:** `iter-219-mirror-corpus` (merged ff to main, commit `7c3ffa8`)
+**Date:** 2026-06-18
+
+**Improvement (the corpus that lets the offline grid sweep produce a *fair*
+verdict, plus the verdict itself — closing the backlog item repeated across
+iter-216/217/218):** iter-216 shipped `simulate_speed_trajectory`; iter-217
+shipped `sweep_mirror_grid` / `pick_best_mirror_config`; iter-218 shipped the
+`gv simulate-mirror` CLI. The named follow-on in all three backlogs was the
+same: *run* the sweep on a corpus whose per-turn rates stay **inside** the
+intelligibility band so `final_gap` measures real pacing-tracking rather than
+the `min_speed`/`max_speed` clamp, then change the seed defaults from the
+verdict or document why they stand. This lap supplies that corpus and runs the
+real sweep.
+
+**Why the iter-217 demo arc could not produce a fair verdict.** The arc
+`[120,140,200,230,200,140,120]` ends with a 120-WPM slow tail that maps below
+the 0.8 `min_speed` floor at *every* base, so the winning cell was whichever
+base pushed the clamped final speed lowest — an artifact of the clamp, not of
+tracking. A fair corpus must keep every turn inside the band.
+
+**Two findings, both now pinned by tests:**
+
+1. **`base_wpm` is NOT tunable offline — only `strength` is.** `base_wpm` is the
+   hardware calibration `bot_wpm at speed 1.0`, and the simulator's own
+   `ideal = user_wpm / base_wpm` *uses* it to define the convergence target — so
+   a sweep that varies `base_wpm` scores each cell against its own moving target
+   (circular). The right `base_wpm` is whatever a deployment's Kokoro voice
+   actually clocks at speed 1.0, an on-device measurement, not a replay.
+   `strength`, by contrast, is pure convergence dynamics at a fixed base and
+   *is* answerable offline.
+2. **The seed `strength=0.5` wins the fair test.** On `TUNING_CORPUS_WPMS` (a
+   slow→fast→slow arc, every rate in band at base 150/165/180, with a sustained
+   3-turn tail so every candidate has converged) the lowest-`score` cell at the
+   seed base 165 is `strength=0.5` — the knee between *lagging* (0.3/0.4, the
+   deadband blocks the small early nudges so the speed never catches the user)
+   and *lurching* (0.6/0.7, a single noisy turn jumps the rate too far). So the
+   seed default **STANDS**, now from data rather than assertion.
+
+What changed (`session/wpm_mirror.py`):
+- **`TUNING_CORPUS_WPMS`** `(165,150,190,195,170,150,150,150)` — the canonical
+  in-band varied-pacing corpus. Every rate sits in `[144,195]`, the band
+  intersection across base 150/165/180; the sustained tail lets every `strength`
+  candidate converge so the ranking turns on lurch/churn, not residual gap.
+- **`TUNING_STRENGTH_AXIS`** `(0.3,0.4,0.5,0.6,0.7)` — the swept candidates,
+  spanning the seed with one 0.1 step either side so the verdict shows the knee.
+- **`tune_strength(...)`** — the audio-free reproduction of the verdict: a
+  one-row grid at a **fixed** `base_wpm` + pick. A thin pure wrapper over
+  `sweep_mirror_grid` / `pick_best_mirror_config`; reads nothing, mutates
+  nothing.
+- All three added to `__all__`.
+
+**Off-by-default invariant untouched.** A pure read-only analysis helper, only
+ever building `enabled` configs for offline scoring; nothing in the live
+`mic_chat` / `pipecat_server` path imports it, so it cannot change runtime
+behavior or the proven fixed-rate default path.
+
+**Verification:**
+- New tests: `python -m pytest tests/unit/test_tune_strength.py` → **12 passed**.
+  Coverage: corpus in-band at every grid base; corpus varies + sustained tail;
+  no turn clamps in a converged trajectory; seed `strength` wins;
+  `tune_strength` == an explicit fixed-base sweep+pick; base is held (never
+  swept); the lag-vs-lurch knee (0.3 gap > 0.5 gap, 0.7 step > 0.5 step); custom
+  arc/axis; `None` on an all-silent arc; purity (no constant mutation);
+  determinism; `lurch_weight` threads through (a heavy penalty favours a smoother
+  strength).
+- Full Python unit suite: `python -m pytest tests/unit/` → **3014 passed**
+  (3002 prior + 12 new), run on the feature branch before ff-merge. GATE
+  command: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/`.
+  Re-verified `test_tune_strength.py` (12 passed) on main after merge.
+- `python -W error::SyntaxWarning -m py_compile session/wpm_mirror.py
+  tests/unit/test_tune_strength.py` clean.
+- Operator smoke (worktree): `gv simulate-mirror --wpms
+  165,150,190,195,170,150,150,150 --grid --base-wpms 165 --strengths
+  0.3,0.4,0.5,0.6,0.7` prints the table and picks `strength=0.50` (score 0.110)
+  — the same verdict, operator-runnable.
+- (`tests/test_session.py` still errors on collection — pre-existing missing
+  `pipecat` dep, not a regression.)
+
+**Next planned items:**
+1. **[wpm-mirroring, follow-on, now mostly closed] On-device `base_wpm`
+   calibration.** This lap established that `base_wpm` cannot be tuned by replay
+   — it is the bot's actual WPM at speed 1.0. The natural next hop is a tiny
+   calibration harness: synthesize a fixed known-length script at speed 1.0,
+   measure `bot_wpm` (iter-046 already computes it), and report the implied
+   `base_wpm` so a deployment can set it from its own voice rather than the 165
+   nominal. Offline-renderable from a TTS sample; gate on a real Kokoro render.
+2. **[silence] Run the actual `--sweep silence_ms` over a newly-synced corpus**
+   — the sweep harness carries the full floor/typical/ceiling/spread shape on
+   all three axes from one shared renderer (iter-207). Gate a real `silence_ms`
+   default change on a corpus that exercises real mid-utterance pauses *and*
+   two-turns-one-pause cases (the seed corpus is flat in both windows).
+3. **[latency, highest value] Pre-warm the capture pipeline** — still the top
+   user-facing bug (3–5s `click_to_capture_ms`). Needs an on-device timing
+   harness; cannot be replayed. The iter-208..212 sentinels now make
+   playback-side, recording-loop, mid-stream-LLM, and end-to-end TTFS slowdowns
+   visible in session summaries.
+4. **[preroll-default] Bump the client `prerollMs` default above 0** — iter-200's
+   grid shows pre-roll improves the typical opening, the tail, AND the
+   consistency simultaneously; pick a value (256–512ms) and gate on a
+   busier/newly-synced corpus.
