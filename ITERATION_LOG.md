@@ -18544,3 +18544,89 @@ What changed:
    grid shows pre-roll improves the typical opening, the tail, AND the
    consistency simultaneously; pick a value (256–512ms) and gate on a
    busier/newly-synced corpus.
+
+---
+
+## iter-212 — TTFS consistency sentinel
+
+**Branch:** `iter-212-ttfs-consistency` (merged ff to main, commit `a15477a`)
+**Date:** 2026-06-18
+
+**Improvement (observability — sentinel on the headline latency metric):**
+TTFS (time-to-first-speech = speech-stop → first-audio-to-speaker) is *the*
+number the VISION optimizes for ("latency is the feature"; "sub-500ms on a
+MacBook"). It has had a colored per-turn display (green below 3.0s), an
+attribution breakdown (iter-076), and a median + first-turn-warmup-penalty block
+(`_emit_ttfs_block`, iter-089) — but no *run* sentinel. A healthy median can
+hide a sustained stretch of slow turns: a few snappy turns early pull the median
+down while the back half of the session crawls. This lap adds the run sentinel:
+5+ consecutive turns above the snappy threshold is the actionable signal that
+the bot is consistently slow to start talking back.
+
+This is the **THIRTEENTH** instance of the session-summary diversity-check
+pattern (after iter-114 filler, iter-115/126 naturalness, iter-120 barge-phase,
+iter-128 sentence-length, iter-140 stt-rtf, iter-141 tts-rtf, iter-142 llm-tps,
+iter-143 streaming-overlap, iter-208 synth-dispatch, iter-209 eot-overhead,
+iter-210 bot-wpm, iter-211 max-token-gap) and the **TENTH** applied to a
+continuous metric.
+
+**Smaller-is-better, monotonic** like iter-140/141/208/209/211 and UNLIKE the
+inverted iter-142/143 — the fine bucket is a LOW value (small TTFS), so the
+boundaries are NOT flipped. **Distinct from two neighbouring sentinels** it sits
+between in the summary: iter-211 max-token-gap watches a mid-stream stall AFTER
+the bot starts speaking; iter-209 eot-overhead watches the end-of-turn detection
+wait BEFORE TTFS even starts. This one watches the whole speech-stop → speaker
+latency end to end — the user-perceived "how long until it talks back."
+
+What changed:
+- **`examples/_chat_metrics.py`**:
+  - `_ttfs_bucket(seconds)` — maps per-turn TTFS to `snappy` (< 3.0s, the fine
+    state — boundary aligned with the existing per-turn green display in
+    `TurnMetrics.print`) / `slow` (3.0-6.0s, a noticeable beat — the
+    conversation feels laggy) / `very_slow` (> 6.0s — the user wonders whether
+    it heard them); returns `""` for non-positive input (no audio that turn —
+    error turn or pure barge).
+  - `_emit_ttfs_consistency_line(emit, list, threshold=5)` — filters out
+    `snappy`/`""` before the scan, reuses iter-116 `_longest_consecutive_run`,
+    and emits per-value suggestions pointing at the STT / LLM-first-sentence /
+    synth-dispatch split (the iter-076 attribution terms). Warning text names
+    iter-212 so operators can grep the context.
+  - Wired into `print_session_summary` immediately after the iter-211
+    max-token-gap line, fed `[m.ttfs for m in metrics_list]`.
+- **`tests/unit/test_emit_ttfs_consistency_line.py`** — 21 tests covering the
+  full pattern matrix: bucket boundaries
+  (zero/negative/snappy/slow/very_slow + float edges at 3.0/6.0), empty +
+  all-zero suppression, long-snappy-run never fires, filter semantics (a
+  `snappy` interleaving doesn't break a slow run; a `very_slow` phase-change DOES
+  break a slow run), at/above threshold per value, below threshold, custom
+  threshold, longest-of-multiple, 4-space indent, iter-212 attribution,
+  1000-element scaling.
+
+**Verification:**
+- `python -m pytest tests/unit/test_emit_ttfs_consistency_line.py`
+  → **21 passed**.
+- Full Python unit suite: `python -m pytest tests/unit/` → **2807 passed**
+  (2786 prior + 21 new), run on the feature branch before ff-merge. GATE command:
+  `cd ~/code-purp/geno-voice && python -m pytest tests/unit/`.
+- (`tests/test_session.py` still errors on collection — pre-existing missing
+  `pipecat` dep, not a regression.)
+
+**Next planned items (from the research-doc backlog):**
+1. **[silence] Run the actual `--sweep silence_ms` over a newly-synced corpus**
+   — the sweep harness carries the full floor/typical/ceiling/spread shape on all
+   three axes from one shared renderer (iter-207). Gate a real `silence_ms`
+   default change on a corpus that exercises real mid-utterance pauses *and*
+   two-turns-one-pause cases (the seed corpus is flat in both windows).
+2. **[latency, highest value] Pre-warm the capture pipeline** — still the top
+   user-facing bug (3–5s `click_to_capture_ms`). Needs an on-device timing
+   harness; cannot be replayed. The iter-208/209/211/212 sentinels now make
+   playback-side, recording-loop, mid-stream-LLM, and end-to-end TTFS slowdowns
+   visible in session summaries.
+3. **[wpm-mirroring] Adapt bot WPM toward the measured user WPM** — iter-210's
+   sentinel surfaces a mis-set rate; the natural follow-up is the iter-064
+   mirroring effect (match bot_wpm to user_wpm). Gate on a corpus with varied
+   user pacing.
+4. **[preroll-default] Bump the client `prerollMs` default above 0** — iter-200's
+   grid shows pre-roll improves the typical opening, the tail, AND the
+   consistency simultaneously; pick a value (256–512ms) and gate on a
+   busier/newly-synced corpus.
