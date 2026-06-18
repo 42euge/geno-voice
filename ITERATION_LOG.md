@@ -20658,3 +20658,78 @@ calibrate-base-wpm but no VAD command at all.
 4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
    --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
    refresh the comparison table.
+
+## iter-234 — `gv vad --json`: machine-readable Silero segmentation
+
+**Branch:** `iter-234-gv-vad-json` (merged ff to main, commit `5de2d9a`)
+**Date:** 2026-06-18
+
+**No STEER.md this lap.** The two top-priority next items from iter-233 (wire
+`ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()` in the desktop
+app) both need a Mac + mic + browser and can't run headless on the loop host.
+The recording corpus is unchanged since iter-231 (same 6 WAVs), so the "ingest
+new recordings" item had nothing to do. I took the last headless-doable item
+from the iter-233 backlog: `gv vad --json` (item #3).
+
+**The gap.** iter-233 brought the Silero batch segmenter to the `gv` CLI, but
+`gv vad` only printed a human-readable report. The corpus replay
+(`fixtures/replay_silero.py`) and the HTTP endpoint both expose a machine-
+readable JSON shape (`SileroResult.to_dict`), but a single-file `gv vad`
+segmentation could not feed a script/pipeline without scraping the text report.
+
+**What changed.**
+1. **`examples/gv.py`** — new `render_vad_json(result, *, threshold)` pure
+   helper beside `render_vad_segments`. It builds the payload from the result's
+   attributes rather than calling `result.to_dict()`, so it works on any object
+   exposing the `SileroResult` shape (the unit tests drive it without importing
+   torch) while emitting the identical key set + values (`name`, `sample_rate`,
+   `duration_s`, `num_segments`, `speech_s`, `segments[]` of
+   `start_s`/`end_s`/`duration_s`, all rounded to 3 places). `None` →
+   `{"available": false, "hint": …}` so a consumer detects the degraded path
+   from the document itself rather than parsing prose. `cmd_vad` branches on
+   `args.json`; a `--json` `store_true` flag is added to the vad subparser.
+   `json` imported at module scope; module + usage docstrings updated.
+2. **Tests.**
+   - `tests/unit/test_gv_vad.py` (**+11**, now 55 in-file): the `--json` parser
+     flag (default false / set true), `render_vad_json` (unavailable payload,
+     empty/populated segments, threshold echo + omission, 3-place rounding, and
+     an `importorskip` test asserting the render carries every
+     `SileroResult.to_dict()` key with equal values so the two surfaces stay in
+     lock-step), and the `cmd_vad` `--json` branches (unavailable → one
+     `available:false` doc; populated → parseable segmentation; a regression
+     guard that the non-json path stays multi-line human text). NO torch import.
+   - `tests/integration/test_gv_vad_cli.py` (**+2 cases**, one parametrized over
+     the corpus): `--json` over THE GATE recording (`voice-20260618-110355.wav`)
+     emits one parseable document with `num_segments >= 2` and
+     `speech_s == sum(segment durations)`; per-recording, the `--json`
+     `num_segments` matches the human report's `[ n]` row count (the two
+     surfaces describe the same segmentation). Skips without the corpus/package.
+3. **Docs** (`docs/research/voice-capture-tuning.md`) — `--json` documented in
+   the `gv vad` section: invocation example, the payload shape, and the
+   degraded-path `{"available": false}` object.
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3297 passed** (3286 prior + 11 new), run on the feature branch before
+  ff-merge. Re-confirmed on main: `pytest tests/unit/test_gv_vad.py` →
+  **55 passed**.
+- Integration: `python -m pytest tests/integration/test_gv_vad_cli.py` →
+  **15 passed** (corpus symlinked into the worktree; symlink removed before
+  commit so it is not tracked).
+- Manual smoke on the branch: `python examples/gv.py vad
+  fixtures/recordings/voice-20260618-110355.wav --json` → a JSON doc with
+  `num_segments: 5`, `speech_s: 16.2`, matching the iter-231/233 gate proof.
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] `gv vad --json` consumers** — now that the machine-readable surface
+   exists, a small `gv` mode (or example script) that diffs two segmentations
+   (e.g. threshold A vs B) using the JSON output, instead of eyeballing reports.
+4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
+   --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
+   refresh the comparison table.
