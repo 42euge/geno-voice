@@ -20063,3 +20063,80 @@ line in the session summary and touches nothing in the live
    problematic bucket, so it may warrant a trend-detector variant
    rather than the run-scan. `mean_token_reveal_lag` (iter-071) is
    another candidate.
+
+## iter-227 — pre-warm the VoiceRecorder capture pipeline (latency)
+
+**Branch:** `iter-227-prewarm-capture` (merged ff to main, commit `d643db5`)
+**Date:** 2026-06-18
+
+**OPERATOR STEERING followed.** `.loops/geno-voice/STEER.md` directs the
+loop to STOP the iter-208..226 sentinel drift and return to the
+user-facing capture/latency priority, item #1: build the pre-warm
+change in `client/voice-capture.js`. This lap does exactly that.
+
+**Improvement (the highest-value capture-latency fix):** The 3–5s
+`click_to_capture_ms` stall the steering names is the cold-start cost of
+`getUserMedia` + `AudioContext.resume()` + `audioWorklet.addModule()`
+(or the ScriptProcessor fallback) all running *inside*
+`VoiceRecorder.start()` at the instant the user clicks to talk. You
+can't TIME it headlessly, but you can implement it correctly and prove
+parity with tests — which is what the steering asks for so the desktop
+app can adopt + time it on-device.
+
+What changed (`client/voice-capture.js`):
+- Extracted the heavy setup out of `start()` into an **idempotent
+  `_setup()`** (returns early once `_ready`), exposed as a public
+  **`prewarm()`** method.
+- `start()` now calls `_setup()` (a no-op when `prewarm()` already ran)
+  and then only flips `recording` + `startedAt` and fires
+  `onStateChange`. When the app calls `prewarm()` ahead of the click,
+  `start()` collapses to a pure flag flip — the latency win. When
+  `prewarm()` is never called, `start()` lazily runs the same `_setup()`,
+  so default behaviour is byte-for-byte identical to the historical cold
+  path (**default off**, as the steering requires).
+- A pre-warmed graph is **silent**: the worklet/processor frame handlers
+  already gate on `if (!this.recording) return`, so no audio accumulates
+  until `start()` flips the flag; `start()` also clears `chunks` so the
+  segment begins at the click.
+- `cleanup()` resets `_ready` so a recorder can be re-warmed after
+  `stop()`/`cancel()`.
+
+**Tests (`client/voice-capture.test.js`):** the first tests to drive
+`VoiceRecorder.start()` at all — they install a minimal fake Web Audio
+environment (`navigator.mediaDevices`, `window.AudioContext`, the
+ScriptProcessor fallback) that COUNTS the cold-start calls and injects
+captured frames through the live processor handler. Seven new cases:
+prewarm pays the cost / start does not re-pay it; prewarm idempotent;
+cold start with no prewarm stands the graph up itself (default off);
+frames before `start()` are discarded (segment begins at the click);
+**prewarm-then-start captures a byte-for-byte identical WAV to
+start-alone (parity)**; cleanup resets readiness for re-warm; double
+`start()` is a no-op.
+
+**Verification:**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3169 passed** (unchanged — this is a client-JS change; the gate
+  confirms no Python regression), re-run on main after ff-merge.
+- Client: `node --test` (in `client/`) → **42 passed** (35 prior + 7
+  new), 0 failed.
+- Integration: `python -m pytest tests/integration/` → **35 passed,
+  13 skipped** (recording fixtures are gitignored / absent in the
+  worktree; present in main).
+- Recordings check (steering item #3): no new WAVs appeared in
+  `fixtures/recordings/` (still 4 in main), so no replay re-run needed
+  this lap.
+
+**Next planned items (per STEER.md order):**
+1. **[gain] Auto-gain / sensitivity sweep** — steering item #2,
+   replayable. Model the existing `gain` multiplier in the replay
+   harness and sweep it to find a gain that lifts the quietest real
+   speech clearly over 0.006 without lifting silence over ~0.0003.
+   Prove across ALL recordings, pin with a test. (`ContinuousListener`
+   already carries a `gain` knob from iter-195; the recorder path and
+   the replay harness `frame_rms` model are the surfaces to align.)
+2. **[recordings] Ingest new recordings every lap** — re-run the replay
+   harness and refresh the tuning-doc per-recording table whenever new
+   WAVs land in `fixtures/recordings/`.
+3. **[latency, on-device follow-on to this lap] Adopt `prewarm()` in the
+   desktop app** and TIME `click_to_capture_ms` before/after to confirm
+   the win on real hardware (cannot be done headlessly).
