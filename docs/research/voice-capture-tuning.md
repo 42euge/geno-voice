@@ -96,7 +96,18 @@ the *typical* turn is lengthening (turns merging across the board) or shortening
 (fragmenting across the board), not just whether one outlier did. Averaged over
 every emitted segment, so a recording that fragments into many short segments
 rightly pulls it down; bounded below by the `min_speech` gate and within
-`[min_seg, max_seg]`), `onsets`/`speak_frames` totals, `mean_over` (mean %-of-frames-over-threshold),
+`[min_seg, max_seg]`), `seg_std` (iter-205 — `std_segment_ms`, the population
+standard deviation of every committed segment's duration across the corpus: the
+duration *consistency*, to the duration axis what `onset1_std` is to the timing
+axis. `min_seg`/`mean_seg`/`max_seg` give the envelope and center; `seg_std`
+gives the *spread* — the one thing they can't. Two `silence_ms` values can share
+a `mean_seg` while one emits uniformly medium turns and the other mixes short
+fragments with long run-ons (the over-split *and* over-merge mix a borderline
+timeout produces): identical mean, far larger `seg_std` for the mixed case, so it
+is the only aggregate that separates a cleanly-segmenting parameter set from one
+unstable in both directions at once. Population std over every emitted segment,
+so a single committed segment reads as `0.0` and the value is bounded above by
+the `max_seg - min_seg` range), `onsets`/`speak_frames` totals, `mean_over` (mean %-of-frames-over-threshold),
 and `onset1`
 (iter-197 — the onset-*timing* aggregate: the mean of each recording's
 **first** emitted `onset_ms`, averaged only over recordings that detected
@@ -578,6 +589,38 @@ axis does. The seed corpus is flat in both silence windows, so gate the actual
 `silence_ms` default change on a newly-synced corpus that exercises real
 mid-utterance pauses and two-turns-one-pause cases.
 
+### Consistency of the duration axis (iter-205)
+
+iter-202/203/204 gave the segment-*duration* axis its floor (`min_seg`,
+over-split), ceiling (`max_seg`, over-merge), and center (`mean_seg`, typical
+turn) — but the onset-*timing* axis carried a *fourth* statistic the duration
+axis lacked: `onset1_std`, the consistency (spread) of the distribution. iter-205
+closes that asymmetry with `std_segment_ms` (the `seg_std` column): the
+population standard deviation of every committed segment's duration across the
+corpus. It is to the duration axis exactly what `onset1_std` is to the timing
+axis, completing both axes to the same floor/typical/ceiling/spread shape.
+
+The spread is the one thing min/mean/max can't give. Two `silence_ms` values can
+share a `mean_seg` while segmenting completely differently: one emits uniformly
+medium turns (low spread), the other mixes short fragments with long run-ons —
+the over-split *and* over-merge mix a borderline timeout produces — at the same
+mean (high spread). `seg_std` is the only aggregate that separates a
+cleanly-segmenting parameter set from one that is unstable in *both* directions
+at once, so a `--sweep silence_ms` should prefer the value that minimizes
+`seg_std` among those with an acceptable `mean_seg`, not just the one with the
+best mean.
+
+| corpus | segment durations | mean_seg | seg_std | reading |
+|--------|-------------------|---------:|--------:|---------|
+| two equal 1s tones | 1024.0ms, 1024.0ms | 1024.0ms | **0.0ms** | uniform turns → no spread |
+| 1s + 1s tones split by a 300ms gap | 1152.0ms, 1024.0ms | 1088.0ms | **64.0ms** | unequal committed halves → real spread |
+
+Population (not sample) std, so a single committed segment reads as `0.0`
+("perfectly consistent given one point") rather than undefined, and the value is
+bounded above by the `max_seg - min_seg` range. As with the other duration
+aggregates, the seed corpus is flat in both silence windows, so gate any actual
+`silence_ms` default change on a newly-synced corpus.
+
 ## Findings & backlog (prioritized)
 
 1. **[latency] Pre-warm the capture pipeline.** The 3–5s `click_to_capture_ms`
@@ -686,7 +729,13 @@ mid-utterance pauses and two-turns-one-pause cases.
    duration axis — where `min_seg`/`max_seg` each read one worst-case recording,
    `mean_seg` reads the whole corpus, so a `mean_seg` climbing alongside `max_seg`
    at high `silence_ms` means turns are merging *broadly*, not just in one
-   recording (see "Center of the duration axis" above)._
+   recording (see "Center of the duration axis" above). iter-205: the
+   `std_segment_ms` aggregate completes the duration axis with its *consistency*
+   (spread), matching the onset-timing axis's `onset1_std`. Two `silence_ms`
+   values can share a `mean_seg` while one segments uniformly and the other mixes
+   short fragments with long run-ons; `seg_std` is the only aggregate that tells
+   them apart, so prefer the `silence_ms` that minimizes `seg_std` among those
+   with an acceptable `mean_seg` (see "Consistency of the duration axis" above)._
 
 ## Methodology notes
 

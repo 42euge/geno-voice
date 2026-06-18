@@ -334,6 +334,7 @@ class TestAggregateResults:
         assert point.max_segment_ms == 0.0
         assert point.min_segment_ms == 0.0
         assert point.mean_segment_ms == 0.0
+        assert point.std_segment_ms == 0.0
 
     def test_aggregates_across_corpus(self, tmp_path):
         corpus = _make_corpus(tmp_path)
@@ -429,6 +430,7 @@ class TestAggregateResults:
         assert point.std_first_onset_ms == 0.0
         assert point.max_segment_ms == 0.0
         assert point.mean_segment_ms == 0.0
+        assert point.std_segment_ms == 0.0
 
     def test_max_first_onset_is_latest_detected_recording(self, tmp_path):
         corpus = _make_corpus(tmp_path)
@@ -698,6 +700,91 @@ class TestAggregateResults:
         point = aggregate_results(VadParams(threshold=0.006), results)
         assert point.mean_segment_ms == 0.0
 
+    def test_std_segment_is_population_std_of_committed_segments(self, tmp_path):
+        corpus = _make_corpus(tmp_path)
+        results = replay_all(corpus, VadParams(threshold=0.006))
+        point = aggregate_results(VadParams(threshold=0.006), results)
+        # The consistency aggregate is the population std over EVERY emitted
+        # segment in the corpus — the same set the mean averages.
+        all_durations = [s.duration_ms for r in results for s in r.segments]
+        assert all_durations, "fixture should detect at least one segment"
+        assert point.std_segment_ms == pytest.approx(float(np.std(all_durations)))
+        # The spread is never negative and never exceeds the full min→max range.
+        assert point.std_segment_ms >= 0.0
+        assert point.std_segment_ms <= (point.max_segment_ms - point.min_segment_ms) + 1e-6
+        # When the corpus emits more than one segment of differing duration the
+        # spread is strictly positive.
+        if len(set(all_durations)) > 1:
+            assert point.std_segment_ms > 0.0
+
+    def test_std_segment_zero_for_single_committed_segment(self, tmp_path):
+        corpus = tmp_path / "one"
+        corpus.mkdir()
+        # A single clean tone yields exactly one committed segment → zero spread
+        # (population std of one point is 0.0, the "perfectly consistent given
+        # one point" reading, not the undefined sample std).
+        _write_wav(corpus / "a.wav", _tone(SR, 1.0))
+        (corpus / "a.json").write_text('{"peak_rms": 0.05}')
+        results = replay_all(corpus, VadParams(threshold=0.006))
+        total = sum(len(r.segments) for r in results)
+        assert total == 1, "fixture must emit exactly one segment"
+        point = aggregate_results(VadParams(threshold=0.006), results)
+        assert point.std_segment_ms == 0.0
+
+    def test_std_segment_separates_mixed_from_uniform(self, tmp_path):
+        # Two parameter sets can share a mean segment duration while one emits
+        # uniform turns and the other mixes a short fragment with a long run-on.
+        # The std is the only aggregate that tells them apart. The gap recording
+        # the floor/ceiling/center tests use. At a silence_ms below the 300ms gap
+        # it splits into two committed halves whose durations differ slightly
+        # (the first ends on the silence clock, the second is closed at EOF), so
+        # the corpus emits multiple segments of UNEQUAL duration → a real positive
+        # spread. We compare that against a corpus of two identical tones whose
+        # equal durations give a zero spread despite also emitting two segments —
+        # same multi-segment shape, the std is what separates them.
+        gap_corpus = tmp_path / "gap"
+        gap_corpus.mkdir()
+        # _tone(n_samples, amplitude): both tones are 1s long; the gap is 300ms.
+        gap = np.concatenate([
+            _tone(SR, 1.0),
+            _silence(int(SR * 0.3)),
+            _tone(SR, 1.0),
+        ])
+        _write_wav(gap_corpus / "gap.wav", gap)
+        (gap_corpus / "gap.json").write_text('{"peak_rms": 0.05}')
+        # silence_ms below the 300ms gap → splits into two committed halves of
+        # slightly unequal duration → a real positive duration spread.
+        split = aggregate_results(
+            VadParams(silence_ms=100.0),
+            replay_all(gap_corpus, VadParams(silence_ms=100.0)),
+        )
+        assert split.std_segment_ms > 0.0
+        # Two identical tones → equal committed durations → zero spread despite
+        # multiple segments. Same multi-segment shape, different std: the std is
+        # what separates a cleanly-segmenting set from an unstable one.
+        uniform_corpus = tmp_path / "uniform"
+        uniform_corpus.mkdir()
+        _write_wav(uniform_corpus / "a.wav", _tone(SR, 1.0))
+        (uniform_corpus / "a.json").write_text('{"peak_rms": 0.05}')
+        _write_wav(uniform_corpus / "b.wav", _tone(SR, 1.0))
+        (uniform_corpus / "b.json").write_text('{"peak_rms": 0.05}')
+        uniform = aggregate_results(
+            VadParams(threshold=0.006),
+            replay_all(uniform_corpus, VadParams(threshold=0.006)),
+        )
+        assert uniform.std_segment_ms == pytest.approx(0.0, abs=1e-6)
+        assert split.std_segment_ms > uniform.std_segment_ms
+
+    def test_std_segment_zero_when_nothing_detected(self, tmp_path):
+        corpus = tmp_path / "silent"
+        corpus.mkdir()
+        _write_wav(corpus / "a.wav", _silence(SR))
+        (corpus / "a.json").write_text('{"peak_rms": 0.0001}')
+        results = replay_all(corpus, VadParams(threshold=0.006))
+        assert all(not r.segments for r in results)
+        point = aggregate_results(VadParams(threshold=0.006), results)
+        assert point.std_segment_ms == 0.0
+
 
 # ---------------------------------------------------------------------------
 # sweep_param
@@ -947,6 +1034,9 @@ class TestSweepCli:
         # ...and the typical (mean) committed segment duration — the center of
         # the duration axis.
         assert "mean_seg=" in out
+        # ...and the duration consistency (spread) — completes the duration axis
+        # to the same min/mean/max/std shape the onset-timing axis carries.
+        assert "seg_std=" in out
 
     def test_sweep_json_includes_mean_first_onset(self, tmp_path, capsys):
         corpus = _make_corpus(tmp_path)
@@ -1034,6 +1124,20 @@ class TestSweepCli:
         assert payload[0]["min_segment_ms"] <= payload[0]["mean_segment_ms"]
         assert payload[0]["mean_segment_ms"] <= payload[0]["max_segment_ms"]
 
+    def test_sweep_json_includes_std_segment(self, tmp_path, capsys):
+        corpus = _make_corpus(tmp_path)
+        rc = main(["--sweep", "threshold", "--sweep-values", "0.006", "--dir", str(corpus), "--json"])
+        assert rc == 0
+        import json as _json
+
+        payload = _json.loads(capsys.readouterr().out)
+        assert "std_segment_ms" in payload[0]
+        # The duration spread is non-negative and bounded above by the full
+        # min→max segment-duration range.
+        assert payload[0]["std_segment_ms"] >= 0.0
+        rng = payload[0]["max_segment_ms"] - payload[0]["min_segment_ms"]
+        assert payload[0]["std_segment_ms"] <= rng + 1e-6
+
 
 # ---------------------------------------------------------------------------
 # CLI — main() with --grid (2-D grid sweep)
@@ -1070,6 +1174,8 @@ class TestGridCli:
         assert out.count("min_seg=") == 4
         # ...and the typical (mean) committed segment duration per cell.
         assert out.count("mean_seg=") == 4
+        # ...and the duration consistency (spread) per cell.
+        assert out.count("seg_std=") == 4
 
     def test_grid_json_row_major(self, tmp_path, capsys):
         corpus = _make_corpus(tmp_path)

@@ -536,6 +536,32 @@ class SweepPoint:
                          ``min_speech_ms`` gate, so the mean is bounded below by
                          it and lies within ``[min_segment_ms, max_segment_ms]``.
                          ``0.0`` when nothing detected.
+    ``std_segment_ms`` — the population standard deviation of every committed
+                         segment ``duration_ms`` across the whole corpus (the
+                         *consistency* of segment duration). This is to the
+                         duration axis exactly what ``std_first_onset_ms`` is to
+                         the onset-timing axis: ``min``/``mean``/``max`` give the
+                         envelope and center of the duration distribution, and
+                         this gives its *spread* — how tightly the segments
+                         cluster around the typical duration — completing the
+                         duration axis to the same floor/typical/ceiling/spread
+                         shape the onset-timing axis carries
+                         (``onset1_min``/``onset1``/``onset1_max``/``onset1_std``).
+                         Two ``silence_ms`` values can share a mean segment
+                         duration while one emits uniformly medium turns and the
+                         other mixes short fragments with long run-ons (the
+                         over-split *and* over-merge mix a borderline timeout
+                         produces): the mean is identical but the std is far
+                         larger for the mixed case, so it is the only aggregate
+                         that distinguishes a cleanly-segmenting parameter set
+                         from one that is unstable in both directions at once.
+                         Population (ddof=0) std over every emitted segment (the
+                         same corpus-wide set ``mean_segment_ms`` averages, not
+                         per-recording-then-averaged), so a single committed
+                         segment reads as ``0.0`` spread (perfectly consistent
+                         given one point) rather than the undefined sample std.
+                         Bounded above by the full ``max_segment_ms -
+                         min_segment_ms`` range. ``0.0`` when nothing detected.
     """
 
     params: VadParams
@@ -553,6 +579,7 @@ class SweepPoint:
     max_segment_ms: float
     min_segment_ms: float
     mean_segment_ms: float
+    std_segment_ms: float
 
     def summary_line(self, label_key: str = "threshold") -> str:
         value = getattr(self.params, label_key)
@@ -570,7 +597,8 @@ class SweepPoint:
             f"onset1_std={self.std_first_onset_ms:6.1f}ms "
             f"min_seg={self.min_segment_ms:7.1f}ms "
             f"mean_seg={self.mean_segment_ms:7.1f}ms "
-            f"max_seg={self.max_segment_ms:7.1f}ms"
+            f"max_seg={self.max_segment_ms:7.1f}ms "
+            f"seg_std={self.std_segment_ms:7.1f}ms"
         )
 
 
@@ -628,6 +656,14 @@ def aggregate_results(params: VadParams, results: List[ReplayResult]) -> SweepPo
     # averaged) so a recording fragmenting into many short segments rightly pulls
     # the mean down. Bounded below by the min_speech gate, within [min, max].
     mean_segment = (sum(seg_durations) / len(seg_durations)) if seg_durations else 0.0
+    # Duration consistency: population std over every emitted segment — the same
+    # corpus-wide set the mean averages. The companion to std_first_onset on the
+    # *duration* axis: min/mean/max give the envelope and center, this gives the
+    # spread, so a sweep tells apart two cells with the same mean duration — one
+    # cleanly emitting uniform turns, the other mixing short fragments and long
+    # run-ons (a borderline silence_ms over-splits and over-merges at once).
+    # Population (ddof=0) so a single committed segment reads as 0.0 spread.
+    std_segment = float(np.std(seg_durations)) if seg_durations else 0.0
     return SweepPoint(
         params=params,
         recordings=n,
@@ -644,6 +680,7 @@ def aggregate_results(params: VadParams, results: List[ReplayResult]) -> SweepPo
         max_segment_ms=max_segment,
         min_segment_ms=min_segment,
         mean_segment_ms=mean_segment,
+        std_segment_ms=std_segment,
     )
 
 
@@ -802,7 +839,8 @@ def _grid_summary_line(p: SweepPoint, param_a: str, param_b: str) -> str:
         f"onset1_std={p.std_first_onset_ms:6.1f}ms "
         f"min_seg={p.min_segment_ms:7.1f}ms "
         f"mean_seg={p.mean_segment_ms:7.1f}ms "
-        f"max_seg={p.max_segment_ms:7.1f}ms"
+        f"max_seg={p.max_segment_ms:7.1f}ms "
+        f"seg_std={p.std_segment_ms:7.1f}ms"
     )
 
 
