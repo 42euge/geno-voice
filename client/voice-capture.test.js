@@ -790,3 +790,165 @@ test("a double start() is a no-op (idempotent recording flag)", async () => {
     await r.cancel();
   });
 });
+
+// ---------------------------------------------------------------------------
+// iter-229 — ContinuousListener pre-warm.
+//
+// iter-227 added prewarm() to VoiceRecorder (the push-to-talk path). The
+// continuous/conversational listener still paid the same 3-5s cold-start cost
+// (getUserMedia + AudioContext.resume() + worklet addModule()) inside its own
+// start(); this extends the identical pattern to it. Reuses the installFakeAudio
+// harness from iter-227 but wraps it with an ADVANCING clock, because committing
+// speech runs through the debounce state machine which reads performance.now().
+// The proof obligations mirror iter-227:
+//   * prewarm-then-start produces identical capture to start-alone;
+//   * start works with and without a prior prewarm (default off);
+//   * the expensive calls happen during prewarm(), not start();
+//   * no frames are processed before start() flips `active`.
+// ---------------------------------------------------------------------------
+
+// installFakeAudio + a mutable performance.now() clock. `advance(ms)` moves the
+// clock forward so debounce/silence timing behaves like real time. Pushing a
+// frame does NOT advance the clock — callers step it explicitly between frames.
+async function withFakeAudioClock(body) {
+  const fake = installFakeAudio();
+  const origNow = performance.now;
+  let clock = 1000; // positive offset (candidate timestamp is truthiness-checked)
+  performance.now = () => clock;
+  const advance = (ms) => {
+    clock += ms;
+  };
+  try {
+    return await body(fake, advance);
+  } finally {
+    performance.now = origNow;
+    fake.restore();
+  }
+}
+
+// Push `n` held-loud frames through the live processor, advancing the clock one
+// FRAME_MS per frame so a candidate can clear the onset debounce and commit.
+function pushLoud(fake, advance, n, value = 0.4) {
+  for (let i = 0; i < n; i++) {
+    fake.pushFrame(value);
+    advance(FRAME_MS);
+  }
+}
+
+test("CL: prewarm pays the cold-start cost; start then only flips active", async () => {
+  await withFakeAudioClock(async (fake) => {
+    const l = new ContinuousListener({ silenceThreshold: 0.015 });
+    assert.equal(l._ready, false);
+
+    await l.prewarm();
+    // The expensive calls all happened during prewarm, before voice is enabled.
+    assert.equal(fake.counts.getUserMedia, 1);
+    assert.equal(fake.counts.ctor, 1);
+    assert.equal(fake.counts.resume, 1);
+    assert.equal(l._ready, true);
+    assert.equal(l.active, false, "prewarm must not begin listening");
+
+    await l.start();
+    // start() reused the warmed graph — no second cold start.
+    assert.equal(fake.counts.getUserMedia, 1, "start must not re-open the mic");
+    assert.equal(fake.counts.ctor, 1, "start must not build a second context");
+    assert.equal(l.active, true);
+
+    await l.stop();
+  });
+});
+
+test("CL: prewarm is idempotent — a second call rebuilds nothing", async () => {
+  await withFakeAudioClock(async (fake) => {
+    const l = new ContinuousListener();
+    await l.prewarm();
+    await l.prewarm();
+    await l.prewarm();
+    assert.equal(fake.counts.getUserMedia, 1);
+    assert.equal(fake.counts.ctor, 1);
+    assert.equal(fake.counts.resume, 1);
+    await l.stop();
+  });
+});
+
+test("CL: start with no prior prewarm lazily stands up the graph (default off)", async () => {
+  await withFakeAudioClock(async (fake) => {
+    const l = new ContinuousListener();
+    assert.equal(l._ready, false);
+    await l.start();
+    // Cold start() did the full setup itself — identical to the historical path.
+    assert.equal(fake.counts.getUserMedia, 1);
+    assert.equal(fake.counts.ctor, 1);
+    assert.equal(fake.counts.resume, 1);
+    assert.equal(l.active, true);
+    await l.stop();
+  });
+});
+
+test("CL: frames before start() are not processed (active gate stays silent)", async () => {
+  await withFakeAudioClock(async (fake, advance) => {
+    const l = new ContinuousListener({ silenceThreshold: 0.015 });
+    await l.prewarm();
+    // A pre-warmed graph is silent: _handleFrame bails on `if (!this.active)`
+    // before metering or the VAD state machine, so loud frames do nothing.
+    pushLoud(fake, advance, 5);
+    assert.equal(l.frameCount, 0, "no frame should be metered before start");
+    assert.equal(l.speaking, false, "no speech should commit before start");
+
+    await l.start();
+    pushLoud(fake, advance, COMMIT_FRAMES);
+    assert.ok(l.frameCount > 0, "frames meter once active");
+    assert.equal(l.speaking, true, "held-loud frames commit after start");
+    await l.stop();
+  });
+});
+
+test("CL: stop resets _ready so the listener can be re-warmed", async () => {
+  await withFakeAudioClock(async (fake) => {
+    const l = new ContinuousListener();
+    await l.prewarm();
+    await l.start();
+    await l.stop();
+    assert.equal(l._ready, false, "stop must clear readiness");
+    assert.equal(l.audioContext, null);
+
+    // A fresh prewarm rebuilds the graph (second cold start).
+    await l.prewarm();
+    assert.equal(fake.counts.getUserMedia, 2);
+    assert.equal(l._ready, true);
+    await l.stop();
+  });
+});
+
+test("CL: prewarm-then-start captures identically to start-alone (parity)", async () => {
+  // Same injected frame sequence through both entry paths must emit a byte-for-
+  // byte identical WAV via onSpeechEnd — prewarm changes WHEN the graph is
+  // built, never WHAT it captures.
+  async function captureVia(prewarmFirst) {
+    return withFakeAudioClock(async (fake, advance) => {
+      let wav = null;
+      const l = new ContinuousListener({
+        silenceThreshold: 0.015,
+        minSpeechMs: 100,
+        silenceDurationMs: 800,
+        onSpeechEnd: (w) => {
+          wav = w;
+        },
+      });
+      if (prewarmFirst) await l.prewarm();
+      await l.start();
+      // Commit speech, then keep talking, then fall silent. ~0.7s of audio.
+      pushLoud(fake, advance, COMMIT_FRAMES);
+      pushLoud(fake, advance, 18);
+      advance(900); // past silenceDurationMs and minSpeechMs
+      l._onSilence(); // the same method the silence timer would invoke
+      await l.stop();
+      return wav;
+    });
+  }
+  const viaPrewarm = await captureVia(true);
+  const viaCold = await captureVia(false);
+  assert.ok(viaPrewarm instanceof Uint8Array, "prewarm path should emit a WAV");
+  assert.ok(viaCold instanceof Uint8Array, "cold path should emit a WAV");
+  assert.deepEqual([...viaPrewarm], [...viaCold], "capture must be identical");
+});

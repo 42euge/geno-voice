@@ -297,6 +297,14 @@ export class ContinuousListener {
     this.silenceTimer = null;
     this.stream = null;
     this.audioContext = null;
+    // Pre-warm latency fix (iter-229, extending the iter-227 VoiceRecorder fix
+    // to the continuous/conversational path): the 3-5s click-to-listen stall is
+    // the cold-start cost of getUserMedia + AudioContext.resume() + worklet
+    // addModule() inside start(). `_ready` flips true once _setup() has paid
+    // that cost so start() collapses to flipping `active`. No frames are
+    // processed until `active` is true (the `_handleFrame` guard), so a
+    // pre-warmed graph stays silent until start() flips it.
+    this._ready = false;
   }
 
   // Derive the pre-roll ring capacity (in samples) from the current sample
@@ -337,10 +345,24 @@ export class ContinuousListener {
 
   setRawRecordingCallback(cb) { this._rawCallback = cb; }
 
-  async start() {
-    if (this.active) return;
-    this._muted = false;
-    this._rawCallback = this._rawCallback || null;
+  // Pay the expensive cold-start cost ahead of the user enabling voice: open
+  // the mic stream, build + resume the AudioContext, load the worklet, and wire
+  // the (silent, active-gated) capture graph. Idempotent — a second call while
+  // already set up is a no-op. Calling this before start() collapses the
+  // click-to-listen latency to a flag flip. start() lazily runs the same
+  // _setup() when prewarm() was never called, so behaviour is identical either
+  // way (default off). Mirrors the iter-227 VoiceRecorder.prewarm().
+  async prewarm() {
+    await this._setup();
+  }
+
+  // Build the capture graph if it is not already standing. Extracted from the
+  // old start() body so both prewarm() and a cold start() share one path. Safe
+  // to call repeatedly: returns early once `_ready`. No frames are processed
+  // until start() flips `active` — `_handleFrame` guards on it — so a warmed
+  // graph stays silent.
+  async _setup() {
+    if (this._ready) return;
 
     this.stream = await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: true },
@@ -383,6 +405,20 @@ export class ContinuousListener {
     silentGain.connect(this.audioContext.destination);
     this._source = source;
     this._silentGain = silentGain;
+
+    this._ready = true;
+  }
+
+  async start() {
+    if (this.active) return;
+    this._muted = false;
+    this._rawCallback = this._rawCallback || null;
+
+    // Stand up the graph if prewarm() did not already. When prewarm() ran ahead
+    // of time this returns immediately and start() is a pure flag flip — the
+    // latency win. When prewarm() was never called this lazily runs the same
+    // _setup(), so the default cold path is byte-for-byte the historical one.
+    await this._setup();
 
     this.active = true;
     if (this.onStateChange) this.onStateChange("listening");
@@ -483,6 +519,9 @@ export class ContinuousListener {
   async stop() {
     this.active = false;
     this.speaking = false;
+    // The graph is being torn down, so a future start()/prewarm() must rebuild
+    // it. Reset readiness before releasing the nodes.
+    this._ready = false;
     this._prerollChunks = [];
     this._prerollSamples = 0;
     if (this.silenceTimer) clearTimeout(this.silenceTimer);
