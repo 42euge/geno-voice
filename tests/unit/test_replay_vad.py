@@ -331,6 +331,7 @@ class TestAggregateResults:
         assert point.max_first_onset_ms == 0.0
         assert point.min_first_onset_ms == 0.0
         assert point.std_first_onset_ms == 0.0
+        assert point.max_segment_ms == 0.0
 
     def test_aggregates_across_corpus(self, tmp_path):
         corpus = _make_corpus(tmp_path)
@@ -424,6 +425,7 @@ class TestAggregateResults:
         assert point.max_first_onset_ms == 0.0
         assert point.min_first_onset_ms == 0.0
         assert point.std_first_onset_ms == 0.0
+        assert point.max_segment_ms == 0.0
 
     def test_max_first_onset_is_latest_detected_recording(self, tmp_path):
         corpus = _make_corpus(tmp_path)
@@ -519,6 +521,63 @@ class TestAggregateResults:
         # Only the one detected recording counts → zero spread, NOT the spread
         # that a phantom 0.0 onset for the miss would produce.
         assert point.std_first_onset_ms == 0.0
+
+    def test_max_segment_is_longest_committed_segment(self, tmp_path):
+        corpus = _make_corpus(tmp_path)
+        results = replay_all(corpus, VadParams(threshold=0.006))
+        point = aggregate_results(VadParams(threshold=0.006), results)
+        # The over-merge ceiling is the longest single segment's duration across
+        # every detected segment in the corpus.
+        all_durations = [s.duration_ms for r in results for s in r.segments]
+        assert all_durations, "fixture should detect at least one segment"
+        assert point.max_segment_ms == pytest.approx(max(all_durations))
+        # A real segment is at least the min_speech gate long (the gate measures
+        # committed duration), so the ceiling is a positive, plausible duration.
+        assert point.max_segment_ms >= VadParams().min_speech_ms
+
+    def test_max_segment_rises_when_long_silence_overmerges(self, tmp_path):
+        # The over-MERGE failure mode (the other end of the silence lever from
+        # the over-split max_onsets catches): a long utterance with a mid-gap
+        # reads as TWO short segments under a tiny silence_ms but fuses into ONE
+        # long run-on segment under a large silence_ms. max_segment_ms is the
+        # aggregate that makes that merge visible — the count stays flat (or
+        # falls), only the duration balloons.
+        corpus = tmp_path / "gap"
+        corpus.mkdir()
+        # speech — 300ms gap — speech, all loud. Splits at silence_ms=100 (the
+        # 300ms gap exceeds the timeout) but merges at silence_ms=800.
+        gap = np.concatenate([
+            _tone(SR, 0.3),
+            _silence(int(SR * 0.3)),
+            _tone(SR, 0.3),
+        ])
+        _write_wav(corpus / "gap.wav", gap)
+        (corpus / "gap.json").write_text('{"peak_rms": 0.05}')
+
+        split = aggregate_results(
+            VadParams(silence_ms=100.0),
+            replay_all(corpus, VadParams(silence_ms=100.0)),
+        )
+        merged = aggregate_results(
+            VadParams(silence_ms=800.0),
+            replay_all(corpus, VadParams(silence_ms=800.0)),
+        )
+        # Merging fuses the two halves (plus the bridged gap) into one segment
+        # whose duration exceeds either half alone — the over-merge signal.
+        assert merged.max_onsets < split.max_onsets  # count fell (the merge)
+        assert merged.max_segment_ms > split.max_segment_ms  # duration ballooned
+
+    def test_max_segment_zero_when_nothing_detected(self, tmp_path):
+        # A corpus where every recording misses → no committed segments, so the
+        # over-merge ceiling is 0.0 (the documented "no data" sentinel).
+        corpus = tmp_path / "silent"
+        corpus.mkdir()
+        _write_wav(corpus / "a.wav", _silence(SR))
+        (corpus / "a.json").write_text('{"peak_rms": 0.0001}')
+        results = replay_all(corpus, VadParams(threshold=0.006))
+        assert all(not r.segments for r in results)
+        point = aggregate_results(VadParams(threshold=0.006), results)
+        assert point.max_segment_ms == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -762,6 +821,8 @@ class TestSweepCli:
         # ...and the onset-count floor and over-split ceiling.
         assert "min_onsets=" in out
         assert "max_onsets=" in out
+        # ...and the over-merge ceiling (longest committed segment).
+        assert "max_seg=" in out
 
     def test_sweep_json_includes_mean_first_onset(self, tmp_path, capsys):
         corpus = _make_corpus(tmp_path)
@@ -811,6 +872,18 @@ class TestSweepCli:
         rng = payload[0]["max_first_onset_ms"] - payload[0]["min_first_onset_ms"]
         assert payload[0]["std_first_onset_ms"] <= rng + 1e-6
 
+    def test_sweep_json_includes_max_segment(self, tmp_path, capsys):
+        corpus = _make_corpus(tmp_path)
+        rc = main(["--sweep", "threshold", "--sweep-values", "0.006", "--dir", str(corpus), "--json"])
+        assert rc == 0
+        import json as _json
+
+        payload = _json.loads(capsys.readouterr().out)
+        assert "max_segment_ms" in payload[0]
+        # The over-merge ceiling is a real committed segment, so at least the
+        # min_speech gate long when anything detected.
+        assert payload[0]["max_segment_ms"] >= 0.0
+
 
 # ---------------------------------------------------------------------------
 # CLI — main() with --grid (2-D grid sweep)
@@ -842,6 +915,8 @@ class TestGridCli:
         # ...and the onset-count floor + over-split ceiling per cell.
         assert out.count("min_onsets=") == 4
         assert out.count("max_onsets=") == 4
+        # ...and the over-merge ceiling per cell.
+        assert out.count("max_seg=") == 4
 
     def test_grid_json_row_major(self, tmp_path, capsys):
         corpus = _make_corpus(tmp_path)

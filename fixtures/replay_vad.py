@@ -467,6 +467,29 @@ class SweepPoint:
                          data point" rather than the undefined sample std. Uses
                          the same detected-recordings subset as the mean (no
                          segment → no onset time); ``0.0`` when nothing detected.
+    ``max_segment_ms`` — the longest single committed segment's ``duration_ms``
+                         across the whole corpus (the over-*merge* ceiling). This
+                         is the silence-timeout backlog item's missing half. The
+                         onset-*count* aggregates read fragmentation: a too-short
+                         ``silence_ms`` shatters one utterance into many short
+                         segments, which ``max_onsets`` (iter-201) catches as a
+                         climbing per-recording count. The opposite failure — a
+                         too-*long* ``silence_ms`` fusing two real turns into one
+                         run-on segment — leaves the onset count flat (or even
+                         lower) and is invisible to every count aggregate; its
+                         signature is a single segment's *duration* ballooning.
+                         ``max_segment_ms`` reads exactly that: paired with
+                         ``max_onsets`` it brackets both ends of the silence lever
+                         — the ceiling on *count* catches over-splitting, the
+                         ceiling on *duration* catches over-merging — so a
+                         ``--sweep silence_ms`` reads the merge end and the split
+                         end in one pass. It is the ``max`` of each emitted
+                         segment's ``duration_ms`` (onset→end); since pre-roll
+                         pulls the emitted onset earlier it can add at most that
+                         window, small (≤512ms) next to the multi-second swing a
+                         real over-merge produces, and a ``silence_ms`` sweep
+                         holds pre-roll fixed anyway. ``0.0`` when nothing
+                         detected.
     """
 
     params: VadParams
@@ -481,6 +504,7 @@ class SweepPoint:
     max_first_onset_ms: float
     min_first_onset_ms: float
     std_first_onset_ms: float
+    max_segment_ms: float
 
     def summary_line(self, label_key: str = "threshold") -> str:
         value = getattr(self.params, label_key)
@@ -495,7 +519,8 @@ class SweepPoint:
             f"onset1_min={self.min_first_onset_ms:6.1f}ms "
             f"onset1={self.mean_first_onset_ms:6.1f}ms "
             f"onset1_max={self.max_first_onset_ms:6.1f}ms "
-            f"onset1_std={self.std_first_onset_ms:6.1f}ms"
+            f"onset1_std={self.std_first_onset_ms:6.1f}ms "
+            f"max_seg={self.max_segment_ms:7.1f}ms"
         )
 
 
@@ -532,6 +557,13 @@ def aggregate_results(params: VadParams, results: List[ReplayResult]) -> SweepPo
     # swinging. Population (ddof=0) so a single detected recording reads as 0.0
     # (perfectly consistent given one point) rather than an undefined sample std.
     std_first_onset = float(np.std(first_onsets)) if first_onsets else 0.0
+    # Over-merge ceiling: the longest single committed segment across the corpus.
+    # The symmetric companion to max_onsets on the *duration* axis — a too-long
+    # silence_ms fuses two turns into one run-on segment, leaving the onset count
+    # flat (invisible to every count aggregate) while a single segment's duration
+    # balloons. Measures duration_ms (onset→end) over every detected segment.
+    seg_durations = [s.duration_ms for r in results for s in r.segments]
+    max_segment = max(seg_durations) if seg_durations else 0.0
     return SweepPoint(
         params=params,
         recordings=n,
@@ -545,6 +577,7 @@ def aggregate_results(params: VadParams, results: List[ReplayResult]) -> SweepPo
         max_first_onset_ms=max_first_onset,
         min_first_onset_ms=min_first_onset,
         std_first_onset_ms=std_first_onset,
+        max_segment_ms=max_segment,
     )
 
 
@@ -700,7 +733,8 @@ def _grid_summary_line(p: SweepPoint, param_a: str, param_b: str) -> str:
         f"onset1_min={p.min_first_onset_ms:6.1f}ms "
         f"onset1={p.mean_first_onset_ms:6.1f}ms "
         f"onset1_max={p.max_first_onset_ms:6.1f}ms "
-        f"onset1_std={p.std_first_onset_ms:6.1f}ms"
+        f"onset1_std={p.std_first_onset_ms:6.1f}ms "
+        f"max_seg={p.max_segment_ms:7.1f}ms"
     )
 
 

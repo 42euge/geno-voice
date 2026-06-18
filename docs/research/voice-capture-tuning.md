@@ -71,7 +71,14 @@ real miss even when the total looks healthy), `max_onsets` (iter-201 — the
 busiest single recording, the *over-split ceiling*: the symmetric companion
 to `min_onsets`, where `min_onsets` catches a recording dropping to a miss
 and `max_onsets` catches the opposite — a recording *fragmenting* into many
-short segments, the signature of a too-short `silence_ms`),
+short segments, the signature of a too-short `silence_ms`), `max_seg` (iter-202
+— `max_segment_ms`, the longest single committed segment across the corpus: the
+*over-merge ceiling*, the duration-axis companion to `max_onsets`. Where
+`max_onsets` reads a too-*short* `silence_ms` fragmenting one utterance,
+`max_seg` reads a too-*long* `silence_ms` fusing two real turns into one run-on
+segment — a failure that leaves the onset count flat and is invisible to every
+count aggregate, showing up only as a single segment's duration ballooning, so
+the two ceilings bracket both ends of the silence lever),
 `onsets`/`speak_frames` totals, `mean_over` (mean %-of-frames-over-threshold),
 and `onset1`
 (iter-197 — the onset-*timing* aggregate: the mean of each recording's
@@ -453,6 +460,38 @@ real corpus (backlog item 6) now reads cleanly: a `max_onsets` that jumps at
 low `silence_ms` means turns are fragmenting, telling the operator the timeout
 floor before quality degrades.
 
+### Over-merge ceiling, the other end of the silence lever (iter-202)
+
+`max_onsets` (iter-201) reads only one of the two ways `silence_ms` can go
+wrong: too *short* and one utterance fragments into many segments (the count
+ceiling climbs). The opposite — too *long*, fusing two real conversational
+turns into one run-on segment — is invisible to every count aggregate: the
+onset count stays flat or even *falls* (two onsets become one), while the
+damage shows up purely as a single segment's *duration* ballooning. iter-202
+adds `max_segment_ms` (the `max_seg` column): the longest single committed
+segment across the corpus, the duration-axis companion to `max_onsets`.
+Together they bracket both ends of the silence lever in one `--sweep silence_ms`
+pass — the count ceiling catches over-splitting, the duration ceiling catches
+over-merging.
+
+The same synthetic gap recording (1s tone — 300ms gap — 1s tone, all loud)
+shows both ceilings moving in opposite directions as `silence_ms` crosses the
+gap length:
+
+| silence_ms | max_onsets | max_seg | reading |
+|-----------:|-----------:|--------:|---------|
+| 100        | **2**      | 1152.0ms | gap (300ms) > timeout → **splits**: two ~1.15s halves |
+| 400        | 1          | **2304.0ms** | gap < timeout → **merges**: one 2.3s run-on segment |
+| 800        | 1          | **2304.0ms** | the production default — merged |
+
+As `silence_ms` rises past the 300ms gap the count ceiling *drops* (2→1, the
+merge) while the duration ceiling *doubles* (1152→2304ms, the bridged gap plus
+both halves). On a real corpus a `max_seg` that climbs at high `silence_ms`
+toward multiples of a single turn's length is the over-merge signal — turns are
+running together — telling the operator the timeout *ceiling*, the same way
+`max_onsets` reads the floor. The seed corpus has no two-turns-one-pause case in
+the relevant window, so revisit when a newly-synced recording exercises it.
+
 ## Findings & backlog (prioritized)
 
 1. **[latency] Pre-warm the capture pipeline.** The 3–5s `click_to_capture_ms`
@@ -547,7 +586,11 @@ floor before quality degrades.
    into many (see "Over-split ceiling" above). The seed corpus has no
    mid-utterance gap in the sub-800ms window, so the sweep is flat there today;
    gate the actual default change on a newly-synced corpus that exercises real
-   pauses._
+   pauses. iter-202: the `max_segment_ms` aggregate now reads the *other* end —
+   over-merging — so a `--sweep silence_ms` brackets both failures at once: a
+   `max_onsets` jump at low values means fragmentation, a `max_seg` climbing
+   toward multiples of one turn's length at high values means turns are running
+   together (see "Over-merge ceiling" above)._
 
 ## Methodology notes
 
