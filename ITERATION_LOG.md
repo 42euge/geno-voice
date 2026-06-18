@@ -20305,3 +20305,86 @@ identical WAV via `onSpeechEnd` (parity)**.
    wire the `gain` knob through the recorder path (the `ContinuousListener`
    `gain` knob already exists from iter-195) and prove parity with node
    tests.
+
+## iter-230 — resume a suspended AudioContext at start() (prewarm capture fix)
+
+**Branch:** `iter-230-resume-on-start` (merged ff to main, commit `de4acc9`)
+**Date:** 2026-06-18
+
+**OPERATOR STEERING item #1 territory (capture-pipeline correctness).**
+Hardening the prewarm path the steering prioritized — NOT a sentinel.
+
+**The bug.** The iter-227 (`VoiceRecorder`) / iter-229
+(`ContinuousListener`) `prewarm()` feature has a real on-device
+correctness defect. Browsers gate `AudioContext` audio on a **user
+gesture**. A context built by `prewarm()` *before* any gesture — i.e. on
+page load, the natural place to prewarm — resolves its `await
+audioContext.resume()` yet stays in state `"suspended"` and delivers **no
+audio frames**. Because `_setup()` sets `_ready = true` regardless, the
+later `start()` short-circuits inside `_setup()` (`if (this._ready)
+return`) and **never re-attempts `resume()`**. So a pre-warmed graph
+captures pure silence: the very latency optimization silently breaks
+capture. (When `prewarm()` is never called, the cold `start()` runs
+`resume()` under the click gesture itself, so the bug only bit the
+warmed-ahead-of-gesture path — exactly the path the feature exists for.)
+
+**The fix (`client/voice-capture.js`).** Added an idempotent
+`_ensureRunning()` to both `VoiceRecorder` and `ContinuousListener`,
+called from `start()` immediately after `_setup()`:
+```js
+async _ensureRunning() {
+  if (this.audioContext && this.audioContext.state === "suspended") {
+    await this.audioContext.resume();
+  }
+}
+```
+The `start()` click **is** the user gesture, so re-resuming a still-
+suspended context there is precisely when the browser will honor it. It
+is a cheap no-op when the context is already running (the cold path and
+the gesture-granted prewarm path), so behavioral parity is preserved
+everywhere the bug did not bite. Default-off prewarm behaviour is
+unchanged.
+
+**Test harness upgrade (`client/voice-capture.test.js`).**
+`FakeAudioContext` now models `state` (`"suspended"` → `"running"` on
+`resume()`) and a `gestureGated` install mode where `resume()` only
+promotes the context once a gesture is granted, plus a `grantGesture()`
+hook to simulate the click arriving. `installFakeAudio`,
+`withFakeAudio`, and `withFakeAudioClock` thread an opts object.
+
+**Tests (4 new, two per class):**
+- `prewarm before a gesture leaves the context suspended; start resumes
+  it` (both classes) — asserts `resume` count goes 1→2 across
+  prewarm→start, ending `"running"`; the listener variant further pushes
+  held-loud frames and asserts `speaking === true` (proof the resumed
+  graph is actually live, not just flag-flipped).
+- `start does not re-resume an already-running context` (both classes) —
+  asserts `resume` stays at 1 on the gesture-granted path (no redundant
+  resume).
+
+**Red-bar proof.** Reverting the two `_ensureRunning()` call sites makes
+exactly the two gesture-gated tests fail (`not ok 42`, `not ok 51`;
+`# fail 2`) — confirming the tests catch the real bug, not a tautology.
+
+**Verification:**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3190 passed** (unchanged; this is a client-JS change — the gate
+  confirms no Python regression), run on the feature branch before
+  ff-merge.
+- Client: `node --test` (in `client/`) → **52 passed** (48 prior + 4
+  new), 0 failed.
+- Recordings check (steering item #3): still 4 WAVs in
+  `fixtures/recordings/`, md5-unchanged since iter-228 (122716, 123829,
+  131451, 135015), so no new replay re-run / per-recording-table refresh
+  needed this lap.
+
+**Next planned items (per STEER.md order):**
+1. **[latency, on-device] Adopt `prewarm()` in the desktop app** and TIME
+   `click_to_capture_ms` / click-to-listen before/after on real hardware.
+   With this lap, the prewarm path is now correct even when warmed before
+   a user gesture — the desktop integration can prewarm on load safely.
+2. **[recordings] Ingest new recordings every lap** — when new WAVs land
+   in `fixtures/recordings/`, re-run `--recommend-gain` + the sweeps and
+   refresh the tuning-doc per-recording table.
+3. **[gain, client] If a future corpus yields `recommended_gain>1.0`**,
+   wire the `gain` knob through the recorder path and prove parity.
