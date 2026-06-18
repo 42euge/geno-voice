@@ -20571,3 +20571,90 @@ exactly reconstruct the batch `get_speech_timestamps` segments).
 3. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
    --compare` + the energy sweeps when new WAVs land in `fixtures/recordings/`,
    and refresh the comparison table.
+
+## iter-233 — `gv vad`: offline Silero segmentation on the CLI
+
+**Branch:** `iter-233-gv-vad` (merged ff to main, commit `fa8bf5a`)
+**Date:** 2026-06-18
+
+**No STEER.md this lap.** The two documented top-priority next items
+(wire `ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()` in the
+desktop app) both need a Mac + mic + browser and can't be done headless on the
+loop host. The recording corpus is unchanged since iter-231 (same 6 WAVs,
+md5-stable), so the "ingest new recordings" item had nothing to do. I took the
+next headless-doable gv-CLI increment instead.
+
+**The gap.** The iter-231 Silero batch segmenter (`vad/silero.py`) was reachable
+only via the :5111 HTTP endpoint (`POST /vad/silero`) and the corpus-replay
+script (`fixtures/replay_silero.py`). There was no way to segment a *single*
+WAV from the `gv` CLI — the primary user-facing surface named in the mission —
+without standing up the server. `gv` had bench/stream/talk/chat/simulate-mirror/
+calibrate-base-wpm but no VAD command at all.
+
+**What changed.**
+1. **`examples/gv.py`** — new `gv vad <wav>` subcommand: the headless offline
+   analogue of the live mic path. Prints the detected speech regions (sample
+   rate, duration, segment count, total speech, and a per-region
+   `start–end (duration)` table) for any 16-bit PCM WAV.
+   - **`cmd_vad`** follows the established gv handler-injection pattern: it
+     takes injected `segmenter` / `availability` / `log` deps (defaulting to
+     `vad.silero.segment_recording` / `silero_available` / `print`, imported
+     lazily so the parser stays torch-free). When `silero-vad` is absent it
+     prints a one-line install hint and returns — the same degrade-don't-die
+     contract the server's 503 follows.
+   - **Five SileroParams knobs** exposed as flags: `--threshold`,
+     `--min-speech-ms`, `--min-silence-ms`, `--speech-pad-ms`, `--max-speech-s`.
+     Defaults are sourced from `SileroParams()` so the CLI tracks the real
+     engine (the 800ms min-silence default is the pipecat `stop_secs=0.8` the
+     live path uses); `build_parser` falls back to documented constants if
+     `vad.silero` can't import, keeping parser construction audio-free.
+   - **Three new pure argparse validators:** `unit_interval_type` (the `[0,1]`
+     P(speech) threshold), `nonneg_float_type` (the ms knobs; `0` allowed,
+     negatives rejected), `max_speech_type` (positive float OR `inf`/`none`/
+     `off` sentinels meaning "never force-split"). All reject NaN explicitly.
+   - **`render_vad_segments`** — pure presentation helper alongside the other
+     `render_*` functions; `None` result → install-hint line.
+2. **Tests.**
+   - `tests/unit/test_gv_vad.py` (**44 tests**): parser registration/defaults/
+     overrides, the three type validators (in-range / out-of-range / NaN /
+     non-number / sentinels), `render_vad_segments` (none / empty / populated /
+     threshold-omitted), and `cmd_vad` with injected stubs (unavailable path
+     does NOT call the segmenter; params pass-through; one `importorskip` test
+     asserting a genuine `vad.silero.SileroParams` is constructed so the field
+     names stay in lock-step with the engine). Runs with NO torch import.
+   - `tests/integration/test_gv_vad_cli.py` (**8 tests**): drives `cmd_vad`
+     with the REAL `segment_recording` over the REAL corpus. Re-pins THE GATE
+     (the 31s `voice-20260618-110355.wav` splits to **≥2** regions through the
+     CLI), asserts a well-formed report for every recording, and proves the
+     `--threshold` knob reaches the engine (a 0.95 gate recovers ≤ the speech of
+     a 0.5 gate). Skips cleanly without the corpus or `silero-vad`.
+   - Updated `test_gv_cli.py::test_dispatch_default_handlers_are_the_real_cmds`
+     to include the new `vad` entry in the asserted handler map.
+3. **Docs** (`docs/research/voice-capture-tuning.md`) — a `gv vad` subsection
+   beside the `replay_silero` block: invocation examples, the defaults, the
+   `--max-speech-s none` sentinel, the degrade-to-hint behavior, and pointers
+   to both test files.
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3286 passed** (3242 prior + 44 new), run on the feature branch before
+  ff-merge AND re-confirmed on main after the merge.
+- Integration: `python -m pytest tests/integration/test_gv_vad_cli.py` →
+  **8 passed** (corpus symlinked into the worktree).
+- Manual smoke on main: `python examples/gv.py vad
+  fixtures/recordings/voice-20260618-110355.wav` → 5 segments, speech=16.2s,
+  matching the iter-231 gate proof.
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] `gv vad --json`** — a machine-readable mode for `gv vad` (mirror
+   `replay_silero.py --json` / `SileroResult.to_dict`) so the segmentation can
+   feed scripts/tooling, not just human eyes.
+4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
+   --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
+   refresh the comparison table.
