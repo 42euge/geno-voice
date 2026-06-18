@@ -18754,3 +18754,112 @@ default config makes it a passthrough.
    grid shows pre-roll improves the typical opening, the tail, AND the
    consistency simultaneously; pick a value (256–512ms) and gate on a
    busier/newly-synced corpus.
+
+---
+
+## iter-214 — Wire WpmMirror into the live TTS path (backlog #1)
+
+**Branch:** `iter-214-wpm-mirror-wire` (merged ff to main, commit `f589865`)
+**Date:** 2026-06-18
+
+**Improvement (behavior — the bot's TTS rate now adapts toward the user's,
+behind an off-by-default switch):**
+This lap closes the loop on iter-213's WPM-mirroring **decision seam**. iter-213
+shipped the pure, exhaustively-tested `session.wpm_mirror.WpmMirror` primitive
+(`user_wpm → bot speed`) behind an off-by-default gate but left it *unwired*;
+this is backlog item #1 — the named follow-on that actually changes a live
+entrypoint's rate. It is the standard codebase rhythm (decision-seam-first lap,
+then a separate reviewable wiring lap — same as iter-159/167/169 closing
+backlog #9 in hops).
+
+**The obstacle iter-213 left open.** The Kokoro `speed` knob was a **constant
+float** captured once at closure-build time: `build_audio_io(..., speed)` baked
+it into the `synth_fn` closure. Adapting the rate turn-to-turn requires the
+speed to become a *mutable per-session value* that the synth path reads fresh on
+every sentence and the turn loop updates after each measured `user_wpm`
+(iter-064). The wiring is the four small seams that make that possible.
+
+What changed:
+- **`examples/_chat_speed.py`** (new, pure, dependency-free): `SpeedController`
+  — the mutable per-session speed holder.
+  - `current()` — zero-arg accessor the synth path reads on every sentence.
+  - `observe(user_wpm)` — folds the just-measured user rate through an injected
+    mirror (duck-typed `speed(*, user_wpm, current_speed)` — exactly the
+    iter-213 `WpmMirror` interface) to set the *next* turn's speed.
+  - `mirror=None` (the default) ⇒ `observe` is a no-op and the speed never moves
+    from its initial value — the proven fixed-rate path. A misbehaving mirror
+    (raises / returns a non-number) is swallowed and the prior speed kept, so a
+    bad mirror can never break the live turn loop. Carries no cross-turn state
+    (the iter-213 `strength` damping already smooths across turns).
+- **`examples/_chat_audio_io.py`**: `build_audio_io`'s `speed` arg now accepts a
+  **float OR a zero-arg callable**. `synth_fn` resolves a callable fresh on
+  every sentence (so a speed updated between turns takes effect on the next
+  sentence synthesized); a plain float is read once and used unchanged —
+  byte-for-byte the historical shape. `callable(...)` cleanly distinguishes the
+  two.
+- **`examples/_chat_session.py`**: `run_session` (and the shared
+  `_record_completed_turn` / `_speak_flushed_fragment` helpers) gain an optional
+  `on_turn_complete(metrics)` hook, fired right after a turn is recorded — for
+  both a mic turn AND a spoken flushed fragment (it lives in the shared helper,
+  so both adapt the rate identically). Wrapped in `try/except` so a misbehaving
+  observer can never break the loop. `None` (default) = pre-iter-214 path.
+- **`examples/_chat_config.py`**: `parse_wpm_mirror_config(chat_cfg, warn=…)` —
+  tolerant parser for the optional `chat.wpm_mirror` section, mirroring the
+  iter-187 `parse_vad_config` template (warn seam, bool/positivity guards).
+  Returns `WpmMirrorConfig` kwargs. **Off-by-default to the bone**: `enabled`
+  must be a *real bool* (a truthy `1`/`"yes"` does NOT enable it), and every
+  numeric tunable is omitted unless present-and-valid so `WpmMirrorConfig`
+  backfills its own defaults. `min_delta` accepts `>= 0` (the "deadband off"
+  sentinel); the others require `> 0`. Decoupled from the pipecat-eager
+  `session` package — it returns a plain dict the caller splats.
+- **`examples/mic_chat.py`**: build a `SpeedController` holding the CLI `speed`;
+  construct a live `WpmMirror` **only when `chat.wpm_mirror.enabled` is on**
+  (lazy-imported from `session.wpm_mirror` so the eager pipecat import isn't paid
+  on the default path); hand `controller.current` to `build_audio_io` and wire
+  `on_turn_complete=lambda m: controller.observe(m.user_wpm)` into
+  `run_session`. With mirroring off, the mirror is None and the speed is the
+  constant `speed` for the whole session.
+
+**The off-by-default invariant is the whole point.** With no `wpm_mirror` config
+(the default), the controller's mirror is None, `observe` is inert, and
+`synth_fn` resolves the same constant speed every sentence — byte-for-byte
+today's fixed-rate behavior. Mirroring engages only behind the explicit,
+validated `enabled: true` switch. So this lap — the first to thread a *dynamic*
+speed through the live `synth_fn` — cannot regress the proven constant-speed
+path.
+
+**Verification:**
+- New/affected files:
+  `python -m pytest tests/unit/test_chat_speed.py
+  tests/unit/test_parse_wpm_mirror_config.py tests/unit/test_chat_audio_io.py
+  tests/unit/test_chat_session.py` → **120 passed** (15 + 26 new + 3 + 7 new).
+- Full Python unit suite: `python -m pytest tests/unit/` → **2909 passed**
+  (2858 prior + 51 new), run on the feature branch before ff-merge. GATE
+  command: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/`.
+- `python -W error::SyntaxWarning -m py_compile` clean on all five changed
+  modules + the two new test files.
+- (`tests/test_session.py` still errors on collection — pre-existing missing
+  `pipecat` dep, not a regression.)
+
+**Next planned items:**
+1. **[wpm-mirroring, follow-on] Surface the adapted speed in the session
+   summary.** The mechanics now adapt the rate; the natural next hop is to
+   *measure* it — record per-turn whether the mirror is active and the speed it
+   chose, and show it in `print_session_summary` so the iter-210 `bot_wpm`
+   sentinel can be seen shrinking the gap when mirroring is on (measured, not
+   asserted). Then tune `base_wpm`/`strength` against a corpus with varied user
+   pacing.
+2. **[silence] Run the actual `--sweep silence_ms` over a newly-synced corpus**
+   — the sweep harness carries the full floor/typical/ceiling/spread shape on all
+   three axes from one shared renderer (iter-207). Gate a real `silence_ms`
+   default change on a corpus that exercises real mid-utterance pauses *and*
+   two-turns-one-pause cases (the seed corpus is flat in both windows).
+3. **[latency, highest value] Pre-warm the capture pipeline** — still the top
+   user-facing bug (3–5s `click_to_capture_ms`). Needs an on-device timing
+   harness; cannot be replayed. The iter-208..212 sentinels now make
+   playback-side, recording-loop, mid-stream-LLM, and end-to-end TTFS slowdowns
+   visible in session summaries.
+4. **[preroll-default] Bump the client `prerollMs` default above 0** — iter-200's
+   grid shows pre-roll improves the typical opening, the tail, AND the
+   consistency simultaneously; pick a value (256–512ms) and gate on a
+   busier/newly-synced corpus.
