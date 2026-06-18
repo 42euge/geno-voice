@@ -41,6 +41,7 @@ entries.
 
 from __future__ import annotations
 
+import statistics
 from dataclasses import dataclass, field
 
 __all__ = [
@@ -55,6 +56,9 @@ __all__ = [
     "TUNING_CORPUS_WPMS",
     "TUNING_STRENGTH_AXIS",
     "tune_strength",
+    "CalibrationSample",
+    "BaseWpmCalibration",
+    "calibrate_base_wpm",
     "DEFAULT_LURCH_WEIGHT",
     "DEFAULT_BASE_WPM",
     "DEFAULT_STRENGTH",
@@ -596,3 +600,151 @@ def tune_strength(
         initial_speed=initial_speed,
     )
     return pick_best_mirror_config(points, lurch_weight=lurch_weight)
+
+
+# --------------------------------------------------------------------------
+# iter-220 — on-device ``base_wpm`` calibration from rendered samples.
+#
+# iter-219 closed the offline tuning question with a hard finding: ``base_wpm``
+# is NOT tunable by replay. It is the bot's actual ``bot_wpm`` (iter-046) at
+# Kokoro ``speed=1.0`` — a hardware/voice calibration — and the simulator's own
+# ``ideal = user_wpm / base_wpm`` *uses* it to define the convergence target, so
+# sweeping it scores each cell against its own moving target (circular). The
+# right ``base_wpm`` for a deployment is therefore a *measurement*: synthesize a
+# known-length script, time the audio, and back out the rate the voice clocks at
+# speed 1.0.
+#
+# This is the audio-free arithmetic core of that calibration. A
+# ``CalibrationSample`` is one render — ``words`` synthesized into
+# ``audio_seconds`` of audio at a known Kokoro ``speed`` — and it derives both
+# the measured ``bot_wpm`` (the iter-046 ``words·60/audio_seconds``) and the
+# ``implied_base_wpm`` (that rate normalized back to speed 1.0, i.e.
+# ``bot_wpm / speed``, since ``bot_wpm ≈ speed · base_wpm``).
+# ``calibrate_base_wpm`` folds one-or-more samples into a robust *median*
+# ``implied_base_wpm`` plus spread (min↔max) and drift-vs-nominal diagnostics, so
+# an operator can set ``base_wpm`` from their own voice instead of the 165
+# nominal seed (``DEFAULT_BASE_WPM``).
+#
+# The real Kokoro render that *produces* the samples is the on-device follow-on
+# (gate on a real synth); this lap ships the pure measurement that turns a
+# rendered duration into a ``base_wpm`` verdict — no I/O, no clock, no audio.
+# Unit-tested in isolation exactly like the iter-216/217/219 simulator engine it
+# complements.
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CalibrationSample:
+    """One TTS render used to calibrate ``base_wpm``.
+
+    A known-length script (``words``) synthesized into ``audio_seconds`` of
+    audio at a known Kokoro ``speed`` knob. Derives the measured rate and the
+    rate the voice would clock at the calibration point (``speed=1.0``).
+
+    Attributes:
+      words: number of words in the rendered script (must be ``> 0``).
+      audio_seconds: measured duration of the rendered audio (must be ``> 0``).
+      speed: the Kokoro ``speed`` knob the render used (must be ``> 0``;
+        defaults to the ``1.0`` calibration point).
+
+    All three are validated in ``__post_init__`` because a non-positive value is
+    a measurement bug (an empty script, a zero-length clip, or a missing speed)
+    that would otherwise divide by zero or produce a nonsensical negative rate.
+    """
+
+    words: int
+    audio_seconds: float
+    speed: float = 1.0
+
+    def __post_init__(self) -> None:
+        if self.words <= 0:
+            raise ValueError(f"words must be positive (got {self.words})")
+        if self.audio_seconds <= 0:
+            raise ValueError(
+                f"audio_seconds must be positive (got {self.audio_seconds})"
+            )
+        if self.speed <= 0:
+            raise ValueError(f"speed must be positive (got {self.speed})")
+
+    @property
+    def bot_wpm(self) -> float:
+        """Measured speaking rate of this render (iter-046 convention)."""
+        return self.words / (self.audio_seconds / 60.0)
+
+    @property
+    def implied_base_wpm(self) -> float:
+        """The rate the voice would clock at ``speed=1.0`` (the calibration).
+
+        ``bot_wpm ≈ speed · base_wpm`` (the same relation the live
+        ``SpeedController`` inverts when it picks ``speed ≈ target_wpm /
+        base_wpm``), so dividing the measured rate by the render's ``speed``
+        normalizes it back to the ``speed=1.0`` calibration point.
+        """
+        return self.bot_wpm / self.speed
+
+
+@dataclass(frozen=True)
+class BaseWpmCalibration:
+    """Verdict of folding one-or-more :class:`CalibrationSample` renders.
+
+    Attributes:
+      implied_base_wpm: the robust **median** of the samples'
+        ``implied_base_wpm`` — the value to set ``DEFAULT_BASE_WPM`` to for this
+        voice. Median (not mean) so a single mis-timed render does not skew it.
+      n_samples: how many samples were folded.
+      min_base_wpm / max_base_wpm: the extremes of the per-sample
+        ``implied_base_wpm`` — the calibration's range.
+      spread: ``max_base_wpm - min_base_wpm`` — a large spread means the renders
+        disagree (inconsistent synth or a bad sample), so the median is less
+        trustworthy.
+      default_base_wpm: the nominal seed the calibration is compared against.
+      drift: ``implied_base_wpm - default_base_wpm`` — how far this voice clocks
+        from the 165 nominal. Positive ⇒ the voice is faster than nominal at
+        speed 1.0 (so the seed would make the mirror under-shoot the target
+        speed); negative ⇒ slower.
+    """
+
+    implied_base_wpm: float
+    n_samples: int
+    min_base_wpm: float
+    max_base_wpm: float
+    spread: float
+    default_base_wpm: float
+    drift: float
+
+
+def calibrate_base_wpm(
+    samples,
+    default_base_wpm: float = DEFAULT_BASE_WPM,
+) -> BaseWpmCalibration | None:
+    """Fold calibration renders into a robust ``base_wpm`` verdict.
+
+    Each :class:`CalibrationSample`'s ``implied_base_wpm`` normalizes its render
+    back to the ``speed=1.0`` calibration point, so samples taken at *different*
+    speeds are directly comparable. Returns their **median** as the calibrated
+    ``base_wpm`` (robust to a single mis-timed render) plus spread and
+    drift-vs-nominal diagnostics.
+
+    Args:
+      samples: iterable of :class:`CalibrationSample`. Empty ⇒ ``None`` (nothing
+        to calibrate from).
+      default_base_wpm: the nominal seed to report ``drift`` against
+        (defaults to :data:`DEFAULT_BASE_WPM`).
+
+    Pure — no I/O, no clock, no mutation of the input.
+    """
+    bases = [s.implied_base_wpm for s in samples]
+    if not bases:
+        return None
+    median = statistics.median(bases)
+    lo = min(bases)
+    hi = max(bases)
+    return BaseWpmCalibration(
+        implied_base_wpm=median,
+        n_samples=len(bases),
+        min_base_wpm=lo,
+        max_base_wpm=hi,
+        spread=hi - lo,
+        default_base_wpm=float(default_base_wpm),
+        drift=median - float(default_base_wpm),
+    )
