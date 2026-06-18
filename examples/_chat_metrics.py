@@ -3396,6 +3396,144 @@ def _emit_split_coverage_consistency_line(
     )
 
 
+def _worker_idle_gap_bucket(idle_gap: float) -> str:
+    """iter-226: bucket a per-turn ``worker_idle_gap_total``
+    (iter-044's cumulative seconds the SentenceWorker spent blocked
+    waiting for the next sentence AFTER the first one — i.e. the LLM
+    didn't keep up with synth+playback) into a coarse category. Used by
+    ``_emit_worker_idle_gap_consistency_line`` to detect runs of turns
+    where the worker repeatedly starved between sentences, so the
+    iter-008 streaming-overlap design produced gaps of silence the
+    user can hear.
+
+    A continuous-metric instance like
+    iter-128/140/141/142/143/208/224/225. Like iter-140/141 (RTF) and
+    iter-208 (synth-dispatch) and iter-224 (preview-divergence) — and
+    UNLIKE iter-142/143/225 — ``worker_idle_gap_total`` is
+    "smaller is better": the fine state is a LOW value (0 = the worker
+    never waited), so the boundaries are NOT inverted; the problematic
+    end is a LARGE idle gap.
+
+    Buckets (chosen against iter-044's per-turn yellow-flag line, which
+    colors the inline figure yellow above 0.3s — that's the operator-
+    visible "the worker is starving" threshold):
+
+        ``smooth``   — < 0.3s: cumulative idle gap is below the
+            iter-044 yellow line; the LLM kept up with synth. The
+            desired state.
+        ``stalled``  — 0.3-1.0s: a noticeable cumulative gap — the
+            user hears short silences between sentences; the LLM is
+            lagging the synth+playback pipeline.
+        ``starved``  — > 1.0s: a large cumulative gap — synth sat idle
+            for over a second waiting on the LLM; streaming overlap is
+            being defeated and the turn feels stop-start.
+
+    Returns ``""`` when ``idle_gap`` is non-positive (the worker never
+    blocked after the first sentence — a single-sentence turn, or a
+    turn where the LLM always stayed ahead; both the "fine"/"no
+    measurement" state) — empty-string filter applies in the consumer,
+    mirroring iter-114/115/120/126/128/140/141/142/143/208/224/225.
+    """
+    if idle_gap <= 0:
+        return ""
+    if idle_gap < 0.3:
+        return "smooth"
+    if idle_gap <= 1.0:
+        return "stalled"
+    return "starved"
+
+
+def _emit_worker_idle_gap_consistency_line(
+    emit, idle_gap_list: list[float], threshold: int = 5,
+) -> None:
+    """iter-226: detect consecutive runs of turns where the
+    SentenceWorker starved between sentences, so the iter-008
+    streaming-overlap design produced audible gaps of silence. Latest
+    instance of the diversity-check pattern after iter-114 (filler),
+    iter-115/126 (naturalness), iter-120 (barge-phase), iter-128
+    (sentence-length), iter-140 (stt-rtf), iter-141 (tts-rtf),
+    iter-142 (llm-tps), iter-143 (streaming-overlap), iter-208
+    (synth-dispatch), iter-209 (eot-overhead), iter-210 (bot-wpm),
+    iter-211 (max-token-gap), iter-212 (ttfs), iter-224
+    (stt-preview-divergence), iter-225 (sentence-split-coverage).
+    Buckets the per-turn ``worker_idle_gap_total`` via
+    ``_worker_idle_gap_bucket`` before running the scan (same
+    continuous-metric shape as iter-128/140/141/142/143/208/224/225).
+
+    The iter-044 metric exists to localize pipeline bottlenecks
+    (combined with ``streaming_overlap_ratio``), but it's otherwise
+    silent at the session level: each turn colors the inline figure
+    yellow above 0.3s, but a *sustained* high-idle-gap run — the LLM
+    systematically failing to keep up with synth+playback, e.g. a
+    slow model, a long system prompt, or context creep — never
+    surfaces in the summary. A sustained run is the actionable signal
+    that the user is hearing stop-start audio turn after turn, eroding
+    the conversational feel the VISION targets. Distinct from
+    iter-143's ``streaming_overlap_ratio`` sentinel: that measures the
+    FRACTION of synth that overlapped the stream; this measures the
+    ABSOLUTE seconds the worker sat idle. A turn can show decent
+    overlap ratio yet still leave the worker blocked for a long gap on
+    one slow sentence — the inverse of iter-062's ``max_queue_depth``
+    (worker backed up vs worker starved).
+
+    Filter rule: drop the ``"smooth"`` bucket before the scan. It's
+    the "fine" state; only "stalled" and "starved" warrant warning.
+    Empty buckets (single-sentence turns / turns the worker never
+    blocked) also drop. Like iter-140/141/208/224 and UNLIKE
+    iter-142/143/225, the fine bucket is a LOW value ("smooth")
+    because idle gap is smaller-is-better — the boundaries are NOT
+    inverted.
+
+    Threshold = 5: same as iter-115/128/140/141/142/143/208/224/225.
+    Idle gap varies turn to turn with how long the LLM happens to
+    pause mid-response; a single high-idle turn is normal, a sustained
+    run is the real signal.
+
+    Output:
+
+        Worker idle gap:  5 consecutive 'starved' turns — synth sat
+                          idle over a second waiting on the LLM;
+                          streaming overlap is defeated, check LLM
+                          throughput / context size
+                          (iter-044 worker_idle_gap_total)
+    """
+    # Bucketize, then drop the "uninteresting" bucket (empty, smooth).
+    interesting = {"stalled", "starved"}
+    filtered = [
+        b for b in (
+            _worker_idle_gap_bucket(g) for g in idle_gap_list
+        )
+        if b in interesting
+    ]
+    if not filtered:
+        return
+
+    longest_run, longest_bucket = _longest_consecutive_run(filtered)
+    if longest_run < threshold:
+        return
+
+    if longest_bucket == "starved":
+        suggestion = (
+            "synth sat idle over a second waiting on the LLM; "
+            "streaming overlap is defeated, check LLM throughput / "
+            "context size"
+        )
+    elif longest_bucket == "stalled":
+        suggestion = (
+            "the user hears short silences between sentences; the LLM "
+            "is lagging synth+playback"
+        )
+    else:
+        # Defensive: future buckets that pass the filter rule.
+        suggestion = "investigate recurring SentenceWorker idle gaps"
+
+    emit(
+        f"    Worker idle gap:  {longest_run} consecutive "
+        f"{longest_bucket!r} turns — {suggestion} "
+        f"(iter-044 worker_idle_gap_total)"
+    )
+
+
 def _emit_bargeable_line(emit, bargeable_values: list[float]) -> None:
     """iter-104: extracted from print_session_summary's iter-074
     bargeable line. Reports the WORST bargeable fraction across
@@ -4192,6 +4330,22 @@ def print_session_summary(
     _emit_split_coverage_consistency_line(
         _emit,
         [m.sentence_split_coverage for m in metrics_list],
+    )
+    # iter-226: worker-idle-gap consistency check. Only fires when 5+
+    # consecutive turns left the SentenceWorker blocked between
+    # sentences (stalled 0.3-1.0s / starved > 1.0s). iter-044 added
+    # the per-turn metric to localize pipeline bottlenecks, but it
+    # only colors a single turn's inline figure yellow above 0.3s — a
+    # SUSTAINED high-idle-gap run (the LLM systematically failing to
+    # keep up with synth+playback) never surfaces in the summary, yet
+    # the user hears stop-start audio turn after turn. Distinct from
+    # iter-143's streaming_overlap_ratio sentinel: that measures the
+    # FRACTION of synth that overlapped; this measures the ABSOLUTE
+    # seconds the worker sat idle, which a decent overlap ratio can
+    # still hide on one slow sentence.
+    _emit_worker_idle_gap_consistency_line(
+        _emit,
+        [m.worker_idle_gap_total for m in metrics_list],
     )
     # iter-090: barge block extracted to _emit_barge_block helper.
     # ~76 lines of co-emitted lines (count, interruption rate,
