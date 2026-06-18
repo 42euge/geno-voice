@@ -2457,6 +2457,128 @@ def _emit_streaming_overlap_consistency_line(
     )
 
 
+def _synth_dispatch_bucket(seconds: float) -> str:
+    """iter-208: bucket a per-turn ``synth_dispatch_seconds``
+    (iter-076's TTFS attribution residual — the part of TTFS not
+    explained by ``stt_time + llm_first_sentence``: synth time,
+    speaker open, queue dispatch, audio-device buffering) into a
+    coarse category. Used by ``_emit_synth_dispatch_consistency_line``
+    to detect runs where the final pipeline leg consistently
+    dominates time-to-first-sound.
+
+    Buckets (chosen against VISION's sub-500ms TTFS target, where
+    this leg should be a small slice of the budget — STT and LLM
+    already have their own sentinels at iter-140 and iter-142):
+
+        ``fast``     — < 0.15s: synth+dispatch is a thin slice of
+            TTFS; the desired state.
+        ``slow``     — 0.15-0.35s: the leg is eating a noticeable
+            chunk of the opening latency. A lighter voice/engine,
+            a warmer speaker, or smaller first-chunk dispatch
+            would help.
+        ``very_slow``— > 0.35s: synth/dispatch alone blows most of
+            the sub-500ms budget; the bot feels laggy before the
+            first word regardless of how fast STT and the LLM ran.
+
+    This is the THIRD and final TTFS-leg sentinel, completing the
+    iter-076 decomposition: STT (iter-140 ``stt_rtf``) + LLM
+    (iter-142 ``llm_tps``) + synth/dispatch (here). Like
+    iter-140/141 and UNLIKE iter-142/143, the fine bucket is a LOW
+    value — smaller latency is better, so the boundaries are NOT
+    inverted.
+
+    Returns ``""`` when ``seconds`` is non-positive (no audio this
+    turn or the residual was unmeasured) — empty-string filter
+    applies in the consumer, mirroring iter-114/115/120/126/128/
+    140/141.
+    """
+    if seconds <= 0:
+        return ""
+    if seconds < 0.15:
+        return "fast"
+    if seconds <= 0.35:
+        return "slow"
+    return "very_slow"
+
+
+def _emit_synth_dispatch_consistency_line(
+    emit, synth_dispatch_list: list[float], threshold: int = 5,
+) -> None:
+    """iter-208: detect consecutive runs of turns where the
+    synth+dispatch leg of TTFS (iter-076 ``synth_dispatch_seconds``)
+    consistently dominated the opening latency. NINTH instance of
+    the diversity-check pattern after iter-114 (filler),
+    iter-115/126 (naturalness), iter-120 (barge-phase), iter-128
+    (sentence-length), iter-140 (stt-rtf), iter-141 (tts-rtf),
+    iter-142 (llm-tps), iter-143 (streaming-overlap). SIXTH instance
+    applied to a CONTINUOUS metric — buckets it via
+    ``_synth_dispatch_bucket`` before running the scan (same shape
+    as iter-128/140/141/142/143).
+
+    This completes the iter-076 TTFS attribution decomposition with
+    a sentinel on every leg: STT (iter-140), LLM (iter-142), and
+    now the synth+dispatch residual. The session-summary already
+    prints the median ``synth %`` of TTFS, but a high median can
+    hide behind one bad turn; a *sustained run* in the slow bucket
+    is the actionable signal that the leg — not STT or the LLM — is
+    the recurring opening-latency bottleneck.
+
+    Filter rule: drop the ``"fast"`` bucket before the scan. It's
+    the "fine" state; only "slow" and "very_slow" warrant warning.
+    Empty buckets (turns with no audio / unmeasured residual) also
+    drop. Like iter-140/141 and UNLIKE iter-142/143, the fine
+    bucket is a LOW value (small latency) — synth+dispatch is
+    smaller-is-better.
+
+    Threshold = 5: same as iter-115/128/140/141/142/143. The leg
+    varies turn to turn with sentence length and engine warmth, and
+    a single slow opening (e.g. first turn cold-start) is normal; a
+    sustained run is the real signal.
+
+    Output:
+
+        Synth/dispatch:   5 consecutive 'slow' turns — the synth +
+                          speaker-open + dispatch leg is eating the
+                          opening latency; try a lighter voice or
+                          warm the speaker (iter-076 synth_dispatch_seconds)
+    """
+    # Bucketize, then drop the "uninteresting" bucket (empty, fast).
+    interesting = {"slow", "very_slow"}
+    filtered = [
+        b for b in (
+            _synth_dispatch_bucket(s) for s in synth_dispatch_list
+        )
+        if b in interesting
+    ]
+    if not filtered:
+        return
+
+    longest_run, longest_bucket = _longest_consecutive_run(filtered)
+    if longest_run < threshold:
+        return
+
+    if longest_bucket == "very_slow":
+        suggestion = (
+            "synth+dispatch alone blows most of the sub-500ms "
+            "budget; switch to a lighter voice/engine or pre-warm "
+            "the speaker"
+        )
+    elif longest_bucket == "slow":
+        suggestion = (
+            "the synth + speaker-open + dispatch leg is eating the "
+            "opening latency; try a lighter voice or warm the speaker"
+        )
+    else:
+        # Defensive: future buckets that pass the filter rule.
+        suggestion = "investigate synth time and speaker-open latency"
+
+    emit(
+        f"    Synth/dispatch:   {longest_run} consecutive "
+        f"{longest_bucket!r} turns — {suggestion} "
+        f"(iter-076 synth_dispatch_seconds)"
+    )
+
+
 def _emit_bargeable_line(emit, bargeable_values: list[float]) -> None:
     """iter-104: extracted from print_session_summary's iter-074
     bargeable line. Reports the WORST bargeable fraction across
@@ -3139,6 +3261,18 @@ def print_session_summary(
     _emit_streaming_overlap_consistency_line(
         _emit,
         [m.streaming_overlap_ratio for m in metrics_list],
+    )
+    # iter-208: synth+dispatch consistency check. Only fires when
+    # 5+ consecutive turns spent a noticeable chunk of TTFS in the
+    # synth + speaker-open + dispatch leg (slow 0.15-0.35s /
+    # very_slow > 0.35s) — completes the iter-076 TTFS attribution
+    # decomposition with a sentinel on every leg (STT iter-140,
+    # LLM iter-142, synth/dispatch here). Surfaces the final leg
+    # as the recurring opening-latency bottleneck even when its
+    # median hides behind one bad turn.
+    _emit_synth_dispatch_consistency_line(
+        _emit,
+        [m.synth_dispatch_seconds for m in metrics_list],
     )
     # iter-090: barge block extracted to _emit_barge_block helper.
     # ~76 lines of co-emitted lines (count, interruption rate,
