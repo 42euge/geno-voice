@@ -20486,3 +20486,88 @@ energy floor; the live mic path (`pipecat_server.py`) already uses it.
 3. **[recordings] Ingest new recordings every lap** — re-run
    `replay_silero.py --compare` + the energy sweeps when new WAVs land, and
    refresh the comparison table.
+
+## iter-232 — streaming Silero VAD (frame-by-frame for live capture)
+
+**Branch:** `iter-232-silero-stream` (merged ff to main, commit `47f8570`)
+**Date:** 2026-06-18
+
+**Next planned item #2 from iter-231.** No STEER.md present this lap, so I took
+the documented next item: streaming Silero. The batch `POST /vad/silero`
+(iter-231) needs the whole utterance buffered before it emits a single segment.
+For live capture the desktop `ContinuousListener` wants **incremental**
+speech-start/end decisions as audio arrives, so a turn can be cut the instant
+Silero sees `min_silence_ms` of trailing silence — without waiting for the user
+to stop AND a whole-WAV round-trip. This wraps `silero-vad`'s `VADIterator`
+"stream imitation" primitive (verified on the real model: its per-window events
+exactly reconstruct the batch `get_speech_timestamps` segments).
+
+**What changed.**
+1. **`vad/silero.py`** —
+   - `SileroStream`: stateful frame-by-frame wrapper over `VADIterator`.
+     `push()` takes arbitrary-length float32 mono chunks (buffers sub-window
+     remainders to the model's required **512-sample @ 16k / 256 @ 8k** window)
+     and returns `StreamEvent` start/end events. `flush()` closes a region left
+     open because the stream ended mid-speech — a property the batch path gets
+     for free but a live stream must handle explicitly. `reset()` re-arms for a
+     new utterance without reloading the model. The streaming path supports a
+     **reduced knob set** vs batch: `threshold`/`min_silence_ms`/`speech_pad_ms`
+     apply; `min_speech_ms`/`max_speech_s` do **NOT** (the iterator has no
+     look-back to drop a short region after the fact), so the stream is a
+     documented **superset** of the batch path.
+   - `stream_samples()`: drives a `SileroStream` over a whole signal and
+     rebuilds a `SileroResult`, so streaming is asserted to reconstruct batch
+     segmentation.
+   - `StreamProtocol` + `decode_float32_le`: the WebSocket message state machine
+     (config / flush / reset / binary → reply dict), **extracted so it is
+     unit-tested WITHOUT importing `server`** (which pulls in pipecat,
+     unimportable on the x86_64 loop host). Mirrors the GENO.md mic_chat.py
+     extraction pattern: inject a stream factory, return plain dicts.
+2. **`server.py`** — `WS /vad/silero/stream` endpoint: thin transport glue over
+   `StreamProtocol` with the blocking `push` off-loaded to the executor; 1011
+   close when the model is unavailable. Full contract in the docstring.
+3. **`vad/__init__.py`** — exports `SileroStream`, `StreamEvent`,
+   `StreamProtocol`, `WINDOW_SAMPLES`, `decode_float32_le`, `stream_samples`.
+4. **Tests.**
+   - `tests/unit/test_silero_stream.py` (**36 tests**, model stubbed): a
+     faithful re-implementation of the real `VADIterator` trigger/hangover state
+     machine drives `StreamEvent`/`_events_to_segments`, construction + param
+     mapping, push windowing/buffering/**chunk-size-independence**, flush
+     (open-segment close, idempotent, no-op-when-silent), reset, `stream_samples`
+     reconstruction, `decode_float32_le` wire format, and the full
+     `StreamProtocol` dispatch matrix (arm/flush/reset/binary, before-arm
+     safety, reconfig builds fresh stream).
+   - `tests/integration/test_silero_stream_recordings.py` (**REAL model + REAL
+     corpus**): streaming reconstructs the batch segmentation once the
+     structurally-absent `min_speech_ms` filter is replayed (proven a superset —
+     a `0.1s` blip on `135015.wav` that batch drops at `min_speech=250ms` is the
+     only divergence, and it is filtered, not a bug); the 31s GATE recording
+     still splits **≥2** when streamed incrementally; chunk size (320-sample mic
+     frame vs 4096 bulk) is **irrelevant** on real audio. Skips cleanly without
+     the corpus/package.
+5. **Docs** (`docs/research/voice-capture-tuning.md`) — streaming endpoint
+   contract, the batch-vs-stream **superset** relationship (and why
+   `min_speech_ms` can't apply on the streaming path), and the
+   desktop-integration backlog update (prefer `/vad/silero/stream` or pipecat WS
+   for live; batch `POST` stays simplest for whole-clip segmentation).
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3242 passed** (3206 prior + 36 new), run on the feature branch before
+  ff-merge AND re-confirmed on main after the merge.
+- Integration: `python -m pytest tests/integration/` → **132 passed, 1 skipped**
+  (the faster-whisper case), with the corpus symlinked into the worktree. The
+  25 streaming tests are the new additions; all green against the real model.
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** and
+   GUI-test on the Mac. The streaming contract (`StreamProtocol` reply shapes,
+   512-sample window quantum, flush/reset commands, `/health` availability
+   probe) is now documented; energy VAD is the fallback for hosts without
+   `silero-vad`. Needs a browser + mic, so it can't be done headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
+   --compare` + the energy sweeps when new WAVs land in `fixtures/recordings/`,
+   and refresh the comparison table.
