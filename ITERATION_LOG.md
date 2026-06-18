@@ -20233,3 +20233,75 @@ recording corpus; touches nothing in the live `mic_chat` /
    wire the `gain` knob through `client/voice-capture.js` (the param
    already exists in the replay model) and prove parity with node tests,
    as iter-227 did for `prewarm()`.
+
+## iter-229 — pre-warm the ContinuousListener capture pipeline (latency)
+
+**Branch:** `iter-229-prewarm-continuous-listener` (merged ff to main, commit `052ffae`)
+**Date:** 2026-06-18
+
+**OPERATOR STEERING followed.** `.loops/geno-voice/STEER.md` item #1
+(pre-warm the capture pipeline — "the highest-value item") landed only
+on `VoiceRecorder` in iter-227. The continuous/conversational listener
+— `ContinuousListener` in `client/voice-capture.js`, the hands-free
+voice-driven-dev path — still paid the FULL 3–5s cold-start cost inline
+inside its own `start()`: `getUserMedia` + `new AudioContext()` +
+`resume()` + `audioWorklet.addModule()` all ran at the instant voice was
+enabled. This lap extends the identical iter-227 pre-warm pattern to it.
+This is genuine capture-latency work, NOT a sentinel (the steering bans
+new sentinels) — it directly targets the click-to-listen stall the
+steering names.
+
+**What changed (`client/voice-capture.js`):**
+- Extracted the heavy graph setup out of `ContinuousListener.start()`
+  into an **idempotent `_setup()`** (returns early once `_ready`),
+  exposed as a public **`prewarm()`** method mirroring
+  `VoiceRecorder.prewarm()` (iter-227).
+- `start()` now calls `_setup()` (a no-op when `prewarm()` already ran)
+  and then only flips `active` + fires `onStateChange("listening")`.
+  When the app calls `prewarm()` ahead of time, `start()` collapses to a
+  flag flip — the latency win. When `prewarm()` is never called,
+  `start()` lazily runs the same `_setup()`, so default behaviour is
+  byte-for-byte identical to the historical cold path (**default off**).
+- A pre-warmed graph is **silent**: `_handleFrame` already bails on
+  `if (!this.active) return` before metering or the VAD state machine,
+  so no frames are processed until `start()` flips `active` (the
+  analogue of `VoiceRecorder`'s `recording`-gated handlers).
+- `stop()` resets `_ready` so a listener can be re-warmed after teardown.
+
+**Tests (`client/voice-capture.test.js`, 6 new):** reuse the iter-227
+`installFakeAudio` harness wrapped with an **advancing clock**
+(`withFakeAudioClock`) — committing speech runs through the onset
+debounce state machine which reads `performance.now()`, unlike
+`VoiceRecorder` whose capture is clock-agnostic. Cases: prewarm pays the
+cold-start cost / start does not re-pay it; prewarm idempotent; cold
+start with no prewarm stands the graph up itself (default off); frames
+before `start()` are not metered (active gate stays silent); stop resets
+readiness for re-warm; **prewarm-then-start emits a byte-for-byte
+identical WAV via `onSpeechEnd` (parity)**.
+
+**Verification:**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3190 passed** (unchanged — this is a client-JS change; the gate
+  confirms no Python regression), re-run on main after ff-merge.
+- Client: `node --test` (in `client/`) → **48 passed** (42 prior + 6
+  new), 0 failed, re-run on main after ff-merge.
+- Integration: `python -m pytest tests/integration/` → **35 passed,
+  13 skipped** (recording fixtures gitignored / absent in the worktree;
+  present in main).
+- Recordings check (steering item #3): still 4 WAVs in
+  `fixtures/recordings/`, md5-unchanged since iter-228, so no new replay
+  re-run / per-recording-table refresh needed this lap.
+
+**Next planned items (per STEER.md order):**
+1. **[latency, on-device] Adopt `prewarm()` (iter-227 VoiceRecorder +
+   iter-229 ContinuousListener) in the desktop app** and TIME
+   `click_to_capture_ms` / click-to-listen before/after to confirm the
+   win on real hardware — the remaining capture-latency work that cannot
+   be done headlessly. Both capture entry paths now expose `prewarm()`.
+2. **[recordings] Ingest new recordings every lap** — when new WAVs land
+   in `fixtures/recordings/`, re-run `--recommend-gain` + the sweeps and
+   refresh the tuning-doc per-recording table.
+3. **[gain, client] If a future corpus yields `recommended_gain>1.0`**,
+   wire the `gain` knob through the recorder path (the `ContinuousListener`
+   `gain` knob already exists from iter-195) and prove parity with node
+   tests.
