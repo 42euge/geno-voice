@@ -18022,3 +18022,104 @@ onset-timing axis does (`onset1_min`/`onset1`/`onset1_max`/`onset1_std`).
    busier/newly-synced corpus.
 4. **[gain] Add a gain×preroll grid finding** — quantify whether amplifying the
    pre-roll audio changes the recovered soft-attack quality.
+
+---
+
+## iter-206 — add `std_onsets` consistency aggregate to the VAD sweep
+
+**Branch:** `iter-206-mean-onsets` (merged ff to main, commit `ce67689`)
+**Date:** 2026-06-17
+
+**Improvement (backlog item 6 — the spread of the onset-count axis):**
+the onset-*timing* axis (`onset1_min`/`onset1`/`onset1_max`/`onset1_std`,
+iters 197–200) and the segment-*duration* axis
+(`min_seg`/`mean_seg`/`max_seg`/`seg_std`, iters 202–205) both carry the full
+envelope/center/spread shape. The onset-*count* axis had only `min_onsets`
+(floor, iter-189), `max_onsets` (over-split ceiling, iter-201) and
+`total_onsets` (corpus sum) — an envelope and a total, but no measure of
+*spread*. This lap closes that asymmetry with `std_onsets` — the population
+standard deviation of the per-recording onset count across the corpus. It is to
+the count axis exactly what `std_first_onset_ms` is to the timing axis and
+`std_segment_ms` is to the duration axis.
+
+Why it matters: min/max/total cannot express *spread*, and spread is the only
+thing that distinguishes two `silence_ms` values that share an `onsets` total
+but distribute those onsets completely differently — one fragmenting a *single*
+recording into many short segments (that recording's count spikes far above the
+rest — high spread), the other splitting *every* recording evenly (low spread).
+`min_onsets`/`max_onsets` catch the spike only if it reaches the corpus extreme;
+`std_onsets` reads the whole distribution's unevenness directly, so a
+`--sweep silence_ms` can prefer the value that fragments uniformly (or not at
+all) over one that shatters a lone recording while leaving the total flat.
+Unlike the onset-*timing* std (which excludes missed recordings — a miss has no
+onset time), the count std *includes* a miss as a `0`: a recording detecting
+nothing is a real count of zero on the count axis, and a corpus mixing a hit
+with a miss is genuinely inconsistent in onset count. Population (ddof=0) std so
+a single-recording corpus reads as `0.0`; bounded above by the
+`max_onsets - min_onsets` range.
+
+What changed:
+- **`fixtures/replay_vad.py`** — `SweepPoint` gains a `std_onsets` float field
+  (population std over every recording's onset count across the corpus, misses
+  included as `0`, `0.0` for an empty corpus); `aggregate_results` computes it
+  via `np.std(onset_counts)`; `summary_line` and `_grid_summary_line` surface an
+  `onset_std=` column after `max_onsets=` in the human sweep/grid tables; it
+  rides along in `--json` for free (dataclass field via `asdict`).
+- **`tests/unit/test_replay_vad.py`** — +5 dedicated tests (96 → 101):
+  `test_std_onsets_is_population_std_of_onset_counts` (equals `np.std` over every
+  recording's count; non-negative; ≤ `max-min` range),
+  `test_std_onsets_zero_for_single_recording`,
+  `test_std_onsets_separates_lopsided_from_even` (an even corpus of two
+  one-onset tones gives `0.0`; a corpus where one recording fragments into two
+  segments while a sibling stays whole gives a positive `0.5` spread — same
+  total-3 vs total-2 shape, the std is what separates uniform from lopsided),
+  `test_std_onsets_counts_misses_as_zero` (a hit+miss corpus at 0.015 folds the
+  0-count miss into the std → strictly positive; the miss is not dropped), and
+  `test_sweep_json_includes_std_onsets`. Plus assertions folded into the
+  empty-corpus and nothing-detected zero tests, the sweep human-table column
+  test (`onset_std=`), and the grid human-table test (4 cells each carry
+  `onset_std=`).
+- **`docs/research/voice-capture-tuning.md`** — `onset_std` documented in the
+  "Each row reports" legend; new "Consistency of the count axis (iter-206)"
+  section with the even-vs-lopsided table; backlog item 6 updated.
+
+**Synthetic evidence (the spread separating uniform from lopsided fragmentation):**
+- two clean tones, one onset each → counts `1, 1` → `onsets=2`,
+  **`onset_std=0.00`** (even distribution, no spread).
+- one tone split by a sub-gap `silence_ms` into two segments + one clean tone →
+  counts `2, 1` → `onsets=3`, **`onset_std=0.50`** (one recording fragments
+  while the other stays whole, real spread).
+Same multi-onset shape, different `onset_std`: the std is the aggregate that
+separates a parameter set that fragments uniformly from one that shatters a lone
+recording. The count axis now carries the same envelope+spread shape the timing
+and duration axes do.
+
+**Verification:**
+- `python -m pytest tests/unit/test_replay_vad.py` → **101 passed** (96 + 5 new).
+- Full Python unit suite: `python -m pytest tests/unit/` → **2697 passed**
+  (2692 prior + 5 new). GATE command:
+  `cd ~/code-purp/geno-voice && python -m pytest tests/unit/`.
+- Integration `tests/integration/test_vad_recordings.py` → skipped in the
+  worktree (the binary corpus lives only in the main checkout); the synthetic
+  even-vs-lopsided demo above exercised the new aggregate directly.
+- (`tests/test_session.py` still errors on collection — pre-existing missing
+  `pipecat` dep, not a regression.)
+
+**Next planned items (from the research-doc backlog):**
+1. **[silence] Run the actual `--sweep silence_ms` over a newly-synced corpus**
+   — every axis is now fully legible: count (`min_onsets`/`max_onsets`/
+   `onset_std`), timing (`onset1_min`/`onset1`/`onset1_max`/`onset1_std`), and
+   duration (`min_seg`/`mean_seg`/`max_seg`/`seg_std`). Gate a real `silence_ms`
+   default change on a corpus that exercises real mid-utterance pauses *and*
+   two-turns-one-pause cases (the seed corpus is flat in both windows); prefer
+   the value that minimizes `onset_std` and `seg_std` among those with an
+   acceptable `mean_seg`.
+2. **[latency, highest value] Pre-warm the capture pipeline** — still the top
+   user-facing bug (3–5s `click_to_capture_ms`). Needs an on-device timing
+   harness; cannot be replayed.
+3. **[preroll-default] Bump the client `prerollMs` default above 0** — iter-200's
+   grid shows pre-roll improves the typical opening, the tail, AND the
+   consistency simultaneously; pick a value (256–512ms) and gate on a
+   busier/newly-synced corpus.
+4. **[gain] Add a gain×preroll grid finding** — quantify whether amplifying the
+   pre-roll audio changes the recovered soft-attack quality.
