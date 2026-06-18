@@ -326,6 +326,7 @@ class TestAggregateResults:
         assert point.total_speaking_frames == 0
         assert point.mean_pct_over == 0.0
         assert point.min_onsets == 0
+        assert point.mean_first_onset_ms == 0.0
 
     def test_aggregates_across_corpus(self, tmp_path):
         corpus = _make_corpus(tmp_path)
@@ -337,6 +338,46 @@ class TestAggregateResults:
         assert point.min_onsets == min(r.onsets for r in results)
         # min_onsets is the worst single recording, never above the total.
         assert point.min_onsets <= point.total_onsets
+
+    def test_mean_first_onset_averages_detected_recordings(self, tmp_path):
+        corpus = _make_corpus(tmp_path)
+        results = replay_all(corpus, VadParams(threshold=0.006))
+        point = aggregate_results(VadParams(threshold=0.006), results)
+        # Hand-compute the expected mean over only the recordings that
+        # detected at least one segment.
+        first_onsets = [r.segments[0].onset_ms for r in results if r.segments]
+        assert first_onsets, "fixture should detect speech in at least one rec"
+        assert point.mean_first_onset_ms == pytest.approx(
+            sum(first_onsets) / len(first_onsets)
+        )
+
+    def test_mean_first_onset_excludes_missed_recordings(self, tmp_path):
+        corpus = _make_corpus(tmp_path)
+        # At threshold 0.015 the quiet recording misses (no segments) while the
+        # loud one detects. The mean must reflect ONLY the loud recording's
+        # onset, not be dragged to 0 by the miss.
+        results = replay_all(corpus, VadParams(threshold=0.015))
+        detected = [r for r in results if r.segments]
+        missed = [r for r in results if not r.segments]
+        assert detected and missed, "fixture must mix a hit and a miss at 0.015"
+        point = aggregate_results(VadParams(threshold=0.015), results)
+        assert point.mean_first_onset_ms == pytest.approx(
+            detected[0].segments[0].onset_ms
+        )
+        assert point.mean_first_onset_ms > 0.0
+
+    def test_mean_first_onset_zero_when_nothing_detected(self, tmp_path):
+        # A corpus where every recording misses → no onset times to average,
+        # so the timing aggregate is 0.0 (the documented "no data" sentinel),
+        # never a spurious early value.
+        corpus = tmp_path / "silent"
+        corpus.mkdir()
+        _write_wav(corpus / "a.wav", _silence(SR))
+        (corpus / "a.json").write_text('{"peak_rms": 0.0001}')
+        results = replay_all(corpus, VadParams(threshold=0.006))
+        assert all(not r.segments for r in results)
+        point = aggregate_results(VadParams(threshold=0.006), results)
+        assert point.mean_first_onset_ms == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -379,6 +420,18 @@ class TestSweepParam:
             "gain", [1.0, 4.0], base=VadParams(threshold=0.02), recordings_dir=corpus
         )
         assert points[1].total_onsets >= points[0].total_onsets
+
+    def test_preroll_sweep_pulls_mean_first_onset_earlier(self, tmp_path):
+        corpus = _make_corpus(tmp_path)
+        # Pre-roll only shifts onset *timing*, not count. The timing aggregate
+        # is the lever that exposes that in a sweep (the count aggregates stay
+        # flat). A larger pre-roll must not push the mean first onset later.
+        points = sweep_param(
+            "preroll_ms", [0.0, 256.0], base=VadParams(threshold=0.006), recordings_dir=corpus
+        )
+        no_pre, pre = points
+        assert pre.total_onsets == no_pre.total_onsets  # count unchanged
+        assert pre.mean_first_onset_ms <= no_pre.mean_first_onset_ms  # earlier
 
     def test_unknown_field_raises(self, tmp_path):
         corpus = _make_corpus(tmp_path)
@@ -549,6 +602,24 @@ class TestSweepCli:
         out = capsys.readouterr().out
         assert "preroll_ms=0" in out
         assert "preroll_ms=256" in out
+
+    def test_sweep_reports_onset_timing_column(self, tmp_path, capsys):
+        corpus = _make_corpus(tmp_path)
+        rc = main(["--sweep", "debounce_ms", "--sweep-values", "100,200", "--dir", str(corpus)])
+        assert rc == 0
+        out = capsys.readouterr().out
+        # The onset-timing aggregate is surfaced in the human table.
+        assert "onset1=" in out
+
+    def test_sweep_json_includes_mean_first_onset(self, tmp_path, capsys):
+        corpus = _make_corpus(tmp_path)
+        rc = main(["--sweep", "threshold", "--sweep-values", "0.006", "--dir", str(corpus), "--json"])
+        assert rc == 0
+        import json as _json
+
+        payload = _json.loads(capsys.readouterr().out)
+        assert "mean_first_onset_ms" in payload[0]
+        assert payload[0]["mean_first_onset_ms"] > 0.0
 
 
 # ---------------------------------------------------------------------------

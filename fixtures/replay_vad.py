@@ -399,6 +399,18 @@ class SweepPoint:
                          worst-case recording for this parameter set; a
                          sweep wants to maximize this floor, not just the
                          total — one missed recording is a real miss).
+    ``mean_first_onset_ms`` — mean of each recording's *first* segment
+                         ``onset_ms`` (the emitted speech-start), averaged
+                         only over recordings that detected at least one
+                         segment. This is the onset-*timing* aggregate
+                         (backlog item 5 follow-up): a smaller value means
+                         speech is captured earlier. It complements the
+                         onset-*count* aggregates so a debounce/pre-roll
+                         sweep can show timing moving earlier in one pass,
+                         without hand-inspecting each recording's ``--json``.
+                         Recordings with no segments are excluded (a missed
+                         recording has no onset time; counting it as 0ms
+                         would falsely read as "earliest possible").
     """
 
     params: VadParams
@@ -408,6 +420,7 @@ class SweepPoint:
     total_speaking_frames: int
     mean_pct_over: float
     min_onsets: int
+    mean_first_onset_ms: float
 
     def summary_line(self, label_key: str = "threshold") -> str:
         value = getattr(self.params, label_key)
@@ -417,7 +430,8 @@ class SweepPoint:
             f"min_onsets={self.min_onsets:<2} "
             f"onsets={self.total_onsets:<3} "
             f"speak_frames={self.total_speaking_frames:<5} "
-            f"mean_over={self.mean_pct_over:5.1f}%"
+            f"mean_over={self.mean_pct_over:5.1f}% "
+            f"onset1={self.mean_first_onset_ms:6.1f}ms"
         )
 
 
@@ -429,6 +443,12 @@ def aggregate_results(params: VadParams, results: List[ReplayResult]) -> SweepPo
     total_speaking = sum(r.speaking_frames for r in results)
     mean_over = (sum(r.pct_over_threshold for r in results) / n) if n else 0.0
     min_onsets = min((r.onsets for r in results), default=0)
+    # Onset *timing*: average each recording's first emitted onset, but only
+    # over recordings that actually detected speech. A missed recording has
+    # no onset time; folding in a 0.0 would falsely pull the mean toward
+    # "earliest possible", masking the miss as great timing.
+    first_onsets = [r.segments[0].onset_ms for r in results if r.segments]
+    mean_first_onset = (sum(first_onsets) / len(first_onsets)) if first_onsets else 0.0
     return SweepPoint(
         params=params,
         recordings=n,
@@ -437,6 +457,7 @@ def aggregate_results(params: VadParams, results: List[ReplayResult]) -> SweepPo
         total_speaking_frames=total_speaking,
         mean_pct_over=mean_over,
         min_onsets=min_onsets,
+        mean_first_onset_ms=mean_first_onset,
     )
 
 
@@ -587,7 +608,8 @@ def _grid_summary_line(p: SweepPoint, param_a: str, param_b: str) -> str:
         f"min_onsets={p.min_onsets:<2} "
         f"onsets={p.total_onsets:<3} "
         f"speak_frames={p.total_speaking_frames:<5} "
-        f"mean_over={p.mean_pct_over:5.1f}%"
+        f"mean_over={p.mean_pct_over:5.1f}% "
+        f"onset1={p.mean_first_onset_ms:6.1f}ms"
     )
 
 

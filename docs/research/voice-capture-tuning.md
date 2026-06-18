@@ -68,7 +68,16 @@ Each row reports, across the corpus: `trig` (how many recordings'
 known speech would trigger), `min_onsets` (the worst single recording —
 the floor a sweep wants to *maximize*, since one missed recording is a
 real miss even when the total looks healthy), `onsets`/`speak_frames`
-totals, and `mean_over` (mean %-of-frames-over-threshold).
+totals, `mean_over` (mean %-of-frames-over-threshold), and `onset1`
+(iter-197 — the onset-*timing* aggregate: the mean of each recording's
+**first** emitted `onset_ms`, averaged only over recordings that detected
+speech). A smaller `onset1` means speech is captured earlier in the
+recording; missed recordings are excluded so a miss can't masquerade as
+great timing (it would otherwise fold in a 0ms onset). This is the
+aggregate the onset-shaping knobs (`debounce_ms`, `preroll_ms`) move —
+the count aggregates stay flat while timing shifts — so a single sweep now
+shows timing moving earlier without hand-inspecting each recording's
+`--json`.
 
 `tests/integration/test_vad_recordings.py` turns every recording into a
 regression test (the data flywheel): the more the user talks to the app,
@@ -215,6 +224,48 @@ is monotone along both axes (lower threshold ⇒ ≥ onsets; higher gain ⇒ ≥
 onsets), pinned by `TestGridSweep` in
 `tests/integration/test_vad_recordings.py`.
 
+## Onset-timing aggregate over the seed corpus (iter-197)
+
+Before iter-197 the sweep/grid only aggregated onset *counts*
+(`total_onsets`, `min_onsets`), so validating that an onset-shaping knob
+moves speech-capture *earlier* meant hand-reading each recording's
+`onset_ms` out of `--json`. iter-197 adds `mean_first_onset_ms` (the
+`onset1` column) to `SweepPoint`, so the timing lever is now visible in a
+single sweep pass. The two onset-shaping knobs, swept over the seed corpus
+at threshold 0.006, frame 1024:
+
+```
+python fixtures/replay_vad.py --sweep debounce_ms --sweep-values 100,200,300
+```
+| debounce_ms | trig | min_onsets | onsets | onset1 (mean first) |
+|-------------|------|------------|--------|---------------------|
+| **100** | 4/4 | 1 | 11 | **1271.3ms** |
+| 200 (default) | 4/4 | 1 | 10 | 1532.5ms |
+| 300 | **3/4** | **0** | 6 | 2190.4ms |
+
+```
+python fixtures/replay_vad.py --sweep preroll_ms --sweep-values 0,256,512
+```
+| preroll_ms | trig | onsets | onset1 (mean first) |
+|------------|------|--------|---------------------|
+| 0 (default) | 4/4 | 10 | 1532.5ms |
+| 256 | 4/4 | 10 | 1282.9ms |
+| 512 | 4/4 | 10 | 1091.3ms |
+
+**The debounce-timing evidence backlog item 5 was waiting for:** lowering
+the onset debounce from 200ms→100ms pulls the mean first onset **~261ms
+earlier** (1532.5→1271.3ms) while keeping `trig=4/4` and even gaining one
+onset — speech is captured measurably sooner with no detection cost. 300ms
+is the cliff (drops a recording, `min_onsets` 0). Pre-roll is the
+complementary lever: it leaves the onset *count* untouched (10 across all
+three values) while pulling `onset1` earlier by ~250ms per 256ms of
+pre-roll — the recovered-soft-attack effect iter-191 measured, now visible
+as a one-number corpus aggregate instead of a per-recording table. The two
+levers stack: a 100ms debounce + 256ms pre-roll would pull the opening
+earlier on both axes. This is the replay-validated case for lowering the
+client `debounceMs` *default* below 200 (the knob has shipped since
+iter-196) once the busier corpus confirms it holds.
+
 ## Findings & backlog (prioritized)
 
 1. **[latency] Pre-warm the capture pipeline.** The 3–5s `click_to_capture_ms`
@@ -286,9 +337,14 @@ onsets), pinned by `TestGridSweep` in
    replay harness `debounce_ms` field — previously the onset debounce was a
    hard-coded `200` literal in `_handleFrame`. The knob is validated, non-finite/
    negative values fall back to 200, and `0` commits on the first surviving
-   candidate frame. Next: validate onset **timing** moves earlier (not just the
-   count) on the seed corpus before lowering the *default* below 200 — this
-   pairs naturally with item 2 (pre-roll buffer, wired iter-193)._
+   candidate frame._ **iter-197: onset *timing* validated.** The sweep now
+   reports `mean_first_onset_ms` (`onset1`), so the timing claim is measurable
+   in one pass: on the seed corpus 100ms debounce pulls the mean first onset
+   **~261ms earlier** (1532.5→1271.3ms) while keeping `trig=4/4` and gaining an
+   onset (see the onset-timing section above); 300ms is the cliff (drops a
+   recording). The replay evidence now supports lowering the client `debounceMs`
+   *default* to 100; the remaining gate is confirming it on a busier corpus
+   before changing the shipped default._
 6. **[silence] Right-size the silence timeout.** 800ms may over-split or
    over-merge turns. The seed corpus shows clean multi-segment splits;
    revisit if new recordings show truncated or run-on turns.
