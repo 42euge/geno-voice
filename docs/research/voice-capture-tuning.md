@@ -902,6 +902,28 @@ gv vad-sweep recording.wav --max-speeches 5,10,inf --target 4>2            # pre
 gv vad-grid  recording.wav --thresholds 0.3 --max-speeches 5,inf --target 4>2 --json
 ```
 
+The additive-penalty WEIGHTED set (`--target 3,6:2`, iter-250) is the stronger
+cousin of the preference: where the preference folds intent only into the
+tie-break, the weighted set folds a per-element penalty into the DISTANCE itself
+(the score is the MIN over each element's raw distance PLUS its penalty), so it
+can override a distance GAP, not merely an exact tie. iter-265 pins it *together*
+with the seconds axis: `--target 3,6:2` makes the bare `3` free and the `6` cost
+`+2`, so a cap one segment off the free `3` (penalised `1`) beats a cap sitting
+exactly on the costly `6` (penalised `2`) — the flat set `3,6` would pick the
+on-`6` cap instead (raw distance `0`). The `best:` line renders the weighted set
+as `3,6:2` (never a `{"weighted": ...}` dict repr) and names the chosen SECONDS
+cap compactly (`max_speech=10` / `max_speech=5`, the no-cap baseline as
+`max_speech=inf`, never `10.00` / `inf.00`) across both the 1-D sweep and the 2-D
+grid column axis. The grid JSON surface carries the weighted set as its
+`{"weighted": [[element, penalty], ...]}` dict (each pair a 2-element array,
+distinct from a flat-set array of scalars) and emits the chosen cap as a finite
+seconds number (`best.max_speech_s == 5.0`) with the penalised distance:
+
+```bash
+gv vad-sweep recording.wav --max-speeches 5,10,inf --target 3,6:2          # +2 penalty overrides the raw-distance gap
+gv vad-grid  recording.wav --thresholds 0.3 --max-speeches 5,inf --target 3,6:2 --json
+```
+
 ### Silero vs energy-VAD segment counts (the headless proof)
 
 Measured over the seed corpus with `min_silence_ms=800` (the pipecat

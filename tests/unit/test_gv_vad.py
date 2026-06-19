@@ -3094,6 +3094,128 @@ def test_render_grid_json_prefer_target_carries_seconds_max_speech():
     assert payload["best"]["max_speech_s"] == 5.0
 
 
+# ---- --target weighted set (a,b:p) form on the seconds max_speech_s axis -----
+#
+# iter-250 shipped the additive-penalty WEIGHTED set (`--target 3,6:2`): a
+# `{"weighted": [(element, penalty), ...]}` dict whose DISTANCE is the MIN over
+# each element's RAW distance PLUS its penalty. Unlike the iter-249 preference
+# (which folds intent only into the tie-break, never the distance), the weight
+# enters the distance itself, so a cheaper (lower-penalty) element can win even
+# at a LARGER raw distance — it overrides a distance GAP, not merely an exact
+# tie. iter-255/257 added the seconds `max_speech_s` force-split-ceiling axis.
+# Every seconds-axis target test from iter-257→264 covered scalar, banded, the
+# flat SET, and the ranked PREFERENCE form, but never the WEIGHTED form — and
+# every weighted render test (iter-250) swept the threshold/min-silence axis. So
+# the penalised-distance path and the `%g` seconds formatting had no JOINT
+# coverage: a regression that broke EITHER (a weighted distance that mishandled
+# the seconds axis, a `%g`→`.2f` drift on the weighted-CHOSEN cap, the `:penalty`
+# rendering, or the JSON carrying the `{"weighted": [...]}` dict) would have
+# shipped green while the threshold-axis weighted tests stayed passing. These pin
+# that the penalty OVERRIDES the raw-distance gap to pick the lower-penalty
+# seconds cap (the discriminating behaviour vs the flat set, which picks the
+# nearest raw cap), names it via %g (compact 10/5, the no-cap baseline as "inf"),
+# renders the weighted set as "3,6:2" (not a `{"weighted": ...}` dict repr),
+# never leaks a gate-style 0.00 / inf.00, and that the grid JSON carries the
+# weighted set as its `{"weighted": [...]}` dict with a finite-seconds best cap —
+# on both the 1-D sweep and the 2-D grid. No production code changed (the wiring
+# was already correct — proved by a pre-test smoke run).
+
+
+def test_render_sweep_weighted_target_on_max_speech_axis_formats_seconds():
+    # Caps inf, 10, 5 (counts 1, 4, 6) in row order. Weighted 3,6:2: the 5s cap
+    # (count 6) lands exactly on the accepted element (penalised 2); the 10s cap
+    # (count 4) is raw dist 1 from the free element 3 (penalised 1), so the FLAT
+    # set [3,6] would pick the 10s cap (raw dist 1 < the 5s cap's raw dist 0-to-6
+    # ... ). The weighted +2 penalty on the 6 flips the pick: 10s scores
+    # min(|4-3|+0, |4-6|+2)=1, 5s scores min(|6-3|+0, 0+2)=2, so the weighted set
+    # picks the 10s cap at |Δ|=1 — the discriminating behaviour: with the penalty
+    # the nearer-to-the-free-element cap wins over the one sitting on the costly
+    # accepted element. The best: line names the SECONDS cap via %g and renders
+    # the weighted set as "3,6:2".
+    r_inf = _result_n_speech(1, 1.0)
+    r_ten = _result_n_speech(4, 4.0)
+    r_five = _result_n_speech(6, 6.0)
+    lines = gv.render_vad_sweep(
+        [float("inf"), 10.0, 5.0], [r_inf, r_ten, r_five],
+        name="rec.wav", axis="max_speech_s", target={"weighted": [(3, 0), (6, 2)]},
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    assert "max_speech=10" in best
+    assert "4 segments" in best
+    assert "|Δ|=1" in best
+    # The weighted set renders as "3,6:2", not a {"weighted": ...} dict repr.
+    assert "target 3,6:2" in best
+    assert "weighted" not in best
+    # Compact %g — no gate-style trailing zeros on the seconds cap.
+    assert "10.00" not in best
+    assert "max_speech=10.0" not in best
+
+
+def test_render_sweep_weighted_target_overrides_gap_not_just_tie():
+    # The weighted set's defining property vs the flat set: the penalty folds into
+    # the DISTANCE, so it overrides a raw-distance GAP, not just an exact tie.
+    # Caps inf, 5 (counts 1, 6). Weighted 3,6:9 — a huge penalty on the accepted 6:
+    # inf (count 1) scores min(|1-3|+0, |1-6|+9)=2; 5s (count 6) scores
+    # min(|6-3|+0, 0+9)=3, so the inf baseline WINS at |Δ|=2 even though the 5s cap
+    # sits exactly on a listed element — the +9 penalty makes the free element 3
+    # the cheaper route. The flat set [3,6] would instead pick the 5s cap (raw
+    # dist 0). Proves the penalty changes the WINNER, not merely a tie order.
+    r_inf = _result_n_speech(1, 1.0)
+    r_five = _result_n_speech(6, 6.0)
+    lines = gv.render_vad_sweep(
+        [float("inf"), 5.0], [r_inf, r_five],
+        name="rec.wav", axis="max_speech_s", target={"weighted": [(3, 0), (6, 9)]},
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    assert "max_speech=inf" in best
+    assert "1 segments" in best
+    assert "|Δ|=2" in best
+    assert "target 3,6:9" in best
+    assert "weighted" not in best
+    # The no-cap baseline names the sentinel as "inf", not "inf.00".
+    assert "inf.00" not in best
+
+
+def test_render_grid_weighted_target_on_max_speech_col_axis_formats_seconds():
+    # The seconds force-split ceiling is also a vad-grid COLUMN axis; the weighted
+    # best: line must format the col value via %g too AND honour the penalised
+    # distance. 1×2 grid over caps inf, 5 (counts 6, 4). Weighted 3,6:2: the inf
+    # baseline (count 6) sits on the accepted element (penalised 2); the 5s cap
+    # (count 4) is raw dist 1 from the free 3 (penalised 1), so the penalty flips
+    # the pick to the 5s cap at |Δ|=1 — OVERRIDING the earlier inf row (the flat
+    # set [3,6] would pick inf, count 6, raw dist 0).
+    lines = gv.render_vad_grid(
+        [0.3], [float("inf"), 5.0], [_cell_result(6), _cell_result(4)],
+        name="rec.wav", col_axis="max_speech_s", target={"weighted": [(3, 0), (6, 2)]},
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    assert "max_speech=5" in best
+    assert "threshold=0.30" in best
+    assert "4 segments" in best
+    assert "|Δ|=1" in best
+    assert "target 3,6:2" in best
+    assert "weighted" not in best
+    # Seconds col formats compactly — no 5.00 leak.
+    assert "max_speech=5.00" not in best
+
+
+def test_render_grid_json_weighted_target_carries_seconds_max_speech():
+    # The grid JSON surface must carry a weighted target on the seconds col axis as
+    # its {"weighted": [[element, penalty], ...]} dict (each pair a 2-element array,
+    # distinct from a flat-set array of scalars) AND emit the weighted-chosen cap as
+    # a finite seconds number (5.0), with the penalised distance (1).
+    payload = json.loads(
+        gv.render_vad_grid_json(
+            [0.3], [float("inf"), 5.0], [_cell_result(6), _cell_result(4)],
+            name="rec.wav", col_axis="max_speech_s", target={"weighted": [(3, 0), (6, 2)]},
+        )
+    )
+    assert payload["target"] == {"weighted": [[3, 0], [6, 2]]}
+    assert payload["best"]["num_segments"] == 4
+    assert payload["best"]["distance"] == 1
+    assert payload["best"]["max_speech_s"] == 5.0
+
+
 def test_render_sweep_json_carries_max_speech_axis():
     r = _Result(name="rec.wav", sample_rate=16000, duration_s=5.0, segments=[_Seg(0.0, 1.0)])
     payload = json.loads(
