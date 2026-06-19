@@ -286,6 +286,66 @@ def test_format_target_open_band():
     assert gv._format_target((None, 0)) == "-0"
 
 
+# ---- target_type: comma-separated SET form (iter-248) ------------------
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("3,5,7", [3, 5, 7]),
+        ("0,2", [0, 2]),
+        (" 3 , 5 , 7 ", [3, 5, 7]),  # whitespace around each element trimmed
+        ("3,5-7", [3, (5, 7)]),  # an element may itself be a band
+        ("3,5-,-7", [3, (5, None), (None, 7)]),  # ...or an open band
+    ],
+)
+def test_target_type_set_parses_to_list(raw, expected):
+    # iter-248: a comma joins a SET of acceptable targets, each element a scalar
+    # or a band; the whole thing parses to a list preserving first-seen order.
+    value = gv.target_type(raw)
+    assert value == expected
+    assert isinstance(value, list)
+
+
+def test_target_type_set_dedupes_preserving_order():
+    # iter-248: a repeated element is collapsed, first-seen order preserved.
+    assert gv.target_type("5,3,5,3") == [5, 3]
+
+
+def test_target_type_single_element_set_collapses_to_bare_element():
+    # iter-248: a set whose elements collapse to one reduces to that bare element
+    # so scalar/band output stays byte-for-byte unchanged.
+    value = gv.target_type("3,3")
+    assert value == 3
+    assert isinstance(value, int)
+    band = gv.target_type("3-5,3-5")
+    assert band == (3, 5)
+    assert isinstance(band, tuple)
+
+
+@pytest.mark.parametrize("raw", ["3,", ",5", "3,,5", " 3 , , 5 ", ","])
+def test_target_type_rejects_empty_set_element(raw):
+    # iter-248: an empty element (trailing/leading/doubled comma) is a typo.
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.target_type(raw)
+
+
+def test_target_type_rejects_malformed_set_element():
+    # iter-248: each element must itself parse — a bad element fails the whole set.
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.target_type("3,a,5")
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.target_type("3,5-3")  # inverted band element
+
+
+def test_format_target_set():
+    # iter-248: a set renders comma-joined, each element via _format_target, so it
+    # reads back exactly as typed.
+    assert gv._format_target([3, 5, 7]) == "3,5,7"
+    assert gv._format_target([3, (5, 7)]) == "3,5-7"
+    assert gv._format_target([3, (5, None), (None, 7)]) == "3,5-,-7"
+
+
 # ---- max_speech_type: the force-split bound ----------------------------
 
 
@@ -1980,6 +2040,15 @@ def test_vad_grid_rejects_fractional_target():
         gv.build_parser().parse_args(["vad-grid", "rec.wav", "--target", "1.5"])
 
 
+def test_vad_grid_target_parses_set():
+    # iter-248: a comma-separated set parses to a list of acceptable targets.
+    args = gv.build_parser().parse_args(
+        ["vad-grid", "rec.wav", "--target", "3,5,7"]
+    )
+    assert args.target == [3, 5, 7]
+    assert isinstance(args.target, list)
+
+
 def test_vad_grid_top_defaults_none():
     args = gv.build_parser().parse_args(["vad-grid", "rec.wav"])
     assert args.top is None
@@ -2120,6 +2189,28 @@ def test_grid_cell_distance_open_band_at_most():
         assert gv.grid_cell_distance({"num_segments": n}, (None, 5)) == 0
     assert gv.grid_cell_distance({"num_segments": 7}, (None, 5)) == 2  # 7 - 5
     assert gv.grid_cell_distance({"num_segments": 6}, (None, 5)) == 1  # just above
+
+
+def test_grid_cell_distance_set_is_min_over_elements():
+    # iter-248: a set [3, 5, 7] scores 0 for any listed count and the gap to the
+    # nearest listed count otherwise (min distance over the elements).
+    for n in (3, 5, 7):
+        assert gv.grid_cell_distance({"num_segments": n}, [3, 5, 7]) == 0
+    assert gv.grid_cell_distance({"num_segments": 4}, [3, 5, 7]) == 1  # nearest 3/5
+    assert gv.grid_cell_distance({"num_segments": 6}, [3, 5, 7]) == 1  # nearest 5/7
+    assert gv.grid_cell_distance({"num_segments": 9}, [3, 5, 7]) == 2  # gap to 7
+    assert gv.grid_cell_distance({"num_segments": 0}, [3, 5, 7]) == 3  # gap to 3
+
+
+def test_grid_cell_distance_set_of_bands_is_min_over_elements():
+    # iter-248: set elements may be bands — [(2, 3), (7, 8)] scores 0 inside
+    # either band, the gap to the nearest band edge in the gap between them.
+    target = [(2, 3), (7, 8)]
+    for n in (2, 3, 7, 8):
+        assert gv.grid_cell_distance({"num_segments": n}, target) == 0
+    assert gv.grid_cell_distance({"num_segments": 5}, target) == 2  # 7 - 5 vs 5 - 3
+    assert gv.grid_cell_distance({"num_segments": 4}, target) == 1  # 4 - 3
+    assert gv.grid_cell_distance({"num_segments": 6}, target) == 1  # 7 - 6
 
 
 def test_pick_best_grid_cell_closest_to_target():
@@ -2461,6 +2552,36 @@ def test_render_grid_json_carries_open_band_target():
     assert at_most["target"] == [None, 5]
     assert at_most["best"]["num_segments"] == 4
     assert at_most["best"]["distance"] == 0
+
+
+def test_render_grid_set_target_picks_satisfying_cell():
+    # iter-248: counts 4 and 5; set 3,5,7 satisfies the 5-count cell (|Δ|=0) and
+    # the 4-count cell is off by 1, so the 5-count cell wins.
+    results = [_cell_result(n) for n in (4, 5)]
+    lines = gv.render_vad_grid(
+        [0.3], [400.0, 800.0], results, name="rec.wav", target=[3, 5, 7],
+    )
+    best_line = lines[-1]
+    assert best_line.lstrip().startswith("best:")
+    assert "5 segments" in best_line
+    assert "|Δ|=0" in best_line
+    # The set renders as "3,5,7", not a list repr.
+    assert "target 3,5,7" in best_line
+    assert "[3, 5, 7]" not in best_line
+
+
+def test_render_grid_json_carries_set_target():
+    # iter-248: a set target serialises as a JSON array of its elements (a band
+    # element nests as its own [lo, hi] array). The satisfied cell scores 0.
+    results = [_cell_result(n) for n in (4, 5)]
+    payload = json.loads(
+        gv.render_vad_grid_json(
+            [0.3], [400.0, 800.0], results, name="rec.wav", target=[3, 5, 7],
+        )
+    )
+    assert payload["target"] == [3, 5, 7]
+    assert payload["best"]["num_segments"] == 5
+    assert payload["best"]["distance"] == 0
 
 
 def test_render_grid_json_best_is_none_for_empty_grid():
@@ -2951,6 +3072,50 @@ def test_cmd_vad_sweep_open_band_target_picks_satisfying_value():
     assert "4 segments" in text
     assert "target -5" in text
     assert "None" not in text
+
+
+def test_cmd_vad_grid_set_target_picks_satisfying_cell():
+    # iter-248: low gate → 4 segments, high gate → 5. Set 3,5,7 satisfies the
+    # 5-count cell (|Δ|=0), so it wins over the off-by-one 4-count cell.
+    def seg(wav, params=None):
+        n = 4 if params.threshold < 0.5 else 5
+        return _cell_result(n)
+
+    lines: List[str] = []
+    gv.cmd_vad_grid(
+        _grid_args(
+            thresholds=[0.3, 0.5], min_silences=[400.0, 800.0], target=[3, 5, 7],
+        ),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    text = "\n".join(lines)
+    assert "best:" in text
+    assert "5 segments" in text
+    assert "target 3,5,7" in text
+    assert "[3, 5, 7]" not in text
+
+
+def test_cmd_vad_sweep_set_target_picks_satisfying_value():
+    # iter-248, sweep form: low gate → 4 segments, high gate → 7. Set 3,5,7
+    # satisfies the 7-count threshold (|Δ|=0), so it wins over the 4-count one.
+    def seg(wav, params=None):
+        n = 4 if params.threshold < 0.5 else 7
+        return _cell_result(n)
+
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(thresholds=[0.3, 0.7], target=[3, 5, 7]),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    text = "\n".join(lines)
+    assert "best:" in text
+    assert "7 segments" in text
+    assert "target 3,5,7" in text
+    assert "[3, 5, 7]" not in text
 
 
 def test_cmd_vad_grid_csv_ignores_target():

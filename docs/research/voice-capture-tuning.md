@@ -155,6 +155,7 @@ gv vad-sweep recording.wav --target 3                       # data-driven best-v
 gv vad-sweep recording.wav --target 3-5                     # tolerance band: 0 distance inside (iter-246)
 gv vad-sweep recording.wav --target 3-                      # open band: at least 3 regions (iter-247)
 gv vad-sweep recording.wav --target -5                      # open band: at most 5 regions (iter-247)
+gv vad-sweep recording.wav --target 3,5,7                   # set: 3 OR 5 OR 7 regions (iter-248)
 ```
 
 The human report is a small table — the WAV name, a `threshold / segments /
@@ -382,6 +383,31 @@ through the same `grid_cell_distance` machinery, since an open band is still a
 parses as the open band "at most 1", not a (rejected) negative count — a bare
 negative segment count is no longer expressible, which is harmless since nobody
 targets a negative count.
+
+#### `--target A,B,C` — a set of acceptable counts (iter-248)
+
+A band (closed or open) accepts a contiguous window; but sometimes the
+acceptable counts are **disjoint** — "3 OR 5 segments, but nothing between" (two
+phrasings that segment cleanly, the in-between count being an artefact). iter-248
+lets `--target` take a comma-separated SET: `--target 3,5,7` means "3 OR 5 OR 7".
+Each element is itself a scalar or a band, so they compose — `--target 3,5-7`
+means "3 OR anywhere from 5 to 7". The distance is the **minimum** over the
+elements, so a count satisfying ANY listed target scores `0` and otherwise scores
+the gap to the nearest one.
+
+```bash
+gv vad-sweep recording.wav --thresholds 0.3,0.5,0.7,0.9 --target 3,5,7   # 3 OR 5 OR 7 regions
+gv vad-grid  recording.wav --thresholds 0.3,0.5,0.7 --min-silences 400,800 --target 3,5-7  # 3 OR a 5-7 band
+```
+
+The `best:` / `top N:` lines render a set comma-joined exactly as typed
+(`3,5,7`), and the `--json` `target` serialises as a JSON array of its elements
+(a band element nests as its own `[lo, hi]` array — `3,5-7` → `[3, [5, 7]]`).
+Everything else — `--top`, `--tie-break`, the pickers — flows through the same
+`grid_cell_distance` machinery, which recurses as a min-over-elements. A set is
+deduped preserving first-seen order, and a single-element set (`3,3`) collapses
+to the bare element so scalar/band output stays byte-for-byte unchanged. An empty
+element (`3,`, `3,,5`) is rejected as a typo.
 
 ### `gv vad-grid` — a 2-D knob grid (iter-240)
 

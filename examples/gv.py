@@ -259,23 +259,61 @@ def target_type(raw):
     same ``(lo, hi)`` tuple shape (with ``None`` marking the open edge) so the
     distance/pick/render machinery flows through with no parallel path.
 
-    Each present edge is a non-negative whole number (reusing
+    iter-248 adds the comma-separated SET form: ``--target 3,5,7`` means "3 OR 5
+    OR 7 segments, but nothing between" and parses to a ``list`` of elements,
+    each itself a scalar or a band (so ``3,5-7`` = "3 OR anywhere from 5 to 7"
+    composes for free). :func:`grid_cell_distance` scores a set as the MIN
+    distance to any listed element, so an operator with two acceptable counts no
+    longer has to eyeball the table. A set is deduped preserving first-seen order
+    and a degenerate set whose elements all collapse to one (``3,3``) reduces to
+    that bare element, keeping scalar/band output byte-for-byte unchanged.
+
+    Each present band edge is a non-negative whole number (reusing
     :func:`nonneg_int_type`'s rules — ``0`` is legitimate, negatives/fractionals
-    are rejected), the separator is a single ``-``, and for a CLOSED band
+    are rejected), the band separator is a single ``-``, and for a CLOSED band
     ``lo <= hi`` (an inverted band is a typo, not a degenerate window). Exactly
     one edge may be empty (the open forms); a bare ``-`` with both edges empty
     is meaningless and rejected. A bare count with no ``-`` is the scalar form.
-    Pure and side-effect-free for direct unit testing; raises
+    An empty set element (``3,``, ``3,,5``) is rejected. Pure and
+    side-effect-free for direct unit testing; raises
     :class:`argparse.ArgumentTypeError` on any malformed input.
     """
     text = raw.strip() if isinstance(raw, str) else raw
+    # iter-248: a comma separates a SET of acceptable targets, each element
+    # itself a scalar or a band. The set scores as the MIN distance to any
+    # element (see grid_cell_distance), so '3,5' accepts 3 OR 5 but nothing
+    # between. A single-element set collapses to that bare element.
+    if isinstance(text, str) and "," in text:
+        parts = [p.strip() for p in text.split(",")]
+        if any(p == "" for p in parts):
+            raise argparse.ArgumentTypeError(
+                f"target set must be comma-separated targets, got {raw!r}"
+            )
+        elements = []
+        for part in parts:
+            element = _parse_single_target(part)
+            if element not in elements:  # dedupe, preserve first-seen order
+                elements.append(element)
+        return elements[0] if len(elements) == 1 else elements
+    return _parse_single_target(text)
+
+
+def _parse_single_target(text):
+    """Parse one ``--target`` element: a scalar count or a (possibly open) band.
+
+    Factored out of :func:`target_type` in iter-248 so the comma-separated set
+    form can parse each element with the same scalar/band/open-band rules. A
+    bare count with no ``-`` is the scalar form (a bare ``int``); a ``LO-HI``
+    form is a closed/open ``(lo, hi)`` tuple. Pure; raises
+    :class:`argparse.ArgumentTypeError` on malformed input.
+    """
     # A single '-' separates the band edges; no '-' is the scalar form. (Edges
     # are non-negative, so '-' is never a sign — it is always the separator.)
     if isinstance(text, str) and "-" in text:
         parts = text.split("-")
         if len(parts) != 2 or (parts[0] == "" and parts[1] == ""):
             raise argparse.ArgumentTypeError(
-                f"target band must be LO-HI with whole numbers, got {raw!r}"
+                f"target band must be LO-HI with whole numbers, got {text!r}"
             )
         # An empty edge is the open form ('3-' = at least 3 → (3, None);
         # '-5' = at most 5 → (None, 5)); None marks "no bound on that side".
@@ -283,7 +321,7 @@ def target_type(raw):
         hi = nonneg_int_type(parts[1]) if parts[1] != "" else None
         if lo is not None and hi is not None and lo > hi:
             raise argparse.ArgumentTypeError(
-                f"target band LO-HI must have LO <= HI, got {raw!r}"
+                f"target band LO-HI must have LO <= HI, got {text!r}"
             )
         return (lo, hi)
     return nonneg_int_type(text)
@@ -295,10 +333,14 @@ def _format_target(target):
     A scalar target renders as its bare count (``3``); an iter-246 closed
     ``(lo, hi)`` band renders as ``lo-hi`` (``3-5``). iter-247's open bands keep
     the empty edge empty so they read back exactly as typed: ``(3, None)`` →
-    ``3-`` ("at least 3"), ``(None, 5)`` → ``-5`` ("at most 5"). Used by
+    ``3-`` ("at least 3"), ``(None, 5)`` → ``-5`` ("at most 5"). iter-248's set
+    form renders each element comma-joined so it reads back as typed:
+    ``[3, 5, 7]`` → ``3,5,7``, ``[3, (5, 7)]`` → ``3,5-7``. Used by
     :func:`_render_pick_block` so the ``best:`` / ``top N:`` lines read naturally
     for any form without each call site re-deriving the format. Pure.
     """
+    if isinstance(target, list):
+        return ",".join(_format_target(element) for element in target)
     if isinstance(target, tuple):
         lo, hi = target
         lo_text = "" if lo is None else str(lo)
@@ -1068,11 +1110,16 @@ def grid_cell_distance(cell, target):
       scores ``0`` for any count ``<= hi`` and ``count - hi`` above it. The open
       side simply skips its bound check, so the closed-edge gap is the only
       distance that can be non-zero.
+    - **set (iter-248)** — a ``list`` of elements (each a scalar or a band):
+      the MIN distance to any element, so a count that satisfies ANY listed
+      target scores ``0`` and otherwise scores the gap to the nearest one.
 
     Pure — reads only ``cell["num_segments"]``, an int, so it never touches
     torch.
     """
     count = cell["num_segments"]
+    if isinstance(target, list):
+        return min(grid_cell_distance(cell, element) for element in target)
     if isinstance(target, tuple):
         lo, hi = target
         if lo is not None and count < lo:
@@ -2258,12 +2305,12 @@ def build_parser():
         type=target_type,
         default=None,
         dest="target",
-        help="Desired segment count (e.g. 3), closed band (e.g. 3-5), or "
-        "open band (3- = at least 3, -5 = at most 5) — when given, a "
-        "data-driven 'best:' pick names the swept value whose recovered "
-        "segment count is closest to it (a band scores 0 anywhere it is "
-        "satisfied); the same machinery as vad-grid's --target; omit for just "
-        "the table",
+        help="Desired segment count (e.g. 3), closed band (e.g. 3-5), "
+        "open band (3- = at least 3, -5 = at most 5), or set (3,5,7 = 3 OR 5 "
+        "OR 7) — when given, a data-driven 'best:' pick names the swept value "
+        "whose recovered segment count is closest to it (a band/set scores 0 "
+        "anywhere it is satisfied); the same machinery as vad-grid's --target; "
+        "omit for just the table",
     )
     vad_sweep.add_argument(
         "--top",
@@ -2385,12 +2432,12 @@ def build_parser():
         type=target_type,
         default=None,
         dest="target",
-        help="Desired segment count (e.g. 3), closed band (e.g. 3-5), or "
-        "open band (3- = at least 3, -5 = at most 5) — when given, a "
-        "data-driven 'best:' pick names the cell whose recovered segment count "
-        "is closest to it (a band scores 0 anywhere it is satisfied); the "
-        "vad-grid analogue of simulate-mirror --grid's best pick; omit for "
-        "just the table",
+        help="Desired segment count (e.g. 3), closed band (e.g. 3-5), "
+        "open band (3- = at least 3, -5 = at most 5), or set (3,5,7 = 3 OR 5 "
+        "OR 7) — when given, a data-driven 'best:' pick names the cell whose "
+        "recovered segment count is closest to it (a band/set scores 0 "
+        "anywhere it is satisfied); the vad-grid analogue of simulate-mirror "
+        "--grid's best pick; omit for just the table",
     )
     vad_grid.add_argument(
         "--top",
