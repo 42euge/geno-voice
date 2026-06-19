@@ -5720,6 +5720,108 @@ def test_render_grid_csv_consumer_rederives_json_band_target_pick():
     assert [c["distance"] for c in payload["top"][:2]] == [0, 0]
 
 
+def test_render_grid_csv_consumer_rederives_json_preference_target_pick():
+    # iter-276: iter-273/274/275 pinned the cross-surface --target pick AGREEMENT
+    # (a CSV consumer re-parses the bare grid table back to cells and re-runs
+    # pick_best_grid_cell / pick_top_grid_cells to recover the JSON-embedded
+    # `best`/`top` identically) for a SCALAR target under both tie-breaks
+    # (row-major iter-273, speech iter-274) and a closed (lo, hi) tolerance BAND
+    # (iter-275). All of those forms carry their preference (if any) ENTIRELY in
+    # grid_cell_distance. A {"prefer": [...]} PREFERENCE target (iter-249) is the
+    # first form whose precedence lives at the SORT-KEY layer, NOT the distance:
+    # grid_cell_distance treats a preference IDENTICALLY to a flat set (the MIN
+    # over its elements), and only grid_cell_sort_key inserts _preference_rank as
+    # a secondary key so that, among cells tied at equal distance, the one nearest
+    # a MORE-preferred element wins. render_vad_grid_json threads the preference
+    # opaquely into the pickers; a CSV consumer re-running the SAME pickers with
+    # the SAME {"prefer": ...} dict MUST recover the SAME preference-ordered pick.
+    # That cross-surface agreement under a preference target was never pinned — a
+    # regression that, say, flattened the {"prefer": ...} dict to a plain set on
+    # the JSON path (dropping the preference rank key) while the CSV consumer still
+    # passed the preference would diverge the two surfaces yet ship green, because
+    # iters 273/274/275 only exercise forms whose precedence is folded into the
+    # distance. Pin both surfaces to name the SAME preference-broken best cell and
+    # the SAME preference-ordered top shortlist, with a SET control proving the
+    # preference precedence genuinely changes the pick.
+    row_values = [0.3, 0.5]
+    col_values = [400.0, 800.0]
+    # 2×2 row-major counts 3/5/8/1, target = preference 5>3 ({"prefer": [5, 3]}).
+    # Preference distance is the MIN over its elements, IDENTICAL to a set:
+    #   - (0.3,400) count 3 → satisfies element 3 → dist 0 (in preference)
+    #   - (0.3,800) count 5 → satisfies element 5 → dist 0 (in preference)
+    #   - (0.5,400) count 8 → min(|8-5|, |8-3|) = 3
+    #   - (0.5,800) count 1 → min(|1-5|, |1-3|) = 2
+    # The two count-{3,5} cells tie at distance 0. ROW-MAJOR would keep (0.3,400)
+    # first (earlier in the grid), but the preference rank breaks the tie toward
+    # the MORE-preferred element 5 (rank 0) over element 3 (rank 1), so the
+    # preference best is (0.3,800) count 5, NOT the row-major pick. A flat SET of
+    # the same two elements [5, 3] carries no precedence, so it falls back to the
+    # row-major tie and picks (0.3,400) count 3 — a DIFFERENT cell. The preference
+    # genuinely changes the result, the whole point of this fixture.
+    results = [_cell_result(n) for n in (3, 5, 8, 1)]
+    target = {"prefer": [5, 3]}
+    csv_text = gv.render_vad_grid_csv(
+        row_values, col_values, results, name="rec.wav",
+        row_axis="threshold", col_axis="min_silence_ms",
+    )
+    payload = json.loads(
+        gv.render_vad_grid_json(
+            row_values, col_values, results, name="rec.wav",
+            row_axis="threshold", col_axis="min_silence_ms",
+            target=target, top=3,
+        )
+    )
+    # The JSON twin records the preference target as a {"prefer": [...]} object,
+    # preserving the listed order.
+    assert payload["target"] == {"prefer": [5, 3]}
+    # The CSV body still carries no pick columns — it is the bare grid.
+    assert "best" not in csv_text and "distance" not in csv_text
+    assert "prefer" not in csv_text
+    # A CSV consumer re-parses the flat table back to grid cells...
+    cells = [
+        {
+            "threshold": float(row["threshold"]),
+            "min_silence_ms": float(row["min_silence_ms"]),
+            "num_segments": int(row["num_segments"]),
+            "speech_s": float(row["speech_s"]),
+        }
+        for row in csv.DictReader(io.StringIO(csv_text))
+    ]
+    # ...and re-runs the SAME picker with the SAME preference target. The
+    # CSV-derived best equals the JSON `best` (distance key stripped), and the
+    # re-derived preference distance matches the one the JSON embedded (0 — the
+    # cell satisfies a preference element).
+    csv_best = gv.pick_best_grid_cell(cells, target)
+    json_best = dict(payload["best"])
+    assert json_best.pop("distance") == gv.grid_cell_distance(csv_best, target)
+    assert csv_best == json_best
+    assert (csv_best["threshold"], csv_best["min_silence_ms"]) == (0.3, 800.0)
+    # CONTROL: a flat SET of the SAME two elements [5, 3] carries no precedence, so
+    # it falls back to the row-major tie and picks a DIFFERENT cell (count-3
+    # (0.3,400), the earlier dist-0 cell). Proves the test cannot pass by the
+    # preference silently flattening to a set on either surface.
+    set_best = gv.pick_best_grid_cell(cells, [5, 3])
+    assert set_best != csv_best
+    assert (set_best["threshold"], set_best["min_silence_ms"]) == (0.3, 400.0)
+    # The top shortlist agrees cell-for-cell (distance stripped), with the two
+    # dist-0 cells ordered by PREFERENCE rank (count-5 before count-3 — the
+    # REVERSE of row-major) ahead of the out-of-band runner-up.
+    csv_top = gv.pick_top_grid_cells(cells, target, 3)
+    json_top = [dict(c) for c in payload["top"]]
+    for c in json_top:
+        c.pop("distance")
+    assert csv_top == json_top
+    # Head of the shortlist is the single best pick, on both surfaces.
+    assert csv_top[0] == csv_best
+    # The dist-0 tie resolved on preference rank (count-5 before count-3), then the
+    # nearest out-of-band cell — NOT the row-major order the set control gives.
+    assert [(c["threshold"], c["min_silence_ms"]) for c in csv_top] == [
+        (0.3, 800.0), (0.3, 400.0), (0.5, 800.0),
+    ]
+    # The two leading cells both satisfy the preference (distance 0).
+    assert [c["distance"] for c in payload["top"][:2]] == [0, 0]
+
+
 # ---- cmd_vad_grid: end-to-end ------------------------------------------
 
 

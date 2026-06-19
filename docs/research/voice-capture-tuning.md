@@ -268,7 +268,18 @@ the same band recovers the same in-band pick and band-scored shortlist. The
 fixture is built so a scalar at the band's lower edge would pick a *different*
 cell (the lone exact hit) than the band (whose floor ties two cells, broken
 row-major), so the test would catch a JSON path that collapsed the band tuple to
-a scalar.
+a scalar. iter-276 carries the pick agreement to the first form whose precedence
+lives at the *sort-key* layer rather than the distance: an iter-249
+`{"prefer": […]}` **preference** target. `grid_cell_distance` treats a preference
+identically to a flat set (the min over its elements), and only
+`grid_cell_sort_key` inserts a `_preference_rank` secondary key so that, among
+cells tied at equal distance, the one nearest a *more-preferred* element wins. A
+CSV consumer re-running the pickers with the same `{"prefer": …}` dict recovers
+the same preference-broken pick. The fixture ties two cells at distance 0 and
+adds a flat-`set` control of the same two elements: the set falls back to the
+row-major tie (the earlier cell), while the preference flips the pick toward the
+more-preferred element — so the test catches a JSON path that flattened the
+`{"prefer": …}` dict to a plain set and dropped the preference rank key.
 
 **`--min-silences` — a second sweep axis (iter-238).** The default axis is the
 P(speech) gate (`--thresholds`); passing `--min-silences` instead sweeps the
