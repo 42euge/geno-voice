@@ -924,6 +924,33 @@ gv vad-sweep recording.wav --max-speeches 5,10,inf --target 3,6:2          # +2 
 gv vad-grid  recording.wav --thresholds 0.3 --max-speeches 5,inf --target 3,6:2 --json
 ```
 
+The multiplicative-factor SCALED set (`--target 3,8*2`, iter-252) is the
+multiplicative twin of the weighted set: where the weighted set ADDS a constant
+per-element penalty, the scaled set MULTIPLIES each element's raw distance by its
+factor (the score is the MIN over each element's raw distance TIMES its factor).
+Two consequences distinguish it from BOTH the flat set and the additive weighted
+set: an exact hit stays FREE (raw `0` × any factor = `0`, so a high factor never
+bites an on-target cap — unlike an additive penalty), and the cost GROWS with
+distance (one count off a factor-`2` element costs `2`, two counts cost `4`, not
+the constant offset the weighted form adds). iter-266 pins it *together* with the
+seconds axis: `--target 3,8*2` makes the bare `3` free and AMPLIFIES drift past
+the `8`, so a cap one segment off the free `3` beats a cap four off the `8` even
+though the flat set `3,8` would tie them — while a cap landing exactly on the
+costly `8` still scores `0` (the additive `3,8:2` would instead penalise it to
+`2`). The `best:` line renders the scaled set as `3,8*2` (never a
+`{"scaled": ...}` dict repr) and names the chosen SECONDS cap compactly
+(`max_speech=10` / `max_speech=5`, the no-cap baseline as `max_speech=inf`, never
+`10.00` / `inf.00`) across both the 1-D sweep and the 2-D grid column axis. The
+grid JSON surface carries the scaled set as its `{"scaled": [[element, factor],
+...]}` dict (each pair a 2-element array, distinct from a flat-set array of
+scalars and from a `{"weighted": ...}` dict) and emits the chosen cap as a finite
+seconds number (`best.max_speech_s == 5.0`) with the scaled distance:
+
+```bash
+gv vad-sweep recording.wav --max-speeches 10,inf --target 3,8*2            # factor amplifies the off-8 gap, picks the finite cap
+gv vad-grid  recording.wav --thresholds 0.3 --max-speeches 5,inf --target 3,8*2 --json
+```
+
 ### Silero vs energy-VAD segment counts (the headless proof)
 
 Measured over the seed corpus with `min_silence_ms=800` (the pipecat

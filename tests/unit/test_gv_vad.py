@@ -3216,6 +3216,130 @@ def test_render_grid_json_weighted_target_carries_seconds_max_speech():
     assert payload["best"]["max_speech_s"] == 5.0
 
 
+# ---- --target scaled set (a,b*f) form on the seconds max_speech_s axis -------
+#
+# iter-252 shipped the multiplicative-factor SCALED set (`--target 3,8*2`): a
+# `{"scaled": [(element, factor), ...]}` dict whose DISTANCE is the MIN over each
+# element's RAW distance TIMES its factor — the multiplicative twin of the
+# iter-250 additive WEIGHTED set. The defining contrast with BOTH the flat set
+# and the additive weighted form: an exact hit stays FREE (raw 0 × any factor =
+# 0), unlike an additive penalty which bites even an exact hit, while the cost
+# GROWS with distance (drifting one count past a factor-2 element costs 2, not
+# the constant offset the weighted form adds). iter-255/257 added the seconds
+# `max_speech_s` force-split-ceiling axis. Every seconds-axis target test from
+# iter-257→265 covered scalar, banded, the flat SET, the ranked PREFERENCE, and
+# the additive WEIGHTED form, but never the SCALED form — and every scaled render
+# test (iter-252) swept the threshold/min-silence axis. So the scaled-distance
+# path and the `%g` seconds formatting had no JOINT coverage: a regression that
+# broke EITHER (a scaled distance that mishandled the seconds axis, a `%g`→`.2f`
+# drift on the scaled-CHOSEN cap, the `*factor` rendering, or the JSON carrying
+# the `{"scaled": [...]}` dict) would have shipped green while the threshold-axis
+# scaled tests stayed passing. These pin that the factor AMPLIFIES the off-element
+# cost to pick the lower-factor seconds cap (the discriminating behaviour vs the
+# flat set, which picks the nearest raw cap), that an exact hit on a high-factor
+# element stays free (the discriminating behaviour vs the additive weighted set,
+# which penalises it), names the cap via %g (compact 10/5, the no-cap baseline as
+# "inf"), renders the scaled set as "3,8*2" (not a `{"scaled": ...}` dict repr),
+# never leaks a gate-style 0.00 / inf.00, and that the grid JSON carries the
+# scaled set as its `{"scaled": [...]}` dict with a finite-seconds best cap — on
+# both the 1-D sweep and the 2-D grid. No production code changed (the wiring was
+# already correct — proved by a pre-test smoke run).
+
+
+def test_render_sweep_scaled_target_on_max_speech_axis_formats_seconds():
+    # Caps inf, 10 (counts 7, 4) in row order. Scaled 3,8*2: preferred 3 (factor
+    # 1), accepted 8 (factor 2). The inf baseline (count 7) is raw dist 4 from the
+    # free 3 and raw dist 1 from the factor-2 8 → min(4*1, 1*2)=2; the 10s cap
+    # (count 4) is raw dist 1 from the free 3 and raw dist 4 from the 8 →
+    # min(1*1, 4*2)=1. So the scaled set picks the 10s cap at |Δ|=1. The FLAT set
+    # [3,8] instead scores inf as min(4,1)=1 and 10s as min(1,4)=1 — a tie the
+    # earlier inf row wins. The factor AMPLIFYING the off-8 distance is what flips
+    # the pick to the finite 10s cap (the discriminating behaviour vs the flat
+    # set). The best: line names the SECONDS cap via %g and renders "3,8*2".
+    r_inf = _result_n_speech(7, 7.0)
+    r_ten = _result_n_speech(4, 4.0)
+    lines = gv.render_vad_sweep(
+        [float("inf"), 10.0], [r_inf, r_ten],
+        name="rec.wav", axis="max_speech_s", target={"scaled": [(3, 1), (8, 2)]},
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    assert "max_speech=10" in best
+    assert "4 segments" in best
+    assert "|Δ|=1" in best
+    # The scaled set renders as "3,8*2", not a {"scaled": ...} dict repr.
+    assert "target 3,8*2" in best
+    assert "scaled" not in best
+    # Compact %g — no gate-style trailing zeros on the seconds cap.
+    assert "10.00" not in best
+    assert "max_speech=10.0" not in best
+
+
+def test_render_sweep_scaled_target_keeps_exact_hit_free():
+    # The scaled set's defining property vs the ADDITIVE weighted set: an exact
+    # hit stays FREE (raw 0 × factor = 0), where an additive penalty would bite
+    # it. Caps inf, 5 (counts 4, 8). Scaled 3,8*2: inf (count 4) scores
+    # min(1*1, 4*2)=1; the 5s cap (count 8) sits EXACTLY on the factor-2 element
+    # 8 → min(5*1, 0*2)=0, so it WINS at |Δ|=0 despite the high factor — the
+    # factor never bites the exact hit. (The additive weighted 3,8:2 would instead
+    # penalise that hit to 2 and pick the inf baseline.) Proves the multiplicative
+    # form leaves on-target caps free.
+    r_inf = _result_n_speech(4, 4.0)
+    r_five = _result_n_speech(8, 8.0)
+    lines = gv.render_vad_sweep(
+        [float("inf"), 5.0], [r_inf, r_five],
+        name="rec.wav", axis="max_speech_s", target={"scaled": [(3, 1), (8, 2)]},
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    assert "max_speech=5" in best
+    assert "8 segments" in best
+    assert "|Δ|=0" in best
+    assert "target 3,8*2" in best
+    assert "scaled" not in best
+    # Finite seconds cap formats compactly — no 5.00 leak.
+    assert "max_speech=5.00" not in best
+
+
+def test_render_grid_scaled_target_on_max_speech_col_axis_formats_seconds():
+    # The seconds force-split ceiling is also a vad-grid COLUMN axis; the scaled
+    # best: line must format the col value via %g too AND honour the scaled
+    # distance. 1×2 grid over caps inf, 5 (counts 7, 4). Scaled 3,8*2: the inf
+    # baseline (count 7) scores min(4*1, 1*2)=2; the 5s cap (count 4) scores
+    # min(1*1, 4*2)=1, so the factor flips the pick to the 5s cap at |Δ|=1 —
+    # OVERRIDING the earlier inf row (the flat set [3,8] would tie at 1 and keep
+    # the earlier inf, count 7).
+    lines = gv.render_vad_grid(
+        [0.3], [float("inf"), 5.0], [_cell_result(7), _cell_result(4)],
+        name="rec.wav", col_axis="max_speech_s", target={"scaled": [(3, 1), (8, 2)]},
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    assert "max_speech=5" in best
+    assert "threshold=0.30" in best
+    assert "4 segments" in best
+    assert "|Δ|=1" in best
+    assert "target 3,8*2" in best
+    assert "scaled" not in best
+    # Seconds col formats compactly — no 5.00 leak.
+    assert "max_speech=5.00" not in best
+
+
+def test_render_grid_json_scaled_target_carries_seconds_max_speech():
+    # The grid JSON surface must carry a scaled target on the seconds col axis as
+    # its {"scaled": [[element, factor], ...]} dict (each pair a 2-element array,
+    # distinct from a flat-set array of scalars and from a {"weighted": ...} dict)
+    # AND emit the scaled-chosen cap as a finite seconds number (5.0), with the
+    # scaled distance (1).
+    payload = json.loads(
+        gv.render_vad_grid_json(
+            [0.3], [float("inf"), 5.0], [_cell_result(7), _cell_result(4)],
+            name="rec.wav", col_axis="max_speech_s", target={"scaled": [(3, 1), (8, 2)]},
+        )
+    )
+    assert payload["target"] == {"scaled": [[3, 1], [8, 2]]}
+    assert payload["best"]["num_segments"] == 4
+    assert payload["best"]["distance"] == 1
+    assert payload["best"]["max_speech_s"] == 5.0
+
+
 def test_render_sweep_json_carries_max_speech_axis():
     r = _Result(name="rec.wav", sample_rate=16000, duration_s=5.0, segments=[_Seg(0.0, 1.0)])
     payload = json.loads(
