@@ -25189,3 +25189,102 @@ wiring was already correct — proved by the passing test on first run).
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
    should track a curated subset, decide the policy and re-run
    `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
+
+## iter-279 — grid CSV consumer re-derives the JSON `--target` open-band pick
+
+**Branch:** `iter-279-grid-open-band-target` (merged ff to main, commit `ac1330c`)
+**Date:** 2026-06-19
+
+**No STEER.md this lap.** The carried operator items (wire `ContinuousListener`
+→ `/vad/silero/stream`; adopt `prewarm()` in the desktop app) both need a Mac +
+mic + browser and can't run headless; "ingest new recordings" stays corpus-gated;
+the COMBINED additive+multiplicative `--target` weight is a feature/design item,
+not a regression gap. iter-278 backlog item #4 named the next pure increment: "the
+open band is the most distinct remaining failure mode (one-sided distance)." I
+confirmed no existing test round-trips an OPEN band `(lo, None)`/`(None, hi)`
+target *cross-surface* (only the iter-273/274 scalar, iter-275 CLOSED band,
+iter-276 preference, iter-277 weighted, iter-278 scaled twins exist; the open-band
+unit tests pin a single surface in isolation), so the gap is real, and took the
+open-band form.
+
+**The gap.** iter-273–278 pinned the grid CSV↔JSON cross-surface `--target` pick
+AGREEMENT — a CSV consumer re-parses the bare grid table back to cells and
+re-runs `pick_best_grid_cell` / `pick_top_grid_cells` to recover the
+JSON-embedded `best`/`top` identically — across forms. iter-275 covered a CLOSED
+`(lo, hi)` tolerance band (both edges bounded; in-band only when `lo <= count <=
+hi`). `grid_cell_distance` also accepts an iter-247 OPEN band where ONE edge is
+`None`: `(lo, None)` ("at least `lo`") scores `0` for any count `>= lo`,
+`(None, hi)` ("at most `hi`") scores `0` for any count `<= hi`. The open side
+SKIPS its bound check, so the in-band region is ONE-SIDED and unbounded —
+arbitrarily many cells can tie at the floor, a genuinely distinct distance shape
+from the closed band. A regression that coerced the open `None` edge to a finite
+bound (or collapsed the open band to a scalar at `lo`) on the JSON path while the
+CSV consumer still passed the open band would diverge the two surfaces yet ship
+green — a failure mode iter-275's CLOSED-band fixture cannot catch. No production
+code changed (the wiring was already correct — proved by the passing test on first
+run).
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+1 test).**
+  `test_render_grid_csv_consumer_rederives_json_open_band_target_pick` — a 2×2
+  `threshold × min_silence_ms` grid (row-major counts 3/12/7/1) with
+  `target=(5, None)` ("at least 5"), `top=3`. Counts 12 and 7 both score the
+  open-band floor (dist 0, no upper bound), so row-major picks `(0.3,800)` count
+  12. A CLOSED `(5, 9)` control pushes count 12 OUT (above `hi=9` → dist 3),
+  leaving count 7 `(0.5,400)` the lone in-band cell and a DIFFERENT pick — proving
+  the UNBOUNDED upper side is load-bearing for the count-12 flip. Asserts the JSON
+  records `target == [5, null]`; the CSV body carries no `best`/`distance`
+  columns; a CSV `DictReader` consumer re-running `pick_best_grid_cell` recovers a
+  `best` identical to the JSON `best` (distance 0, re-derived open-band distance
+  matching); and `pick_top_grid_cells` recovers a shortlist agreeing cell-for-cell,
+  both dist-0 cells leading row-major `[(0.3,800),(0.5,400),(0.3,400)]`, the two
+  leaders both at the band floor (distance 0).
+- **`docs/research/voice-capture-tuning.md`.** Extended the grid cross-surface
+  paragraph: iter-279 carries the pick agreement to an OPEN band — a one-sided
+  unbounded distance shape distinct from iter-275's closed band, with the
+  closed-band control flip explained.
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3859 passed** (3858 prior + 1 net new), run on the feature branch before
+  ff-merge.
+- Focused: `pytest tests/unit/test_gv_vad.py -k "rederives_json_open_band_target_pick or rederives_json_band_target_pick"`
+  → **2 passed** (the new open-band twin + the iter-275 closed-band twin it
+  generalises to one unbounded side).
+- Pre-test smoke (Python, on the branch): the 2×2 grid (counts 3/12/7/1) → open
+  band `(5, None)` distances `[2, 0, 0, 4]`; the closed `(5, 9)` control
+  distances `[2, 3, 0, 4]` (count 12 pushed out) and a scalar `5` `[2, 7, 2, 4]`
+  — confirming the unbounded upper side flips the pick from count 7 to count 12
+  and the wiring was already correct before writing the assertion.
+- Integration: not re-run this lap (no corpus symlinked into this worktree; same
+  as prior corpus-gated laps — the change is pure CLI render logic fully covered
+  by the unit matrix).
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] COMBINED additive+multiplicative `--target` weight** — iter-250/251
+   give additive (`:penalty`), iter-252 multiplicative (`*factor`); an operator
+   might want both on one element (`5:1*1.5`). Larger design question (operator
+   precedence of `:` vs `*`) — scope before building. Pure, headless if pursued.
+   The only `--target` increment that is a FEATURE, not a regression-test gap.
+4. **[cli] The grid CSV↔JSON cross-surface `--target` pick contract now covers:**
+   scalar under row-major (iter-273) and speech (iter-274) tie-breaks, a closed
+   `(lo, hi)` band (iter-275), the `{"prefer": …}` PREFERENCE form (iter-276), the
+   `{"weighted": …}` ADDITIVELY-penalised form (iter-277), the `{"scaled": …}`
+   MULTIPLICATIVELY-penalised form (iter-278), and the OPEN band
+   `(lo, None)`/`(None, hi)` (iter-279 — one-sided unbounded distance). The
+   smallest remaining pure cross-surface gap is the flat SET target (iter-248 —
+   note iter-276/277/278 CONTROLS already exercise a set pick but do not round-trip
+   it against a JSON set surface, so a dedicated set twin would close it). Beyond
+   that, all the documented `grid_cell_distance` forms are now cross-surface
+   pinned; the remaining work is the iter-244 SET twin or moving to the feature
+   item (#3). Confirm no existing test already exercises the chosen form
+   cross-surface before assuming a gap.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
+   should track a curated subset, decide the policy and re-run
+   `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
