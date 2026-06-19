@@ -1678,6 +1678,96 @@ def test_render_sweep_csv_round_trips_to_sweep_rows():
     ] == json_rows
 
 
+# ---- 1-D sweep CSV ↔ JSON round-trip on a non-default MS axis (iter-268) -
+#
+# iter-267 backlog item #4: the cross-surface round-trip above
+# (test_render_sweep_csv_round_trips_to_sweep_rows) proves the CSV body
+# describes the SAME segmentation as the JSON twin — but ONLY on the default
+# `threshold` axis (it omits the `axis=` kwarg). The seconds axis got its own
+# round-trip (test_render_sweep_csv_max_speech_round_trips_with_inf), but that
+# one compares the CSV against vad_segmentation_sweep cells, NOT the JSON twin,
+# and the millisecond axes (min_silence_ms / min_speech_ms / speech_pad_ms) had
+# only single-row HEADER tests (test_render_sweep_csv_header_is_*_axis_name) —
+# no multi-row CSV↔JSON cross-surface round-trip on a non-default ms axis.
+# render_vad_sweep_csv and render_vad_sweep_json are axis-agnostic (each
+# stringifies whichever value the `axis` kwarg names), so a regression that let
+# the CSV's first column drift from the JSON row key, truncated a later ms-axis
+# value, or disagreed on num_segments/speech_s across rows would have shipped
+# green while the threshold-only round-trip and the single-row header tests
+# stayed passing. These two close that hole on the 1-D sweep: a multi-row sweep
+# on min_speech_ms and on speech_pad_ms, each asserting the CSV DictReader rows
+# parse back to the EXACT JSON `sweep` payload. No production code changed (the
+# wiring was already correct — proved by a pre-test smoke run).
+
+
+def test_render_sweep_csv_min_speech_axis_round_trips_to_json_twin():
+    # A multi-row min_speech_ms sweep: the CSV body must describe the SAME
+    # segmentation as the JSON twin on this NON-default axis, so a consumer
+    # reading either surface recovers identical numbers across every row.
+    r_lo = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=10.0,
+        segments=[_Seg(0.0, 1.0), _Seg(2.0, 3.0), _Seg(4.0, 5.0)],
+    )
+    r_mid = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=10.0,
+        segments=[_Seg(0.0, 1.0), _Seg(2.0, 3.0)],
+    )
+    r_hi = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=10.0,
+        segments=[_Seg(0.0, 1.0)],
+    )
+    floors = [200.0, 400.0, 800.0]
+    results = [r_lo, r_mid, r_hi]
+    csv_text = gv.render_vad_sweep_csv(
+        floors, results, name="rec.wav", axis="min_speech_ms"
+    )
+    json_rows = json.loads(
+        gv.render_vad_sweep_json(floors, results, name="rec.wav", axis="min_speech_ms")
+    )["sweep"]
+    csv_rows = list(csv.DictReader(io.StringIO(csv_text)))
+    # The first column header IS the swept axis name (self-describing CSV).
+    assert csv_rows[0].keys() >= {"min_speech_ms", "num_segments", "speech_s"}
+    assert [
+        {
+            "min_speech_ms": float(row["min_speech_ms"]),
+            "num_segments": int(row["num_segments"]),
+            "speech_s": float(row["speech_s"]),
+        }
+        for row in csv_rows
+    ] == json_rows
+
+
+def test_render_sweep_csv_speech_pad_axis_round_trips_to_json_twin():
+    # The speech_pad_ms twin of the above: a different ms axis name keys both
+    # surfaces, and the multi-row CSV↔JSON agreement must hold there too.
+    r_lo = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=10.0,
+        segments=[_Seg(0.0, 1.0), _Seg(2.0, 3.0)],
+    )
+    r_hi = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=10.0,
+        segments=[_Seg(0.0, 1.5)],
+    )
+    pads = [30.0, 90.0]
+    results = [r_lo, r_hi]
+    csv_text = gv.render_vad_sweep_csv(
+        pads, results, name="rec.wav", axis="speech_pad_ms"
+    )
+    json_rows = json.loads(
+        gv.render_vad_sweep_json(pads, results, name="rec.wav", axis="speech_pad_ms")
+    )["sweep"]
+    csv_rows = list(csv.DictReader(io.StringIO(csv_text)))
+    assert csv_rows[0].keys() >= {"speech_pad_ms", "num_segments", "speech_s"}
+    assert [
+        {
+            "speech_pad_ms": float(row["speech_pad_ms"]),
+            "num_segments": int(row["num_segments"]),
+            "speech_s": float(row["speech_s"]),
+        }
+        for row in csv_rows
+    ] == json_rows
+
+
 # ---- cmd_vad_sweep --csv: the handler ----------------------------------
 
 

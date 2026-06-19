@@ -210,7 +210,13 @@ repeat per row), unlike the human table's title line and the JSON `name` key.
 When `silero-vad` is absent the output is a single `# silero VAD unavailable: …`
 comment line so a degraded run stays self-describing. An integration test pins
 that the `--csv` rows describe the same segmentation as `--json` over the real
-corpus.
+corpus. The 1-D `--csv` and `--json` surfaces are *axis-agnostic* — each
+stringifies whichever dimension the run sweeps — so the CSV↔JSON agreement holds
+on every axis, not just the default `threshold`. iter-268 unit tests pin that a
+multi-row `min_speech_ms` and a multi-row `speech_pad_ms` sweep parse from the
+CSV `DictReader` back to the *exact* `--json` `sweep` payload (the first CSV
+column keyed by the swept ms-axis name), closing the gap left by the
+threshold-only cross-surface round-trip and the single-row ms-axis header tests.
 
 **`--min-silences` — a second sweep axis (iter-238).** The default axis is the
 P(speech) gate (`--thresholds`); passing `--min-silences` instead sweeps the
