@@ -218,6 +218,27 @@ def nonneg_float_type(raw):
     return value
 
 
+def nonneg_int_type(raw):
+    """Argparse ``type`` for ``gv vad-grid --target``: a target segment count.
+
+    The number of speech regions an operator wants the segmenter to land on for
+    a given recording (e.g. one segment per spoken sentence). A count is a
+    non-negative integer — ``0`` is legitimate ("expect silence"), negatives and
+    fractional values are nonsensical. Pure and side-effect-free for direct unit
+    testing; raises :class:`argparse.ArgumentTypeError` on a non-integer or
+    negative value. The integer twin of :func:`nonneg_float_type`.
+    """
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(
+            f"target must be a whole number, got {raw!r}"
+        )
+    if value < 0:
+        raise argparse.ArgumentTypeError(f"target must be >= 0, got {value}")
+    return value
+
+
 def max_speech_type(raw):
     """Argparse ``type`` for ``gv vad --max-speech-s``: force-split bound.
 
@@ -830,6 +851,44 @@ def vad_segmentation_grid(
     return cells
 
 
+def grid_cell_distance(cell, target):
+    """``|num_segments - target|`` for one grid cell — lower is better.
+
+    The VAD-grid scoring analogue of :meth:`MirrorGridPoint.score`: where the
+    WPM grid folds convergence + lurch into a lower-is-better number, a VAD
+    grid cell is scored purely by how far its recovered segment count sits from
+    the operator's ``target`` (e.g. one segment per spoken sentence). Pure —
+    reads only ``cell["num_segments"]``, an int, so it never touches torch.
+    """
+    return abs(cell["num_segments"] - target)
+
+
+def pick_best_grid_cell(cells, target):
+    """Pick the grid cell whose ``num_segments`` is closest to ``target``.
+
+    iter-240 shipped ``gv vad-grid`` tabulating the gate × ms-knob cartesian
+    product; this is iter-241's data-driven picker over that table — the VAD
+    counterpart of :func:`pick_best_mirror_config` (``simulate-mirror --grid``).
+    Scores every cell with :func:`grid_cell_distance` and returns the one with
+    the smallest distance to the target segment count — the ``(threshold, ms)``
+    pair that segments the recording into closest to the number of regions the
+    operator expects.
+
+    Earliest-tie rule (matching :func:`pick_best_mirror_config` and the VAD
+    sweep): on an exact distance tie the earlier cell in row-major order wins,
+    so a stable grid ordering yields a stable pick. ``None`` when ``cells`` is
+    empty. Pure — reads nothing, mutates nothing.
+    """
+    best = None
+    best_distance = None
+    for cell in cells:
+        d = grid_cell_distance(cell, target)
+        if best_distance is None or d < best_distance:
+            best = cell
+            best_distance = d
+    return best
+
+
 def render_vad_grid(
     row_values,
     col_values,
@@ -838,6 +897,7 @@ def render_vad_grid(
     name,
     row_axis="threshold",
     col_axis="min_silence_ms",
+    target=None,
 ):
     """Render a 2-D grid sweep as a plain-text table.
 
@@ -849,7 +909,14 @@ def render_vad_grid(
     ``col_axis`` name the two swept dimensions, which set the two leading column
     labels and value formats (a gate prints ``0.40``, a millisecond knob a bare
     ``800``). Any ``None`` in ``results`` (segmenter unavailable) yields the
-    shared install hint. Pure: returns a list of strings.
+    shared install hint.
+
+    When ``target`` (a desired segment count) is given, a trailing ``best:``
+    line names the data-driven pick — the cell whose segment count is closest
+    to ``target`` (the :func:`pick_best_grid_cell` analogue of
+    :func:`render_grid`'s best line). ``target=None`` (the default) omits the
+    line, keeping the iter-240 output unchanged. Pure: returns a list of
+    strings.
     """
     if any(r is None for r in results):
         return [
@@ -871,6 +938,21 @@ def render_vad_grid(
             f"{_format_sweep_axis_value(col_axis, cell[col_axis]):>11}  "
             f"{cell['num_segments']:>8}  {cell['speech_s']:>5.1f}s"
         )
+    if target is not None:
+        best = pick_best_grid_cell(cells, target)
+        if best is None:
+            lines.append(
+                f"  best: none (empty grid; target {target} segments)"
+            )
+        else:
+            lines.append(
+                f"  best: {row_label}="
+                f"{_format_sweep_axis_value(row_axis, best[row_axis])} "
+                f"{col_label}="
+                f"{_format_sweep_axis_value(col_axis, best[col_axis])} "
+                f"({best['num_segments']} segments, "
+                f"|Δ|={grid_cell_distance(best, target)} from target {target})"
+            )
     return lines
 
 
@@ -882,6 +964,7 @@ def render_vad_grid_json(
     name,
     row_axis="threshold",
     col_axis="min_silence_ms",
+    target=None,
 ):
     """Render a 2-D grid sweep as a JSON string.
 
@@ -890,7 +973,14 @@ def render_vad_grid_json(
     (``row_axis`` / ``col_axis``) so a consumer knows which two dimensions the
     cells vary (the cells are keyed by those same names). Any ``None`` in
     ``results`` → ``{"available": false}`` + install hint, mirroring
-    :func:`render_vad_sweep_json`. Pure: returns a single JSON string.
+    :func:`render_vad_sweep_json`.
+
+    When ``target`` (a desired segment count) is given, the payload gains a
+    ``"target"`` int and a ``"best"`` cell — :func:`pick_best_grid_cell`'s pick,
+    the cell whose segment count is closest to the target, augmented with a
+    ``"distance"`` key (``|num_segments - target|``). ``target=None`` (the
+    default) omits both keys, keeping the iter-240 payload unchanged. Pure:
+    returns a single JSON string.
     """
     if any(r is None for r in results):
         return json.dumps(
@@ -903,15 +993,24 @@ def render_vad_grid_json(
             },
             indent=2,
         )
+    cells = vad_segmentation_grid(
+        row_values, col_values, results, row_axis=row_axis, col_axis=col_axis
+    )
     payload = {
         "available": True,
         "name": name,
         "row_axis": row_axis,
         "col_axis": col_axis,
-        "grid": vad_segmentation_grid(
-            row_values, col_values, results, row_axis=row_axis, col_axis=col_axis
-        ),
+        "grid": cells,
     }
+    if target is not None:
+        payload["target"] = target
+        best = pick_best_grid_cell(cells, target)
+        payload["best"] = (
+            None
+            if best is None
+            else {**best, "distance": grid_cell_distance(best, target)}
+        )
     return json.dumps(payload, indent=2)
 
 
@@ -1291,6 +1390,11 @@ def cmd_vad_grid(args, *, log=print, segmenter=None, availability=None):
 
     as_json = getattr(args, "json", False)
     as_csv = getattr(args, "csv", False)
+    # --target (a desired segment count) drives the data-driven best-cell pick;
+    # None (the default) leaves the iter-240 output unchanged. The CSV emitter is
+    # a pure data grid, so it ignores the target (the pick is a derived scalar,
+    # not a per-cell column).
+    target = getattr(args, "target", None)
 
     # Rows are always the gate; the column axis is whichever ms list was passed
     # (--min-speeches → floor; else --min-silences → hangover, the default). The
@@ -1311,7 +1415,7 @@ def cmd_vad_grid(args, *, log=print, segmenter=None, availability=None):
             log(
                 render_vad_grid_json(
                     [], [], unavailable, name=args.wav,
-                    row_axis=row_axis, col_axis=col_axis,
+                    row_axis=row_axis, col_axis=col_axis, target=target,
                 )
             )
         elif as_csv:
@@ -1324,7 +1428,7 @@ def cmd_vad_grid(args, *, log=print, segmenter=None, availability=None):
         else:
             for line in render_vad_grid(
                 [], [], unavailable, name=args.wav,
-                row_axis=row_axis, col_axis=col_axis,
+                row_axis=row_axis, col_axis=col_axis, target=target,
             ):
                 log(line)
         return
@@ -1357,7 +1461,7 @@ def cmd_vad_grid(args, *, log=print, segmenter=None, availability=None):
         log(
             render_vad_grid_json(
                 row_values, col_values, results, name=name,
-                row_axis=row_axis, col_axis=col_axis,
+                row_axis=row_axis, col_axis=col_axis, target=target,
             )
         )
     elif as_csv:
@@ -1370,7 +1474,7 @@ def cmd_vad_grid(args, *, log=print, segmenter=None, availability=None):
     else:
         for line in render_vad_grid(
             row_values, col_values, results, name=name,
-            row_axis=row_axis, col_axis=col_axis,
+            row_axis=row_axis, col_axis=col_axis, target=target,
         ):
             log(line)
 
@@ -1916,6 +2020,16 @@ def build_parser():
         dest="max_speech_s",
         help="Force-split regions longer than this, in seconds — shared by "
         "all cells; 'inf'/'none' never splits (default: inf)",
+    )
+    vad_grid.add_argument(
+        "--target",
+        type=nonneg_int_type,
+        default=None,
+        dest="target",
+        help="Desired segment count — when given, a data-driven 'best:' pick "
+        "names the cell whose recovered segment count is closest to it (the "
+        "vad-grid analogue of simulate-mirror --grid's best pick); omit for "
+        "just the table",
     )
     vad_grid_fmt = vad_grid.add_mutually_exclusive_group()
     vad_grid_fmt.add_argument(

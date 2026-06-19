@@ -175,6 +175,28 @@ def test_nonneg_float_rejects_nan():
         gv.nonneg_float_type("nan")
 
 
+# ---- nonneg_int_type: the vad-grid target segment count ----------------
+
+
+@pytest.mark.parametrize("raw", ["0", "1", "5", "42"])
+def test_nonneg_int_accepts_zero_and_positive(raw):
+    value = gv.nonneg_int_type(raw)
+    assert isinstance(value, int)
+    assert value >= 0
+
+
+@pytest.mark.parametrize("raw", ["-1", "-5"])
+def test_nonneg_int_rejects_negative(raw):
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.nonneg_int_type(raw)
+
+
+@pytest.mark.parametrize("raw", ["lots", "", "1.5", "3ms"])
+def test_nonneg_int_rejects_non_integers(raw):
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.nonneg_int_type(raw)
+
+
 # ---- max_speech_type: the force-split bound ----------------------------
 
 
@@ -1765,6 +1787,7 @@ def _grid_args(**over):
         min_silence_ms=800.0,
         speech_pad_ms=30.0,
         max_speech_s=float("inf"),
+        target=None,
         json=False,
         csv=False,
     )
@@ -1834,6 +1857,32 @@ def test_vad_grid_json_and_csv_are_mutually_exclusive():
         gv.build_parser().parse_args(["vad-grid", "rec.wav", "--json", "--csv"])
 
 
+def test_vad_grid_target_defaults_none():
+    args = gv.build_parser().parse_args(["vad-grid", "rec.wav"])
+    assert args.target is None
+
+
+def test_vad_grid_target_parses_int():
+    args = gv.build_parser().parse_args(["vad-grid", "rec.wav", "--target", "5"])
+    assert args.target == 5
+    assert isinstance(args.target, int)
+
+
+def test_vad_grid_target_zero_allowed():
+    args = gv.build_parser().parse_args(["vad-grid", "rec.wav", "--target", "0"])
+    assert args.target == 0
+
+
+def test_vad_grid_rejects_negative_target():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(["vad-grid", "rec.wav", "--target", "-1"])
+
+
+def test_vad_grid_rejects_fractional_target():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(["vad-grid", "rec.wav", "--target", "1.5"])
+
+
 # ---- vad_segmentation_grid: pure core ----------------------------------
 
 
@@ -1876,6 +1925,52 @@ def test_grid_length_mismatch_raises():
 def test_grid_defaults_to_threshold_x_min_silence():
     cells = gv.vad_segmentation_grid([0.5], [400.0], [_cell_result(2)])
     assert "threshold" in cells[0] and "min_silence_ms" in cells[0]
+
+
+# ---- grid_cell_distance / pick_best_grid_cell: the data-driven pick -----
+
+
+def _grid_cells(seg_counts, row_values=None, col_values=None):
+    """Build a row-major cell list with the given segment counts."""
+    row_values = row_values if row_values is not None else [0.3, 0.5]
+    col_values = col_values if col_values is not None else [400.0, 800.0]
+    results = [_cell_result(n) for n in seg_counts]
+    return gv.vad_segmentation_grid(row_values, col_values, results)
+
+
+def test_grid_cell_distance_is_abs_segment_gap():
+    cell = {"num_segments": 7}
+    assert gv.grid_cell_distance(cell, 5) == 2
+    assert gv.grid_cell_distance(cell, 9) == 2
+    assert gv.grid_cell_distance(cell, 7) == 0
+
+
+def test_pick_best_grid_cell_closest_to_target():
+    # Counts 4,3,2,1 over the 2×2 grid; target 3 picks the second cell exactly.
+    cells = _grid_cells([4, 3, 2, 1])
+    best = gv.pick_best_grid_cell(cells, 3)
+    assert best["num_segments"] == 3
+    assert (best["threshold"], best["min_silence_ms"]) == (0.3, 800.0)
+
+
+def test_pick_best_grid_cell_earliest_tie_wins():
+    # Two cells are equidistant from target 3 (counts 2 and 4 both |Δ|=1); the
+    # earlier one in row-major order wins, matching pick_best_mirror_config.
+    cells = _grid_cells([2, 4, 2, 4])
+    best = gv.pick_best_grid_cell(cells, 3)
+    # First cell (count 2, |Δ|=1) wins over the later count-4 cell (also |Δ|=1).
+    assert best["num_segments"] == 2
+    assert (best["threshold"], best["min_silence_ms"]) == (0.3, 400.0)
+
+
+def test_pick_best_grid_cell_empty_is_none():
+    assert gv.pick_best_grid_cell([], 3) is None
+
+
+def test_pick_best_grid_cell_exact_zero_target():
+    cells = _grid_cells([3, 0, 2, 1])
+    best = gv.pick_best_grid_cell(cells, 0)
+    assert best["num_segments"] == 0
 
 
 # ---- renderers ----------------------------------------------------------
@@ -1934,6 +2029,64 @@ def test_render_grid_json_none_marks_unavailable():
     payload = json.loads(gv.render_vad_grid_json([0.5], [400.0], [None], name="rec.wav"))
     assert payload["available"] is False
     assert "hint" in payload
+
+
+# ---- the --target best-cell pick in the renderers ----------------------
+
+
+def test_render_grid_omits_best_line_without_target():
+    results = [_cell_result(n) for n in (4, 1)]
+    lines = gv.render_vad_grid([0.3], [400.0, 800.0], results, name="rec.wav")
+    assert not any("best:" in ln for ln in lines)
+
+
+def test_render_grid_appends_best_line_with_target():
+    # 1×2 grid, counts 4 and 1; target 2 picks the count-1 cell (|Δ|=1 vs 2).
+    results = [_cell_result(n) for n in (4, 1)]
+    lines = gv.render_vad_grid(
+        [0.3], [400.0, 800.0], results, name="rec.wav", target=2,
+    )
+    best_line = lines[-1]
+    assert best_line.lstrip().startswith("best:")
+    assert "min_silence=800" in best_line
+    assert "threshold=0.30" in best_line
+    assert "1 segments" in best_line
+    assert "target 2" in best_line
+
+
+def test_render_grid_best_line_empty_grid():
+    lines = gv.render_vad_grid([], [], [], name="rec.wav", target=3)
+    assert lines[-1].lstrip().startswith("best: none")
+
+
+def test_render_grid_json_omits_best_and_target_without_target():
+    results = [_cell_result(n) for n in (4, 1)]
+    payload = json.loads(
+        gv.render_vad_grid_json([0.3], [400.0, 800.0], results, name="rec.wav")
+    )
+    assert "best" not in payload
+    assert "target" not in payload
+
+
+def test_render_grid_json_carries_best_and_target():
+    results = [_cell_result(n) for n in (4, 1)]
+    payload = json.loads(
+        gv.render_vad_grid_json(
+            [0.3], [400.0, 800.0], results, name="rec.wav", target=2,
+        )
+    )
+    assert payload["target"] == 2
+    assert payload["best"]["num_segments"] == 1
+    assert payload["best"]["distance"] == 1
+    assert payload["best"]["min_silence_ms"] == 800.0
+
+
+def test_render_grid_json_best_is_none_for_empty_grid():
+    payload = json.loads(
+        gv.render_vad_grid_json([], [], [], name="rec.wav", target=3)
+    )
+    assert payload["target"] == 3
+    assert payload["best"] is None
 
 
 def test_render_grid_csv_header_and_rows():
@@ -2122,3 +2275,77 @@ def test_cmd_vad_grid_uses_segmenter_name():
         availability=lambda: True,
     )
     assert "actual-basename.wav" in "\n".join(lines)
+
+
+def test_cmd_vad_grid_target_emits_best_line():
+    # Fewer segments at a higher gate; target 1 should pick a high-gate cell.
+    def seg(wav, params=None):
+        n = 3 if params.threshold < 0.5 else 1
+        return _cell_result(n)
+
+    lines: List[str] = []
+    gv.cmd_vad_grid(
+        _grid_args(thresholds=[0.3, 0.5], min_silences=[400.0, 800.0], target=1),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    text = "\n".join(lines)
+    assert "best:" in text
+    assert "1 segments" in text
+
+
+def test_cmd_vad_grid_target_in_json_branch():
+    def seg(wav, params=None):
+        n = 3 if params.threshold < 0.5 else 1
+        return _cell_result(n)
+
+    lines: List[str] = []
+    gv.cmd_vad_grid(
+        _grid_args(
+            thresholds=[0.3, 0.5], min_silences=[400.0, 800.0],
+            target=1, json=True,
+        ),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    payload = json.loads(lines[0])
+    assert payload["target"] == 1
+    assert payload["best"]["num_segments"] == 1
+    assert payload["best"]["distance"] == 0
+
+
+def test_cmd_vad_grid_csv_ignores_target():
+    # CSV is a pure data grid — --target adds no best row/column.
+    def seg(wav, params=None):
+        return _cell_result(2)
+
+    lines: List[str] = []
+    gv.cmd_vad_grid(
+        _grid_args(
+            thresholds=[0.3, 0.5], min_silences=[400.0, 800.0],
+            target=1, csv=True,
+        ),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    rows = list(csv.reader(io.StringIO(lines[0])))
+    assert rows[0] == ["threshold", "min_silence_ms", "num_segments", "speech_s"]
+    assert len(rows) == 5  # header + 4 cells, no best row
+    assert "best" not in lines[0]
+
+
+def test_cmd_vad_grid_no_target_omits_best_line():
+    def seg(wav, params=None):
+        return _cell_result(2)
+
+    lines: List[str] = []
+    gv.cmd_vad_grid(
+        _grid_args(thresholds=[0.3], min_silences=[400.0]),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert "best:" not in "\n".join(lines)

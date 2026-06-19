@@ -329,6 +329,41 @@ that recovered speech is non-increasing reading down rising thresholds *within
 each column* (the gate monotonicity, now visible inside the grid), and that
 `--csv` agrees with `--json` — all over the real corpus.
 
+#### `--target` — a data-driven best-cell pick (iter-241)
+
+The bare grid leaves the operator to eyeball which cell to pick. Passing
+`--target N` (the number of speech regions you expect — e.g. one segment per
+spoken sentence) surfaces a data-driven pick: the cell whose recovered segment
+count is **closest** to `N`, scored by `|num_segments - N|` (lower is better).
+This is the VAD counterpart of `simulate-mirror --grid`'s `pick_best_mirror_config`
+best line. On an exact-distance tie the earlier cell in row-major order wins, so
+a stable grid yields a stable pick.
+
+```
+gv vad-grid recording.wav --thresholds 0.3,0.5,0.7 --min-silences 400,800 --target 3
+```
+
+```
+silero VAD grid — voice-20260618-110355.wav (threshold × min_silence)
+    threshold  min_silence  segments  speech
+         0.30          400         5   16.1s
+         0.30          800         5   17.3s
+         0.50          400         5   15.7s
+         0.50          800         5   16.2s
+         0.70          400         6   14.2s
+         0.70          800         4   15.5s
+  best: threshold=0.70 min_silence=800 (4 segments, |Δ|=1 from target 3)
+```
+
+The trailing `best:` line names the picked `(threshold, ms)` pair, its segment
+count, and the residual distance. `--json` adds a `"target"` int and a `"best"`
+cell (the picked grid cell plus a `"distance"` key); `--target` is a derived
+scalar, not a per-cell column, so `--csv` ignores it (the CSV stays a pure data
+grid). Without `--target` the output is byte-for-byte the iter-240 shape — no
+`best:` line, no `"best"`/`"target"` JSON keys. An integration test pins that the
+surfaced pick genuinely minimises `|num_segments - target|` over the very grid
+the run tabulated, over the real corpus.
+
 ### Silero vs energy-VAD segment counts (the headless proof)
 
 Measured over the seed corpus with `min_silence_ms=800` (the pipecat

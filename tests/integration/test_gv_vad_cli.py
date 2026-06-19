@@ -460,6 +460,7 @@ def _grid_args(wav: Path, **over):
         min_silence_ms=800.0,
         speech_pad_ms=30.0,
         max_speech_s=float("inf"),
+        target=None,
         json=False,
         csv=False,
     )
@@ -551,3 +552,48 @@ def test_gv_vad_grid_csv_matches_json():
         assert float(csv_row["min_silence_ms"]) == cell["min_silence_ms"]
         assert int(csv_row["num_segments"]) == cell["num_segments"]
         assert abs(float(csv_row["speech_s"]) - cell["speech_s"]) <= 0.01
+
+
+# ---- iter-241: gv vad-grid --target (data-driven best-cell pick) -------
+
+
+def test_gv_vad_grid_best_pick_is_closest_cell_to_target():
+    """iter-241: ``gv vad-grid --target N`` over THE GATE recording picks the
+    cell whose recovered segment count is genuinely closest to the target — the
+    ``best`` it surfaces must minimise ``|num_segments - target|`` over the very
+    same grid the run tabulated (no off-by-one, no stale cell)."""
+    wav = RECORDINGS_DIR / CONTINUOUS_31S
+    if not wav.exists():
+        pytest.skip(f"{CONTINUOUS_31S} not present")
+
+    thresholds = [0.3, 0.5, 0.7, 0.9]
+    min_silences = [400.0, 800.0]
+    target = 3
+    payload = json.loads(
+        _run_grid(
+            wav, thresholds=thresholds, min_silences=min_silences,
+            target=target, json=True,
+        )[0]
+    )
+    assert payload["target"] == target
+    best = payload["best"]
+    assert best is not None
+    # The picked distance must be the minimum over the whole tabulated grid.
+    distances = [abs(c["num_segments"] - target) for c in payload["grid"]]
+    assert best["distance"] == min(distances)
+    assert abs(best["num_segments"] - target) == best["distance"]
+    # And it must be an actual cell of this grid (earliest-tie among minima).
+    assert best in [{**c, "distance": best["distance"]} for c in payload["grid"]]
+
+
+def test_gv_vad_grid_target_absent_keeps_iter240_payload():
+    """Without ``--target`` the JSON payload is byte-for-byte the iter-240 shape
+    over THE GATE recording — no ``best`` / ``target`` keys leak in."""
+    wav = RECORDINGS_DIR / CONTINUOUS_31S
+    if not wav.exists():
+        pytest.skip(f"{CONTINUOUS_31S} not present")
+    payload = json.loads(
+        _run_grid(wav, thresholds=[0.3, 0.7], min_silences=[400.0, 800.0], json=True)[0]
+    )
+    assert "best" not in payload
+    assert "target" not in payload
