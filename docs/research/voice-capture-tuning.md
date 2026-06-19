@@ -215,8 +215,12 @@ stringifies whichever dimension the run sweeps — so the CSV↔JSON agreement h
 on every axis, not just the default `threshold`. iter-268 unit tests pin that a
 multi-row `min_speech_ms` and a multi-row `speech_pad_ms` sweep parse from the
 CSV `DictReader` back to the *exact* `--json` `sweep` payload (the first CSV
-column keyed by the swept ms-axis name), closing the gap left by the
-threshold-only cross-surface round-trip and the single-row ms-axis header tests.
+column keyed by the swept ms-axis name), and iter-269 completes the trio with
+the `min_silence_ms` axis (the most common non-default sweep — it tunes the
+trailing-silence gate that ends one utterance and starts the next). Together
+they close the gap left by the threshold-only cross-surface round-trip and the
+single-row ms-axis header tests: the round-trip is now proven on `threshold`
+(default), `max_speech_s` (seconds), and all three ms axes.
 
 **`--min-silences` — a second sweep axis (iter-238).** The default axis is the
 P(speech) gate (`--thresholds`); passing `--min-silences` instead sweeps the

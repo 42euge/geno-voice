@@ -24211,3 +24211,89 @@ axes, all matching).
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
    should track a curated subset, decide the policy and re-run
    `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
+
+## iter-269 — `min_silence_ms` ms-axis CSV ↔ JSON round-trip test (the last 1-D axis)
+
+**Branch:** `iter-269-min-silence-roundtrip` (merged ff to main, commit `0fb6f11`)
+**Date:** 2026-06-19
+
+**No STEER.md this lap.** The carried top-priority items (wire
+`ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()` in the desktop
+app) both need a Mac + mic + browser and can't run headless on the loop host.
+"Ingest new recordings" stays corpus-gated. The COMBINED additive+multiplicative
+`--target` weight is a feature/design item, not a regression-test gap. So I took
+iter-268 backlog item #4: close the `min_silence_ms` ms-axis CSV↔JSON
+cross-surface round-trip — the last untested 1-D combination.
+
+**The gap.** iter-268 shipped the `min_speech_ms` and `speech_pad_ms` twins of
+`test_render_sweep_csv_round_trips_to_sweep_rows`, each asserting the CSV
+`DictReader` rows parse back to the EXACT `--json` `sweep` payload. It explicitly
+left `min_silence_ms` as the third ms axis (its smoke run showed it matched, but
+no test pinned it). That axis is the most common non-default sweep — it tunes the
+trailing-silence gate that decides where one utterance ends and the next begins
+(`--min-silences`, iter-238) — yet its only prior coverage was the single-row
+HEADER test (`test_render_sweep_csv_header_is_axis_name`). `render_vad_sweep_csv`
+and `render_vad_sweep_json` are axis-agnostic (each stringifies whichever value
+the `axis` kwarg names), so a regression that let the CSV's first column drift
+from the JSON row key, truncated a later `min_silence_ms` value, or disagreed on
+`num_segments`/`speech_s` across rows would have shipped green while the
+threshold-only round-trip, the two iter-268 ms-axis round-trips, and the
+single-row `min_silence_ms` header test stayed passing. No production code
+changed (the wiring was already correct — proved by a pre-test smoke run).
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+1 test, +43 lines).**
+  `test_render_sweep_csv_min_silence_axis_round_trips_to_json_twin` — a 3-row
+  `min_silence_ms` sweep (floors `100, 300, 700`, counts 3/2/1); asserts the CSV
+  `DictReader` rows parse back to the EXACT `--json` `sweep` payload
+  (`min_silence_ms`/`num_segments`/`speech_s` per row), with the first CSV column
+  keyed by the swept ms-axis name. Completes the trio (the iter-268 comment block
+  describing the gap now has all three ms axes covered alongside threshold and
+  seconds).
+- **`docs/research/voice-capture-tuning.md`.** Extended the iter-268 1-D CSV↔JSON
+  paragraph: iter-269 completes the trio with `min_silence_ms` (calling out it is
+  the most common non-default sweep — the trailing-silence gate), so the
+  round-trip is now proven on `threshold` (default), `max_speech_s` (seconds), and
+  all three ms axes.
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3849 passed** (3848 prior + 1 net new), run on the feature branch before
+  ff-merge AND re-run on main after the merge (both 3849).
+- Focused: `pytest tests/unit/test_gv_vad.py -k "round_trips_to_json_twin"` →
+  **3 passed** (the two iter-268 ms axes + the new `min_silence_ms`).
+- Pre-test smoke (Python, on the branch): a 3-row `min_silence_ms` sweep (floors
+  `100, 300, 700`, counts 3/2/1) → CSV rows
+  `min_silence_ms,num_segments,speech_s` / `100.0,3,3.0` / `300.0,2,2.0` /
+  `700.0,1,1.0`; CSV `DictReader` rows parsed back to the JSON `sweep` payload
+  identically (`match=True`, header named by the axis). Confirmed the wiring was
+  already correct before writing the assertion.
+- Integration: not re-run this lap (no corpus symlinked into this worktree; same
+  as prior corpus-gated laps — the change is pure CLI render logic fully covered
+  by the unit matrix).
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] COMBINED additive+multiplicative `--target` weight** — iter-250/251
+   give additive (`:penalty`), iter-252 multiplicative (`*factor`); an operator
+   might want both on one element (`5:1*1.5`). Larger design question (operator
+   precedence of `:` vs `*`) — scope before building. Pure, headless if pursued.
+   This remains the only `--target` increment that is a FEATURE (new
+   parse/semantics), not a regression-test gap.
+4. **[cli] GRID `--json` ↔ `--csv` cross-surface round-trip on a non-default
+   axis.** With the 1-D sweep CSV↔JSON round-trip now complete on all five axes
+   (threshold + seconds + three ms), the next frontier is whether the 2-D GRID
+   surfaces agree the same way: does `render_vad_grid_csv` parse back to the
+   `render_vad_grid_json` `grid` payload on a non-default `col_axis`/`row_axis`?
+   iter-267 pinned the grid-CSV seconds *round-trip vs cells*, and the 1-D twin
+   pattern is established — confirm whether a grid CSV↔JSON cross-surface test
+   exists before assuming a gap. Small, pure, headless.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
+   should track a curated subset, decide the policy and re-run
+   `replay_silero.py --compare` + `gv vad` to refresh the comparison table.

@@ -1768,6 +1768,49 @@ def test_render_sweep_csv_speech_pad_axis_round_trips_to_json_twin():
     ] == json_rows
 
 
+def test_render_sweep_csv_min_silence_axis_round_trips_to_json_twin():
+    # iter-269: the third and LAST ms axis. iter-268 left min_silence_ms as the
+    # only untested 1-D CSV↔JSON cross-surface round-trip (it shipped the
+    # min_speech_ms and speech_pad_ms twins above). min_silence_ms is the most
+    # common non-default sweep axis (it tunes the trailing-silence gate that
+    # decides where one utterance ends and the next begins), yet its only prior
+    # coverage was the single-row header test
+    # (test_render_sweep_csv_header_is_axis_name). Closing it completes the
+    # axis-agnostic round-trip matrix: threshold (default), seconds (max_speech_s),
+    # and all three ms axes now prove the CSV body and JSON twin describe the
+    # SAME segmentation across every row.
+    r_lo = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=10.0,
+        segments=[_Seg(0.0, 1.0), _Seg(2.0, 3.0), _Seg(4.0, 5.0)],
+    )
+    r_mid = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=10.0,
+        segments=[_Seg(0.0, 1.0), _Seg(2.0, 3.0)],
+    )
+    r_hi = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=10.0,
+        segments=[_Seg(0.0, 1.0)],
+    )
+    floors = [100.0, 300.0, 700.0]
+    results = [r_lo, r_mid, r_hi]
+    csv_text = gv.render_vad_sweep_csv(
+        floors, results, name="rec.wav", axis="min_silence_ms"
+    )
+    json_rows = json.loads(
+        gv.render_vad_sweep_json(floors, results, name="rec.wav", axis="min_silence_ms")
+    )["sweep"]
+    csv_rows = list(csv.DictReader(io.StringIO(csv_text)))
+    assert csv_rows[0].keys() >= {"min_silence_ms", "num_segments", "speech_s"}
+    assert [
+        {
+            "min_silence_ms": float(row["min_silence_ms"]),
+            "num_segments": int(row["num_segments"]),
+            "speech_s": float(row["speech_s"]),
+        }
+        for row in csv_rows
+    ] == json_rows
+
+
 # ---- cmd_vad_sweep --csv: the handler ----------------------------------
 
 
