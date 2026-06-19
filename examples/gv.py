@@ -239,6 +239,51 @@ def nonneg_int_type(raw):
     return value
 
 
+def nonneg_penalty_type(raw):
+    """Parse a weighted-set ``:penalty`` weight — a non-negative number (iter-251).
+
+    iter-250's weighted-set penalty was a non-negative WHOLE number
+    (:func:`nonneg_int_type`); a count could only be "1 segment worse", "2 worse",
+    etc. iter-251 widens it to a non-negative FLOAT so an operator can dial the
+    preference strength FINELY — ``3,5:1.5`` means "the accepted count 5 is 1.5
+    segments worse than the preferred 3", landing the override threshold between
+    whole-number penalties. The penalty stays ADDITIVE on the element's distance
+    (:func:`grid_cell_distance`), so a fractional penalty interpolates the
+    "preferred count wins at a larger raw distance" boundary an integer penalty
+    could only step across.
+
+    An INTEGRAL float collapses back to an ``int`` (``5:2`` → penalty ``2``,
+    byte-for-byte the iter-250 result), so every prior integer-penalty
+    parse/render/distance/JSON case is unchanged; only a genuinely fractional
+    value stays a ``float`` (``5:1.5`` → ``1.5``). ``0`` is legitimate (an
+    explicit unweighted element); negatives, NaN, and ``inf`` are rejected (a
+    negative penalty would make a count BETTER than its raw distance — that is
+    what the OTHER element's penalty already expresses — and an infinite penalty
+    is a degenerate "never pick this" that should just drop the element). Pure
+    and side-effect-free for direct unit testing; raises
+    :class:`argparse.ArgumentTypeError` on a non-number, NaN, inf, or negative.
+    The fractional twin of :func:`nonneg_int_type` for the weight slot.
+    """
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(
+            f"penalty must be a number, got {raw!r}"
+        )
+    if value != value:  # NaN is unordered.
+        raise argparse.ArgumentTypeError("penalty must be a number, got nan")
+    if value == float("inf"):
+        raise argparse.ArgumentTypeError("penalty must be finite, got inf")
+    if value < 0:
+        raise argparse.ArgumentTypeError(f"penalty must be >= 0, got {value}")
+    # An integral float collapses to an int so iter-250's integer-penalty output
+    # (parse value, _format_target, JSON) is byte-for-byte unchanged; only a
+    # genuinely fractional value stays a float.
+    if value == int(value):
+        return int(value)
+    return value
+
+
 def target_type(raw):
     """Argparse ``type`` for ``gv vad-grid``/``vad-sweep`` ``--target``.
 
@@ -294,7 +339,14 @@ def target_type(raw):
     (a lone penalty is a constant offset that cannot change a pick). A ``:``
     weight requires a ``,`` set (it is meaningless on a single element) and
     cannot be combined with ``>`` (preference) — both express preference, so
-    stacking them is ambiguous. Each penalty is a non-negative whole number.
+    stacking them is ambiguous. Each penalty is a non-negative number.
+
+    iter-251 widens the ``:penalty`` weight from a whole number to a non-negative
+    FLOAT (``--target 3,5:1.5``), so an operator can dial how strongly preference
+    outweighs distance BETWEEN whole-number steps — ``5:1.5`` places the
+    "preferred count wins at a larger raw distance" boundary halfway. An integral
+    float collapses back to an ``int`` (``5:2`` → ``2``), so every iter-250
+    integer-penalty parse/render/distance/JSON result is byte-for-byte unchanged.
 
     Each present band edge is a non-negative whole number (reusing
     :func:`nonneg_int_type`'s rules — ``0`` is legitimate, negatives/fractionals
@@ -398,9 +450,11 @@ def _parse_weighted_set(text, raw):
     collapses to a single element reduces to the BARE element — a lone penalty is
     a constant offset that cannot change any pick, so it is dropped to keep
     scalar/band output byte-for-byte unchanged. The penalty is a non-negative
-    whole number (reusing :func:`nonneg_int_type`'s rules; ``0`` is legitimate but
-    redundant). Pure; raises :class:`argparse.ArgumentTypeError` on an empty or
-    malformed element/penalty.
+    number (iter-251: :func:`nonneg_penalty_type`, a FLOAT — ``3,5:1.5`` dials
+    the preference strength between whole-number steps; an integral float
+    collapses to an ``int`` so iter-250's integer-penalty output is unchanged);
+    ``0`` is legitimate but redundant. Pure; raises
+    :class:`argparse.ArgumentTypeError` on an empty or malformed element/penalty.
     """
     parts = [p.strip() for p in text.split(",")]
     if any(p == "" for p in parts):
@@ -413,7 +467,7 @@ def _parse_weighted_set(text, raw):
         if ":" in part:
             base_text, _, penalty_text = part.partition(":")
             element = _parse_single_target(base_text.strip())
-            penalty = nonneg_int_type(penalty_text.strip())
+            penalty = nonneg_penalty_type(penalty_text.strip())
         else:
             element = _parse_single_target(part)
             penalty = 0
@@ -2507,7 +2561,8 @@ def build_parser():
         help="Desired segment count (e.g. 3), closed band (e.g. 3-5), "
         "open band (3- = at least 3, -5 = at most 5), set (3,5,7 = 3 OR 5 "
         "OR 7), preference (3>5>7 = prefer 3, accept 5, then 7), or weighted set "
-        "(3,5:2 = prefer 3, accept 5 but 2 segments worse) — when given, "
+        "(3,5:2 = prefer 3, accept 5 but 2 segments worse; the weight may be "
+        "fractional, 3,5:1.5) — when given, "
         "a data-driven 'best:' pick names the swept value whose recovered "
         "segment count is closest to it (a band/set/preference scores 0 anywhere "
         "it is satisfied; a preference breaks ties toward the earlier-listed "
@@ -2638,7 +2693,8 @@ def build_parser():
         help="Desired segment count (e.g. 3), closed band (e.g. 3-5), "
         "open band (3- = at least 3, -5 = at most 5), set (3,5,7 = 3 OR 5 "
         "OR 7), preference (3>5>7 = prefer 3, accept 5, then 7), or weighted set "
-        "(3,5:2 = prefer 3, accept 5 but 2 segments worse) — when given, "
+        "(3,5:2 = prefer 3, accept 5 but 2 segments worse; the weight may be "
+        "fractional, 3,5:1.5) — when given, "
         "a data-driven 'best:' pick names the cell whose recovered segment count "
         "is closest to it (a band/set/preference scores 0 anywhere it is "
         "satisfied; a preference breaks ties toward the earlier-listed count; a "

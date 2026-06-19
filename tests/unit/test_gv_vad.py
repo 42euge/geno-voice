@@ -490,6 +490,112 @@ def test_format_target_weighted():
     assert gv._format_target({"weighted": [(3, 0), ((5, 7), 2)]}) == "3,5-7:2"
 
 
+# ---- nonneg_penalty_type / fractional weighted-set weight (iter-251) ----
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("0", 0),
+        ("2", 2),
+        ("2.0", 2),  # an integral float collapses to int
+        ("1.5", 1.5),
+        ("0.25", 0.25),
+    ],
+)
+def test_nonneg_penalty_parses_number(raw, expected):
+    # iter-251: the weight slot accepts a non-negative float; an integral float
+    # collapses to an int so iter-250's integer-penalty output is unchanged.
+    value = gv.nonneg_penalty_type(raw)
+    assert value == expected
+    assert type(value) is type(expected)
+
+
+@pytest.mark.parametrize("raw", ["-1", "-0.5", "nan", "inf", "abc", ""])
+def test_nonneg_penalty_rejects_bad(raw):
+    # iter-251: a negative, NaN, infinite, or non-numeric penalty is nonsensical.
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.nonneg_penalty_type(raw)
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("3,5:1.5", {"weighted": [(3, 0), (5, 1.5)]}),
+        ("3:0.5,5:1.5", {"weighted": [(3, 0.5), (5, 1.5)]}),
+        ("3,5-7:1.5", {"weighted": [(3, 0), ((5, 7), 1.5)]}),  # a band may be fractionally weighted
+        ("3,5:2.0", {"weighted": [(3, 0), (5, 2)]}),  # integral float collapses to int
+    ],
+)
+def test_target_type_weighted_accepts_fractional_penalty(raw, expected):
+    # iter-251: a ':penalty' weight may be fractional so preference strength dials
+    # finely; an integral float collapses to int (byte-for-byte iter-250 output).
+    value = gv.target_type(raw)
+    assert value == expected
+    # the genuinely fractional penalty stays a float; the collapsed one is an int.
+    assert isinstance(value["weighted"][1][1], type(expected["weighted"][1][1]))
+
+
+def test_format_target_weighted_fractional_reads_back_as_typed():
+    # iter-251: a fractional penalty renders with its decimal, an integral one bare.
+    assert gv._format_target({"weighted": [(3, 0), (5, 1.5)]}) == "3,5:1.5"
+    assert gv._format_target({"weighted": [(3, 0.5), (5, 1.5)]}) == "3:0.5,5:1.5"
+
+
+def test_grid_cell_distance_fractional_penalty_interpolates_threshold():
+    # iter-251: THE point of the fractional weight. Preferred 3 (penalty 0),
+    # accepted 6 (penalty 1.5). Count 6 lands exactly on the accepted element
+    # (penalised 1.5); count 4 is raw dist 1 from preferred 3 (penalised 1) and
+    # count 5 is raw dist 2 (penalised 2). The 1.5 penalty sits BETWEEN whole
+    # steps: count 4 (1.0) beats count 6 (1.5) beats count 5 (2.0) — an integer
+    # penalty of 1 or 2 could not place the boundary here.
+    target = {"weighted": [(3, 0), (6, 1.5)]}
+    assert gv.grid_cell_distance({"num_segments": 6}, target) == 1.5
+    assert gv.grid_cell_distance({"num_segments": 4}, target) == 1
+    assert gv.grid_cell_distance({"num_segments": 5}, target) == 2
+
+
+def test_pick_best_grid_cell_fractional_penalty_orders_between_steps():
+    # iter-251: with accepted-6 penalty 1.5, count 4 (penalised 1.0) wins over the
+    # exact-accepted count 6 (penalised 1.5). A penalty of 2 would also flip it,
+    # but 1.5 also keeps count 6 BELOW count 5 (penalised 2.0) — the fractional
+    # value distinguishes an ordering an integer penalty cannot.
+    cells = _seg_speech_cells([(6, 9.0), (4, 1.0), (5, 5.0)])
+    best = gv.pick_best_grid_cell(cells, {"weighted": [(3, 0), (6, 1.5)]})
+    assert best["num_segments"] == 4
+    ranked = gv.pick_top_grid_cells(cells, {"weighted": [(3, 0), (6, 1.5)]}, 3)
+    assert [c["num_segments"] for c in ranked] == [4, 6, 5]
+
+
+def test_render_grid_json_carries_fractional_penalty():
+    # iter-251: a fractional penalty serialises straight through as a JSON number.
+    results = [_cell_result(n) for n in (4, 6)]
+    payload = json.loads(
+        gv.render_vad_grid_json(
+            [0.3], [400.0, 800.0], results, name="rec.wav",
+            target={"weighted": [(3, 0), (6, 1.5)]},
+        )
+    )
+    assert payload["target"] == {"weighted": [[3, 0], [6, 1.5]]}
+    assert payload["best"]["num_segments"] == 4
+    assert payload["best"]["distance"] == 1
+
+
+def test_render_grid_fractional_penalty_line_reads_back():
+    # iter-251: the best: line renders the fractional weight as typed and shows the
+    # penalised |Δ| (here count 4 → 1) with no dict repr leaking.
+    results = [_cell_result(n) for n in (6, 4)]
+    lines = gv.render_vad_grid(
+        [0.3], [400.0, 800.0], results, name="rec.wav",
+        target={"weighted": [(3, 0), (6, 1.5)]},
+    )
+    best_line = lines[-1]
+    assert "4 segments" in best_line
+    assert "|Δ|=1" in best_line
+    assert "target 3,6:1.5" in best_line
+    assert "weighted" not in best_line
+
+
 # ---- max_speech_type: the force-split bound ----------------------------
 
 

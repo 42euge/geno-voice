@@ -158,6 +158,7 @@ gv vad-sweep recording.wav --target -5                      # open band: at most
 gv vad-sweep recording.wav --target 3,5,7                   # set: 3 OR 5 OR 7 regions (iter-248)
 gv vad-sweep recording.wav --target 3>5>7                   # preference: prefer 3, accept 5, then 7 (iter-249)
 gv vad-sweep recording.wav --target 3,5:2                   # weighted: prefer 3, accept 5 but 2 worse (iter-250)
+gv vad-sweep recording.wav --target 3,5:1.5                 # fractional weight: 5 is 1.5 segments worse (iter-251)
 ```
 
 The human report is a small table — the WAV name, a `threshold / segments /
@@ -472,7 +473,25 @@ now-useless penalty and reduces to the bare element (a lone penalty is a constan
 offset that cannot change any pick). A `:` weight **requires** a `,` set (it is
 meaningless on a single element) and cannot be combined with `>` (preference) —
 both express preference, so stacking them is rejected as ambiguous. Each penalty
-is a non-negative whole number.
+is a non-negative number.
+
+**Fractional weights (iter-251).** The penalty may be **fractional** —
+`--target 3,5:1.5` means "the accepted count 5 is 1.5 segments worse than the
+preferred 3". Because the penalty is additive, a whole-number weight can only
+*step* the "preferred count wins at a larger raw distance" boundary across
+integers; a fractional weight lands it **between** them. With `3,6:1.5`, count 4
+(penalised 1.0) beats the exact-accepted count 6 (penalised 1.5) which still beats
+count 5 (penalised 2.0) — an ordering neither a penalty of 1 nor 2 can place. An
+**integral** float collapses back to an int (`5:2.0` → `5:2`), so every
+integer-penalty result — parse value, rendered line, `|Δ|`, and `--json` `target`
+— is byte-for-byte the iter-250 output; only a genuinely fractional weight stays a
+float. Negative, NaN, and infinite penalties are rejected (a negative weight would
+make a count *better* than its raw distance, which the other element's penalty
+already expresses; an infinite one is a degenerate "never pick this").
+
+```bash
+gv vad-sweep recording.wav --thresholds 0.3,0.5,0.7,0.9 --target 3,5:1.5  # fractional weight: 5 is 1.5 worse
+```
 
 ### `gv vad-grid` — a 2-D knob grid (iter-240)
 
