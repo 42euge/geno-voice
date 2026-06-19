@@ -22103,3 +22103,132 @@ block.
 4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
    --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
    refresh the comparison table.
+
+## iter-249 — `gv vad-grid`/`vad-sweep` `--target A>B>C` preference order
+
+**Branch:** `iter-249-pref-order` (merged ff to main, commit `bda77b3`)
+**Date:** 2026-06-18
+
+**No STEER.md this lap.** The two top-priority next items carried since
+iter-227 (wire `ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()`
+in the desktop app) both need a Mac + mic + browser and can't run headless on
+the loop host. The recording corpus is unchanged since iter-231 (same 6 WAVs),
+so the "ingest new recordings" item had nothing to do. I took the
+headless-doable item from the iter-248 backlog: extend `--target` with a
+`>`-separated PREFERENCE-ORDER form (item #3).
+
+**The gap.** iter-248's set form (`--target 3,5,7`) treats every listed count
+as equally acceptable — the picker returns the FIRST one it reaches in
+row-major order on a distance tie. But an operator often *prefers* one count
+yet would *settle* for another: "prefer 3 regions, but 5 is fine, and 7 only as
+a last resort". A flat set has no way to say which wins when several are equally
+close; the operator was at the mercy of grid position.
+
+**What changed (`examples/gv.py`).**
+1. **`target_type`** — a `>` now separates a PREFERENCE, parsed to a
+   `{"prefer": [...]}` dict (distinct from the flat-set `list`). Mixing `,`
+   (set) and `>` (preference) in one target is rejected up front — they are
+   different composition operators (a flat OR vs a ranked OR) and stacking them
+   is ambiguous. The set/preference split-validate-parse-dedupe logic is
+   factored into a new shared **`_parse_target_collection`** helper that BOTH
+   forms reuse (split on the separator, reject any empty element, parse each via
+   `_parse_single_target`, dedupe preserving first-seen order), so a preference
+   element gets the exact same scalar/band/open-band rules as a set element. A
+   single-element preference (`3>3`) collapses to the bare element so
+   scalar/band output stays byte-for-byte unchanged.
+2. **`grid_cell_distance`** — a `{"prefer": [...]}` dict scores as the MIN
+   distance over its elements — IDENTICAL to a set. The precedence affects only
+   the tie-break, never the distance, so two counts that both satisfy the
+   preference are equidistant here (both 0) and the preference order decides
+   between them one layer up.
+3. **`grid_cell_sort_key`** — when the target is a preference, insert the new
+   **`_preference_rank`** (the index of the earliest preference element at the
+   minimum distance to the cell's count) as the SECONDARY key, right after
+   distance and BEFORE the `tie_break` (row-major/speech) key. So among cells at
+   equal distance, the one nearest a more-preferred element wins, and
+   `--tie-break` only decides cells that ALSO tie on preference rank. The
+   preference is the first tie-break — stronger intent than grid position or
+   recovered speech. For a NON-preference target the key is byte-for-byte the
+   iter-243 shape (no preference key inserted).
+4. **`_format_target`** — a preference renders `>`-joined exactly as typed
+   (`{"prefer": [3,5,7]}` → `3>5>7`, `{"prefer": [3,(5,7)]}` → `3>5-7`). The
+   `--json` `target` serialises as a `{"prefer": [...]}` object carrying the
+   listed order (a band element nests as its own `[lo, hi]` array — `3>5-7` →
+   `{"prefer": [3, [5, 7]]}`, no extra code).
+5. **Help text** for BOTH `--target` args (sweep + grid) documents the
+   preference form (`3>5>7 = prefer 3, accept 5, then 7`).
+
+**The preference rides the existing machinery untouched.** Because the distance
+is the same min-over-elements as a set and the preference rank is just another
+sort-key component, `--top`, `--tie-break`, the pickers (`pick_best_grid_cell` /
+`pick_top_grid_cells`), the shared `_render_pick_block` helper (iter-245), and
+the `--json` payload all flow through with NO parallel implementation. Only
+`target_type` (+ the extracted `_parse_target_collection`), `grid_cell_distance`,
+`grid_cell_sort_key` (+ `_preference_rank`), and `_format_target` needed
+touching.
+
+**Scalar + band + set output is byte-for-byte unchanged.** Every prior scalar,
+band, open-band, and set case (renderer, JSON, cmd-level, sort-key, distance)
+passes without edits — a scalar still parses to a bare `int`, a band to a tuple,
+a set to a `list`, and the non-preference sort key carries no extra component.
+
+**Tests (`tests/unit/test_gv_vad.py`, +28).** `target_type` preference parsing
+(incl. band/open-band elements, whitespace-trimmed, dedupe preserving order,
+single-element collapse to a bare scalar AND a bare band); empty-element
+rejection (`3>`, `>5`, `3>>5`, bare `>`) and malformed-element rejection
+(`3>a>5`, `3>5-3`); mixing-`,`-and-`>` rejection (`3,5>7`, `3>5,7`, `3,5-7>9`);
+`_format_target` preference rendering; `grid_cell_distance` min-over-elements
+(asserted EQUAL to the same set element-for-element); `_preference_rank`
+index-of-nearest (earliest-tie); `grid_cell_sort_key` rank insertion after
+distance + preference-then-speech key ordering; `pick_best_grid_cell` tie-break
+toward the preferred count (over BOTH earlier row-major order AND more recovered
+speech) AND that distance still dominates the preference; `pick_top_grid_cells`
+preference-ordered runners-up; renderer + JSON set-vs-dict best-pick for the
+grid surface (preference renders as `5>3`, JSON as `{"prefer": ...}`, no
+`prefer` literal leaks into the text line); `cmd_vad_grid` AND `cmd_vad_sweep`
+end-to-end with a preference target. No torch import — bare dicts / the existing
+`_cell_result` / `_seg_speech_cells` stubs.
+
+**Docs (`docs/research/voice-capture-tuning.md`).** A `--target A>B>C`
+preference subsection under `gv vad-sweep` (the accepts-any/tie-break-toward-
+preferred rule, composition with band elements, the first-tie-break ordering vs
+`--tie-break speech`, the `{"prefer": [...]}` JSON form, the dedupe/collapse/
+empty-reject/mixing-reject rules) + two quick-invocation lines in the sweep
+block.
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3650 passed** (3622 prior + 28 new), run on the feature branch before
+  ff-merge. Re-confirmed on main after merge: `pytest
+  tests/unit/test_gv_vad.py tests/unit/test_gv_cli.py` → **501 passed**.
+- Manual smoke (on the branch): `target_type('3>5>7')`→`{'prefer': [3,5,7]}`,
+  `target_type('3>5-7')`→`{'prefer': [3,(5,7)]}`, `target_type('3>3')`→`3`,
+  `target_type('5>3>5')`→`{'prefer': [5,3]}`, `target_type('3>')`/`'>5'`/
+  `'3,5>7'`→ArgumentTypeError, `_format_target({'prefer':[3,5,7]})`→`'3>5>7'`,
+  `grid_cell_distance(count=5, {'prefer':[3,5,7]})`→`0`,
+  `_preference_rank(count=5, [3,5,7])`→`1`, `grid_cell_sort_key(count=5,
+  {'prefer':[3,5]})`→`(0, 1)`, `pick_best_grid_cell([c5,c3], {'prefer':[3,5]})`
+  → the count-3 cell (preference outranks earlier row-major position),
+  `json.dumps({'prefer':[3,(5,7)]})`→`{"prefer": [3, [5, 7]]}`.
+- Integration: not re-run this lap (no corpus symlinked into this worktree;
+  same as prior corpus-gated laps — the change is pure CLI logic fully covered
+  by the unit matrix).
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] `gv vad-sweep`/`vad-grid` `--target` weighted-distance form** — the
+   preference form breaks only exact distance TIES toward the earlier element.
+   An operator who wants the preferred count to win even when it is slightly
+   FARTHER (e.g. "I'll take 3 segments at distance 1 over 5 at distance 0") has
+   no expression. A `--target 3:2,5:1` weighted form (count:weight, scoring
+   `distance / weight` or `distance - bonus`) would let preference outweigh a
+   small distance gap. Pure, headless — reuses `grid_cell_distance` as a
+   weighted min.
+4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
+   --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
+   refresh the comparison table.
