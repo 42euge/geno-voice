@@ -21383,3 +21383,105 @@ eliminates for the WPM grid (it scores every cell and names the lowest-score
 4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
    --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
    refresh the comparison table.
+
+## iter-242 — `gv vad-grid --top`: a ranked shortlist of the K closest cells
+
+**Branch:** `iter-242-vad-grid-topk` (merged ff to main, commit `22a6f93`)
+**Date:** 2026-06-18
+
+**No STEER.md this lap.** The two top-priority next items carried since
+iter-227 (wire `ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()`
+in the desktop app) both need a Mac + mic + browser and can't run headless on
+the loop host. The recording corpus is unchanged since iter-231 (same 6 WAVs),
+so the "ingest new recordings" item had nothing to do. I took the first
+headless-doable item from the iter-241 backlog: `gv vad-grid --target` top-K
+(item #3) — surface the K closest cells as a ranked shortlist, not just the
+single best.
+
+**The gap.** iter-241 shipped `gv vad-grid --target N`, scoring every grid cell
+by `|num_segments - N|` and surfacing the single closest cell as a `best:`
+pick. But the single pick hides the runners-up: if the winning cell sits at a
+knob extreme the operator distrusts (the highest gate, the longest hangover),
+they can't see how close the next-best cell came without re-reading the table
+by eye — the very cross-reading the data-driven pick was meant to eliminate.
+
+**What changed.**
+1. **`pos_int_type`** (`examples/gv.py`) — argparse `type` for `--top`, the
+   positive twin of `nonneg_int_type`: `0` is rejected (a 0-cell shortlist is
+   meaningless) where the target validator accepts it; negatives and
+   fractional/non-integer values rejected with an `ArgumentTypeError`.
+2. **`pick_top_grid_cells(cells, target, k)`** — the pure picker: sorts cells
+   by `grid_cell_distance` (a STABLE sort, so equal-distance cells keep their
+   row-major order) and returns the closest `k`. `k` is clamped to the grid
+   size; an empty grid returns `[]`. Because the sort is stable, the shortlist
+   HEAD is always identical to `pick_best_grid_cell`'s single pick (both honour
+   the earliest-tie rule). No I/O, no torch — sorts a shallow copy, mutates
+   nothing.
+3. **`render_vad_grid` / `render_vad_grid_json`** gain an optional `top` kwarg.
+   The human table appends a `top N (closest to target N):` block of ranked
+   rows (nearest first) AFTER the `best:` line; the JSON payload gains a
+   `"top"` list (each cell augmented with a `"distance"` key, head equal to
+   `"best"`). `top` is ignored without a `target` (no distance to rank by), so
+   the iter-240 / iter-241 outputs stay byte-for-byte unchanged when absent.
+4. **`render_vad_grid_csv` untouched** — `--top` is a derived view, not a
+   per-cell column (the same rationale that keeps `--target` and `name` out of
+   the CSV body).
+5. **`cmd_vad_grid`** reads `args.top` and threads it into the human/json
+   renderers (both the available and unavailable branches); CSV ignores it.
+6. **Parser:** new `--top` (pos int, default `None`) on the `vad-grid`
+   subcommand, beside `--target`.
+7. **Tests.**
+   - `tests/unit/test_gv_vad.py` (**+~28**): `pos_int_type` accept/reject
+     matrix; `--top` parser flag (default-None, int parse, zero + negative
+     rejection); `pick_top_grid_cells` (ranked nearest-first, head == best
+     pick, stable-on-ties, k clamped to grid size, empty → `[]`, no input
+     mutation); both renderers (top block / list present with target+top,
+     absent without top, ignored without target, empty-grid handling);
+     `cmd_vad_grid` end-to-end (shortlist block, json top list ranked +
+     head == best, csv ignores top, top-without-target omitted, unavailable
+     branch no crash). NO torch import — driven through the injected segmenter
+     seam.
+   - `tests/integration/test_gv_vad_cli.py` (**+2**): over THE GATE recording
+     the K listed distances are the K smallest over the whole tabulated grid
+     (no off-by-one, no stale cell), head == best, distances non-decreasing;
+     without `--top` the payload keeps the iter-241 shape (no `top` key leaks).
+     Skips without corpus/package.
+8. **Docs** (`docs/research/voice-capture-tuning.md`) — a `--top` subsection
+   under `gv vad-grid`: invocation, the verified real-corpus example (gate ×
+   hangover, target 3 / top 3 → 0.70/800 then two |Δ|=2 cells), the
+   stable-sort / earliest-tie rule, the k-clamp, the per-format behaviour
+   (human top block / JSON top list / CSV ignores), and the rides-along-with-
+   target rule.
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3495 passed** (3462 prior + 33 new), run on the feature branch before
+  ff-merge. Re-confirmed on main after merge: `pytest
+  tests/unit/test_gv_vad.py tests/unit/test_gv_cli.py` → **346 passed**.
+- Integration: `python -m pytest tests/integration/test_gv_vad_cli.py` →
+  **35 passed** (33 prior + 2 new; corpus symlinked into the worktree, symlink
+  removed before commit so it is not tracked). silero-vad IS installed on this
+  host, so these ran against the real model.
+- Manual smoke on the branch over `voice-20260618-110355.wav`:
+  `gv vad-grid … --thresholds 0.3,0.5,0.7 --min-silences 400,800 --target 3
+  --top 3` → the 6-cell table, `best: threshold=0.70 min_silence=800 (4
+  segments, |Δ|=1 from target 3)`, then `top 3 (closest to target 3):` listing
+  0.70/800 (|Δ|=1), 0.30/400 (|Δ|=2), 0.30/800 (|Δ|=2); `--json --top 2`
+  confirmed `best == top[0]` and ascending distances.
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] `gv vad-grid --top` secondary sort key** — the shortlist ranks
+   purely on segment-count distance; equal-distance cells fall back to
+   row-major order. A richer rank could break those ties on speech-seconds
+   (closest total speech) or prefer the lower/more-central knob, so the
+   runner-up shown first is the more defensible cell, not merely the earlier
+   one.
+4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
+   --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
+   refresh the comparison table.
