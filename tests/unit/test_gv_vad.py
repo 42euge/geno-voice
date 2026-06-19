@@ -2614,6 +2614,78 @@ def test_render_sweep_max_speech_axis_labels_column():
     assert "5.00" not in text
 
 
+def test_render_sweep_target_on_max_speech_axis_formats_seconds():
+    # iter-257: the --target pick block ranks by num_segments (axis-agnostic), so
+    # it already works on the seconds max_speech_s sweep. This guards that the
+    # best: line names the swept SECONDS value via %g — no gate-style 0.00 leak,
+    # the no-cap sentinel rendered as inf — rather than the .2f used for the gate.
+    # Caps inf, 10, 5; segment counts 1, 2, 4; target 2 → the 10s value (2 segs).
+    r_inf = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=20.0,
+        segments=[_Seg(0.0, 12.0)],
+    )
+    r_ten = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=20.0,
+        segments=[_Seg(0.0, 5.0), _Seg(5.0, 10.0)],
+    )
+    r_five = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=20.0,
+        segments=[_Seg(0.0, 2.5), _Seg(2.5, 5.0), _Seg(5.0, 7.5), _Seg(7.5, 10.0)],
+    )
+    lines = gv.render_vad_sweep(
+        [float("inf"), 10.0, 5.0], [r_inf, r_ten, r_five],
+        name="rec.wav", axis="max_speech_s", target=2,
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    assert "max_speech=10" in best
+    assert "2 segments" in best
+    assert "|Δ|=0" in best
+    assert "target 2" in best
+    # Compact %g, no gate-style trailing zeros anywhere on the line.
+    assert "10.00" not in best
+    assert "max_speech=10.0" not in best
+
+
+def test_render_sweep_target_best_can_name_inf_max_speech():
+    # iter-257: when the no-cap baseline (inf) is the closest cell, the best: line
+    # must render the sentinel as "inf", not "inf.00" or a float repr.
+    r_inf = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=20.0,
+        segments=[_Seg(0.0, 12.0)],
+    )
+    r_tight = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=20.0,
+        segments=[_Seg(0.0, 2.5), _Seg(2.5, 5.0), _Seg(5.0, 7.5), _Seg(7.5, 10.0)],
+    )
+    lines = gv.render_vad_sweep(
+        [float("inf"), 5.0], [r_inf, r_tight],
+        name="rec.wav", axis="max_speech_s", target=1,
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    assert "max_speech=inf" in best
+    assert "1 segments" in best
+    assert "inf.00" not in best
+
+
+def test_render_grid_target_on_max_speech_col_axis_formats_seconds():
+    # iter-257: the seconds force-split ceiling is also a vad-grid COLUMN axis;
+    # the --target best: line must format the col value via %g too. 1×2 grid over
+    # max_speech_s caps inf, 5; counts 1, 4; target 3 → the 5s cell (|Δ|=1 vs 2).
+    r_inf = _cell_result(1)
+    r_tight = _cell_result(4)
+    lines = gv.render_vad_grid(
+        [0.3], [float("inf"), 5.0], [r_inf, r_tight],
+        name="rec.wav", col_axis="max_speech_s", target=3,
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    assert "max_speech=5" in best
+    assert "threshold=0.30" in best
+    assert "4 segments" in best
+    assert "target 3" in best
+    # Seconds col formats compactly — no 5.00 leak, ints not truncated oddly.
+    assert "max_speech=5.00" not in best
+
+
 def test_render_sweep_json_carries_max_speech_axis():
     r = _Result(name="rec.wav", sample_rate=16000, duration_s=5.0, segments=[_Seg(0.0, 1.0)])
     payload = json.loads(

@@ -23021,3 +23021,86 @@ tightens elbow, and the grid/sweep symmetry.
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
    should track a curated subset, decide the policy and re-run
    `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
+
+## iter-257 — `gv vad-sweep`/`vad-grid` `--target` regression test on the seconds `max_speech_s` axis
+
+**Branch:** `iter-257-target-seconds-axis` (merged ff to main)
+**Date:** 2026-06-19
+
+**No STEER.md this lap.** The two top-priority next items carried since
+iter-227 (wire `ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()`
+in the desktop app) both need a Mac + mic + browser and can't run headless on
+the loop host. "Ingest new recordings" stays corpus-gated (large untracked
+WAVs, no corpus symlinked into the worktree). The COMBINED
+additive+multiplicative `--target` weight item is again "a larger design
+question — scope before building" and the `--target` micro-syntax has grown for
+many consecutive laps. So I took the iter-256 backlog item #4, the clean,
+small, pure, headless increment: an explicit regression test that the
+`--target` best-cell pick formats the SECONDS `max_speech_s` axis correctly.
+
+**The gap.** iter-255/256 added `--max-speeches` (the seconds force-split
+ceiling) as a `gv vad-grid` COLUMN axis and a `gv vad-sweep` 1-D axis. The
+`--target` pick block (`_render_pick_block`) ranks by `num_segments`, which is
+axis-agnostic, so it already works on the new axis — but its `best:` /
+`top N:` lines name the picked value through `format_axes`, which routes through
+`_format_sweep_axis_value`. There was NO test pinning that a `--target` pick on
+the seconds axis renders the picked value via `%g` (`max_speech=10`, `inf`)
+rather than the gate-style `.2f` (`max_speech=10.00`) — a one-line formatter
+regression on either surface would have shipped silently. This lap closes that
+hole with explicit asserts; no production code changed (the wiring was already
+correct, this lap proves and guards it).
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+3 tests, net +~70 lines).**
+  1. `test_render_sweep_target_on_max_speech_axis_formats_seconds` — a 1-D
+     sweep over caps `inf, 10, 5` with segment counts `1, 2, 4`; `--target 2`
+     picks the `10`s value (2 segs, |Δ|=0). Asserts the `best:` line shows
+     `max_speech=10`, `2 segments`, `|Δ|=0`, `target 2`, and crucially that it
+     contains NO `10.00` and NO `max_speech=10.0` (compact `%g`, no gate-style
+     trailing zeros).
+  2. `test_render_sweep_target_best_can_name_inf_max_speech` — when the no-cap
+     baseline (`inf`) is the closest cell (`--target 1`), the `best:` line
+     renders `max_speech=inf`, not `inf.00` or a float repr.
+  3. `test_render_grid_target_on_max_speech_col_axis_formats_seconds` — the
+     same guarantee on the 2-D grid COLUMN axis: a 1×2 grid over caps `inf, 5`
+     with counts `1, 4` and `--target 3` picks the `5`s cell (|Δ|=1), and the
+     `best:` line shows `max_speech=5` / `threshold=0.30` with no `5.00` leak.
+- **`docs/research/voice-capture-tuning.md`.** New `#### --target on the
+  seconds max_speech_s axis (iter-257)` subsection under the `--tie-break`
+  section: explains the pick machinery is axis-agnostic (ranks on
+  `num_segments`), the only axis-specific detail is `%g` rendering of the picked
+  seconds value (compact, `inf` baseline, no `0.00` / `inf.00` leak), with two
+  copy-paste invocations (1-D sweep, 2-D grid) and a note that unit tests pin
+  the formatting on both surfaces.
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3809 passed** (3806 prior + 3 net new), run on the feature branch before
+  ff-merge.
+- Focused: `pytest tests/unit/test_gv_vad.py -k "target_on_max_speech or
+  target_best_can_name_inf"` → **3 passed**.
+- Integration: not re-run this lap (no corpus symlinked into this worktree;
+  same as prior corpus-gated laps — the change is pure CLI render logic fully
+  covered by the unit matrix).
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] COMBINED additive+multiplicative `--target` weight** — iter-250/251
+   give additive (`:penalty`), iter-252 multiplicative (`*factor`); an operator
+   might want both on one element (`5:1*1.5`). Larger design question (operator
+   precedence of `:` vs `*`) — scope before building. Pure, headless if pursued.
+4. **[cli] `--target` `--json`/`--csv` on the seconds axis** — iter-257 pins the
+   HUMAN `best:` line formatting on `max_speech_s`; the JSON `best` block and
+   the `tie_break`/`top` derived views also flow through the seconds axis. An
+   explicit test that the JSON `best` cell carries the seconds `max_speech_s`
+   value (and that `inf` survives JSON round-trip as a string/float) would
+   complete the seconds-axis pick coverage. Small, pure, headless.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
+   should track a curated subset, decide the policy and re-run
+   `replay_silero.py --compare` + `gv vad` to refresh the comparison table.

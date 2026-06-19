@@ -777,6 +777,26 @@ order, field omitted). An integration test pins that, over the real corpus, the
 `speech` pick recovers the maximum speech among all cells tied at the winning
 distance.
 
+#### `--target` on the seconds `max_speech_s` axis (iter-257)
+
+The `--target` pick and the `--top`/`--tie-break` machinery rank purely on
+`num_segments`, which is axis-agnostic, so they work unchanged when the swept (or
+column) axis is the seconds force-split ceiling `--max-speeches` rather than the
+gate or a millisecond knob. The only axis-specific detail is *rendering*: the
+`best:` / `top N:` lines name the picked value through `_format_sweep_axis_value`,
+so a seconds cap prints compactly via `%g` (`max_speech=10`, the no-cap baseline
+as `max_speech=inf`) — never the gate-style `max_speech=10.00`, and never a raw
+`inf.00`. Tuning the ceiling toward a desired segment count is thus a one-liner:
+
+```bash
+gv vad-sweep recording.wav --max-speeches 5,10,20,inf --target 3   # 1-D ceiling sweep
+gv vad-grid  recording.wav --thresholds 0.3,0.5 --max-speeches 5,10,inf --target 3  # gate × ceiling
+```
+
+Unit tests pin that the `best:` line names the seconds value with `%g` (no
+`0.00` leak) on both the 1-D sweep axis and the 2-D grid column axis, and that an
+`inf` winner renders as `inf`.
+
 ### Silero vs energy-VAD segment counts (the headless proof)
 
 Measured over the seed corpus with `min_silence_ms=800` (the pipecat
