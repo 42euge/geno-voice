@@ -569,17 +569,29 @@ cross-reading them by hand. `gv vad-grid` tabulates the cartesian product of TWO
 knobs in one pass — the VAD analogue of `simulate-mirror --grid` (base_wpm ×
 strength). The **row** axis is always the P(speech) gate (`--thresholds`); the
 **column** axis is a millisecond knob — `--min-silences` (the hangover, the
-default) or `--min-speeches` (the floor), mutually exclusive. The non-column ms
-knob is held at its scalar (`--min-silence-ms` / `--min-speech-ms`); every other
+default), `--min-speeches` (the floor), or `--speech-pads` (the symmetric region
+padding, iter-254), mutually exclusive. The non-column ms knob is held at its
+scalar (`--min-silence-ms` / `--min-speech-ms` / `--speech-pad-ms`); every other
 knob is shared across all cells.
 
 ```
 gv vad-grid recording.wav                                       # gate × hangover (defaults)
 gv vad-grid recording.wav --thresholds 0.3,0.5,0.7 --min-silences 400,800
 gv vad-grid recording.wav --thresholds 0.5,0.7 --min-speeches 50,200,400  # gate × floor
+gv vad-grid recording.wav --thresholds 0.5,0.7 --speech-pads 0,20,40,80   # gate × padding
 gv vad-grid recording.wav --json                                # machine-readable cells
 gv vad-grid recording.wav --csv                                 # flat CSV for plots/pivots
 ```
+
+The `--speech-pads` column (iter-254) crosses the gate against the symmetric
+padding Silero adds to each end of every recovered region — the 2-D counterpart
+of `vad-sweep`'s fourth axis. Too little padding clips the talker's onsets and
+tails; too much fuses adjacent regions until distinct utterances merge. Crossing
+it against the gate exposes where that clip-vs-merge elbow shifts as the gate
+tightens. The list is parsed by the same `nonneg_float_list_type` validator as
+the other ms column axes and formats as bare integers (`40`, not `0.04`); the
+shared `--speech-pad-ms` scalar is held fixed under the other two column axes and
+ignored while `--speech-pads` is the column.
 
 Cells are emitted in **row-major** order (each gate's full row of columns, then
 the next gate). The human table is one row per cell (not a matrix) so each

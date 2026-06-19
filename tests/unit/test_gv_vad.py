@@ -2424,6 +2424,7 @@ def _grid_args(**over):
         thresholds=[0.3, 0.5],
         min_silences=[400.0, 800.0],
         min_speeches=None,
+        speech_pads=None,
         min_speech_ms=250.0,
         min_silence_ms=800.0,
         speech_pad_ms=30.0,
@@ -2482,6 +2483,52 @@ def test_vad_grid_min_silences_and_min_speeches_mutually_exclusive():
     with pytest.raises(SystemExit):
         gv.build_parser().parse_args(
             ["vad-grid", "rec.wav", "--min-silences", "400,800", "--min-speeches", "50,100"]
+        )
+
+
+# iter-254 — gv vad-grid --speech-pads: a third column-axis option (padding)
+
+
+def test_vad_grid_speech_pads_column_axis():
+    args = gv.build_parser().parse_args(
+        ["vad-grid", "rec.wav", "--speech-pads", "0,20,40,80"]
+    )
+    assert args.speech_pads == [0.0, 20.0, 40.0, 80.0]
+    # The hangover list keeps its default; the handler picks the pad column.
+    assert args.min_silences == [400.0, 600.0, 800.0, 1000.0]
+    assert args.min_speeches is None
+
+
+def test_vad_grid_speech_pads_default_is_none():
+    # Without --speech-pads the pad axis is off (None), so the default column
+    # axis stays the hangover.
+    args = gv.build_parser().parse_args(["vad-grid", "rec.wav"])
+    assert args.speech_pads is None
+
+
+def test_vad_grid_speech_pads_allows_zero():
+    args = gv.build_parser().parse_args(
+        ["vad-grid", "rec.wav", "--speech-pads", "0,40"]
+    )
+    assert args.speech_pads == [0.0, 40.0]
+
+
+def test_vad_grid_speech_pads_rejects_negative_member():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(["vad-grid", "rec.wav", "--speech-pads", "20,-1"])
+
+
+def test_vad_grid_silences_and_speech_pads_mutually_exclusive():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-grid", "rec.wav", "--min-silences", "400,800", "--speech-pads", "0,40"]
+        )
+
+
+def test_vad_grid_speeches_and_speech_pads_mutually_exclusive():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-grid", "rec.wav", "--min-speeches", "50,100", "--speech-pads", "0,40"]
         )
 
 
@@ -3728,6 +3775,74 @@ def test_cmd_vad_grid_speech_column_holds_silence_scalar():
         (0.3, 50.0), (0.3, 100.0), (0.5, 50.0), (0.5, 100.0),
     ]
     assert {p.min_silence_ms for p in captured} == {777.0}
+
+
+def test_cmd_vad_grid_speech_pad_column_sweeps_pad_holds_others():
+    # iter-254: when the column axis is --speech-pads, speech_pad_ms is SWEPT
+    # and the scalar --min-silence-ms / --min-speech-ms are held fixed across
+    # every cell (the shared --speech-pad-ms scalar is NOT used as a value).
+    captured = []
+
+    def seg(wav, params=None):
+        captured.append(params)
+        return _cell_result(1)
+
+    gv.cmd_vad_grid(
+        _grid_args(
+            thresholds=[0.3, 0.5], speech_pads=[0.0, 40.0],
+            min_silence_ms=777.0, min_speech_ms=333.0, speech_pad_ms=999.0,
+        ),
+        log=lambda *a: None,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert [(p.threshold, p.speech_pad_ms) for p in captured] == [
+        (0.3, 0.0), (0.3, 40.0), (0.5, 0.0), (0.5, 40.0),
+    ]
+    assert {p.min_silence_ms for p in captured} == {777.0}
+    assert {p.min_speech_ms for p in captured} == {333.0}
+    # The shared --speech-pad-ms scalar (999) is the swept axis now, so it is
+    # never used as a held value.
+    assert 999.0 not in {p.speech_pad_ms for p in captured}
+
+
+def test_cmd_vad_grid_speech_pad_column_json_axis():
+    # The JSON payload names the swept column axis so a consumer knows the grid
+    # crossed gate × padding.
+    def seg(wav, params=None):
+        return _cell_result(1)
+
+    lines: List[str] = []
+    gv.cmd_vad_grid(
+        _grid_args(thresholds=[0.3, 0.5], speech_pads=[0.0, 40.0], json=True),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    payload = json.loads(lines[0])
+    assert payload["row_axis"] == "threshold"
+    assert payload["col_axis"] == "speech_pad_ms"
+    assert [c["speech_pad_ms"] for c in payload["grid"]] == [0.0, 40.0, 0.0, 40.0]
+
+
+def test_cmd_vad_grid_speech_pad_column_human_label():
+    # The human table labels the pad column "speech_pad" and formats bare
+    # integers (no gate-style 0.00 leak).
+    def seg(wav, params=None):
+        return _cell_result(1)
+
+    lines: List[str] = []
+    gv.cmd_vad_grid(
+        _grid_args(thresholds=[0.3, 0.5], speech_pads=[0.0, 40.0]),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    text = "\n".join(lines)
+    assert "speech_pad" in text
+    # Bare-integer formatting for the ms axis, not "0.00"/"40.00".
+    assert "40" in text
+    assert "40.00" not in text
 
 
 def test_cmd_vad_grid_json_branch():
