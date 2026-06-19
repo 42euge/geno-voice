@@ -20,6 +20,7 @@ import argparse
 import csv
 import io
 import json
+import math
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -2703,6 +2704,134 @@ def test_render_sweep_csv_header_is_max_speech_axis_name():
     rows = list(csv.reader(io.StringIO(text)))
     assert rows[0] == ["max_speech_s", "num_segments", "speech_s"]
     assert rows[1] == ["10.0", "1", "1.0"]
+
+
+# ---- --target JSON `best`/`top` on the seconds max_speech_s axis -------
+#
+# iter-257 pinned the HUMAN best: line %g formatting on the seconds axis;
+# iter-258 closes the parallel hole on the MACHINE surface — the JSON `best`
+# (and `top`) cell must carry the picked SECONDS max_speech_s value, and the
+# `inf` no-cap baseline must survive the JSON round-trip (Python's json emits
+# the `Infinity` token, which json.loads reads back as float('inf')).
+
+
+def test_render_sweep_json_target_best_carries_seconds_max_speech():
+    # Caps inf, 10, 5; segment counts 1, 2, 4; target 2 → the 10s cell (2 segs).
+    # The best cell's max_speech_s key must be the bare float 10.0 (not a
+    # gate-style string, not truncated) with distance 0.
+    r_inf = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=20.0,
+        segments=[_Seg(0.0, 12.0)],
+    )
+    r_ten = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=20.0,
+        segments=[_Seg(0.0, 5.0), _Seg(5.0, 10.0)],
+    )
+    r_five = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=20.0,
+        segments=[_Seg(0.0, 2.5), _Seg(2.5, 5.0), _Seg(5.0, 7.5), _Seg(7.5, 10.0)],
+    )
+    payload = json.loads(
+        gv.render_vad_sweep_json(
+            [float("inf"), 10.0, 5.0], [r_inf, r_ten, r_five],
+            name="rec.wav", axis="max_speech_s", target=2,
+        )
+    )
+    assert payload["axis"] == "max_speech_s"
+    assert payload["target"] == 2
+    assert payload["best"]["max_speech_s"] == 10.0
+    assert payload["best"]["num_segments"] == 2
+    assert payload["best"]["distance"] == 0
+
+
+def test_render_sweep_json_best_inf_max_speech_survives_round_trip():
+    # When the no-cap baseline (inf) is the closest cell, the JSON best value
+    # must round-trip back to float('inf') — the seconds axis carries the
+    # sentinel through json.dumps/json.loads unchanged.
+    r_inf = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=20.0,
+        segments=[_Seg(0.0, 12.0)],
+    )
+    r_tight = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=20.0,
+        segments=[_Seg(0.0, 2.5), _Seg(2.5, 5.0), _Seg(5.0, 7.5), _Seg(7.5, 10.0)],
+    )
+    payload = json.loads(
+        gv.render_vad_sweep_json(
+            [float("inf"), 5.0], [r_inf, r_tight],
+            name="rec.wav", axis="max_speech_s", target=1,
+        )
+    )
+    best = payload["best"]["max_speech_s"]
+    assert math.isinf(best) and best > 0
+    assert payload["best"]["num_segments"] == 1
+    assert payload["best"]["distance"] == 0
+
+
+def test_render_sweep_json_top_list_carries_seconds_max_speech():
+    # The `top` shortlist on the seconds axis names each cell by its
+    # max_speech_s value; the head equals `best`, distances non-decreasing, and
+    # the inf baseline survives the round-trip inside the list too.
+    r_inf = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=20.0,
+        segments=[_Seg(0.0, 12.0)],
+    )
+    r_ten = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=20.0,
+        segments=[_Seg(0.0, 5.0), _Seg(5.0, 10.0)],
+    )
+    r_five = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=20.0,
+        segments=[_Seg(0.0, 2.5), _Seg(2.5, 5.0), _Seg(5.0, 7.5), _Seg(7.5, 10.0)],
+    )
+    payload = json.loads(
+        gv.render_vad_sweep_json(
+            [float("inf"), 10.0, 5.0], [r_inf, r_ten, r_five],
+            name="rec.wav", axis="max_speech_s", target=2, top=3,
+        )
+    )
+    top = payload["top"]
+    assert [c["max_speech_s"] for c in top][0] == payload["best"]["max_speech_s"]
+    dists = [c["distance"] for c in top]
+    assert dists == sorted(dists)
+    # Every cell carries a numeric seconds value; the inf baseline is present.
+    caps = [c["max_speech_s"] for c in top]
+    assert any(math.isinf(c) for c in caps)
+    assert 10.0 in caps and 5.0 in caps
+
+
+def test_render_grid_json_target_best_carries_seconds_col_axis():
+    # The seconds force-split ceiling is also a vad-grid COLUMN axis; the JSON
+    # best cell must carry the picked col value (10.0) plus the held row gate.
+    # 1×3 grid over caps inf, 10, 5; counts 1, 2, 4; target 2 → the 10s cell.
+    results = [_cell_result(n) for n in (1, 2, 4)]
+    payload = json.loads(
+        gv.render_vad_grid_json(
+            [0.3], [float("inf"), 10.0, 5.0], results,
+            name="rec.wav", col_axis="max_speech_s", target=2,
+        )
+    )
+    assert payload["col_axis"] == "max_speech_s"
+    assert payload["best"]["max_speech_s"] == 10.0
+    assert payload["best"]["threshold"] == 0.3
+    assert payload["best"]["num_segments"] == 2
+    assert payload["best"]["distance"] == 0
+
+
+def test_render_grid_json_best_inf_col_axis_survives_round_trip():
+    # The no-cap baseline as the best grid cell round-trips to float('inf') on
+    # the column axis, same guarantee as the 1-D sweep.
+    results = [_cell_result(n) for n in (1, 4)]
+    payload = json.loads(
+        gv.render_vad_grid_json(
+            [0.3], [float("inf"), 5.0], results,
+            name="rec.wav", col_axis="max_speech_s", target=1,
+        )
+    )
+    best = payload["best"]["max_speech_s"]
+    assert math.isinf(best) and best > 0
+    assert payload["best"]["num_segments"] == 1
+    assert payload["best"]["distance"] == 0
 
 
 # ---- cmd_vad_sweep: ceiling axis end-to-end ----------------------------

@@ -797,6 +797,21 @@ Unit tests pin that the `best:` line names the seconds value with `%g` (no
 `0.00` leak) on both the 1-D sweep axis and the 2-D grid column axis, and that an
 `inf` winner renders as `inf`.
 
+The same pick on the `--json` surface (iter-258) carries the bare seconds value,
+not the human-formatted string: the `best` cell (and each `top` cell) holds
+`"max_speech_s": 10.0`, with the no-cap baseline as the JSON `Infinity` token,
+which round-trips back to `float('inf')` through `json.loads`. So a consumer
+reading `payload["best"]["max_speech_s"]` gets a number it can compare and plot
+directly — no `%g` parsing step — and the `inf` sentinel survives unchanged:
+
+```bash
+gv vad-sweep recording.wav --max-speeches 5,10,inf --target 2 --json   # best.max_speech_s == 10.0
+gv vad-grid  recording.wav --thresholds 0.3 --max-speeches 5,10,inf --target 2 --json
+```
+
+Unit tests pin the JSON `best`/`top` cells on both surfaces, including that the
+`inf` baseline survives the round-trip.
+
 ### Silero vs energy-VAD segment counts (the headless proof)
 
 Measured over the seed corpus with `min_silence_ms=800` (the pipecat
