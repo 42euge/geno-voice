@@ -1135,18 +1135,20 @@ def render_vad_diff_json(result_a, result_b, *, label_a, label_b):
 
 # gv vad-sweep axis metadata. iter-236 swept only the P(speech) gate; iter-238
 # adds the trailing-silence hangover as a second axis; iter-239 adds the
-# minimum-speech floor as a third. Each entry gives the human-table column label
+# minimum-speech floor as a third; iter-253 adds the symmetric region padding
+# (speech_pad_ms) as a fourth. Each entry gives the human-table column label
 # (right-justified to 9, matching the original "threshold" width) and the
 # per-value display formatter — a gate prints with 2 decimals (0.30), a
-# millisecond knob (hangover or speech floor) as a bare integer (800). The dict
-# key is also the row key emitted by vad_segmentation_sweep and the CSV/JSON
+# millisecond knob (hangover, speech floor, or pad) as a bare integer (800). The
+# dict key is also the row key emitted by vad_segmentation_sweep and the CSV/JSON
 # column name, so a consumer reads which dimension was swept straight off the
-# data. Both millisecond axes format identically, so they're grouped below.
-_SWEEP_MS_AXES = ("min_silence_ms", "min_speech_ms")
+# data. All millisecond axes format identically, so they're grouped below.
+_SWEEP_MS_AXES = ("min_silence_ms", "min_speech_ms", "speech_pad_ms")
 _SWEEP_AXIS_LABEL = {
     "threshold": "threshold",
     "min_silence_ms": "min_silence",
     "min_speech_ms": "min_speech",
+    "speech_pad_ms": "speech_pad",
 }
 
 
@@ -2044,9 +2046,13 @@ def cmd_vad_sweep(args, *, log=print, segmenter=None, availability=None):
     start merging. iter-239 adds a THIRD axis — the minimum-speech floor.
     Passing ``--min-speeches 50,100,200,400`` sweeps ``min_speech_ms`` (the gate
     again held at scalar ``--threshold``), so an operator can find the floor
-    where short speech regions start getting dropped. The three axes are
-    mutually exclusive (the parser rejects passing more than one); exactly one
-    knob varies per run.
+    where short speech regions start getting dropped. iter-253 adds a FOURTH
+    axis — the symmetric region padding. Passing ``--speech-pads 0,20,40,60``
+    sweeps ``speech_pad_ms`` (the gate again held at scalar ``--threshold``), so
+    an operator can find how much padding stops clipping the talker's onsets/
+    tails before adjacent regions start merging. The four axes are mutually
+    exclusive (the parser rejects passing more than one); exactly one knob varies
+    per run.
 
     Same injected-dependency contract as :func:`cmd_vad` / :func:`cmd_vad_diff`:
     ``segmenter`` / ``availability`` default to the real :mod:`vad.silero`
@@ -2074,18 +2080,22 @@ def cmd_vad_sweep(args, *, log=print, segmenter=None, availability=None):
     tie_break = getattr(args, "tie_break", "row-major")
 
     # Pick the swept axis: --min-silences sweeps the hangover, --min-speeches the
-    # minimum-speech floor (both with the gate held at scalar --threshold);
-    # otherwise sweep --thresholds (the default iter-236 behaviour) with the
-    # millisecond knobs held at their scalars. The parser guarantees at most one
-    # of the three is set.
+    # minimum-speech floor, --speech-pads the symmetric region padding (all with
+    # the gate held at scalar --threshold); otherwise sweep --thresholds (the
+    # default iter-236 behaviour) with the millisecond knobs held at their
+    # scalars. The parser guarantees at most one of the four is set.
     min_silences = getattr(args, "min_silences", None)
     min_speeches = getattr(args, "min_speeches", None)
+    speech_pads = getattr(args, "speech_pads", None)
     if min_silences is not None:
         axis = "min_silence_ms"
         values = min_silences
     elif min_speeches is not None:
         axis = "min_speech_ms"
         values = min_speeches
+    elif speech_pads is not None:
+        axis = "speech_pad_ms"
+        values = speech_pads
     else:
         axis = "threshold"
         values = args.thresholds
@@ -2114,11 +2124,12 @@ def cmd_vad_sweep(args, *, log=print, segmenter=None, availability=None):
         threshold = value if axis == "threshold" else args.threshold
         min_silence_ms = value if axis == "min_silence_ms" else args.min_silence_ms
         min_speech_ms = value if axis == "min_speech_ms" else args.min_speech_ms
+        speech_pad_ms = value if axis == "speech_pad_ms" else args.speech_pad_ms
         params = SileroParams(
             threshold=threshold,
             min_speech_ms=min_speech_ms,
             min_silence_ms=min_silence_ms,
-            speech_pad_ms=args.speech_pad_ms,
+            speech_pad_ms=speech_pad_ms,
             max_speech_s=args.max_speech_s,
         )
         return segmenter(args.wav, params=params)
@@ -2638,17 +2649,19 @@ def build_parser():
     vad_sweep = sub.add_parser(
         "vad-sweep",
         help="Offline Silero VAD — segment a WAV across a swept knob "
-        "(--thresholds gate, --min-silences hangover, or --min-speeches floor) "
+        "(--thresholds gate, --min-silences hangover, --min-speeches floor, or "
+        "--speech-pads region padding) "
         "and tabulate segment-count / speech-seconds (find the knob's elbow)",
     )
     vad_sweep.add_argument(
         "wav",
         help="Path to a 16-bit PCM WAV file to segment at each swept value",
     )
-    # The swept axis: --thresholds (default) OR --min-silences OR --min-speeches,
-    # never more than one. The default list lives on --thresholds so a bare
-    # `vad-sweep rec.wav` keeps the iter-236 behaviour; a group default isn't
-    # "provided", so the mutex only fires when two are passed explicitly.
+    # The swept axis: --thresholds (default) OR --min-silences OR --min-speeches
+    # OR --speech-pads, never more than one. The default list lives on
+    # --thresholds so a bare `vad-sweep rec.wav` keeps the iter-236 behaviour; a
+    # group default isn't "provided", so the mutex only fires when two are passed
+    # explicitly.
     vad_sweep_axis = vad_sweep.add_mutually_exclusive_group()
     vad_sweep_axis.add_argument(
         "--thresholds",
@@ -2673,6 +2686,15 @@ def build_parser():
         dest="min_speeches",
         help="Comma-separated minimum-speech floors in ms to sweep instead of "
         "the gate (e.g. 50,100,200,400); the gate is held at the scalar "
+        "--threshold (mutually exclusive with the other axes)",
+    )
+    vad_sweep_axis.add_argument(
+        "--speech-pads",
+        type=nonneg_float_list_type,
+        default=None,
+        dest="speech_pads",
+        help="Comma-separated symmetric region paddings in ms to sweep instead "
+        "of the gate (e.g. 0,20,40,60); the gate is held at the scalar "
         "--threshold (mutually exclusive with the other axes)",
     )
     vad_sweep.add_argument(
@@ -2707,7 +2729,8 @@ def build_parser():
         default=vad_speech_pad_default,
         dest="speech_pad_ms",
         help="Symmetric padding added to each region, in ms — shared by all "
-        f"runs (default: {vad_speech_pad_default})",
+        "runs when sweeping --thresholds; ignored when sweeping --speech-pads "
+        f"(default: {vad_speech_pad_default})",
     )
     vad_sweep.add_argument(
         "--max-speech-s",

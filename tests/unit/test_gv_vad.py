@@ -1227,6 +1227,7 @@ def _sweep_args(**over):
         thresholds=[0.3, 0.5, 0.7, 0.9],
         min_silences=None,
         min_speeches=None,
+        speech_pads=None,
         threshold=0.5,
         min_speech_ms=250.0,
         min_silence_ms=800.0,
@@ -2162,6 +2163,244 @@ def test_cmd_vad_sweep_speech_axis_unavailable():
     lines: List[str] = []
     gv.cmd_vad_sweep(
         _sweep_args(min_speeches=[50.0, 400.0], json=True),
+        log=lines.append,
+        segmenter=lambda *a, **k: (_ for _ in ()).throw(AssertionError("no")),
+        availability=lambda: False,
+    )
+    assert len(lines) == 1
+    assert json.loads(lines[0])["available"] is False
+
+
+# ====================================================================
+# iter-253 — gv vad-sweep --speech-pads: a fourth sweep axis (padding)
+# ====================================================================
+# The symmetric region padding (speech_pad_ms) was held fixed across all runs;
+# iter-253 promotes it to a fourth sweepable axis alongside the gate, hangover,
+# and floor, mirroring the iter-238/239 axis-addition pattern. Padding values
+# are non-negative floats; the gate is held at scalar --threshold while it
+# sweeps; the four axes are mutually exclusive.
+
+
+# ---- parser wiring: --speech-pads axis ---------------------------------
+
+
+def test_vad_sweep_speech_pads_parses():
+    args = gv.build_parser().parse_args(
+        ["vad-sweep", "rec.wav", "--speech-pads", "0,20,40,60"]
+    )
+    assert args.speech_pads == [0.0, 20.0, 40.0, 60.0]
+    # The threshold list keeps its default; the handler picks the pad axis.
+    assert args.thresholds == [0.3, 0.5, 0.7, 0.9]
+
+
+def test_vad_sweep_speech_pads_default_is_none():
+    # Without --speech-pads the pad axis is off (None), so the handler sweeps
+    # --thresholds (the iter-236 default).
+    args = gv.build_parser().parse_args(["vad-sweep", "rec.wav"])
+    assert args.speech_pads is None
+
+
+def test_vad_sweep_speech_pads_allows_zero():
+    # 0 ms is legitimate (no padding — the unpadded region boundaries).
+    args = gv.build_parser().parse_args(
+        ["vad-sweep", "rec.wav", "--speech-pads", "0,40"]
+    )
+    assert args.speech_pads == [0.0, 40.0]
+
+
+def test_vad_sweep_thresholds_and_speech_pads_mutually_exclusive():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-sweep", "rec.wav", "--thresholds", "0.3,0.5", "--speech-pads", "0,40"]
+        )
+
+
+def test_vad_sweep_min_silences_and_speech_pads_mutually_exclusive():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-sweep", "rec.wav", "--min-silences", "400,800", "--speech-pads", "0,40"]
+        )
+
+
+def test_vad_sweep_min_speeches_and_speech_pads_mutually_exclusive():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-sweep", "rec.wav", "--min-speeches", "50,100", "--speech-pads", "0,40"]
+        )
+
+
+def test_vad_sweep_rejects_negative_speech_pad_member():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-sweep", "rec.wav", "--speech-pads", "40,-1"]
+        )
+
+
+# ---- vad_segmentation_sweep / renderers: pad axis ----------------------
+
+
+def test_sweep_axis_keys_rows_by_pad_axis_name():
+    r_lo = _Result(
+        name="r.wav",
+        sample_rate=16000,
+        duration_s=10.0,
+        segments=[_Seg(0.0, 1.0), _Seg(2.0, 3.0)],
+    )
+    r_hi = _Result(
+        name="r.wav", sample_rate=16000, duration_s=10.0, segments=[_Seg(0.0, 1.0)]
+    )
+    rows = gv.vad_segmentation_sweep([0.0, 60.0], [r_lo, r_hi], axis="speech_pad_ms")
+    assert rows == [
+        {"speech_pad_ms": 0.0, "num_segments": 2, "speech_s": 2.0},
+        {"speech_pad_ms": 60.0, "num_segments": 1, "speech_s": 1.0},
+    ]
+
+
+def test_render_sweep_pad_axis_labels_column():
+    r_lo = _Result(
+        name="rec.wav",
+        sample_rate=16000,
+        duration_s=10.0,
+        segments=[_Seg(0.0, 1.0), _Seg(2.0, 3.0)],
+    )
+    r_hi = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=10.0, segments=[_Seg(0.0, 1.0)]
+    )
+    lines = gv.render_vad_sweep(
+        [0.0, 60.0], [r_lo, r_hi], name="rec.wav", axis="speech_pad_ms"
+    )
+    text = "\n".join(lines)
+    assert "speech_pad" in text
+    assert "min_silence" not in text
+    # Pad values print as bare integers (0, 60), not 0.00 gates.
+    assert "60" in text
+    assert "0.00" not in text
+
+
+def test_render_sweep_json_carries_pad_axis():
+    r = _Result(name="rec.wav", sample_rate=16000, duration_s=5.0, segments=[_Seg(0.0, 1.0)])
+    payload = json.loads(
+        gv.render_vad_sweep_json([40.0], [r], name="rec.wav", axis="speech_pad_ms")
+    )
+    assert payload["axis"] == "speech_pad_ms"
+    assert payload["sweep"] == [
+        {"speech_pad_ms": 40.0, "num_segments": 1, "speech_s": 1.0}
+    ]
+
+
+def test_render_sweep_csv_header_is_pad_axis_name():
+    r = _Result(name="rec.wav", sample_rate=16000, duration_s=5.0, segments=[_Seg(0.0, 1.0)])
+    text = gv.render_vad_sweep_csv([40.0], [r], name="rec.wav", axis="speech_pad_ms")
+    rows = list(csv.reader(io.StringIO(text)))
+    assert rows[0] == ["speech_pad_ms", "num_segments", "speech_s"]
+    assert rows[1] == ["40.0", "1", "1.0"]
+
+
+# ---- cmd_vad_sweep: pad axis end-to-end --------------------------------
+
+
+def test_cmd_vad_sweep_pad_axis_sweeps_padding():
+    # When --speech-pads is set, the segmenter sees the SWEPT speech_pad_ms and
+    # the gate held at scalar --threshold; the scalar --speech-pad-ms is ignored.
+    captured = []
+
+    def seg(wav, params=None):
+        captured.append(params)
+        # More padding merges adjacent regions → fewer segments.
+        n = 3 if params.speech_pad_ms < 40 else 1
+        return _Result(
+            name="rec.wav",
+            sample_rate=16000,
+            duration_s=10.0,
+            segments=[_Seg(float(i), i + 0.5) for i in range(n)],
+        )
+
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(speech_pads=[0.0, 60.0], threshold=0.7, speech_pad_ms=999.0),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert [p.speech_pad_ms for p in captured] == [0.0, 60.0]
+    # Gate held at scalar --threshold for every run; the shared --speech-pad-ms
+    # scalar (999) is NOT used as a swept value.
+    assert {p.threshold for p in captured} == {0.7}
+    text = "\n".join(lines)
+    assert "speech_pad" in text
+    assert "60" in text
+
+
+def test_cmd_vad_sweep_pad_axis_holds_silence_scalar():
+    # The non-swept ms knob (--min-silence-ms) is shared across every run.
+    captured = []
+
+    def seg(wav, params=None):
+        captured.append(params)
+        return _Result(
+            name="rec.wav", sample_rate=16000, duration_s=10.0, segments=[_Seg(0.0, 1.0)]
+        )
+
+    gv.cmd_vad_sweep(
+        _sweep_args(speech_pads=[0.0, 60.0], min_silence_ms=750.0),
+        log=lambda *a: None,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert {p.min_silence_ms for p in captured} == {750.0}
+
+
+def test_cmd_vad_sweep_pad_axis_json_branch():
+    def seg(wav, params=None):
+        n = 3 if params.speech_pad_ms < 40 else 1
+        return _Result(
+            name="rec.wav",
+            sample_rate=16000,
+            duration_s=10.0,
+            segments=[_Seg(float(i), i + 0.5) for i in range(n)],
+        )
+
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(speech_pads=[0.0, 60.0], json=True),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert len(lines) == 1
+    payload = json.loads(lines[0])
+    assert payload["axis"] == "speech_pad_ms"
+    assert [row["speech_pad_ms"] for row in payload["sweep"]] == [0.0, 60.0]
+    assert payload["sweep"][0]["num_segments"] == 3
+    assert payload["sweep"][1]["num_segments"] == 1
+
+
+def test_cmd_vad_sweep_pad_axis_csv_branch():
+    def seg(wav, params=None):
+        return _Result(
+            name="rec.wav",
+            sample_rate=16000,
+            duration_s=10.0,
+            segments=[_Seg(0.0, 1.0)],
+        )
+
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(speech_pads=[0.0, 60.0], csv=True),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert len(lines) == 1
+    rows = list(csv.reader(io.StringIO(lines[0])))
+    assert rows[0] == ["speech_pad_ms", "num_segments", "speech_s"]
+    assert [row[0] for row in rows[1:]] == ["0.0", "60.0"]
+
+
+def test_cmd_vad_sweep_pad_axis_unavailable():
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(speech_pads=[0.0, 60.0], json=True),
         log=lines.append,
         segmenter=lambda *a, **k: (_ for _ in ()).throw(AssertionError("no")),
         availability=lambda: False,

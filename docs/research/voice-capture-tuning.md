@@ -143,8 +143,9 @@ of `fixtures/replay_silero.py`'s sweep over the corpus), so the knob's *elbow* �
 where recovered speech falls off as the gate tightens, or where regions merge as
 the hangover lengthens — is visible at a glance rather than as a single A-vs-B
 delta. The default swept knob is the P(speech) gate (`--thresholds`); iter-238
-adds the trailing-silence hangover as a second axis (`--min-silences`, below) and
-iter-239 adds the minimum-speech floor as a third (`--min-speeches`, below):
+adds the trailing-silence hangover as a second axis (`--min-silences`, below),
+iter-239 adds the minimum-speech floor as a third (`--min-speeches`, below), and
+iter-253 adds the symmetric region padding as a fourth (`--speech-pads`, below):
 
 ```
 gv vad-sweep recording.wav                                  # 0.3,0.5,0.7,0.9 (defaults)
@@ -253,7 +254,7 @@ monotone non-increasing across rising hangovers, and that `--csv` agrees with
 instead sweeps the *minimum-speech floor* `min_speech_ms` — the shortest speech
 region the segmenter keeps; anything briefer is dropped as noise. As with
 `--min-silences`, the gate is held fixed at the scalar `--threshold` (default
-`0.5`). All three axes are mutually exclusive (argparse rejects passing more than
+`0.5`). All four axes are mutually exclusive (argparse rejects passing more than
 one); exactly one knob varies per run.
 
 ```
@@ -289,6 +290,34 @@ each row by that name. Integration tests pin that each speech-sweep row equals a
 independent `gv vad --json` run at that floor, that segments are monotone
 non-increasing across rising floors, and that `--csv` agrees with `--json` on
 this axis — all over the real corpus.
+
+**`--speech-pads` — a fourth sweep axis (iter-253).** Passing `--speech-pads`
+instead sweeps the *symmetric region padding* `speech_pad_ms` — the margin Silero
+adds to each end of every recovered region. Too little clips the talker's onsets
+and tails (a word's leading consonant or trailing fricative lands outside the
+region); too much pads regions until adjacent ones touch and merge. As with the
+other ms axes, the gate is held fixed at the scalar `--threshold` (default `0.5`),
+and the four axes are mutually exclusive.
+
+```
+gv vad-sweep recording.wav --speech-pads 0,20,40,60,100            # sweep the padding
+gv vad-sweep recording.wav --speech-pads 0,20,40 --threshold 0.7   # hold the gate at 0.7
+gv vad-sweep recording.wav --speech-pads 0,20,40 --csv             # flat CSV for plots
+```
+
+The column label, the JSON/CSV first column, and the `--json` `axis` key all
+become `speech_pad` / `speech_pad_ms`. Pad values print as bare integers in the
+human table (`40`, not `0.04`), sharing the millisecond formatter with the
+hangover and floor axes. Unlike the floor and hangover, the segment count is
+*not* monotone in padding: more padding can only merge regions (never split
+them), so the count is non-increasing — but the *speech seconds* it recovers
+rises as padding stops clipping onsets/tails, then plateaus once regions begin to
+merge. The elbow is the smallest pad that recovers the talker's edges without yet
+fusing distinct utterances. The `--speech-pads` list is parsed by the same
+`nonneg_float_list_type` validator as the other ms axes (comma-separated durations
+`≥ 0`, order preserved, empty list rejected; `0` is legitimate — the unpadded
+boundaries). The scalar `--speech-pad-ms` is held fixed when sweeping the other
+axes and ignored while `--speech-pads` sweeps.
 
 #### `--target` / `--top` / `--tie-break` — a data-driven best-value pick (iter-244)
 
