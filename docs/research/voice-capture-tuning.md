@@ -376,9 +376,25 @@ penalty to land at distance 2, OUT of the floor. Under `tie_break="speech"` the
 most-speech floor cell (count 4 at 2.0s) wins over count 2; a row-major control picks
 count 2 instead, and a flat-SET control `[3, 6]` (no penalties) makes count 6 the sole
 raw-distance-0 floor and picks it outright — proving the +2 penalty is load-bearing for
-which cells tie. With this every documented target form is now cross-surface pinned
-under the default row-major tie-break, and the scalar, closed band, flat set, open
-band, preference, and weighted set are pinned under `tie_break="speech"`.
+which cells tie. iter-286 carries the speech tie-break onto the
+`{"scaled": [(element, factor), ...]}` *scaled set* form (iter-252) — the
+MULTIPLICATIVE twin of the weighted set and the LAST dict form to gain the
+cross-surface speech contract. Like the weighted set it folds its preference INTO the
+distance and inserts NO secondary sort key (speech stays the SECONDARY key, two-level
+`(scaled_distance, -speech_s)`), but its cost is `|Δ| * factor` (GROWS with distance)
+rather than `|Δ| + penalty` (a fixed offset), so the cells that tie at the SCALED floor
+differ from the weighted set's penalised floor — an exact hit stays free on ANY factor
+while a near miss on a high-factor element is amplified. A
+`{"scaled": [(3, 3), (8, 1)]}` target over counts 4/6/10/16 ties counts 6 and 10 at
+scaled distance 2 (each two off the cheap ×1 accepted-8 element), while count 4 — one
+off the preferred 3 but blown up by the ×3 factor — lands at scaled distance 3, OUT of
+the floor. Under `tie_break="speech"` the most-speech floor cell (count 10 at 5.0s)
+wins over count 6; a row-major control picks count 6 instead, and a flat-SET control
+`[3, 8]` (no factors) makes count 4 the sole raw-distance-1 floor and picks it outright
+— proving the ×3 factor is load-bearing for which cells tie. With this every documented
+target form is now cross-surface pinned under the default row-major tie-break, and the
+scalar, closed band, flat set, open band, preference, weighted set, and scaled set are
+all pinned under `tie_break="speech"`.
 
 **`--min-silences` — a second sweep axis (iter-238).** The default axis is the
 P(speech) gate (`--thresholds`); passing `--min-silences` instead sweeps the
