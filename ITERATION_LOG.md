@@ -23199,3 +23199,96 @@ robust if the emitter ever switches to a string sentinel.
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
    should track a curated subset, decide the policy and re-run
    `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
+
+## iter-259 — `gv --csv` seconds `max_speech_s` axis `inf`-baseline regression test
+
+**Branch:** `iter-259-target-seconds-csv` (merged ff to main, commit `58338f9`)
+**Date:** 2026-06-19
+
+**No STEER.md this lap.** The two top-priority next items carried since
+iter-227 (wire `ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()`
+in the desktop app) both need a Mac + mic + browser and can't run headless on
+the loop host. "Ingest new recordings" stays corpus-gated (large untracked
+WAVs, no corpus symlinked into the worktree). The COMBINED
+additive+multiplicative `--target` weight item is again "a larger design
+question — scope before building." So I took the iter-258 backlog item #4, the
+clean, small, pure, headless increment: pin the `--csv` emitter on the SECONDS
+`max_speech_s` axis.
+
+**The gap.** iter-257 pinned the HUMAN `best:` line `%g` formatting and iter-258
+the JSON `best`/`top` serialization on the seconds force-split ceiling axis (the
+`--max-speeches` sweep/grid axis from iter-255/256). The THIRD machine surface —
+the CSV emitter (`render_vad_sweep_csv` / `render_vad_grid_csv`) — writes the raw
+axis value into the first column via the stdlib `csv` writer, which stringifies
+a finite cap as `10.0` and `float('inf')` as the bare token `inf` (NOT JSON's
+`Infinity`, NOT a blank). An existing test (`test_render_sweep_csv_header_is_max_speech_axis_name`)
+already covered the finite `10.0` case, but NOTHING pinned the `inf` baseline
+serialization, nor the grid COLUMN-axis CSV on `max_speech_s` at all. A
+serialization regression (e.g. routing the CSV cap through the JSON encoder)
+would have shipped silently. This lap closes that hole; no production code
+changed (the wiring was already correct — this lap proves and guards it).
+
+**The CSV-vs-JSON distinction.** Python's `json.dumps` emits `Infinity` for
+`float('inf')` (iter-258 verified `json.loads` reads it back as `float('inf')`).
+The stdlib `csv` writer instead calls `str()` on the value, so `float('inf')`
+becomes the bare token `inf` — which `float("inf")` parses straight back. The
+tests assert `math.isinf(float(cell))` rather than the textual token so they
+stay robust if the rendering ever changes, and explicitly assert `"Infinity"`
+never appears in the CSV text to guard against the JSON encoder leaking onto the
+CSV surface.
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+3 tests, +82 lines).**
+  1. `test_render_sweep_csv_max_speech_inf_baseline_writes_inf` — caps `inf, 10`,
+     counts `1, 2`; asserts the baseline row's cap column is exactly `"inf"`
+     (`math.isinf(float(...))` true), the finite cap stays `"10.0"`, the segment
+     counts are `1`/`2`, and `"Infinity"` never appears in the text.
+  2. `test_render_sweep_csv_max_speech_round_trips_with_inf` — caps `inf, 10, 5`;
+     every CSV cap cell parses back to its `vad_segmentation_sweep` value via
+     `float(...)`, `inf` included, so a `loadtxt`/`read_csv` consumer recovers
+     the seconds axis losslessly.
+  3. `test_render_grid_csv_max_speech_col_axis_inf_baseline_writes_inf` — the
+     same guarantee on the 2-D grid COLUMN axis: a 1×2 grid over caps `inf, 5`,
+     header `["threshold", "max_speech_s", "num_segments", "speech_s"]`, the
+     baseline column writes `"inf"`, the finite cap `"5.0"`, the held threshold
+     row stays `"0.3"`, and `"Infinity"` is absent.
+- **`docs/research/voice-capture-tuning.md`.** A paragraph under the iter-257/258
+  `--target` seconds subsection covering the `--csv` surface: finite cap →
+  `10.0`, no-cap baseline → bare `inf` (not `Infinity`, not blank), lossless
+  `float(...)` round-trip, with two copy-paste `--csv` invocations (1-D sweep,
+  2-D grid) and a note that unit tests pin both surfaces.
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3817 passed** (3814 prior + 3 net new), run on the feature branch before
+  ff-merge.
+- Focused: `pytest tests/unit/test_gv_vad.py -k "csv_max_speech"` → **3 passed**.
+- Manual smoke (Python, on the branch): `render_vad_sweep_csv([inf,10.0],...,
+  axis="max_speech_s")` → `'max_speech_s,num_segments,speech_s\r\ninf,1,12\r\n10.0,2,10'`;
+  `render_vad_grid_csv([0.3],[inf,5.0],...,col_axis="max_speech_s")` →
+  `'threshold,max_speech_s,...\r\n0.3,inf,1,12\r\n0.3,5.0,2,10'`.
+- Integration: not re-run this lap (no corpus symlinked into this worktree;
+  same as prior corpus-gated laps — the change is pure CLI render logic fully
+  covered by the unit matrix).
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] COMBINED additive+multiplicative `--target` weight** — iter-250/251
+   give additive (`:penalty`), iter-252 multiplicative (`*factor`); an operator
+   might want both on one element (`5:1*1.5`). Larger design question (operator
+   precedence of `:` vs `*`) — scope before building. Pure, headless if pursued.
+4. **[cli] seconds-axis surface coverage is now COMPLETE** — iter-257 (human
+   `best:`), iter-258 (JSON `best`/`top`), iter-259 (CSV) all pin `max_speech_s`.
+   The remaining untested seconds-axis surface is the `--tie-break`/`--top`
+   shortlist *human-table* rendering when the axis is seconds (iter-257 covered
+   the `best:` line, not the `top N:` lines' `%g` formatting). Small, pure,
+   headless if a gap is confirmed.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
+   should track a curated subset, decide the policy and re-run
+   `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
