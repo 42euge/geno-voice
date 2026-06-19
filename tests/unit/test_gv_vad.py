@@ -1291,6 +1291,7 @@ def _sweep_args(**over):
         min_silences=None,
         min_speeches=None,
         speech_pads=None,
+        max_speeches=None,
         threshold=0.5,
         min_speech_ms=250.0,
         min_silence_ms=800.0,
@@ -2464,6 +2465,283 @@ def test_cmd_vad_sweep_pad_axis_unavailable():
     lines: List[str] = []
     gv.cmd_vad_sweep(
         _sweep_args(speech_pads=[0.0, 60.0], json=True),
+        log=lines.append,
+        segmenter=lambda *a, **k: (_ for _ in ()).throw(AssertionError("no")),
+        availability=lambda: False,
+    )
+    assert len(lines) == 1
+    assert json.loads(lines[0])["available"] is False
+
+
+# ====================================================================
+# iter-256 — gv vad-sweep --max-speeches: a fifth sweep axis (ceiling)
+# ====================================================================
+# The force-split ceiling (max_speech_s) was held fixed across all runs;
+# iter-256 promotes it to a fifth sweepable axis alongside the gate, hangover,
+# floor, and padding — completing grid/sweep symmetry (every vad-grid column
+# axis is now also a 1-D sweep axis). Unlike the other four, this axis is
+# measured in SECONDS, not ms: it reuses the iter-255 max_speech_list_type
+# validator (so 'inf'/'none'/'off' anchor the no-cap baseline) and the seconds
+# formatter. The gate is held at scalar --threshold while it sweeps; the five
+# axes are mutually exclusive.
+
+
+# ---- parser wiring: --max-speeches axis --------------------------------
+
+
+def test_vad_sweep_max_speeches_parses():
+    args = gv.build_parser().parse_args(
+        ["vad-sweep", "rec.wav", "--max-speeches", "5,10,20"]
+    )
+    assert args.max_speeches == [5.0, 10.0, 20.0]
+    # The threshold list keeps its default; the handler picks the ceiling axis.
+    assert args.thresholds == [0.3, 0.5, 0.7, 0.9]
+
+
+def test_vad_sweep_max_speeches_default_is_none():
+    # Without --max-speeches the ceiling axis is off (None), so the handler
+    # sweeps --thresholds (the iter-236 default).
+    args = gv.build_parser().parse_args(["vad-sweep", "rec.wav"])
+    assert args.max_speeches is None
+
+
+def test_vad_sweep_max_speeches_accepts_inf_sentinels():
+    # 'inf'/'none'/'off' all anchor the no-cap baseline in the sweep, so the
+    # operator can include the never-force-split point alongside finite caps.
+    args = gv.build_parser().parse_args(
+        ["vad-sweep", "rec.wav", "--max-speeches", "5,inf,none,off"]
+    )
+    assert args.max_speeches == [
+        5.0,
+        float("inf"),
+        float("inf"),
+        float("inf"),
+    ]
+
+
+def test_vad_sweep_thresholds_and_max_speeches_mutually_exclusive():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-sweep", "rec.wav", "--thresholds", "0.3,0.5", "--max-speeches", "5,10"]
+        )
+
+
+def test_vad_sweep_min_silences_and_max_speeches_mutually_exclusive():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-sweep", "rec.wav", "--min-silences", "400,800", "--max-speeches", "5,10"]
+        )
+
+
+def test_vad_sweep_min_speeches_and_max_speeches_mutually_exclusive():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-sweep", "rec.wav", "--min-speeches", "50,100", "--max-speeches", "5,10"]
+        )
+
+
+def test_vad_sweep_speech_pads_and_max_speeches_mutually_exclusive():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-sweep", "rec.wav", "--speech-pads", "0,40", "--max-speeches", "5,10"]
+        )
+
+
+def test_vad_sweep_rejects_zero_max_speech_member():
+    # A 0s cap would force-split forever — rejected per token by the seconds
+    # validator (positive-only, like the iter-255 vad-grid column axis).
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-sweep", "rec.wav", "--max-speeches", "5,0"]
+        )
+
+
+def test_vad_sweep_rejects_negative_max_speech_member():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-sweep", "rec.wav", "--max-speeches", "5,-1"]
+        )
+
+
+# ---- vad_segmentation_sweep / renderers: ceiling axis ------------------
+
+
+def test_sweep_axis_keys_rows_by_max_speech_axis_name():
+    # A tighter cap force-splits the long region into more segments.
+    r_loose = _Result(
+        name="r.wav",
+        sample_rate=16000,
+        duration_s=20.0,
+        segments=[_Seg(0.0, 12.0)],
+    )
+    r_tight = _Result(
+        name="r.wav",
+        sample_rate=16000,
+        duration_s=20.0,
+        segments=[_Seg(0.0, 5.0), _Seg(5.0, 10.0)],
+    )
+    rows = gv.vad_segmentation_sweep(
+        [float("inf"), 5.0], [r_loose, r_tight], axis="max_speech_s"
+    )
+    assert rows == [
+        {"max_speech_s": float("inf"), "num_segments": 1, "speech_s": 12.0},
+        {"max_speech_s": 5.0, "num_segments": 2, "speech_s": 10.0},
+    ]
+
+
+def test_render_sweep_max_speech_axis_labels_column():
+    r_loose = _Result(
+        name="rec.wav",
+        sample_rate=16000,
+        duration_s=20.0,
+        segments=[_Seg(0.0, 12.0)],
+    )
+    r_tight = _Result(
+        name="rec.wav",
+        sample_rate=16000,
+        duration_s=20.0,
+        segments=[_Seg(0.0, 5.0), _Seg(5.0, 10.0)],
+    )
+    lines = gv.render_vad_sweep(
+        [float("inf"), 5.0], [r_loose, r_tight], name="rec.wav", axis="max_speech_s"
+    )
+    text = "\n".join(lines)
+    assert "max_speech" in text
+    assert "min_silence" not in text
+    # Seconds print compactly (5, inf) via %g — no 5.00 gate leak, no ms-style
+    # integer truncation, and the no-cap sentinel renders as inf.
+    assert "inf" in text
+    assert "5.00" not in text
+
+
+def test_render_sweep_json_carries_max_speech_axis():
+    r = _Result(name="rec.wav", sample_rate=16000, duration_s=5.0, segments=[_Seg(0.0, 1.0)])
+    payload = json.loads(
+        gv.render_vad_sweep_json([10.0], [r], name="rec.wav", axis="max_speech_s")
+    )
+    assert payload["axis"] == "max_speech_s"
+    assert payload["sweep"] == [
+        {"max_speech_s": 10.0, "num_segments": 1, "speech_s": 1.0}
+    ]
+
+
+def test_render_sweep_csv_header_is_max_speech_axis_name():
+    r = _Result(name="rec.wav", sample_rate=16000, duration_s=5.0, segments=[_Seg(0.0, 1.0)])
+    text = gv.render_vad_sweep_csv([10.0], [r], name="rec.wav", axis="max_speech_s")
+    rows = list(csv.reader(io.StringIO(text)))
+    assert rows[0] == ["max_speech_s", "num_segments", "speech_s"]
+    assert rows[1] == ["10.0", "1", "1.0"]
+
+
+# ---- cmd_vad_sweep: ceiling axis end-to-end ----------------------------
+
+
+def test_cmd_vad_sweep_max_speech_axis_sweeps_ceiling():
+    # When --max-speeches is set, the segmenter sees the SWEPT max_speech_s and
+    # the gate held at scalar --threshold; the scalar --max-speech-s is ignored.
+    captured = []
+
+    def seg(wav, params=None):
+        captured.append(params)
+        # A tighter cap force-splits the monologue into more segments.
+        n = 1 if params.max_speech_s == float("inf") else 3
+        return _Result(
+            name="rec.wav",
+            sample_rate=16000,
+            duration_s=20.0,
+            segments=[_Seg(float(i), i + 0.5) for i in range(n)],
+        )
+
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(
+            max_speeches=[float("inf"), 5.0], threshold=0.7, max_speech_s=999.0
+        ),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert [p.max_speech_s for p in captured] == [float("inf"), 5.0]
+    # Gate held at scalar --threshold for every run; the shared --max-speech-s
+    # scalar (999) is NOT used as a swept value.
+    assert {p.threshold for p in captured} == {0.7}
+    text = "\n".join(lines)
+    assert "max_speech" in text
+    assert "inf" in text
+
+
+def test_cmd_vad_sweep_max_speech_axis_holds_silence_scalar():
+    # The non-swept ms knob (--min-silence-ms) is shared across every run.
+    captured = []
+
+    def seg(wav, params=None):
+        captured.append(params)
+        return _Result(
+            name="rec.wav", sample_rate=16000, duration_s=10.0, segments=[_Seg(0.0, 1.0)]
+        )
+
+    gv.cmd_vad_sweep(
+        _sweep_args(max_speeches=[5.0, 10.0], min_silence_ms=750.0),
+        log=lambda *a: None,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert {p.min_silence_ms for p in captured} == {750.0}
+
+
+def test_cmd_vad_sweep_max_speech_axis_json_branch():
+    def seg(wav, params=None):
+        n = 1 if params.max_speech_s == float("inf") else 3
+        return _Result(
+            name="rec.wav",
+            sample_rate=16000,
+            duration_s=20.0,
+            segments=[_Seg(float(i), i + 0.5) for i in range(n)],
+        )
+
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(max_speeches=[float("inf"), 5.0], json=True),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert len(lines) == 1
+    payload = json.loads(lines[0])
+    assert payload["axis"] == "max_speech_s"
+    # inf round-trips through JSON as the string "Infinity" (Python json), so
+    # assert on the recovered counts and that the first value is non-finite.
+    assert payload["sweep"][0]["num_segments"] == 1
+    assert payload["sweep"][1]["num_segments"] == 3
+    assert payload["sweep"][1]["max_speech_s"] == 5.0
+
+
+def test_cmd_vad_sweep_max_speech_axis_csv_branch():
+    def seg(wav, params=None):
+        return _Result(
+            name="rec.wav",
+            sample_rate=16000,
+            duration_s=20.0,
+            segments=[_Seg(0.0, 1.0)],
+        )
+
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(max_speeches=[5.0, 10.0], csv=True),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert len(lines) == 1
+    rows = list(csv.reader(io.StringIO(lines[0])))
+    assert rows[0] == ["max_speech_s", "num_segments", "speech_s"]
+    assert [row[0] for row in rows[1:]] == ["5.0", "10.0"]
+
+
+def test_cmd_vad_sweep_max_speech_axis_unavailable():
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(max_speeches=[5.0, 10.0], json=True),
         log=lines.append,
         segmenter=lambda *a, **k: (_ for _ in ()).throw(AssertionError("no")),
         availability=lambda: False,

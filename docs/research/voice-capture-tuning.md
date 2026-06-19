@@ -144,8 +144,10 @@ where recovered speech falls off as the gate tightens, or where regions merge as
 the hangover lengthens — is visible at a glance rather than as a single A-vs-B
 delta. The default swept knob is the P(speech) gate (`--thresholds`); iter-238
 adds the trailing-silence hangover as a second axis (`--min-silences`, below),
-iter-239 adds the minimum-speech floor as a third (`--min-speeches`, below), and
-iter-253 adds the symmetric region padding as a fourth (`--speech-pads`, below):
+iter-239 adds the minimum-speech floor as a third (`--min-speeches`, below),
+iter-253 adds the symmetric region padding as a fourth (`--speech-pads`, below),
+and iter-256 adds the force-split ceiling as a fifth (`--max-speeches`, below —
+the only axis measured in seconds, not ms):
 
 ```
 gv vad-sweep recording.wav                                  # 0.3,0.5,0.7,0.9 (defaults)
@@ -318,6 +320,38 @@ fusing distinct utterances. The `--speech-pads` list is parsed by the same
 `≥ 0`, order preserved, empty list rejected; `0` is legitimate — the unpadded
 boundaries). The scalar `--speech-pad-ms` is held fixed when sweeping the other
 axes and ignored while `--speech-pads` sweeps.
+
+**`--max-speeches` — a fifth sweep axis (iter-256).** Passing `--max-speeches`
+instead sweeps the *force-split ceiling* `max_speech_s` — the maximum length
+Silero lets a single region grow before it is force-split into multiple
+segments. A loose cap (or the `inf` no-cap baseline) leaves a long monologue as
+one region; tightening the cap chops it into progressively more segments. This
+is the **only sweep axis measured in seconds**, not milliseconds: the gate is
+still held fixed at the scalar `--threshold` (default `0.5`), and all five axes
+are mutually exclusive.
+
+```
+gv vad-sweep recording.wav --max-speeches 5,10,20,inf             # sweep the ceiling (inf = no cap)
+gv vad-sweep recording.wav --max-speeches 5,10,20 --threshold 0.7 # hold the gate at 0.7
+gv vad-sweep recording.wav --max-speeches 5,10,20 --csv           # flat CSV for plots
+```
+
+The column label, the JSON/CSV first column, and the `--json` `axis` key all
+become `max_speech` / `max_speech_s`. Because this is the seconds axis, values
+print compactly via `%g` in the human table (`5`, `12.5`, and the no-cap
+sentinel as `inf`) — not the bare-integer ms formatter the other four axes
+share. The segment count is non-decreasing as the cap *tightens* (a smaller cap
+can only split regions, never merge them), so the elbow is the largest cap that
+still keeps the longest natural utterance intact before the ceiling starts
+chopping it. The `--max-speeches` list is parsed by the dedicated
+`max_speech_list_type` validator (the seconds twin of `nonneg_float_list_type`):
+each comma-separated token runs through the scalar `max_speech_type`, so the
+`inf`/`none`/`off` "never split" sentinels and the positive-only rule (a `0`s cap
+would force-split forever) carry through per element, and `inf` can anchor the
+no-cap baseline mid-sweep. The scalar `--max-speech-s` is held fixed when
+sweeping the other axes and ignored while `--max-speeches` sweeps. This axis is
+shared with `gv vad-grid`'s `--max-speeches` column (iter-255), so every grid
+column axis is now also a 1-D sweep axis.
 
 #### `--target` / `--top` / `--tie-break` — a data-driven best-value pick (iter-244)
 
