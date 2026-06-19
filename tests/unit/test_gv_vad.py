@@ -2987,6 +2987,113 @@ def test_render_grid_json_set_target_carries_seconds_max_speech():
     assert payload["best"]["max_speech_s"] == 5.0
 
 
+# ---- --target preference (a>b) form on the seconds max_speech_s axis ---------
+#
+# iter-249 shipped the ranked PREFERENCE form (`--target 4>2`): a `{"prefer":
+# [...]}` dict whose DISTANCE is the MIN over its elements (IDENTICAL to the flat
+# set), but whose precedence breaks EXACT distance ties toward the earlier-listed
+# (more-preferred) element via `_preference_rank` — inserted as a secondary sort
+# key before the row-major/speech tie-break. iter-255/257 added the seconds
+# `max_speech_s` force-split-ceiling axis. Every seconds-axis target test from
+# iter-257→263 covered scalar, banded, and the flat SET form, but never the
+# PREFERENCE form — and every preference render test swept the threshold axis. So
+# the preference tie-break path and the `%g` seconds formatting had no JOINT
+# coverage: a regression that broke EITHER (a preference rank that mishandled the
+# seconds axis, or a `%g`→`.2f` drift on the preference-CHOSEN cap, or the JSON
+# carrying the `{"prefer": [...]}` dict) would have shipped green while the
+# threshold-axis preference tests stayed passing. These pin that the preference
+# OVERRIDES row order to pick the more-preferred seconds cap (the discriminating
+# behaviour vs the flat set), names it via %g (compact 10/5, the no-cap baseline
+# as "inf"), renders the preference as "4>2" (not a `{"prefer": ...}` dict repr),
+# never leaks a gate-style 0.00 / inf.00, and that the grid JSON carries the
+# preference as its `{"prefer": [...]}` dict with a finite-seconds best cap — on
+# both the 1-D sweep and the 2-D grid. No production code changed (the wiring was
+# already correct — proved by a pre-test smoke run).
+
+
+def test_render_sweep_prefer_target_on_max_speech_axis_formats_seconds():
+    # Caps inf, 5, 10 (counts 1, 2, 4) in row order. Preference 4>2: both the 10s
+    # cap (4 segs) and the 5s cap (2 segs) score |Δ|=0, but the preference ranks
+    # the 4 ahead of the 2, so the 10s cap WINS even though the 5s cap is the
+    # earlier row — the discriminating behaviour vs the flat set [4,2], which
+    # would pick the earlier 5s cap on the row-major tie. The best: line names
+    # the SECONDS cap via %g and renders the preference as "4>2".
+    r_inf, r_ten, r_five = _max_speech_cells()
+    lines = gv.render_vad_sweep(
+        [float("inf"), 5.0, 10.0], [r_inf, r_five, r_ten],
+        name="rec.wav", axis="max_speech_s", target={"prefer": [4, 2]},
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    assert "max_speech=10" in best
+    assert "4 segments" in best
+    assert "|Δ|=0" in best
+    # The preference renders as "4>2", not a {"prefer": ...} dict repr.
+    assert "target 4>2" in best
+    assert "prefer" not in best
+    # Compact %g — no gate-style trailing zeros on the seconds cap.
+    assert "10.00" not in best
+    assert "max_speech=10.0" not in best
+
+
+def test_render_sweep_prefer_target_best_can_name_inf_max_speech():
+    # When the no-cap baseline (inf) lands on the most-preferred element and a
+    # swept cap also satisfies a less-preferred one, the preference picks inf and
+    # the best: line must render the sentinel as "inf", not "inf.00".
+    # Caps inf, 5 (counts 1, 2); preference 1>2: inf (1 seg) ranks 0, 5s (2 segs)
+    # ranks 1 — both |Δ|=0, inf wins on preference.
+    r_inf, _r_ten, r_five = _max_speech_cells()
+    lines = gv.render_vad_sweep(
+        [float("inf"), 5.0], [r_inf, r_five],
+        name="rec.wav", axis="max_speech_s", target={"prefer": [1, 2]},
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    assert "max_speech=inf" in best
+    assert "1 segments" in best
+    assert "|Δ|=0" in best
+    assert "target 1>2" in best
+    assert "prefer" not in best
+    assert "inf.00" not in best
+
+
+def test_render_grid_prefer_target_on_max_speech_col_axis_formats_seconds():
+    # The seconds force-split ceiling is also a vad-grid COLUMN axis; the
+    # preference best: line must format the col value via %g too AND honour the
+    # preference tie-break. 1×2 grid over caps inf, 5 (counts 2, 4); preference
+    # 4>2 ranks the 5s cell (4 segs) ahead of the inf baseline (2 segs) — both
+    # |Δ|=0, so preference picks the 5s cap, OVERRIDING the earlier inf row (the
+    # flat set [4,2] would pick inf instead).
+    lines = gv.render_vad_grid(
+        [0.3], [float("inf"), 5.0], [_cell_result(2), _cell_result(4)],
+        name="rec.wav", col_axis="max_speech_s", target={"prefer": [4, 2]},
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    assert "max_speech=5" in best
+    assert "threshold=0.30" in best
+    assert "4 segments" in best
+    assert "|Δ|=0" in best
+    assert "target 4>2" in best
+    assert "prefer" not in best
+    # Seconds col formats compactly — no 5.00 leak.
+    assert "max_speech=5.00" not in best
+
+
+def test_render_grid_json_prefer_target_carries_seconds_max_speech():
+    # The grid JSON surface must carry a preference target on the seconds col axis
+    # as its {"prefer": [...]} dict (distinct from a flat-set array) AND emit the
+    # preference-chosen cap as a finite seconds number (5.0), with distance 0 when
+    # the count satisfies the preferred element.
+    payload = json.loads(
+        gv.render_vad_grid_json(
+            [0.3], [float("inf"), 5.0], [_cell_result(2), _cell_result(4)],
+            name="rec.wav", col_axis="max_speech_s", target={"prefer": [4, 2]},
+        )
+    )
+    assert payload["target"] == {"prefer": [4, 2]}
+    assert payload["best"]["num_segments"] == 4
+    assert payload["best"]["distance"] == 0
+    assert payload["best"]["max_speech_s"] == 5.0
+
+
 def test_render_sweep_json_carries_max_speech_axis():
     r = _Result(name="rec.wav", sample_rate=16000, duration_s=5.0, segments=[_Seg(0.0, 1.0)])
     payload = json.loads(

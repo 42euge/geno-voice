@@ -882,6 +882,26 @@ gv vad-sweep recording.wav --max-speeches 5,10,inf --target 2,4,6          # cap
 gv vad-grid  recording.wav --thresholds 0.3 --max-speeches 5,inf --target 2,4,6 --json
 ```
 
+The ranked PREFERENCE form (`--target 4>2`, iter-249) is the same shape of seam
+with one twist: its DISTANCE is the MIN over its elements (identical to the flat
+set), but its precedence breaks EXACT distance ties toward the earlier-listed
+(more-preferred) element. iter-264 pins it *together* with the seconds axis: when
+two caps both land on a preference element (both `|Δ|=0`), the preference picks
+the more-preferred count's cap even when it is NOT the earliest row — so
+`--target 4>2` over caps that recover 2 and 4 segments picks the 4-segment cap,
+where the flat set `4,2` would pick the earlier row instead. The `best:` line
+renders the preference as `4>2` (never a `{"prefer": ...}` dict repr) and names
+the chosen SECONDS cap compactly (`max_speech=10`, the no-cap baseline as
+`max_speech=inf`, never `10.00` / `inf.00`) across both the 1-D sweep and the 2-D
+grid column axis. The grid JSON surface carries the preference as its
+`{"prefer": [...]}` dict (distinct from a flat-set array) and emits the chosen cap
+as a finite seconds number (`best.max_speech_s == 5.0`):
+
+```bash
+gv vad-sweep recording.wav --max-speeches 5,10,inf --target 4>2            # preferred count's cap wins the tie
+gv vad-grid  recording.wav --thresholds 0.3 --max-speeches 5,inf --target 4>2 --json
+```
+
 ### Silero vs energy-VAD segment counts (the headless proof)
 
 Measured over the seed corpus with `min_silence_ms=800` (the pipecat
