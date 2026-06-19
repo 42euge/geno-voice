@@ -21588,3 +21588,119 @@ by eye — the very cross-reading the data-driven pick was meant to eliminate.
 4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
    --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
    refresh the comparison table.
+
+## iter-244 — `gv vad-sweep --target/--top/--tie-break`: bring the grid pick to the 1-D sweep
+
+**Branch:** `iter-244-vad-sweep-target` (merged ff to main, commit `a7094d8`)
+**Date:** 2026-06-18
+
+**No STEER.md this lap.** The two top-priority next items carried since
+iter-227 (wire `ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()`
+in the desktop app) both need a Mac + mic + browser and can't run headless on
+the loop host. The recording corpus is unchanged since iter-231 (same 6 WAVs),
+so the "ingest new recordings" item had nothing to do. I took the first
+headless-doable item from the iter-243 backlog: tie-break/pick parity for
+`gv vad-sweep` (item #3) — close the sweep↔grid feature gap.
+
+**The gap.** `gv vad-grid` grew a data-driven best-cell pick across
+iter-241→243: `--target N` (score every cell by `|num_segments - N|`, surface
+the closest as `best:`), `--top K` (a ranked shortlist of the K closest), and
+`--tie-break {row-major,speech}` (break equal-distance ties on recovered
+speech). The 1-D `gv vad-sweep` — the older, simpler sibling — had NONE of it:
+an operator sweeping one knob still had to eyeball the table to find the value
+closest to their expected segment count, while the 2-D grid handed them the
+answer. The same operator question ("which value gets me ~N regions?") deserved
+the same data-driven answer on both surfaces.
+
+**Why it's a clean reuse.** A sweep row is `{axis, num_segments, speech_s}`;
+a grid cell is `{row_axis, col_axis, num_segments, speech_s}`. The pickers read
+ONLY `num_segments` and (for the speech tie-break) `speech_s` — keys both
+shapes share. So `pick_best_grid_cell`, `pick_top_grid_cells`,
+`grid_cell_distance`, and `grid_cell_sort_key` drive the sweep pick UNCHANGED.
+No parallel implementation, no new pure helpers — the lap is purely plumbing the
+`target`/`top`/`tie_break` kwargs through the sweep renderers + handler, plus
+three parser flags that mirror the grid's.
+
+**What changed.**
+1. **`render_vad_sweep`** (`examples/gv.py`) gains `target` / `top` /
+   `tie_break` kwargs. With a `target`, a trailing `best:` line names the swept
+   value whose recovered count is closest (via `pick_best_grid_cell` over the
+   sweep rows); with `top`, a `top N (closest to target N):` block of ranked
+   rows follows, head always the `best:` value. `target=None` (the default)
+   keeps the iter-236 output byte-for-byte.
+2. **`render_vad_sweep_json`** gains the same kwargs. With a `target` the
+   payload grows `target` / `tie_break` / `best` (augmented with a `distance`
+   key) and, with `top`, a ranked `top` list (each with `distance`, head ==
+   `best`). Absent `target` omits all four keys — the iter-236 shape.
+3. **`render_vad_sweep_csv` untouched** — a pure data grid ignores the derived
+   pick (the same rationale that keeps `target`/`top`/`tie_break` out of the
+   grid CSV body).
+4. **`cmd_vad_sweep`** reads `args.target` / `args.top` / `args.tie_break` and
+   threads them into the human + json renderers (both the available and
+   unavailable branches); CSV ignores them.
+5. **Parser:** new `--target` (`nonneg_int_type`), `--top` (`pos_int_type`),
+   `--tie-break {row-major,speech}` (default `row-major`) on the `vad-sweep`
+   subcommand — the exact flags the `vad-grid` subcommand already carries
+   (same validators, same choices, same defaults).
+6. **Tests.**
+   - `tests/unit/test_gv_vad.py` (**+35**, now 309 in-file): `--target` /
+     `--top` / `--tie-break` parser accept/reject matrix (default-None, int
+     parse, zero accepted for target / rejected for top, negative/fractional
+     rejection, unknown tie-break choice rejection); `render_vad_sweep`
+     best-line names the closest value / min_silence axis label / empty-sweep
+     reports none / top-block ranked nearest-first / top ignored without target
+     / head == best; `render_vad_sweep_json` omits pick keys without target /
+     adds best+distance+tie_break / top list ranked head==best / top ignored
+     without target / empty→best None; speech vs row-major tie-break over a
+     hand-built tied sweep (human + json); `cmd_vad_sweep` end-to-end (best
+     line, no-target no-line, json carries target/best/top, csv ignores all,
+     speech tie-break picks most speech, unavailable branch no crash, target on
+     the min_silence axis). NO torch import — driven through the injected
+     segmenter seam.
+   - `tests/integration/test_gv_vad_cli.py` (**+2**): over THE GATE recording
+     the surfaced `best` genuinely minimises `|num_segments - target|` over the
+     very sweep the run tabulated (no off-by-one, no stale row), the `top` head
+     equals `best` with the K smallest distances sorted; without `--target` the
+     payload keeps the iter-236 shape (no `best`/`target`/`top`/`tie_break`
+     keys leak). Skips without corpus/package.
+   - `tests/unit/test_gv_cli.py`: unchanged — no new handler this lap
+     (`vad-sweep` was already in the pinned handler map).
+7. **Docs** (`docs/research/voice-capture-tuning.md`) — a
+   `--target`/`--top`/`--tie-break` subsection under `gv vad-sweep`: the
+   shared-pickers rationale, the invocation set (incl. on a non-default axis),
+   the verified real-corpus example (gate sweep, target 3 / top 3 → 0.70 then
+   0.90 then 0.30), and a pointer to the `vad-grid` section for the identical
+   semantics. Also added a `--target` line to the sweep quick-invocation block.
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3551 passed** (3516 prior + 35 new), run on the feature branch before
+  ff-merge. Re-confirmed on main after merge: `pytest
+  tests/unit/test_gv_vad.py tests/unit/test_gv_cli.py` → **402 passed**.
+- Integration: `python -m pytest tests/integration/test_gv_vad_cli.py` →
+  **39 passed** (37 prior + 2 new; corpus symlinked into the worktree, symlink
+  removed before commit so it is not tracked). silero-vad IS installed on this
+  host, so these ran against the real model.
+- Manual smoke on the branch over `voice-20260618-110355.wav`:
+  `gv vad-sweep … --thresholds 0.3,0.5,0.7,0.9 --target 3 --top 3` → the 4-row
+  table, `best: threshold=0.70 (4 segments, |Δ|=1 from target 3)`, then the
+  top-3 block (0.70/Δ1, 0.90/Δ1, 0.30/Δ2); `--tie-break speech` kept 0.70 as
+  best (more speech than 0.90 among the |Δ|=1 ties); `--json` carried
+  `"tie_break": "row-major"`.
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] Unify the sweep + grid pick into one shared renderer mix-in** — the
+   `best:`/`top N:` block is now duplicated between `render_vad_sweep` and
+   `render_vad_grid` (the 1-D and 2-D forms differ only in how many axis labels
+   precede the count). A small shared `_render_pick_block(cells, ...)` helper
+   would collapse the duplication and guarantee the two surfaces never drift in
+   format. Pure-function, fully headless.
+4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
+   --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
+   refresh the comparison table.
