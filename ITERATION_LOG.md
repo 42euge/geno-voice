@@ -25864,3 +25864,115 @@ first run).
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
    should track a curated subset, decide the policy and re-run
    `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
+
+## iter-285 — grid CSV ↔ JSON cross-surface weighted-set --target pick under speech tie-break
+
+- **Date:** 2026-06-19
+- **Branch:** iter-285-weighted-speech (ff-merged to main)
+- **Commit:** (see git log — this section)
+
+**Why.** iter-274/281/282/283/284 pinned the grid CSV↔JSON cross-surface
+`--target` pick AGREEMENT — a CSV consumer re-parses the bare grid table back to
+cells and re-runs `pick_best_grid_cell` / `pick_top_grid_cells` to recover the
+JSON-embedded `best`/`top` identically — under the NON-DEFAULT
+`tie_break="speech"` (breaks distance ties on recovered speech, most first,
+iter-243) for the SCALAR (iter-274), closed BAND (iter-281), flat SET (iter-282),
+OPEN band (iter-283), and `{"prefer": [...]}` PREFERENCE (iter-284). The iter-284
+backlog #4 named the next distinct speech twin: a
+`{"weighted": [(element, penalty), ...]}` set (iter-250) under
+`tie_break="speech"`. I confirmed no existing test round-trips a WEIGHTED target
+*under the speech tie-break* cross-surface (iter-277 pins the weighted form only
+under row-major; the speech laps iter-281–284 cover only band/set/open-band/
+preference), so the gap is real.
+
+**The distinct mechanism.** The weighted set is a DISTINCT twin from every prior
+speech case. Like the band/set/open-band it inserts NO secondary sort key (so
+`grid_cell_sort_key` under speech is a TWO-level `(penalised_distance, -speech_s)`
+— speech SECONDARY, NOT the preference's three-level key with a rank between
+distance and speech), but UNLIKE all of them the distance itself carries the
+penalty (`grid_cell_distance` = MIN over elements of `|Δ| + penalty`), so the
+cells that tie at the penalised FLOOR differ from any unweighted form: a cell
+landing EXACTLY on a penalised element can be pushed OUT of the floor by its
+penalty while a farther-but-penalty-free cell sits at the floor. Pinning the
+weighted set under row-major (iter-277) and the band/set/open-band/preference
+under speech (iter-281–284) does NOT pin the weighted set under speech. A
+regression that dropped the `tie_break` on the JSON path (falling back to
+row-major) while the CSV consumer still passed `"speech"`, OR collapsed the
+`{"weighted": ...}` dict to a plain set on the JSON path (dropping the penalties
+so which cells tie at the floor changes), would diverge the two surfaces yet ship
+green. No production code changed (the wiring was already correct — proved by the
+test passing on first run).
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+1 test).**
+  `test_render_grid_csv_consumer_rederives_json_weighted_target_speech_tie_pick`
+  — a 2×2 `threshold × min_silence_ms` grid (row-major counts 2/6/4/8) with
+  `target={"weighted": [(3, 0), (6, 2)]}`, `top=3`, `tie_break="speech"`.
+  Penalised distances `[1, 2, 1, 4]`: counts 2 and 4 tie at the floor 1 (one off
+  the penalty-free preferred 3), while count 6 — an exact hit on element 6 — pays
+  its +2 penalty to land at distance 2, OUT of the floor. With `_cell_result`
+  coupling speech to count (n→n*0.5s) the two floor cells carry distinct speech
+  (1.0/2.0s). Under `tie_break="speech"` the most-speech floor cell, count 4
+  (0.5,400) at 2.0s, beats count 2 (0.3,400) at 1.0s. A ROW-MAJOR control picks
+  the earliest floor cell, count 2 — a DIFFERENT pick, proving the tie-break
+  flips the result. A flat-SET control `[3, 6]` (no penalties) makes count 6 the
+  SOLE raw-distance-0 floor and elects it outright (no tie to reorder) — a third
+  distinct cell, proving the +2 penalty is load-bearing for which cells tie.
+  Asserts the JSON records `target == {"weighted": [[3, 0], [6, 2]]}` AND
+  `tie_break == "speech"`; the CSV body carries no `best`/`distance`/`tie_break`/
+  `weighted` columns; a CSV `DictReader` consumer re-running
+  `pick_best_grid_cell(cells, target, "speech")` recovers a `best` identical to
+  the JSON `best` (penalised distance 1, count 4); and
+  `pick_top_grid_cells(..., "speech")` recovers a shortlist agreeing cell-for-cell
+  — the two floor cells leading speech-ordered `[(0.5,400),(0.3,400)]` (speech
+  `[2.0, 1.0]`) AHEAD of the penalty-2 count-6 cell `(0.3,800)` at distance 2,
+  DESPITE count 6 carrying the MOST speech (3.0s) of the three — `distance
+  [1, 1, 2]` and `speech_s [2.0, 1.0, 3.0]` proving the penalty (distance)
+  outranks speech for the order — the dist-4 count-8 cell never reaching the
+  top 3.
+- **`docs/research/voice-capture-tuning.md`.** Extended the grid cross-surface
+  paragraph: iter-285 carries the speech tie-break onto the weighted set (the
+  two-level `(penalised_distance, -speech_s)` key with the penalty in the
+  distance, NOT a secondary rank), with the row-major and flat-set controls
+  explained, and noted that the scalar, closed band, flat set, open band,
+  preference, and weighted set are now cross-surface pinned under
+  `tie_break="speech"`.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **3865 passed**
+(3864 prior + 1 net new), run on the feature branch before ff-merge.
+- Focused: `pytest tests/unit/test_gv_vad.py -k "rederives_json_weighted_target_speech_tie_pick or rederives_json_weighted_target_pick or rederives_json_preference_target_speech_tie_pick"`
+  → **3 passed** (the new weighted+speech twin + the iter-277 weighted-under-
+  row-major twin it re-tie-breaks on speech + the iter-284 preference+speech twin
+  it sits beside).
+- Integration: not re-run this lap (no corpus symlinked into this worktree; same
+  as prior corpus-gated laps — the change is pure CLI render logic fully covered
+  by the unit matrix).
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] COMBINED additive+multiplicative `--target` weight** — iter-250/251
+   give additive (`:penalty`), iter-252 multiplicative (`*factor`); an operator
+   might want both on one element (`5:1*1.5`). Larger design question (operator
+   precedence of `:` vs `*`) — scope before building. Pure, headless if pursued.
+   Still the ONLY `--target` increment that is a FEATURE, not a regression-test gap.
+4. **[cli] Speech-tie cross-surface contract now covers scalar (iter-274), closed
+   band (iter-281), flat set (iter-282), open band (iter-283), preference
+   (iter-284), and weighted set (iter-285).** The LAST remaining speech-tie
+   cross-surface gap among the dict forms is the `{"scaled": …}` MULTIPLICATIVE
+   set (iter-252) under `tie_break="speech"`. Like the weighted set it folds its
+   preference into the distance and inserts no secondary sort key (speech stays
+   SECONDARY), but the cost is `|Δ| * factor` (grows with distance) rather than
+   `|Δ| + penalty` (a fixed offset), so the cells that tie at the SCALED floor
+   differ from the weighted set's penalised floor — the natural next twin. After
+   that, the 1-D `vad-sweep` cross-surface forms, or the `simulate-mirror` grid
+   pick round-trips. Confirm no existing test already exercises the chosen form
+   cross-surface before assuming a gap.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
+   should track a curated subset, decide the policy and re-run
+   `replay_silero.py --compare` + `gv vad` to refresh the comparison table.

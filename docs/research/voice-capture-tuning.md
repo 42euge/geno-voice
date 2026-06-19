@@ -362,9 +362,23 @@ nearer 9, DESPITE count 8 carrying the most speech), and speech then picks count
 over count 4 among the rank-0 pair. A row-major control picks count 4 instead, and a
 flat-SET control `[5, 9]` (no preference rank) drops the key to two-level and elects
 the most-speech-overall count 8 — proving the preference rank, not just speech, is
-load-bearing. With this every documented target form is now cross-surface pinned
+load-bearing. iter-285 carries the speech tie-break onto the
+`{"weighted": [(element, penalty), ...]}` *weighted set* form (iter-250) — the first
+speech twin whose preference folds back INTO the distance. Like the band/set/open-band
+it inserts NO secondary sort key (so speech stays the SECONDARY key, a two-level
+`(penalised_distance, -speech_s)` — NOT the preference's three-level key), but UNLIKE
+all of them the distance carries the penalty, so which cells tie at the penalised
+FLOOR differs from any unweighted form: a cell landing EXACTLY on a penalised element
+can be pushed OUT of the floor by its penalty. A `{"weighted": [(3, 0), (6, 2)]}`
+target over counts 2/6/4/8 ties counts 2 and 4 at penalised distance 1 (each one off
+the penalty-free preferred 3), while count 6 — an exact hit on element 6 — pays its +2
+penalty to land at distance 2, OUT of the floor. Under `tie_break="speech"` the
+most-speech floor cell (count 4 at 2.0s) wins over count 2; a row-major control picks
+count 2 instead, and a flat-SET control `[3, 6]` (no penalties) makes count 6 the sole
+raw-distance-0 floor and picks it outright — proving the +2 penalty is load-bearing for
+which cells tie. With this every documented target form is now cross-surface pinned
 under the default row-major tie-break, and the scalar, closed band, flat set, open
-band, and preference are pinned under `tie_break="speech"`.
+band, preference, and weighted set are pinned under `tie_break="speech"`.
 
 **`--min-silences` — a second sweep axis (iter-238).** The default axis is the
 P(speech) gate (`--thresholds`); passing `--min-silences` instead sweeps the
