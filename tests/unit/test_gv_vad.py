@@ -2681,6 +2681,174 @@ def test_pick_best_grid_cell_weighted_overrides_distance_gap():
     assert best["num_segments"] == 4
 
 
+# ---- scaled set: factor folds preference into distance MULTIPLICATIVELY (iter-252) ---
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("1", 1),
+        ("2", 2),
+        ("2.0", 2),  # an integral float collapses to int
+        ("1.5", 1.5),
+        ("3.25", 3.25),
+    ],
+)
+def test_scale_factor_parses_number(raw, expected):
+    # iter-252: the factor slot accepts a number >= 1; an integral float collapses
+    # to an int so a whole-number factor renders/serialises as a plain int.
+    value = gv.scale_factor_type(raw)
+    assert value == expected
+    assert type(value) is type(expected)
+
+
+@pytest.mark.parametrize("raw", ["0", "0.5", "-1", "-0.5", "nan", "inf", "abc", ""])
+def test_scale_factor_rejects_bad(raw):
+    # iter-252: a factor below 1 would DISCOUNT an element's distance (the other
+    # elements' larger factors already express that), and NaN/inf/non-numeric are
+    # nonsensical.
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.scale_factor_type(raw)
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("3,5*1.5", {"scaled": [(3, 1), (5, 1.5)]}),
+        ("3*2,5*1.5", {"scaled": [(3, 2), (5, 1.5)]}),
+        ("3,5-7*1.5", {"scaled": [(3, 1), ((5, 7), 1.5)]}),  # a band may be scaled
+        ("3,5*2.0", {"scaled": [(3, 1), (5, 2)]}),  # integral float collapses to int
+    ],
+)
+def test_target_type_scaled_accepts_factor(raw, expected):
+    # iter-252: a '*factor' weight parses to a {"scaled": [...]} dict; a fractional
+    # factor stays a float, an integral one collapses to int.
+    value = gv.target_type(raw)
+    assert value == expected
+    assert isinstance(value["scaled"][1][1], type(expected["scaled"][1][1]))
+
+
+def test_target_type_scaled_dedupes_first_factor_wins():
+    # iter-252: dedupe on the element preserving first-seen order — the first factor
+    # for a repeated element wins.
+    assert gv.target_type("3*2,5*1.5,3*9") == {"scaled": [(3, 2), (5, 1.5)]}
+
+
+def test_target_type_scaled_single_element_collapses():
+    # iter-252: a scaled set that reduces to one element drops the factor (a lone
+    # factor scales every cell uniformly and cannot change a pick), so scalar
+    # output is byte-for-byte unchanged.
+    assert gv.target_type("5*2,5*3") == 5
+
+
+def test_target_type_rejects_factor_without_set():
+    # iter-252: a '*' factor is meaningless on a single element, so it requires the
+    # ',' set context.
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.target_type("3*1.5")
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.target_type("3-5*1.5")  # a lone band with a factor is still single
+
+
+@pytest.mark.parametrize("raw", ["3,5*1.5>7", "3*1.5>7", "3,5*1.5,7>9"])
+def test_target_type_rejects_mixing_factor_and_preference(raw):
+    # iter-252: '*' (factor) and '>' (preference) both express preference; stacking
+    # them is ambiguous.
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.target_type(raw)
+
+
+@pytest.mark.parametrize("raw", ["3,5:2*1.5", "3*1.5,5:2", "3,5*1.5:2"])
+def test_target_type_rejects_mixing_factor_and_penalty(raw):
+    # iter-252: ':' (additive penalty) and '*' (multiplicative factor) are two ways
+    # to weight one set; a set is one OR the other, not both at once.
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.target_type(raw)
+
+
+@pytest.mark.parametrize("raw", ["3,5*a", "3,5*0.5", "3,a*2", "3,5-3*2"])
+def test_target_type_rejects_malformed_scaled_element(raw):
+    # iter-252: a non-number/below-1 factor, a bad base, or an inverted band element
+    # fails the whole target.
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.target_type(raw)
+
+
+def test_format_target_scaled():
+    # iter-252: a scaled set renders comma-joined, each non-neutral factor appended
+    # as '*factor' (a neutral factor 1 stays bare), so it reads back as typed.
+    assert gv._format_target({"scaled": [(3, 1), (5, 1.5)]}) == "3,5*1.5"
+    assert gv._format_target({"scaled": [(3, 2), (5, 1.5)]}) == "3*2,5*1.5"
+    assert gv._format_target({"scaled": [(3, 1), ((5, 7), 1.5)]}) == "3,5-7*1.5"
+
+
+def test_grid_cell_distance_scaled_multiplies_min_over_elements():
+    # iter-252: each element's distance is its raw distance TIMES its factor; the
+    # set scores as the MIN over those scaled distances. An exact hit stays free.
+    target = {"scaled": [(3, 1), (5, 1.5)]}
+    assert gv.grid_cell_distance({"num_segments": 3}, target) == 0  # 0*1 vs 2*1.5
+    assert gv.grid_cell_distance({"num_segments": 5}, target) == 0  # 2*1 vs 0*1.5
+    assert gv.grid_cell_distance({"num_segments": 7}, target) == 3  # 4*1 vs 2*1.5=3
+
+
+def test_grid_cell_distance_scaled_grows_cost_with_distance():
+    # iter-252: THE point of the form vs the additive penalty. Preferred 3
+    # (factor 1), accepted 5 (factor 2). The exact-accepted count 5 stays FREE
+    # (0*2=0) — unlike an additive penalty, which bites even an exact hit. But
+    # drifting one past 5 to count 6 costs 1*2=2, double the raw drift, so the
+    # cost scales with distance rather than offsetting by a constant.
+    target = {"scaled": [(3, 1), (5, 2)]}
+    assert gv.grid_cell_distance({"num_segments": 5}, target) == 0  # exact hit free
+    assert gv.grid_cell_distance({"num_segments": 6}, target) == 2  # 3*1=3 vs 1*2=2
+    assert gv.grid_cell_distance({"num_segments": 4}, target) == 1  # 1*1=1 vs 1*2=2
+
+
+def test_grid_cell_sort_key_scaled_inserts_no_secondary_key():
+    # iter-252: the scaled set's preference is already baked into the distance (the
+    # factor), so the sort key carries NO secondary preference-rank component.
+    target = {"scaled": [(3, 1), (5, 2)]}
+    assert gv.grid_cell_sort_key({"num_segments": 3, "speech_s": 1.0}, target) == (0,)
+    assert gv.grid_cell_sort_key(
+        {"num_segments": 7, "speech_s": 1.0}, target, "speech"
+    ) == (4, -1.0)
+
+
+def test_pick_best_grid_cell_scaled_grows_cost_with_distance():
+    # iter-252: preferred 3 (factor 1), accepted 5 (factor 2). Count 6 (one past the
+    # accepted 5) costs 1*2=2; count 4 (one past the preferred 3) costs 1*1=1, so
+    # the pick leans toward the lower-factor element as cells drift away.
+    cells = _seg_speech_cells([(6, 9.0), (4, 1.0)])
+    best = gv.pick_best_grid_cell(cells, {"scaled": [(3, 1), (5, 2)]})
+    assert best["num_segments"] == 4
+
+
+def test_render_grid_json_carries_scaled_target():
+    # iter-252: a scaled target serialises as {"scaled": [...]} — each element a
+    # nested array, the factor a JSON number (a band element nests its own [lo,hi]).
+    results = [_cell_result(n) for n in (4, 7)]
+    payload = json.loads(
+        gv.render_vad_grid_json(
+            [0.3], [400.0, 800.0], results, name="rec.wav",
+            target={"scaled": [(3, 1), ((5, 7), 1.5)]},
+        )
+    )
+    assert payload["target"] == {"scaled": [[3, 1], [[5, 7], 1.5]]}
+
+
+def test_render_grid_scaled_target_line_reads_back():
+    # iter-252: the best: line renders the scaled weight as typed and shows the
+    # scaled |Δ| with no dict repr leaking.
+    results = [_cell_result(n) for n in (6, 4)]
+    lines = gv.render_vad_grid(
+        [0.3], [400.0, 800.0], results, name="rec.wav",
+        target={"scaled": [(3, 1), (5, 2)]},
+    )
+    best_line = lines[-1]
+    assert "4 segments" in best_line
+    assert "target 3,5*2" in best_line
+    assert "scaled" not in best_line
+
+
 def test_pick_best_grid_cell_speech_tie_break_prefers_most_speech():
     # Both cells are |Δ|=1 from target 3; speech tie-break picks the 5.0s cell
     # even though the 2.0s cell is earlier in row-major order.
@@ -3640,6 +3808,54 @@ def test_cmd_vad_sweep_weighted_target_overrides_distance_gap():
     assert "5 segments" in text
     assert "target 3,8:3" in text
     assert "weighted" not in text
+
+
+def test_cmd_vad_grid_scaled_target_grows_cost_with_distance():
+    # iter-252, grid form: preferred 3 (factor 1), accepted 8 (factor 2). Low gate →
+    # 10 segments (raw dist 2 past accepted 8, scaled 2*2=4); high gate → 5 (raw
+    # dist 2 from preferred 3, scaled 2*1=2). The factor grows the off-8 cost so the
+    # pick lands on the 5-count cell (2 < 4).
+    def seg(wav, params=None):
+        n = 10 if params.threshold < 0.5 else 5
+        return _cell_result(n)
+
+    lines: List[str] = []
+    gv.cmd_vad_grid(
+        _grid_args(
+            thresholds=[0.3, 0.5], min_silences=[400.0],
+            target={"scaled": [(3, 1), (8, 2)]},
+        ),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    text = "\n".join(lines)
+    assert "best:" in text
+    assert "5 segments" in text
+    assert "target 3,8*2" in text
+    assert "scaled" not in text
+
+
+def test_cmd_vad_sweep_scaled_target_grows_cost_with_distance():
+    # iter-252, sweep form: preferred 3 (factor 1), accepted 8 (factor 2). Low gate →
+    # 10 segments (scaled 2*2=4); high gate → 5 (scaled 2*1=2). The factor flips the
+    # pick to the 5-count value (2 < 4).
+    def seg(wav, params=None):
+        n = 10 if params.threshold < 0.5 else 5
+        return _cell_result(n)
+
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(thresholds=[0.3, 0.7], target={"scaled": [(3, 1), (8, 2)]}),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    text = "\n".join(lines)
+    assert "best:" in text
+    assert "5 segments" in text
+    assert "target 3,8*2" in text
+    assert "scaled" not in text
 
 
 def test_cmd_vad_grid_csv_ignores_target():

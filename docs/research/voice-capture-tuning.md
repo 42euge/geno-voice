@@ -159,6 +159,7 @@ gv vad-sweep recording.wav --target 3,5,7                   # set: 3 OR 5 OR 7 r
 gv vad-sweep recording.wav --target 3>5>7                   # preference: prefer 3, accept 5, then 7 (iter-249)
 gv vad-sweep recording.wav --target 3,5:2                   # weighted: prefer 3, accept 5 but 2 worse (iter-250)
 gv vad-sweep recording.wav --target 3,5:1.5                 # fractional weight: 5 is 1.5 segments worse (iter-251)
+gv vad-sweep recording.wav --target 3,5*1.5                 # scaled: prefer 3, accept 5, drift past costs 1.5x (iter-252)
 ```
 
 The human report is a small table — the WAV name, a `threshold / segments /
@@ -492,6 +493,44 @@ already expresses; an infinite one is a degenerate "never pick this").
 ```bash
 gv vad-sweep recording.wav --thresholds 0.3,0.5,0.7,0.9 --target 3,5:1.5  # fractional weight: 5 is 1.5 worse
 ```
+
+#### `--target A,B*F` — a scaled set (iter-252)
+
+The `:penalty` weight is **additive** — a fixed offset on an element's distance,
+so a less-preferred count is "N segments worse" no matter how far the cell drifts,
+and the penalty bites even an **exact** hit (`0 + penalty`). An operator who thinks
+**proportionally** ("count 5 is acceptable, but every segment I drift *past* it
+should hurt more") has no expression for that. iter-252 adds the `*factor`
+**multiplicative** twin: `--target 3,5*1.5` means "prefer 3, accept 5 **but drift
+past it costs 1.5×**". The factor **multiplies** that element's distance
+(`distance * factor`), so — unlike the additive penalty — an exact hit stays
+**free** (`0 * 1.5 = 0`) and the cost grows only as the cell count moves away. An
+element with no `*` carries factor `1` (neutral); each element is itself a scalar
+or band, so they compose (`3,5-7*1.5`).
+
+```bash
+gv vad-sweep recording.wav --thresholds 0.3,0.5,0.7,0.9 --target 3,5*1.5  # prefer 3, accept 5, drift past costs 1.5x
+gv vad-grid  recording.wav --thresholds 0.3,0.5,0.7 --min-silences 400,800 --target 3,5-7*1.5  # scaled band
+```
+
+The distance is the **min** over each element's `(raw distance × factor)`, so a
+count routes through whichever element is cheapest. With `3,5*2`, the exact-
+accepted count 5 stays free, but count 6 (one past) costs `1×2 = 2` while count 4
+(one past the preferred 3) costs `1×1 = 1` — so the pick leans toward the
+lower-factor element as cells drift away. The `best:` / `top N:` lines render the
+set comma-joined with each non-neutral factor appended (`3,5*2`), the `|Δ|` shown
+being the **scaled** distance, and the `--json` `target` serialises as a
+`{"scaled": [[element, factor], ...]}` object (a band element nests as its own
+`[lo, hi]` array). A scaled set is deduped on the element preserving first-seen
+order (the first factor wins), and one that collapses to a single element drops the
+now-useless factor (a lone factor scales every cell uniformly and cannot change a
+pick). A `*` factor **requires** a `,` set, and cannot be combined with `>`
+(preference) or `:` (the additive weight) — a set is additively *or*
+multiplicatively weighted, not both, and stacking either with preference is
+rejected as ambiguous. Each factor is a number `>= 1` (`1` is neutral; a factor
+below 1 would *discount* an element, which the other elements' larger factors
+already express); NaN and infinite factors are rejected, and an integral float
+collapses to an int (`5*2.0` → `5*2`).
 
 ### `gv vad-grid` — a 2-D knob grid (iter-240)
 
