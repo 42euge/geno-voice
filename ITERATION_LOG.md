@@ -24297,3 +24297,89 @@ changed (the wiring was already correct — proved by a pre-test smoke run).
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
    should track a curated subset, decide the policy and re-run
    `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
+
+## iter-270 — grid CSV ↔ JSON cross-surface round-trip on non-default axes
+
+**Branch:** `iter-270-grid-roundtrip` (merged ff to main, commit `15c36ff`)
+**Date:** 2026-06-19
+
+**No STEER.md this lap.** The carried top-priority items (wire
+`ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()` in the desktop
+app) both need a Mac + mic + browser and can't run headless on the loop host.
+"Ingest new recordings" stays corpus-gated. The COMBINED
+additive+multiplicative `--target` weight is a feature/design item, not a
+regression-test gap. So I took iter-269 backlog item #4: lift the CSV↔JSON
+cross-surface round-trip from the 1-D sweep (closed across all five axes in
+iter-268/269) to the 2-D **grid** on a non-default axis pair.
+
+**The gap.** iter-268/269 proved the 1-D `render_vad_sweep_csv` ↔
+`render_vad_sweep_json` agreement on every axis by parsing the CSV `DictReader`
+rows back to the EXACT `--json` `sweep` payload. The 2-D grid had a round-trip
+test (`test_render_grid_csv_round_trips_to_grid_cells`) but it only compared the
+CSV body against the SHARED data layer (`vad_segmentation_grid` cells) on the
+DEFAULT axis pair (`threshold × min_silence_ms`). The two machine surfaces —
+`render_vad_grid_csv` and `render_vad_grid_json` — were never round-tripped
+DIRECTLY against each other, and never on a non-default `row_axis`/`col_axis`.
+Both emitters are axis-agnostic (each stringifies whichever value the
+`row_axis`/`col_axis` kwarg names), so a regression that let the CSV's first two
+columns drift from the JSON cell keys, reordered the row-major cell emission on
+one surface but not the other, or truncated a later cell's value on just one
+surface, would have shipped green while the default-axes grid-cells round-trip
+and the 1-D ms-axis twins stayed passing. No production code changed (the wiring
+was already correct — proved by a pre-test smoke run).
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+1 test, +47 lines).**
+  `test_render_grid_csv_round_trips_to_json_twin_on_nondefault_axes` — a 2×3
+  grid (`min_speech_ms` rows `[200, 400]` × `speech_pad_ms` columns
+  `[30, 90, 150]`), row-major counts 6/4/2 then 5/3/1; asserts the CSV
+  `DictReader` rows parse back to the EXACT `--json` `grid` payload (both axis
+  values + `num_segments` + `speech_s` per cell), with the first two CSV columns
+  keyed by the swept axis names. The 2-D analogue of the iter-268/269 1-D twins.
+- **`docs/research/voice-capture-tuning.md`.** Extended the iter-268/269
+  round-trip paragraph: iter-270 lifts the cross-surface proof to the 2-D grid
+  on a non-default axis pair, calling out that the prior grid test only compared
+  CSV against the shared `vad_segmentation_grid` data layer on the default axes.
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3850 passed** (3849 prior + 1 net new), run on the feature branch before
+  ff-merge AND re-run on main after the merge (both 3850).
+- Focused: `pytest tests/unit/test_gv_vad.py -k "round_trips_to_json_twin or round_trips_to_grid_cells"`
+  → **5 passed** (3 one-D ms-axis twins + the default-axes grid-cells round-trip
+  + the new grid CSV↔JSON twin).
+- Pre-test smoke (Python, on the branch): a 2×3 `min_speech_ms × speech_pad_ms`
+  grid → CSV `DictReader` rows parsed back to the JSON `grid` payload identically
+  (`match=True`, headers named by both axes). Confirmed the wiring was already
+  correct before writing the assertion.
+- Integration: not re-run this lap (no corpus symlinked into this worktree; same
+  as prior corpus-gated laps — the change is pure CLI render logic fully covered
+  by the unit matrix).
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] COMBINED additive+multiplicative `--target` weight** — iter-250/251
+   give additive (`:penalty`), iter-252 multiplicative (`*factor`); an operator
+   might want both on one element (`5:1*1.5`). Larger design question (operator
+   precedence of `:` vs `*`) — scope before building. Pure, headless if pursued.
+   This remains the only `--target` increment that is a FEATURE (new
+   parse/semantics), not a regression-test gap.
+4. **[cli] GRID `--json`↔`--csv` cross-surface round-trip with a `target`/`top`
+   pick.** iter-270 pinned the bare `grid` payload round-trip on a non-default
+   axis pair. The JSON twin grows `target`/`best`/`top`/`tie_break` keys when a
+   target is set (`render_vad_grid_json`), but the CSV surface has no pick
+   columns — so the cross-surface agreement is only meaningful for the `grid`
+   cells, which iter-270 now covers. Confirm there is no further grid round-trip
+   gap before assuming one; the likely-next pure increment is instead a
+   **grid CSV↔JSON round-trip with an `inf` (`max_speech_s`) cell on BOTH axes
+   simultaneously**, since iter-267 pinned the inf sentinel per-surface but the
+   cross-surface inf round-trip on a non-default pair is untested.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
+   should track a curated subset, decide the policy and re-run
+   `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
