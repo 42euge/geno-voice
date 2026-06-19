@@ -788,6 +788,173 @@ def render_vad_sweep_csv(values, results, *, name, axis="threshold"):
     return buf.getvalue().rstrip("\r\n")
 
 
+def vad_segmentation_grid(
+    row_values, col_values, results, *, row_axis="threshold", col_axis="min_silence_ms"
+):
+    """Pair each (row, col) axis-value cell with its segmentation summary.
+
+    iter-240's 2-D analogue of :func:`vad_segmentation_sweep`: where the 1-D
+    sweep tabulates ONE knob across N values, the grid tabulates the cartesian
+    product of TWO knobs (the analogue of ``simulate-mirror --grid``'s
+    base_wpm × strength), so an operator can read the elbow in two dimensions
+    at once instead of running N separate 1-D sweeps. ``results`` is the
+    flattened cell list in ROW-MAJOR order (row 0's whole row of columns first,
+    then row 1's, …), length ``len(row_values) * len(col_values)``.
+
+    Pure: returns a flat list of cell dicts ``{row_axis, col_axis,
+    "num_segments", "speech_s"}`` in that same row-major order, ``speech_s``
+    rounded to 3 places like :func:`vad_segmentation_sweep`. No I/O, no torch
+    import, so it is testable in isolation. Raises :class:`ValueError` if
+    ``results`` length differs from the row×col product.
+    """
+    expected = len(row_values) * len(col_values)
+    if len(results) != expected:
+        raise ValueError(
+            f"results ({len(results)}) must equal row_values × col_values "
+            f"({len(row_values)} × {len(col_values)} = {expected})"
+        )
+    cells = []
+    i = 0
+    for rv in row_values:
+        for cv in col_values:
+            r = results[i]
+            i += 1
+            cells.append(
+                {
+                    row_axis: rv,
+                    col_axis: cv,
+                    "num_segments": r.num_segments,
+                    "speech_s": round(r.speech_s, 3),
+                }
+            )
+    return cells
+
+
+def render_vad_grid(
+    row_values,
+    col_values,
+    results,
+    *,
+    name,
+    row_axis="threshold",
+    col_axis="min_silence_ms",
+):
+    """Render a 2-D grid sweep as a plain-text table.
+
+    The human-readable twin of :func:`render_vad_grid_json`, the 2-D analogue
+    of :func:`render_vad_sweep` and the direct counterpart of
+    :func:`render_grid` (``simulate-mirror --grid``): a FLAT one-row-per-cell
+    table (not a matrix) so each cell's two metrics — segment count and speech
+    seconds — stay unambiguous. ``name`` is the WAV being swept; ``row_axis`` /
+    ``col_axis`` name the two swept dimensions, which set the two leading column
+    labels and value formats (a gate prints ``0.40``, a millisecond knob a bare
+    ``800``). Any ``None`` in ``results`` (segmenter unavailable) yields the
+    shared install hint. Pure: returns a list of strings.
+    """
+    if any(r is None for r in results):
+        return [
+            "silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        ]
+    cells = vad_segmentation_grid(
+        row_values, col_values, results, row_axis=row_axis, col_axis=col_axis
+    )
+    row_label = _SWEEP_AXIS_LABEL.get(row_axis, row_axis)
+    col_label = _SWEEP_AXIS_LABEL.get(col_axis, col_axis)
+    lines = [
+        f"silero VAD grid — {name} ({row_label} × {col_label})",
+        f"  {row_label:>11}  {col_label:>11}  segments  speech",
+    ]
+    for cell in cells:
+        lines.append(
+            f"  {_format_sweep_axis_value(row_axis, cell[row_axis]):>11}  "
+            f"{_format_sweep_axis_value(col_axis, cell[col_axis]):>11}  "
+            f"{cell['num_segments']:>8}  {cell['speech_s']:>5.1f}s"
+        )
+    return lines
+
+
+def render_vad_grid_json(
+    row_values,
+    col_values,
+    results,
+    *,
+    name,
+    row_axis="threshold",
+    col_axis="min_silence_ms",
+):
+    """Render a 2-D grid sweep as a JSON string.
+
+    Machine-readable twin of :func:`render_vad_grid`, so the grid can feed a
+    plotting/tuning script. The payload carries both swept axis names
+    (``row_axis`` / ``col_axis``) so a consumer knows which two dimensions the
+    cells vary (the cells are keyed by those same names). Any ``None`` in
+    ``results`` → ``{"available": false}`` + install hint, mirroring
+    :func:`render_vad_sweep_json`. Pure: returns a single JSON string.
+    """
+    if any(r is None for r in results):
+        return json.dumps(
+            {
+                "available": False,
+                "hint": (
+                    "install 'silero-vad' (pulls torch + torchaudio) to enable "
+                    "offline neural segmentation"
+                ),
+            },
+            indent=2,
+        )
+    payload = {
+        "available": True,
+        "name": name,
+        "row_axis": row_axis,
+        "col_axis": col_axis,
+        "grid": vad_segmentation_grid(
+            row_values, col_values, results, row_axis=row_axis, col_axis=col_axis
+        ),
+    }
+    return json.dumps(payload, indent=2)
+
+
+def render_vad_grid_csv(
+    row_values,
+    col_values,
+    results,
+    *,
+    name,
+    row_axis="threshold",
+    col_axis="min_silence_ms",
+):
+    """Render a 2-D grid sweep as CSV text (no trailing newline).
+
+    The spreadsheet/plot-friendly twin of :func:`render_vad_grid_json`: a flat
+    ``<row_axis>,<col_axis>,num_segments,speech_s`` table (one row per cell, in
+    row-major order) that pivots straight into a spreadsheet or a plotting
+    script without a JSON-parsing step. The first two column headers are the
+    swept axis names so the grid is self-describing. ``name`` is accepted for
+    signature parity with the other ``render_vad_grid_*`` twins but is not part
+    of the tabular body (a CSV is a pure data grid). Any ``None`` in ``results``
+    (segmenter unavailable) yields a single ``# silero VAD unavailable: ...``
+    comment line so a degraded run is still self-describing rather than silently
+    empty. Pure: returns a single string built with the stdlib :mod:`csv`
+    writer (RFC-4180 quoting), trailing terminator stripped.
+    """
+    if any(r is None for r in results):
+        return (
+            "# silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        )
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([row_axis, col_axis, "num_segments", "speech_s"])
+    for cell in vad_segmentation_grid(
+        row_values, col_values, results, row_axis=row_axis, col_axis=col_axis
+    ):
+        writer.writerow(
+            [cell[row_axis], cell[col_axis], cell["num_segments"], cell["speech_s"]]
+        )
+    return buf.getvalue().rstrip("\r\n")
+
+
 def _signed(n):
     """Format an int delta with an explicit sign (``+3`` / ``0`` / ``-2``)."""
     return f"+{n}" if n > 0 else str(n)
@@ -1096,6 +1263,118 @@ def cmd_vad_sweep(args, *, log=print, segmenter=None, availability=None):
             log(line)
 
 
+def cmd_vad_grid(args, *, log=print, segmenter=None, availability=None):
+    """Segment one WAV across a 2-D knob grid and print a grid table.
+
+    The 2-D analogue of :func:`cmd_vad_sweep` (and the direct counterpart of
+    ``simulate-mirror --grid``): where ``gv vad-sweep`` tabulates ONE knob
+    across N values, ``gv vad-grid`` tabulates the cartesian product of TWO
+    knobs so the elbow is readable in two dimensions at once.
+
+    The ROW axis is always the P(speech) gate (``--thresholds``). The COLUMN
+    axis is a millisecond knob: ``--min-silences`` (the trailing-silence
+    hangover, the default) or ``--min-speeches`` (the minimum-speech floor) —
+    mutually exclusive, exactly one column axis per run. Whichever ms knob is
+    NOT the column axis is held fixed at its scalar (``--min-silence-ms`` /
+    ``--min-speech-ms``), and every other knob is shared across all cells.
+
+    Same injected-dependency contract as :func:`cmd_vad_sweep`: ``segmenter`` /
+    ``availability`` default to the real :mod:`vad.silero` functions, imported
+    lazily so the parser stays torch-free. When ``silero-vad`` is absent the
+    handler prints the install hint and returns, never crashing.
+    """
+    if segmenter is None or availability is None:
+        from vad.silero import segment_recording, silero_available
+
+        segmenter = segment_recording if segmenter is None else segmenter
+        availability = silero_available if availability is None else availability
+
+    as_json = getattr(args, "json", False)
+    as_csv = getattr(args, "csv", False)
+
+    # Rows are always the gate; the column axis is whichever ms list was passed
+    # (--min-speeches → floor; else --min-silences → hangover, the default). The
+    # parser's mutex guarantees at most one ms list is set.
+    row_axis = "threshold"
+    row_values = args.thresholds
+    min_speeches = getattr(args, "min_speeches", None)
+    if min_speeches is not None:
+        col_axis = "min_speech_ms"
+        col_values = min_speeches
+    else:
+        col_axis = "min_silence_ms"
+        col_values = args.min_silences
+
+    if not availability():
+        unavailable = [None]
+        if as_json:
+            log(
+                render_vad_grid_json(
+                    [], [], unavailable, name=args.wav,
+                    row_axis=row_axis, col_axis=col_axis,
+                )
+            )
+        elif as_csv:
+            log(
+                render_vad_grid_csv(
+                    [], [], unavailable, name=args.wav,
+                    row_axis=row_axis, col_axis=col_axis,
+                )
+            )
+        else:
+            for line in render_vad_grid(
+                [], [], unavailable, name=args.wav,
+                row_axis=row_axis, col_axis=col_axis,
+            ):
+                log(line)
+        return
+
+    from vad.silero import SileroParams
+
+    def _seg(row_value, col_value):
+        # The two grid axes take (row_value, col_value); every other dimension
+        # is held at its scalar knob. The non-column ms knob is held fixed.
+        min_silence_ms = (
+            col_value if col_axis == "min_silence_ms" else args.min_silence_ms
+        )
+        min_speech_ms = (
+            col_value if col_axis == "min_speech_ms" else args.min_speech_ms
+        )
+        params = SileroParams(
+            threshold=row_value,
+            min_speech_ms=min_speech_ms,
+            min_silence_ms=min_silence_ms,
+            speech_pad_ms=args.speech_pad_ms,
+            max_speech_s=args.max_speech_s,
+        )
+        return segmenter(args.wav, params=params)
+
+    # Row-major: row 0's whole row of columns first, then row 1's, … — the same
+    # order vad_segmentation_grid flattens into.
+    results = [_seg(rv, cv) for rv in row_values for cv in col_values]
+    name = results[0].name if results else args.wav
+    if as_json:
+        log(
+            render_vad_grid_json(
+                row_values, col_values, results, name=name,
+                row_axis=row_axis, col_axis=col_axis,
+            )
+        )
+    elif as_csv:
+        log(
+            render_vad_grid_csv(
+                row_values, col_values, results, name=name,
+                row_axis=row_axis, col_axis=col_axis,
+            )
+        )
+    else:
+        for line in render_vad_grid(
+            row_values, col_values, results, name=name,
+            row_axis=row_axis, col_axis=col_axis,
+        ):
+            log(line)
+
+
 def cmd_bench(args):
     # bench is a legacy argv-driven entrypoint: it parses its own sys.argv
     # rather than taking kwargs, so we rebuild argv here. Only forward
@@ -1135,6 +1414,7 @@ DEFAULT_HANDLERS = {
     "vad": cmd_vad,
     "vad-diff": cmd_vad_diff,
     "vad-sweep": cmd_vad_sweep,
+    "vad-grid": cmd_vad_grid,
 }
 
 # Seed mirror tunables, mirrored as the CLI defaults so the simulator's
@@ -1552,6 +1832,102 @@ def build_parser():
         action="store_true",
         help="Emit a flat <axis>,num_segments,speech_s CSV table for "
         "spreadsheets/plots (mutually exclusive with --json)",
+    )
+
+    # gv vad-grid — segment one WAV across a 2-D knob grid and tabulate the
+    # result. The 2-D analogue of iter-236's vad-sweep (and the direct
+    # counterpart of simulate-mirror --grid): rows are always the P(speech)
+    # gate (--thresholds); the column axis is a millisecond knob, either the
+    # trailing-silence hangover (--min-silences, default) or the minimum-speech
+    # floor (--min-speeches), mutually exclusive. The non-column ms knob is held
+    # at its scalar; every other knob is shared across all cells.
+    vad_grid = sub.add_parser(
+        "vad-grid",
+        help="Offline Silero VAD — segment a WAV across a 2-D grid (gate "
+        "--thresholds × an ms column axis: --min-silences hangover or "
+        "--min-speeches floor) and tabulate segment-count / speech-seconds "
+        "per cell (read the elbow in two dimensions at once)",
+    )
+    vad_grid.add_argument(
+        "wav",
+        help="Path to a 16-bit PCM WAV file to segment at each grid cell",
+    )
+    vad_grid.add_argument(
+        "--thresholds",
+        type=unit_interval_list_type,
+        default=[0.3, 0.5, 0.7, 0.9],
+        help="Comma-separated P(speech) gates in [0, 1] — the grid ROW axis "
+        "(default: 0.3,0.5,0.7,0.9)",
+    )
+    # The column axis: --min-silences (default) OR --min-speeches, never both.
+    # The default list lives on --min-silences so a bare `vad-grid rec.wav`
+    # sweeps gate × hangover; a group default isn't "provided", so the mutex
+    # only fires when both are passed explicitly.
+    vad_grid_col = vad_grid.add_mutually_exclusive_group()
+    vad_grid_col.add_argument(
+        "--min-silences",
+        type=nonneg_float_list_type,
+        default=[400.0, 600.0, 800.0, 1000.0],
+        dest="min_silences",
+        help="Comma-separated trailing-silence hangovers in ms — the grid "
+        "COLUMN axis (default: 400,600,800,1000; mutually exclusive with "
+        "--min-speeches)",
+    )
+    vad_grid_col.add_argument(
+        "--min-speeches",
+        type=nonneg_float_list_type,
+        default=None,
+        dest="min_speeches",
+        help="Comma-separated minimum-speech floors in ms to use as the grid "
+        "COLUMN axis instead of the hangover (e.g. 50,100,200,400); the "
+        "non-column ms knob is held at its scalar (mutually exclusive with "
+        "--min-silences)",
+    )
+    vad_grid.add_argument(
+        "--min-speech-ms",
+        type=nonneg_float_type,
+        default=vad_min_speech_default,
+        dest="min_speech_ms",
+        help="Drop speech regions shorter than this, in ms — held fixed across "
+        "all cells when the column axis is --min-silences; ignored when "
+        f"sweeping --min-speeches (default: {vad_min_speech_default})",
+    )
+    vad_grid.add_argument(
+        "--min-silence-ms",
+        type=nonneg_float_type,
+        default=vad_min_silence_default,
+        dest="min_silence_ms",
+        help="Trailing silence before a region ends, in ms — held fixed across "
+        "all cells when the column axis is --min-speeches; ignored when "
+        f"sweeping --min-silences (default: {vad_min_silence_default})",
+    )
+    vad_grid.add_argument(
+        "--speech-pad-ms",
+        type=nonneg_float_type,
+        default=vad_speech_pad_default,
+        dest="speech_pad_ms",
+        help="Symmetric padding added to each region, in ms — shared by all "
+        f"cells (default: {vad_speech_pad_default})",
+    )
+    vad_grid.add_argument(
+        "--max-speech-s",
+        type=max_speech_type,
+        default=vad_max_speech_default,
+        dest="max_speech_s",
+        help="Force-split regions longer than this, in seconds — shared by "
+        "all cells; 'inf'/'none' never splits (default: inf)",
+    )
+    vad_grid_fmt = vad_grid.add_mutually_exclusive_group()
+    vad_grid_fmt.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON instead of the human-readable table",
+    )
+    vad_grid_fmt.add_argument(
+        "--csv",
+        action="store_true",
+        help="Emit a flat <row_axis>,<col_axis>,num_segments,speech_s CSV "
+        "table for spreadsheets/plots (mutually exclusive with --json)",
     )
 
     return parser

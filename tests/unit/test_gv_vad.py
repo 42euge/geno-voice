@@ -1744,3 +1744,381 @@ def test_cmd_vad_sweep_speech_axis_unavailable():
     )
     assert len(lines) == 1
     assert json.loads(lines[0])["available"] is False
+
+
+# ====================================================================
+# iter-240 — gv vad-grid: tabulate segmentation over a 2-D knob grid
+# ====================================================================
+# The 2-D analogue of vad-sweep (and the counterpart of simulate-mirror --grid):
+# rows are always the P(speech) gate (--thresholds); the column axis is an ms
+# knob — --min-silences (hangover, default) or --min-speeches (floor), mutually
+# exclusive. Cells are flattened ROW-MAJOR.
+
+
+def _grid_args(**over):
+    base = dict(
+        wav="rec.wav",
+        thresholds=[0.3, 0.5],
+        min_silences=[400.0, 800.0],
+        min_speeches=None,
+        min_speech_ms=250.0,
+        min_silence_ms=800.0,
+        speech_pad_ms=30.0,
+        max_speech_s=float("inf"),
+        json=False,
+        csv=False,
+    )
+    base.update(over)
+    return argparse.Namespace(**base)
+
+
+# ---- parser: registration & wiring -------------------------------------
+
+
+def test_vad_grid_in_handler_map():
+    assert gv.DEFAULT_HANDLERS["vad-grid"] is gv.cmd_vad_grid
+
+
+def test_vad_grid_requires_wav_positional():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(["vad-grid"])
+
+
+def test_vad_grid_defaults():
+    args = gv.build_parser().parse_args(["vad-grid", "rec.wav"])
+    assert args.command == "vad-grid"
+    assert args.thresholds == [0.3, 0.5, 0.7, 0.9]
+    assert args.min_silences == [400.0, 600.0, 800.0, 1000.0]
+    assert args.min_speeches is None
+    assert args.json is False
+    assert args.csv is False
+
+
+def test_vad_grid_overrides_axes():
+    args = gv.build_parser().parse_args(
+        ["vad-grid", "rec.wav", "--thresholds", "0.4,0.6", "--min-silences", "500,900"]
+    )
+    assert args.thresholds == [0.4, 0.6]
+    assert args.min_silences == [500.0, 900.0]
+
+
+def test_vad_grid_min_speeches_column_axis():
+    args = gv.build_parser().parse_args(
+        ["vad-grid", "rec.wav", "--min-speeches", "50,100,200"]
+    )
+    assert args.min_speeches == [50.0, 100.0, 200.0]
+    # The hangover list keeps its default; the handler picks the speech column.
+    assert args.min_silences == [400.0, 600.0, 800.0, 1000.0]
+
+
+def test_vad_grid_min_silences_and_min_speeches_mutually_exclusive():
+    # Only one column axis may win; argparse rejects the combination.
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-grid", "rec.wav", "--min-silences", "400,800", "--min-speeches", "50,100"]
+        )
+
+
+def test_vad_grid_rejects_out_of_range_threshold():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(["vad-grid", "rec.wav", "--thresholds", "0.5,1.5"])
+
+
+def test_vad_grid_rejects_negative_min_silence_member():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(["vad-grid", "rec.wav", "--min-silences", "400,-1"])
+
+
+def test_vad_grid_json_and_csv_are_mutually_exclusive():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(["vad-grid", "rec.wav", "--json", "--csv"])
+
+
+# ---- vad_segmentation_grid: pure core ----------------------------------
+
+
+def _cell_result(n):
+    return _Result(
+        name="rec.wav",
+        sample_rate=16000,
+        duration_s=10.0,
+        segments=[_Seg(float(i), i + 0.5) for i in range(n)],
+    )
+
+
+def test_grid_cells_keyed_by_both_axes_row_major():
+    # 2 thresholds × 2 hangovers = 4 cells, row-major: (t0,c0),(t0,c1),(t1,c0),(t1,c1).
+    results = [_cell_result(n) for n in (4, 3, 2, 1)]
+    cells = gv.vad_segmentation_grid(
+        [0.3, 0.5], [400.0, 800.0], results,
+        row_axis="threshold", col_axis="min_silence_ms",
+    )
+    assert [(c["threshold"], c["min_silence_ms"]) for c in cells] == [
+        (0.3, 400.0), (0.3, 800.0), (0.5, 400.0), (0.5, 800.0),
+    ]
+    assert [c["num_segments"] for c in cells] == [4, 3, 2, 1]
+
+
+def test_grid_speech_rounded_to_three_places():
+    r = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=10.0,
+        segments=[_Seg(0.0, 1.23456)],
+    )
+    cells = gv.vad_segmentation_grid([0.5], [400.0], [r])
+    assert cells[0]["speech_s"] == 1.235
+
+
+def test_grid_length_mismatch_raises():
+    with pytest.raises(ValueError):
+        gv.vad_segmentation_grid([0.3, 0.5], [400.0, 800.0], [_cell_result(1)])
+
+
+def test_grid_defaults_to_threshold_x_min_silence():
+    cells = gv.vad_segmentation_grid([0.5], [400.0], [_cell_result(2)])
+    assert "threshold" in cells[0] and "min_silence_ms" in cells[0]
+
+
+# ---- renderers ----------------------------------------------------------
+
+
+def test_render_grid_none_is_install_hint():
+    lines = gv.render_vad_grid([0.5], [400.0], [None], name="rec.wav")
+    assert len(lines) == 1
+    assert "silero VAD unavailable" in lines[0]
+
+
+def test_render_grid_labels_both_axes():
+    results = [_cell_result(n) for n in (3, 1)]
+    lines = gv.render_vad_grid(
+        [0.3], [400.0, 800.0], results, name="rec.wav",
+        row_axis="threshold", col_axis="min_silence_ms",
+    )
+    assert "threshold × min_silence" in lines[0]
+    assert "rec.wav" in lines[0]
+    # Column header carries both axis labels.
+    assert "threshold" in lines[1] and "min_silence" in lines[1]
+    # A gate prints with 2 decimals, a ms knob as a bare integer.
+    body = "\n".join(lines[2:])
+    assert "0.30" in body
+    assert "400" in body and "800" in body
+
+
+def test_render_grid_speech_axis_column_label():
+    results = [_cell_result(2)]
+    lines = gv.render_vad_grid(
+        [0.5], [100.0], results, name="rec.wav",
+        row_axis="threshold", col_axis="min_speech_ms",
+    )
+    assert "threshold × min_speech" in lines[0]
+
+
+def test_render_grid_json_carries_both_axes():
+    results = [_cell_result(n) for n in (3, 1)]
+    payload = json.loads(
+        gv.render_vad_grid_json(
+            [0.3], [400.0, 800.0], results, name="rec.wav",
+            row_axis="threshold", col_axis="min_silence_ms",
+        )
+    )
+    assert payload["available"] is True
+    assert payload["name"] == "rec.wav"
+    assert payload["row_axis"] == "threshold"
+    assert payload["col_axis"] == "min_silence_ms"
+    assert [(c["threshold"], c["min_silence_ms"]) for c in payload["grid"]] == [
+        (0.3, 400.0), (0.3, 800.0),
+    ]
+    assert [c["num_segments"] for c in payload["grid"]] == [3, 1]
+
+
+def test_render_grid_json_none_marks_unavailable():
+    payload = json.loads(gv.render_vad_grid_json([0.5], [400.0], [None], name="rec.wav"))
+    assert payload["available"] is False
+    assert "hint" in payload
+
+
+def test_render_grid_csv_header_and_rows():
+    results = [_cell_result(n) for n in (3, 1)]
+    text = gv.render_vad_grid_csv(
+        [0.3], [400.0, 800.0], results, name="rec.wav",
+        row_axis="threshold", col_axis="min_silence_ms",
+    )
+    rows = list(csv.reader(io.StringIO(text)))
+    assert rows[0] == ["threshold", "min_silence_ms", "num_segments", "speech_s"]
+    assert rows[1][:3] == ["0.3", "400.0", "3"]
+    assert rows[2][:3] == ["0.3", "800.0", "1"]
+
+
+def test_render_grid_csv_no_trailing_newline():
+    text = gv.render_vad_grid_csv([0.5], [400.0], [_cell_result(1)], name="rec.wav")
+    assert not text.endswith("\n")
+    assert not text.endswith("\r")
+
+
+def test_render_grid_csv_none_marks_unavailable():
+    text = gv.render_vad_grid_csv([0.5], [400.0], [None], name="rec.wav")
+    assert text.startswith("# silero VAD unavailable")
+
+
+def test_render_grid_csv_round_trips_to_grid_cells():
+    results = [_cell_result(n) for n in (4, 3, 2, 1)]
+    text = gv.render_vad_grid_csv(
+        [0.3, 0.5], [400.0, 800.0], results, name="rec.wav",
+        row_axis="threshold", col_axis="min_silence_ms",
+    )
+    cells = gv.vad_segmentation_grid(
+        [0.3, 0.5], [400.0, 800.0], results,
+        row_axis="threshold", col_axis="min_silence_ms",
+    )
+    rows = list(csv.reader(io.StringIO(text)))
+    for csv_row, cell in zip(rows[1:], cells):
+        assert float(csv_row[0]) == cell["threshold"]
+        assert float(csv_row[1]) == cell["min_silence_ms"]
+        assert int(csv_row[2]) == cell["num_segments"]
+        assert float(csv_row[3]) == cell["speech_s"]
+
+
+# ---- cmd_vad_grid: end-to-end ------------------------------------------
+
+
+def test_cmd_vad_grid_unavailable_emits_hint():
+    lines: List[str] = []
+    gv.cmd_vad_grid(
+        _grid_args(),
+        log=lines.append,
+        segmenter=lambda *a, **k: (_ for _ in ()).throw(AssertionError("no seg")),
+        availability=lambda: False,
+    )
+    text = "\n".join(lines)
+    assert "silero VAD unavailable" in text
+
+
+def test_cmd_vad_grid_unavailable_json():
+    lines: List[str] = []
+    gv.cmd_vad_grid(
+        _grid_args(json=True),
+        log=lines.append,
+        segmenter=lambda *a, **k: (_ for _ in ()).throw(AssertionError("no seg")),
+        availability=lambda: False,
+    )
+    assert len(lines) == 1
+    assert json.loads(lines[0])["available"] is False
+
+
+def test_cmd_vad_grid_sweeps_full_cartesian_product():
+    # 2 thresholds × 2 hangovers = 4 cells, row-major over (threshold, hangover).
+    captured = []
+
+    def seg(wav, params=None):
+        captured.append(params)
+        return _cell_result(1)
+
+    gv.cmd_vad_grid(
+        _grid_args(thresholds=[0.3, 0.5], min_silences=[400.0, 800.0]),
+        log=lambda *a: None,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert [(p.threshold, p.min_silence_ms) for p in captured] == [
+        (0.3, 400.0), (0.3, 800.0), (0.5, 400.0), (0.5, 800.0),
+    ]
+
+
+def test_cmd_vad_grid_holds_nonaxis_knobs_fixed():
+    # When the column axis is the hangover, the scalar --min-speech-ms is shared
+    # by every cell (it is NOT swept); speech_pad / max_speech too.
+    captured = []
+
+    def seg(wav, params=None):
+        captured.append(params)
+        return _cell_result(1)
+
+    gv.cmd_vad_grid(
+        _grid_args(
+            thresholds=[0.3, 0.5], min_silences=[400.0, 800.0],
+            min_speech_ms=333.0, speech_pad_ms=42.0,
+        ),
+        log=lambda *a: None,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert {p.min_speech_ms for p in captured} == {333.0}
+    assert {p.speech_pad_ms for p in captured} == {42.0}
+
+
+def test_cmd_vad_grid_speech_column_holds_silence_scalar():
+    # When the column axis is --min-speeches, min_speech_ms is SWEPT and the
+    # scalar --min-silence-ms is held fixed across every cell.
+    captured = []
+
+    def seg(wav, params=None):
+        captured.append(params)
+        return _cell_result(1)
+
+    gv.cmd_vad_grid(
+        _grid_args(
+            thresholds=[0.3, 0.5], min_silences=[400.0, 800.0],
+            min_speeches=[50.0, 100.0], min_silence_ms=777.0,
+        ),
+        log=lambda *a: None,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert [(p.threshold, p.min_speech_ms) for p in captured] == [
+        (0.3, 50.0), (0.3, 100.0), (0.5, 50.0), (0.5, 100.0),
+    ]
+    assert {p.min_silence_ms for p in captured} == {777.0}
+
+
+def test_cmd_vad_grid_json_branch():
+    def seg(wav, params=None):
+        # Fewer segments at a higher gate.
+        n = 3 if params.threshold < 0.5 else 1
+        return _cell_result(n)
+
+    lines: List[str] = []
+    gv.cmd_vad_grid(
+        _grid_args(thresholds=[0.3, 0.5], min_silences=[400.0, 800.0], json=True),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert len(lines) == 1
+    payload = json.loads(lines[0])
+    assert payload["row_axis"] == "threshold"
+    assert payload["col_axis"] == "min_silence_ms"
+    assert len(payload["grid"]) == 4
+    assert [c["num_segments"] for c in payload["grid"]] == [3, 3, 1, 1]
+
+
+def test_cmd_vad_grid_csv_branch():
+    def seg(wav, params=None):
+        return _cell_result(1)
+
+    lines: List[str] = []
+    gv.cmd_vad_grid(
+        _grid_args(thresholds=[0.3, 0.5], min_silences=[400.0, 800.0], csv=True),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert len(lines) == 1
+    rows = list(csv.reader(io.StringIO(lines[0])))
+    assert rows[0] == ["threshold", "min_silence_ms", "num_segments", "speech_s"]
+    assert len(rows) == 5  # header + 4 cells
+
+
+def test_cmd_vad_grid_uses_segmenter_name():
+    def seg(wav, params=None):
+        return _Result(
+            name="actual-basename.wav", sample_rate=16000, duration_s=5.0,
+            segments=[_Seg(0.0, 1.0)],
+        )
+
+    lines: List[str] = []
+    gv.cmd_vad_grid(
+        _grid_args(thresholds=[0.5], min_silences=[400.0]),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert "actual-basename.wav" in "\n".join(lines)

@@ -445,3 +445,109 @@ def test_gv_vad_sweep_speech_axis_csv_matches_json():
     for csv_row, json_row in zip(csv_rows, json_rows):
         assert int(csv_row["num_segments"]) == json_row["num_segments"]
         assert abs(float(csv_row["speech_s"]) - json_row["speech_s"]) <= 0.01
+
+
+# ---- iter-240: gv vad-grid (2-D gate × ms-knob grid) -------------------
+
+
+def _grid_args(wav: Path, **over):
+    base = dict(
+        wav=str(wav),
+        thresholds=[0.3, 0.5, 0.7, 0.9],
+        min_silences=[400.0, 600.0, 800.0, 1000.0],
+        min_speeches=None,
+        min_speech_ms=250.0,
+        min_silence_ms=800.0,
+        speech_pad_ms=30.0,
+        max_speech_s=float("inf"),
+        json=False,
+        csv=False,
+    )
+    base.update(over)
+    return argparse.Namespace(**base)
+
+
+def _run_grid(wav: Path, **over) -> list[str]:
+    lines: list[str] = []
+    gv.cmd_vad_grid(_grid_args(wav, **over), log=lines.append)
+    return lines
+
+
+def test_gv_vad_grid_cell_matches_independent_vad_run():
+    """Each grid cell must equal an independent ``gv vad --json`` run at that
+    (threshold, hangover) pair — proving the grid segments once per cell with
+    the real engine, the 2-D analogue of the vad-sweep row-equality property."""
+    wav = RECORDINGS_DIR / CONTINUOUS_31S
+    if not wav.exists():
+        pytest.skip(f"{CONTINUOUS_31S} not present")
+
+    thresholds = [0.3, 0.7]
+    min_silences = [400.0, 800.0]
+    grid = json.loads(
+        _run_grid(wav, thresholds=thresholds, min_silences=min_silences, json=True)[0]
+    )
+    assert grid["available"] is True
+    assert grid["name"] == CONTINUOUS_31S
+    assert grid["row_axis"] == "threshold"
+    assert grid["col_axis"] == "min_silence_ms"
+    # Row-major: every (threshold, hangover) pair appears exactly once.
+    assert [(c["threshold"], c["min_silence_ms"]) for c in grid["grid"]] == [
+        (0.3, 400.0), (0.3, 800.0), (0.7, 400.0), (0.7, 800.0),
+    ]
+    for cell in grid["grid"]:
+        single = json.loads(
+            _run(
+                wav,
+                threshold=cell["threshold"],
+                min_silence_ms=cell["min_silence_ms"],
+                json=True,
+            )[0]
+        )
+        assert cell["num_segments"] == single["num_segments"]
+        assert abs(cell["speech_s"] - single["speech_s"]) <= 0.01
+
+
+def test_gv_vad_grid_speech_non_increasing_along_threshold_within_a_column():
+    """Holding the hangover fixed (one column), reading DOWN rising thresholds
+    recovered speech never grows — the same gate monotonicity vad-sweep proves,
+    now visible inside the 2-D grid."""
+    wav = RECORDINGS_DIR / CONTINUOUS_31S
+    if not wav.exists():
+        pytest.skip(f"{CONTINUOUS_31S} not present")
+    thresholds = [0.3, 0.5, 0.7, 0.9]
+    min_silences = [400.0, 800.0]
+    grid = json.loads(
+        _run_grid(wav, thresholds=thresholds, min_silences=min_silences, json=True)[0]
+    )["grid"]
+    for col in min_silences:
+        speech = [c["speech_s"] for c in grid if c["min_silence_ms"] == col]
+        for lo, hi in zip(speech, speech[1:]):
+            assert hi <= lo + 1e-6, f"speech rose at hangover={col}: {speech}"
+
+
+def test_gv_vad_grid_csv_matches_json():
+    """``gv vad-grid --csv`` describes the same cells as ``--json`` over THE GATE
+    recording — same (threshold, hangover) pairs, same counts, same speech — and
+    the CSV header carries both swept axis names."""
+    wav = RECORDINGS_DIR / CONTINUOUS_31S
+    if not wav.exists():
+        pytest.skip(f"{CONTINUOUS_31S} not present")
+
+    thresholds = [0.3, 0.7]
+    min_silences = [400.0, 800.0]
+    csv_lines = _run_grid(
+        wav, thresholds=thresholds, min_silences=min_silences, csv=True
+    )
+    assert len(csv_lines) == 1
+    csv_rows = list(csv.DictReader(io.StringIO(csv_lines[0])))
+    assert "threshold" in csv_rows[0] and "min_silence_ms" in csv_rows[0]
+
+    json_cells = json.loads(
+        _run_grid(wav, thresholds=thresholds, min_silences=min_silences, json=True)[0]
+    )["grid"]
+    assert len(csv_rows) == len(json_cells) == 4
+    for csv_row, cell in zip(csv_rows, json_cells):
+        assert float(csv_row["threshold"]) == cell["threshold"]
+        assert float(csv_row["min_silence_ms"]) == cell["min_silence_ms"]
+        assert int(csv_row["num_segments"]) == cell["num_segments"]
+        assert abs(float(csv_row["speech_s"]) - cell["speech_s"]) <= 0.01

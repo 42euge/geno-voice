@@ -281,6 +281,54 @@ independent `gv vad --json` run at that floor, that segments are monotone
 non-increasing across rising floors, and that `--csv` agrees with `--json` on
 this axis — all over the real corpus.
 
+### `gv vad-grid` — a 2-D knob grid (iter-240)
+
+The three `vad-sweep` axes each vary ONE knob; finding a joint elbow (e.g. "what
+gate *and* hangover together?") meant running several 1-D sweeps and
+cross-reading them by hand. `gv vad-grid` tabulates the cartesian product of TWO
+knobs in one pass — the VAD analogue of `simulate-mirror --grid` (base_wpm ×
+strength). The **row** axis is always the P(speech) gate (`--thresholds`); the
+**column** axis is a millisecond knob — `--min-silences` (the hangover, the
+default) or `--min-speeches` (the floor), mutually exclusive. The non-column ms
+knob is held at its scalar (`--min-silence-ms` / `--min-speech-ms`); every other
+knob is shared across all cells.
+
+```
+gv vad-grid recording.wav                                       # gate × hangover (defaults)
+gv vad-grid recording.wav --thresholds 0.3,0.5,0.7 --min-silences 400,800
+gv vad-grid recording.wav --thresholds 0.5,0.7 --min-speeches 50,200,400  # gate × floor
+gv vad-grid recording.wav --json                                # machine-readable cells
+gv vad-grid recording.wav --csv                                 # flat CSV for plots/pivots
+```
+
+Cells are emitted in **row-major** order (each gate's full row of columns, then
+the next gate). The human table is one row per cell (not a matrix) so each
+cell's two metrics — segment count and speech seconds — stay unambiguous. Over
+`voice-20260618-110355.wav` (gate × hangover):
+
+```
+silero VAD grid — voice-20260618-110355.wav (threshold × min_silence)
+    threshold  min_silence  segments  speech
+         0.30          400         5   16.1s
+         0.30          800         5   17.3s
+         0.50          400         5   15.7s
+         0.50          800         5   16.2s
+         0.70          400         6   14.2s
+         0.70          800         4   15.5s
+```
+
+Each cell equals an independent `gv vad` run at that `(threshold, hangover)`
+pair — the grid just segments once per cell with the shared engine, the 2-D
+analogue of the `vad-sweep` row-equality property. The `--json` payload carries
+both `"row_axis"` and `"col_axis"` (so a consumer knows which two dimensions the
+cells vary) and a flat `"grid"` cell list keyed by those names; the `--csv`
+header is `<row_axis>,<col_axis>,num_segments,speech_s` (e.g.
+`threshold,min_silence_ms,…`) so the grid pivots straight into a spreadsheet.
+Integration tests pin that every cell matches an independent `gv vad --json` run,
+that recovered speech is non-increasing reading down rising thresholds *within
+each column* (the gate monotonicity, now visible inside the grid), and that
+`--csv` agrees with `--json` — all over the real corpus.
+
 ### Silero vs energy-VAD segment counts (the headless proof)
 
 Measured over the seed corpus with `min_silence_ms=800` (the pipecat
