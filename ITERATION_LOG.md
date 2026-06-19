@@ -24019,3 +24019,105 @@ properties of the scaled form:
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
    should track a curated subset, decide the policy and re-run
    `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
+
+## iter-267 — grid-CSV seconds `max_speech_s` multi-row + row-axis `inf` round-trip tests
+
+**Branch:** `iter-267-grid-csv-seconds-roundtrip` (merged ff to main, commit `2eb59b7`)
+**Date:** 2026-06-19
+
+**No STEER.md this lap.** The carried top-priority items (wire
+`ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()` in the desktop
+app) both need a Mac + mic + browser and can't run headless on the loop host.
+"Ingest new recordings" stays corpus-gated. The COMBINED additive+multiplicative
+`--target` weight is a feature/design item, not a regression-test gap. So I took
+iter-266 backlog item #4: scout whether the CSV machine surface carries the
+seconds-axis behaviour the way JSON does.
+
+**The scout result reshaped the item.** Backlog #4's premise — "does the CSV
+carry the weighted/scaled/preference dict target forms on the seconds axis" — is
+a NON-gap: `render_vad_sweep_csv` / `render_vad_grid_csv` are pure data grids
+(`<axis>,num_segments,speech_s`), they deliberately carry NO `--target`/`best`
+output at all (the pick is a derived scalar, not a per-cell column; the CLI even
+documents "the CSV emitter ignores the target"). So there is nothing for the
+dict target forms to leak into. The real adjacent gap is the seconds AXIS VALUE
+serialization on the grid CSV, where iter-259 left two combinations untested.
+
+**The gap.** iter-259 added grid-CSV seconds coverage but only as a single 1×2
+grid (`test_render_grid_csv_max_speech_col_axis_inf_baseline_writes_inf`, one
+threshold row), and the iter-259 grid-CSV round-trip test
+(`test_render_grid_csv_round_trips_to_grid_cells`) sweeps `min_silence_ms`, NOT
+the seconds force-split axis. Two combinations on `render_vad_grid_csv` therefore
+had no coverage:
+- the MULTI-row column-axis case (several threshold rows each crossed with the
+  seconds caps), where the `inf` baseline must emit ONCE PER ROW and every
+  seconds cell must `float()`-round-trip losslessly across rows; and
+- the seconds axis on the ROW position — `render_vad_grid_csv` is axis-agnostic
+  (it stringifies whichever value the `row_axis`/`col_axis` names), so
+  `max_speech_s` can name either axis — where the `inf` sentinel must write
+  `inf` in the FIRST column (the column round-trip consumers key on).
+
+A regression that emitted the `inf` token only on the first row, let a later
+row's seconds cell drift to `Infinity`/blank/truncated, or mishandled the
+sentinel in the first column would have shipped green while the single-row
+col-axis test stayed passing. No production code changed (the wiring was already
+correct — proved by a pre-test smoke run).
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+2 tests, +79 lines).**
+  1. `test_render_grid_csv_max_speech_col_axis_multi_row_round_trips_with_inf` —
+     2 thresholds × 3 caps (`inf, 10, 5`), row-major counts 1/2/4 then 1/3/6;
+     asserts the `inf` baseline is the first column cell of EVERY threshold row
+     (rows 1 and 4), every cell `float()`-round-trips back to its
+     `vad_segmentation_grid` value (both axes + counts + speech_s), and no
+     `Infinity` token leaks into any row.
+  2. `test_render_grid_csv_max_speech_row_axis_inf_baseline_writes_inf` — seconds
+     axis on the ROW position (`row_axis="max_speech_s"`, caps `inf, 5` × one
+     `min_silence_ms` column); asserts the header names `max_speech_s` first, the
+     `inf` baseline writes `inf` in the FIRST column (parsing back to `math.inf`),
+     the finite cap stays `5.0`, no `Infinity` leak.
+- **`docs/research/voice-capture-tuning.md`.** A note in the grid CSV paragraph:
+  when `max_speech_s` is the column (or row) axis the seconds cells write the
+  bare `inf` token once per gate row (not the JSON `Infinity`, not a blank), so a
+  multi-row grid keeps every `inf` baseline parseable; names the iter-267 tests
+  pinning the per-row sentinel + lossless cross-row round-trip and the row-axis
+  placement.
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3846 passed** (3844 prior + 2 net new), run on the feature branch before
+  ff-merge AND re-run on main after the merge (both 3846).
+- Focused: `pytest tests/unit/test_gv_vad.py -k "grid_csv_max_speech_col_axis_multi_row
+  or grid_csv_max_speech_row_axis_inf"` → **2 passed**.
+- Pre-test smoke (Python, on the branch): `render_vad_grid_csv([0.3,0.5],
+  [inf,10,5], <2×3 results>, col_axis="max_speech_s")` → rows
+  `0.3,inf,1` / `0.3,10.0,2` / `0.3,5.0,4` / `0.5,inf,1` / `0.5,10.0,3` /
+  `0.5,5.0,6`; both `inf` cells parse back to `math.inf`, every cell round-trips
+  to `vad_segmentation_grid`, `"Infinity" not in text`. Confirmed the wiring was
+  already correct before writing the assertions.
+- Integration: not re-run this lap (no corpus symlinked into this worktree; same
+  as prior corpus-gated laps — the change is pure CLI render logic fully covered
+  by the unit matrix).
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] COMBINED additive+multiplicative `--target` weight** — iter-250/251
+   give additive (`:penalty`), iter-252 multiplicative (`*factor`); an operator
+   might want both on one element (`5:1*1.5`). Larger design question (operator
+   precedence of `:` vs `*`) — scope before building. Pure, headless if pursued.
+   This is now the only remaining `--target` increment: a feature (new
+   parse/semantics), not a regression-test gap.
+4. **[cli] Sweep CSV seconds round-trip is single-form too?** With the grid CSV
+   seconds round-trip now multi-row, scout whether the 1-D `render_vad_sweep_csv`
+   round-trip (iter-259 `test_render_sweep_csv_max_speech_round_trips_with_inf`)
+   already covers the seconds axis fully or whether a `min_speech_ms`/
+   `speech_pad_ms` CSV round-trip on a non-default axis is missing (likely
+   already covered — confirm before assuming a gap). Small, pure, headless.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
+   should track a curated subset, decide the policy and re-run
+   `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
