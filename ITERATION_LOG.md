@@ -22465,3 +22465,128 @@ and the help-text mention (`the weight may be fractional, 3,5:1.5`) on BOTH
 4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
    --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
    refresh the comparison table.
+
+## iter-252 — `gv vad-grid`/`vad-sweep` `--target A,B*F` multiplicative weight
+
+**Branch:** `iter-252-multiplicative-weight` (merged ff to main, commit `bbde32a`)
+**Date:** 2026-06-18
+
+**No STEER.md this lap.** The two top-priority next items carried since
+iter-227 (wire `ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()`
+in the desktop app) both need a Mac + mic + browser and can't run headless on
+the loop host. New WAVs DID land under `fixtures/recordings/` (6 dated 06-17/
+06-18) but they are untracked local artifacts (not in git, same as every prior
+corpus-gated lap — no corpus is symlinked into the worktree), so the "ingest
+new recordings" item still has nothing to commit. I took the headless-doable
+item #3 from the iter-251 backlog: the MULTIPLICATIVE-weight `--target` form.
+
+**The gap.** iter-250/251's `:penalty` weight is ADDITIVE — a fixed offset on
+an element's distance (`distance + penalty`), so a less-preferred count is
+"N segments worse" no matter how far the cell drifts, and the penalty bites even
+an EXACT hit (`0 + penalty`). An operator who thinks PROPORTIONALLY ("count 5 is
+acceptable, but every segment I drift PAST it should hurt more") had no
+expression for that.
+
+**What changed (`examples/gv.py`).**
+1. **`scale_factor_type`** — a new parser for the `*` weight slot: a number
+   `>= 1` (`1` neutral; `< 1` rejected — a discount is what the OTHER elements'
+   larger factors already express, the same symmetry as `nonneg_penalty_type`'s
+   `0`). NaN/inf rejected; an integral float collapses to `int` (`5*2.0` → `2`).
+   The multiplicative twin of `nonneg_penalty_type`.
+2. **`target_type`** — detects `*`, routes a comma-set-with-`*` to the new
+   `_parse_scaled_set`, and rejects `*` mixed with `>` (preference) or `:`
+   (additive weight — a set is additively OR multiplicatively weighted, not
+   both), and a `*` without a `,` set (a lone factor scales uniformly and cannot
+   change a pick).
+3. **`_parse_scaled_set`** — the multiplicative clone of `_parse_weighted_set`:
+   parses each `count*factor` element (base via `_parse_single_target`, so a
+   band may be scaled too), dedupes on the element (first factor wins), collapses
+   a single-element set to the bare element. Returns `{"scaled": [(element,
+   factor), ...]}`.
+4. **`grid_cell_distance`** — a `{"scaled": ...}` set scores as the MIN over each
+   element's `(raw distance * factor)`.
+5. **`_format_target`** — renders a scaled set comma-joined, each non-neutral
+   factor appended as `*factor` (factor `1` stays bare), so it reads back as
+   typed; `--json` `target` serialises natively as `{"scaled": [...]}`.
+6. **`grid_cell_sort_key`** — already guards its preference-rank key on
+   `"prefer" in target`, so the scaled dict correctly gets NO secondary key (its
+   preference is baked into the distance) — docstring updated, no code change.
+7. **Help text** on BOTH `--target` args documents the scaled form.
+
+**The `{"scaled": ...}` dict rides the entire iter-250 machinery untouched.** The
+pickers (`pick_best_grid_cell`/`pick_top_grid_cells`), `--top`, `--tie-break`,
+the shared `_render_pick_block` helper, and the `--json` payload all flow through
+with NO parallel implementation. Only `target_type` (+ `_parse_scaled_set`,
+`scale_factor_type`), `grid_cell_distance`, and `_format_target` needed touching.
+
+**Additive vs multiplicative — the key distinction (test math).** With
+`3,5*2`: the exact-accepted count 5 stays FREE (`0*2=0`) — unlike an additive
+penalty, which bites even an exact hit — but drifting one past 5 to count 6 costs
+`1*2=2`, double the raw drift, while count 4 (one past the preferred 3) costs
+`1*1=1`. So the multiplicative cost SCALES with how far the cell drifts, where
+the additive penalty offsets by a constant. The "preferred wins at a larger
+distance" override still works because the off-element factor amplifies that
+element's drift.
+
+**Scalar + band + set + preference + weighted (`:`) output is byte-for-byte
+unchanged.** Every prior case passes without edits — the `*` branch is purely
+additive to the existing routing, and the integral-float-collapse keeps a
+whole-number factor a plain `int`.
+
+**Tests (`tests/unit/test_gv_vad.py`, +39 net).** `scale_factor_type`
+parse/reject; `target_type` scaled parse (incl. scaled band, integral-float-
+collapse) asserting fractional stays `float`/integral becomes `int`; dedupe-
+first-factor-wins; single-element collapse; factor-without-set reject; factor-
+mixed-with-preference reject; factor-mixed-with-penalty reject; malformed-
+element reject; `_format_target` rendering; `grid_cell_distance` min-over-scaled-
+elements AND the exact-hit-free / cost-grows-with-distance property;
+`grid_cell_sort_key` no-secondary-key; `pick_best_grid_cell` cost-grows
+ordering; `render_vad_grid_json` scaled serialisation (`{"scaled": [[3,1],
+[[5,7],1.5]]}`); `render_vad_grid` best-line read-back (`target 3,5*2`, no
+`scaled` dict repr leak); `cmd_vad_grid` AND `cmd_vad_sweep` end-to-end with a
+scaled target. No torch import — bare dicts / existing `_cell_result` /
+`_seg_speech_cells` stubs.
+
+**Docs (`docs/research/voice-capture-tuning.md`).** A `--target A,B*F` scaled
+subsection under `gv vad-sweep` (the multiplicative-vs-additive distinction, the
+exact-hit-free rule, the min-over-cheapest-route scoring, the `{"scaled": ...}`
+JSON form, the requires-set/no-preference-mix/no-penalty-mix/dedupe/collapse
+rules) + a quick-invocation line in the sweep block.
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3738 passed** (3699 prior + 39 net new), run on the feature branch before
+  ff-merge. Re-confirmed on main after merge: `pytest
+  tests/unit/test_gv_vad.py tests/unit/test_gv_cli.py` → **589 passed**.
+- Manual smoke (on the branch): `target_type('3,5*1.5')`→`{'scaled':[(3,1),
+  (5,1.5)]}`, `target_type('3,5*2.0')`→`{'scaled':[(3,1),(5,2)]}` (factor an
+  `int`), `target_type('3,5-7*1.5')`→`{'scaled':[(3,1),((5,7),1.5)]}`,
+  `target_type('5*2,5*3')`→`5` (collapse), `scale_factor_type('1')`→`1`,
+  `_format_target({'scaled':[(3,1),(5,1.5)]})`→`'3,5*1.5'`,
+  `grid_cell_distance(count=5,3,5*1.5)`→`0.0` (exact hit free),
+  `grid_cell_distance(count=7,3,5*1.5)`→`3.0`,
+  `json.dumps(target_type('3,5-7*1.5'))`→`{"scaled": [[3, 1], [[5, 7], 1.5]]}`.
+  Rejected: `3*1.5`, `3-5*1.5`, `3,5*0.5`, `3,5*a`, `3,5*inf`, `3,5*nan`,
+  `3,5*1.5>7`, `3,5:2*1.5`.
+- Integration: not re-run this lap (no corpus symlinked into this worktree;
+  same as prior corpus-gated laps — the change is pure CLI logic fully covered
+  by the unit matrix).
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] `gv vad-sweep`/`vad-grid` `--target` PER-ELEMENT tie-break or a
+   COMBINED additive+multiplicative weight** — iter-250/251 give additive
+   (`:penalty`), iter-252 gives multiplicative (`*factor`); an operator might
+   want both on one element (`5:1*1.5` = "+1 then ×1.5") or a hybrid set. This
+   is a larger design question (operator precedence of `:` vs `*`) — scope it
+   before building. Pure, headless if pursued.
+4. **[recordings] Ingest new recordings every lap** — the 6 new WAVs under
+   `fixtures/recordings/` (06-17/06-18) are untracked; if the loop should track
+   a curated subset, decide the policy (they are large — one is 98 MB) and
+   re-run `replay_silero.py --compare` + `gv vad` to refresh the comparison
+   table.
