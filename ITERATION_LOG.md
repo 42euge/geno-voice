@@ -23895,3 +23895,127 @@ listed element.
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
    should track a curated subset, decide the policy and re-run
    `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
+
+## iter-266 — `gv --target` scaled set (a,b*f) regression tests on the seconds `max_speech_s` axis
+
+**Branch:** `iter-266-scaled-seconds` (merged ff to main, commit `33e33d2`)
+**Date:** 2026-06-19
+
+**No STEER.md this lap.** The top-priority carried items (wire
+`ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()` in the desktop
+app) both need a Mac + mic + browser and can't run headless on the loop host.
+"Ingest new recordings" stays corpus-gated. The COMBINED
+additive+multiplicative `--target` weight item is again a larger design
+question. So I took iter-265 backlog item #4's last concrete sub-option: pin
+the multiplicative-factor SCALED set form (`--target 3,8*2`, iter-252) on the
+SECONDS `max_speech_s` axis — the last untested weighted-form-on-seconds
+combination after iter-257→265 covered scalar, banded, the flat SET, the ranked
+PREFERENCE, and the additive WEIGHTED forms.
+
+**The gap.** iter-252 shipped `{"scaled": [(element, factor), ...]}`, whose
+DISTANCE is the MIN over each element's RAW distance TIMES its factor — the
+multiplicative twin of the iter-250 additive weighted set. Two properties
+distinguish it from BOTH the flat set and the additive weighted form: an exact
+hit stays FREE (raw `0` × any factor = `0`, where an additive penalty bites even
+an exact hit), and the cost GROWS with distance (the factor amplifies the
+off-element gap rather than offsetting by a fixed amount). iter-255/257 added
+the seconds `max_speech_s` force-split-ceiling axis. These seams are orthogonal
+but had never been exercised TOGETHER on a render surface: every seconds-axis
+target test from iter-257→265 used a scalar/band/set/preference/weighted target,
+and every scaled render test (iter-252) swept the threshold/min-silence axis. So
+the scaled-distance path and the `%g` seconds formatting had no JOINT coverage.
+A regression that broke EITHER (a scaled distance mishandling the seconds axis, a
+`%g`→`.2f` drift on the scaled-CHOSEN cap, the `*factor` rendering, or the JSON
+carrying the `{"scaled": [...]}` dict) would have shipped green while the
+threshold-axis scaled tests stayed passing. This lap closes that hole; no
+production code changed (the wiring was already correct — proved by a pre-test
+smoke run).
+
+**The discriminating behaviour.** The fixtures isolate BOTH distinctive
+properties of the scaled form:
+- **Factor amplifies a gap to FLIP the pick vs the flat set.** Caps `inf, 10`
+  (counts 7, 4); scaled `3,8*2` scores inf as `min(4*1, 1*2)=2` and 10s as
+  `min(1*1, 4*2)=1`, so it picks the 10s cap (`|Δ|=1`). The flat set `3,8` ties
+  both at `1` and keeps the earlier inf row — the factor amplifying the off-`8`
+  distance is what flips the pick to the finite cap.
+- **Exact hit stays FREE vs the additive weighted set.** Caps `inf, 5`
+  (counts 4, 8); scaled `3,8*2` picks the 5s cap sitting EXACTLY on the factor-2
+  element `8` at `|Δ|=0` (`0*2=0`), where the additive `3,8:2` would penalise
+  that hit to `2` and pick the inf baseline. The smoke run confirmed this
+  contrast.
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+4 tests, +124 lines).**
+  1. `test_render_sweep_scaled_target_on_max_speech_axis_formats_seconds` —
+     caps `inf, 10` (counts 7, 4); scaled `3,8*2` picks the 10s cap (`|Δ|=1`)
+     FLIPPING the flat-set tie; `best:` names `max_speech=10`, renders
+     `target 3,8*2` (not a `{"scaled": ...}` dict repr), no `10.00` /
+     `max_speech=10.0` leak.
+  2. `test_render_sweep_scaled_target_keeps_exact_hit_free` — caps `inf, 5`
+     (counts 4, 8); scaled `3,8*2` picks the 5s cap on the factor-2 element `8`
+     at `|Δ|=0` (the contrast vs the additive weighted set, which penalises that
+     hit); renders `max_speech=5` / `target 3,8*2`, no `5.00` leak.
+  3. `test_render_grid_scaled_target_on_max_speech_col_axis_formats_seconds` —
+     the 2-D grid COLUMN-axis twin: 1×2 grid over caps `inf, 5` (counts 7, 4);
+     scaled `3,8*2` picks the 5s cap (`|Δ|=1`) OVERRIDING the earlier inf row;
+     held threshold row renders `threshold=0.30`, no `5.00` leak.
+  4. `test_render_grid_json_scaled_target_carries_seconds_max_speech` — the grid
+     JSON machine surface carries the scaled set as its `{"scaled": [[3, 1],
+     [8, 2]]}` dict (each pair a 2-element array, distinct from a flat-set scalar
+     array and from a `{"weighted": ...}` dict) and emits `best.max_speech_s ==
+     5.0` (a finite seconds number) with the scaled distance `1`.
+- **`docs/research/voice-capture-tuning.md`.** A paragraph under the iter-257→265
+  `--target` seconds subsection covering the scaled form on `max_speech_s` (the
+  multiplicative-twin semantics, the exact-hit-free + cost-grows-with-distance
+  twists vs the additive weighted form, `3,8*2` rendering with no dict repr,
+  `%g`-compact chosen cap, `{"scaled": [...]}` JSON carry, across the 1-D sweep
+  and the 2-D grid column axis). Two copy-paste invocations (sweep scaled, grid
+  scaled `--json`).
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3844 passed** (3840 prior + 4 net new), run on the feature branch before
+  ff-merge AND re-run on main after the merge (both 3844).
+- Focused: `pytest tests/unit/test_gv_vad.py -k "scaled_target_on_max_speech or
+  scaled_target_keeps_exact_hit or scaled_target_carries_seconds"` →
+  **4 passed**.
+- Pre-test smoke (Python, on the branch): `render_vad_sweep([inf,10], [7,4 segs],
+  axis="max_speech_s", target={"scaled":[(3,1),(8,2)]})` → `best: max_speech=10
+  (4 segments, |Δ|=1 from target 3,8*2)`; flat set `[3,8]` over the same caps →
+  `max_speech=inf (7 segments, |Δ|=1)` (the CONTRAST proving the factor flip);
+  scaled over caps `inf,5` (counts 4,8) → `max_speech=5 (8 segments, |Δ|=0)`
+  (exact-hit-free), additive `3,8:2` over the same → `max_speech=inf (4 segments,
+  |Δ|=1)` (the contrast proving the penalty bites the hit); grid
+  `{"scaled":[(3,1),(8,2)]}` over caps `inf,5` (counts 7,4) → `threshold=0.30
+  max_speech=5 (4 segments, |Δ|=1)`; grid JSON → `target {"scaled": [[3, 1],
+  [8, 2]]}, best 4 segs, dist 1, max_speech_s 5.0`. Confirmed the wiring was
+  already correct before writing the assertions.
+- Integration: not re-run this lap (no corpus symlinked into this worktree;
+  same as prior corpus-gated laps — the change is pure CLI render logic fully
+  covered by the unit matrix).
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] COMBINED additive+multiplicative `--target` weight** — iter-250/251
+   give additive (`:penalty`), iter-252 multiplicative (`*factor`); an operator
+   might want both on one element (`5:1*1.5`). Larger design question (operator
+   precedence of `:` vs `*`) — scope before building. Pure, headless if pursued.
+   With iter-266 the seconds-axis target coverage now SPANS every form (scalar,
+   banded, flat SET, preference, additive weighted, multiplicative scaled, plus
+   the `top N:` shortlist and `--tie-break`); the combined `:`+`*` form is the
+   only remaining `--target` increment, and it is a feature (new parse/semantics)
+   not a regression-test gap.
+4. **[cli] Other render-surface gaps to scout.** With the seconds-axis `--target`
+   matrix complete, the next regression-test frontier is whether the CSV machine
+   surface (iter-259) carries the weighted/scaled/preference dict forms on the
+   seconds axis the way the JSON surface does — confirm before assuming a gap
+   (iter-259 may already cover it, or the CSV may flatten the target to a label).
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
+   should track a curated subset, decide the policy and re-run
+   `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
