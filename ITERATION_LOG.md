@@ -21179,3 +21179,111 @@ the hangover (culling short regions vs. merging adjacent ones).
 4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
    --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
    refresh the comparison table.
+
+## iter-240 — `gv vad-grid`: a 2-D knob grid (gate × ms axis)
+
+**Branch:** `iter-240-vad-grid` (merged ff to main, commit `a3d6d08`)
+**Date:** 2026-06-18
+
+**No STEER.md this lap.** The two top-priority next items carried since
+iter-227 (wire `ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()`
+in the desktop app) both need a Mac + mic + browser and can't run headless on
+the loop host. The recording corpus is unchanged since iter-231 (same 6 WAVs),
+so the "ingest new recordings" item had nothing to do. I took the first
+headless-doable item from the iter-239 backlog: `gv vad-sweep` 2-D grid
+(item #3) — now that all three 1-D axes exist (threshold / hangover / floor),
+extend the machinery to a `threshold × ms-knob` grid, the analogue of
+`simulate-mirror --grid`.
+
+**The gap.** iter-236 shipped `gv vad-sweep` (one knob across N values);
+iter-237 added `--csv`; iter-238/239 added the hangover and floor as second and
+third 1-D axes. But each sweep still varied ONE knob. Finding a *joint* elbow
+("what gate AND hangover together?") meant running several 1-D sweeps and
+cross-reading them by eye — exactly the manual cross-product `simulate-mirror
+--grid` already eliminates for the WPM mirror (base_wpm × strength). VAD had no
+2-D surface.
+
+**What changed.**
+1. **Pure 2-D core.** `examples/gv.py`: `vad_segmentation_grid(row_values,
+   col_values, results, *, row_axis="threshold", col_axis="min_silence_ms")`
+   pairs each `(row, col)` cell with its segmentation summary in ROW-MAJOR
+   order (row 0's whole row of columns first, then row 1's, …), `speech_s`
+   rounded to 3 places like `vad_segmentation_sweep`. Raises `ValueError` if
+   `len(results) != len(row_values) * len(col_values)`. No I/O, no torch.
+2. **Three renderer twins** mirror the vad-sweep set:
+   - `render_vad_grid` — a FLAT one-row-per-cell text table (not a matrix, so
+     each cell's two metrics stay unambiguous); header line names both axes
+     (`threshold × min_silence`); reuses the iter-238 `_SWEEP_AXIS_LABEL` /
+     `_format_sweep_axis_value` so a gate prints `0.40` and a ms knob a bare
+     `800`.
+   - `render_vad_grid_json` — carries both `"row_axis"` and `"col_axis"` plus a
+     flat `"grid"` cell list keyed by those names.
+   - `render_vad_grid_csv` — flat `<row_axis>,<col_axis>,num_segments,speech_s`
+     table (RFC-4180, trailing terminator stripped) that pivots straight into a
+     spreadsheet.
+   All three degrade to the shared install hint / `# silero VAD unavailable`
+   comment when silero-vad is absent.
+3. **Handler `cmd_vad_grid`** keeps the iter-233 injected-dependency contract
+   (`segmenter` / `availability` / `log`, lazy torch import). Rows are always
+   the gate; the column axis is whichever ms list was passed (`--min-speeches`
+   → `min_speech_ms`; else `--min-silences` → `min_silence_ms`, the default).
+   It segments once per cell row-major, holds the non-column ms knob at its
+   scalar, and routes to the human / json / csv renderer. Registered in
+   `DEFAULT_HANDLERS`.
+4. **Parser:** new `vad-grid` subcommand with a mutually-exclusive column-axis
+   group (`--min-silences` default `400,600,800,1000`; `--min-speeches`
+   alternative) and a mutually-exclusive `--json`/`--csv` format group,
+   mirroring `vad-sweep`. `--thresholds` is the always-present row axis.
+5. **Tests.**
+   - `tests/unit/test_gv_vad.py` (**+30**, now 159 in-file): parser
+     (registration, axis defaults, column-axis + json/csv mutexes,
+     out-of-range / negative-member rejection); pure grid core (row-major
+     keying, rounding, length-mismatch `ValueError`, axis defaults); all three
+     renderers (labels, both-axis JSON keys, CSV header + round-trip,
+     unavailable paths); `cmd_vad_grid` end-to-end (full cartesian product,
+     non-axis knobs held fixed, speech-column holds the silence scalar,
+     json/csv/unavailable branches, segmenter-name use). NO torch import.
+   - `tests/unit/test_gv_cli.py` (**+1 line**): extended the exhaustive
+     handler-map assertion with `vad-grid` (this test pins the full map, so it
+     fails-closed when a handler is added without updating it — caught and fixed
+     this lap).
+   - `tests/integration/test_gv_vad_cli.py` (**+3**): over THE GATE recording,
+     every cell equals an independent `gv vad --json` run at that
+     `(threshold, hangover)` pair; recovered speech is non-increasing reading
+     down rising thresholds *within each column* (the gate monotonicity, now
+     visible inside the 2-D grid); `--csv` agrees with `--json`. Skips without
+     corpus/package.
+6. **Docs** (`docs/research/voice-capture-tuning.md`) — a `gv vad-grid`
+   subsection beside the three sweep axes: invocation (gate × hangover and gate
+   × floor), the row-major ordering note, the verified real-corpus table
+   (`voice-20260618-110355.wav`, gate × hangover), the both-axis JSON keys, the
+   CSV header shape, and the within-column gate monotonicity.
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3432 passed** (3402 prior + 30 new), run on the feature branch before
+  ff-merge. Re-confirmed on main after merge: `pytest
+  tests/unit/test_gv_vad.py tests/unit/test_gv_cli.py` → **283 passed**.
+- Integration: `python -m pytest tests/integration/test_gv_vad_cli.py` →
+  **31 passed** (28 prior + 3 new; corpus symlinked into the worktree, symlink
+  removed before commit so it is not tracked). silero-vad IS installed on this
+  host, so these ran against the real model.
+- Manual smoke on the branch over `voice-20260618-110355.wav`:
+  `gv vad-grid … --thresholds 0.3,0.5,0.7 --min-silences 400,800` → a 6-cell
+  table; `--csv` and `--json` over the same grid matched; `--min-speeches`
+  column axis verified (gate × floor).
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] `gv vad-grid` best-cell pick** — score each grid cell (e.g. against a
+   target segment count or a known transcript boundary) and surface a
+   data-driven "best" pick like `render_grid`/`pick_best_mirror_config`, instead
+   of leaving the operator to eyeball the table.
+4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
+   --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
+   refresh the comparison table.
