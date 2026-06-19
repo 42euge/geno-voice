@@ -220,7 +220,15 @@ the `min_silence_ms` axis (the most common non-default sweep — it tunes the
 trailing-silence gate that ends one utterance and starts the next). Together
 they close the gap left by the threshold-only cross-surface round-trip and the
 single-row ms-axis header tests: the round-trip is now proven on `threshold`
-(default), `max_speech_s` (seconds), and all three ms axes.
+(default), `max_speech_s` (seconds), and all three ms axes. iter-270 lifts the
+same cross-surface proof to the 2-D **grid**: `render_vad_grid_csv` and
+`render_vad_grid_json` are likewise axis-agnostic, so a multi-cell grid on a
+fully non-default axis pair (`min_speech_ms` rows × `speech_pad_ms` columns) now
+parses from the CSV `DictReader` back to the *exact* `--json` `grid` payload,
+cell for cell in row-major order. (The prior grid round-trip test compared the
+CSV only against the shared `vad_segmentation_grid` data layer on the default
+`threshold × min_silence_ms` axes — it never round-tripped the two machine
+surfaces directly, nor on a non-default axis pair.)
 
 **`--min-silences` — a second sweep axis (iter-238).** The default axis is the
 P(speech) gate (`--thresholds`); passing `--min-silences` instead sweeps the

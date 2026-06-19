@@ -5318,6 +5318,53 @@ def test_render_grid_csv_round_trips_to_grid_cells():
         assert float(csv_row[3]) == cell["speech_s"]
 
 
+def test_render_grid_csv_round_trips_to_json_twin_on_nondefault_axes():
+    # iter-270: the 2-D analogue of the iter-268/269 1-D CSV↔JSON twins. The
+    # grid round-trip above (test_render_grid_csv_round_trips_to_grid_cells)
+    # compares the CSV body against the SHARED data layer (vad_segmentation_grid
+    # cells) on the DEFAULT axis pair (threshold × min_silence_ms). But the two
+    # machine surfaces — render_vad_grid_csv and render_vad_grid_json — were
+    # never round-tripped DIRECTLY against each other, and never on a NON-default
+    # row_axis/col_axis. Both emitters are axis-agnostic (each stringifies
+    # whichever value the row_axis/col_axis kwarg names), so a regression that
+    # let the CSV's first two columns drift from the JSON cell keys, reordered
+    # the row-major cell emission on one surface but not the other, or truncated
+    # a later cell's value on just one surface, would have shipped green while
+    # the default-axes grid-cells round-trip and the 1-D ms-axis twins stayed
+    # passing. Pin the CSV body and the JSON `grid` payload to describe the SAME
+    # segmentation, cell for cell, on a fully non-default axis pair
+    # (min_speech_ms rows × speech_pad_ms columns).
+    row_values = [200.0, 400.0]
+    col_values = [30.0, 90.0, 150.0]
+    # 2 rows × 3 cols = 6 cells, row-major counts 6/4/2 then 5/3/1.
+    results = [_cell_result(n) for n in (6, 4, 2, 5, 3, 1)]
+    csv_text = gv.render_vad_grid_csv(
+        row_values, col_values, results, name="rec.wav",
+        row_axis="min_speech_ms", col_axis="speech_pad_ms",
+    )
+    grid = json.loads(
+        gv.render_vad_grid_json(
+            row_values, col_values, results, name="rec.wav",
+            row_axis="min_speech_ms", col_axis="speech_pad_ms",
+        )
+    )["grid"]
+    csv_rows = list(csv.DictReader(io.StringIO(csv_text)))
+    # The first two CSV column headers ARE the swept axis names (self-describing
+    # CSV), keyed identically to the JSON cells.
+    assert csv_rows[0].keys() >= {
+        "min_speech_ms", "speech_pad_ms", "num_segments", "speech_s"
+    }
+    assert [
+        {
+            "min_speech_ms": float(row["min_speech_ms"]),
+            "speech_pad_ms": float(row["speech_pad_ms"]),
+            "num_segments": int(row["num_segments"]),
+            "speech_s": float(row["speech_s"]),
+        }
+        for row in csv_rows
+    ] == grid
+
+
 # ---- cmd_vad_grid: end-to-end ------------------------------------------
 
 
