@@ -22365,3 +22365,103 @@ collapse rules) + a quick-invocation line in the sweep block.
 4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
    --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
    refresh the comparison table.
+
+## iter-251 — `gv vad-grid`/`vad-sweep` `--target A,B:W.W` fractional weight
+
+**Branch:** `iter-251-fractional-weight` (merged ff to main, commit `a70e6d1`)
+**Date:** 2026-06-18
+
+**No STEER.md this lap.** The two top-priority next items carried since
+iter-227 (wire `ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()`
+in the desktop app) both need a Mac + mic + browser and can't run headless on
+the loop host. The recording corpus is unchanged since iter-231 (same 6 WAVs),
+so the "ingest new recordings" item had nothing to do. I took the
+headless-doable item from the iter-250 backlog: widen the `:penalty` weighted-set
+weight from a whole number to a non-negative FLOAT (item #3).
+
+**The gap.** iter-250's `:penalty` weight (`--target 3,5:2`) is a whole-number
+additive penalty on a set element. Because the penalty is added to that
+element's raw distance, a whole-number weight can only *step* the "preferred
+count wins at a larger raw distance" boundary across integers — an operator who
+wants the override threshold to land BETWEEN whole-number penalties (e.g. "5 is
+1.5 segments worse, so it loses to a count one off the preferred but beats a
+count two off") had no expression.
+
+**What changed (`examples/gv.py`).**
+1. **`nonneg_penalty_type`** — a new argparse-style parser for the weight slot:
+   a non-negative FLOAT (the fractional twin of `nonneg_int_type`). NaN, `inf`,
+   and negatives are rejected (a negative weight would make a count BETTER than
+   its raw distance — the other element's penalty already expresses preference;
+   an infinite weight is a degenerate "never pick this"). An INTEGRAL float
+   collapses back to an `int` (`2.0` → `2`), so every iter-250 integer-penalty
+   parse/render/distance/JSON result is byte-for-byte unchanged; only a
+   genuinely fractional value stays a `float`.
+2. **`_parse_weighted_set`** — the only call-site change: the penalty is now
+   parsed via `nonneg_penalty_type` instead of `nonneg_int_type`. Everything
+   else (the `,` split, empty-element reject, element base via
+   `_parse_single_target`, dedupe-on-element-first-penalty-wins, single-element
+   collapse) is untouched.
+3. **No change needed to `grid_cell_distance`, `grid_cell_sort_key`,
+   `_format_target`, the pickers, the renderers, or the `--json` payload** — the
+   penalty was already used purely as an additive number in the min-over-elements
+   distance, `_format_target` already f-string-formats it (`f":{penalty}"`, which
+   renders `1.5` correctly and a collapsed-to-int `2` as `2`), and `json.dumps`
+   serialises a float natively. A fractional penalty rides the entire iter-250
+   machinery with zero parallel implementation.
+
+**Scalar + band + set + preference + integer-weight output is byte-for-byte
+unchanged.** Because an integral float collapses to an int, every prior weighted
+case (parse value, `_format_target`, `grid_cell_distance`, sort-key, JSON,
+cmd-level) passes WITHOUT edits — verified by the full unchanged iter-250 test
+suite. Only a genuinely fractional weight produces new output.
+
+**Tests (`tests/unit/test_gv_vad.py`, +20 net).** `nonneg_penalty_type` parse
+(0, int, integral-float-collapses-to-int, `1.5`, `0.25`) and reject (negative,
+`-0.5`, `nan`, `inf`, non-numeric, empty); `target_type` fractional parse (incl.
+a fractionally-weighted band element `3,5-7:1.5`, mixed fractional penalties,
+integral-float-collapse) asserting the fractional penalty stays a `float` and the
+collapsed one an `int`; `_format_target` fractional read-back (`3,5:1.5`,
+`3:0.5,5:1.5`); `grid_cell_distance` fractional-threshold interpolation (the
+1.5-penalty places count 6 BETWEEN count 4 at 1.0 and count 5 at 2.0 — an
+ordering neither penalty 1 nor 2 can place); `pick_best_grid_cell` +
+`pick_top_grid_cells` between-steps ordering (`[4, 6, 5]`); `render_vad_grid_json`
+fractional penalty serialises as a JSON number; `render_vad_grid` best-line reads
+back `target 3,6:1.5` with the penalised `|Δ|` and no `weighted` dict repr leak.
+
+**Docs (`docs/research/voice-capture-tuning.md`).** A "Fractional weights
+(iter-251)" paragraph under the `--target A,B:W` weighted subsection (the
+between-steps boundary, the integral-float-collapse byte-for-byte rule, the
+reject rules for negative/NaN/inf) + a quick-invocation line in the sweep block
+and the help-text mention (`the weight may be fractional, 3,5:1.5`) on BOTH
+`--target` args.
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3699 passed** (3679 prior + 20 net new), run on the feature branch before
+  ff-merge.
+- Manual smoke (on the branch): `target_type('3,5:1.5')`→`{'weighted':[(3,0),
+  (5,1.5)]}`, `target_type('3,5:2.0')`→`{'weighted':[(3,0),(5,2)]}` (penalty an
+  `int`), `nonneg_penalty_type('0')`→`0` (`int`), `_format_target({'weighted':
+  [(3,0),(5,1.5)]})`→`'3,5:1.5'`, `grid_cell_distance(count=5,3,5:1.5)`→`1.5`,
+  `grid_cell_distance(count=4,3,5:1.5)`→`1`, `json.dumps` round-trips the float.
+  Rejected: `3,5:-1`, `3,5:a`, `3,5:inf`, `3,5:nan`.
+- Integration: not re-run this lap (no corpus symlinked into this worktree;
+  same as prior corpus-gated laps — the change is pure CLI logic fully covered
+  by the unit matrix).
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] `gv vad-sweep`/`vad-grid` `--target` MULTIPLICATIVE weight** — the
+   iter-250/251 weight is an ADDITIVE penalty (`distance + penalty`). An operator
+   who thinks proportionally ("count 5 is 1.5× as far as it looks") has no
+   expression; a `--target 3,5*1.5` multiplicative form (scoring `distance *
+   factor`) would let preference scale with distance rather than offset it. Pure,
+   headless — reuses `grid_cell_distance`'s min-over-elements.
+4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
+   --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
+   refresh the comparison table.
