@@ -812,6 +812,23 @@ gv vad-grid  recording.wav --thresholds 0.3 --max-speeches 5,10,inf --target 2 -
 Unit tests pin the JSON `best`/`top` cells on both surfaces, including that the
 `inf` baseline survives the round-trip.
 
+The third machine surface, `--csv` (iter-259), writes the raw seconds cap into
+the first column via the stdlib `csv` writer: a finite cap renders as `10.0` and
+the no-cap baseline as the bare token `inf` (`str(float('inf'))`) — *not* the
+JSON-style `Infinity`, and never a blank cell. So a `loadtxt`/`read_csv` consumer
+recovers the seconds axis losslessly (every cap cell parses back through
+`float(...)`, `inf` included), and the CSV stays self-describing across the
+no-cap baseline:
+
+```bash
+gv vad-sweep recording.wav --max-speeches 5,10,inf --csv               # first column: 5.0 / 10.0 / inf
+gv vad-grid  recording.wav --thresholds 0.3 --max-speeches 5,10,inf --csv
+```
+
+Unit tests pin the `inf` baseline writing as `inf` (not `Infinity`, not blank) on
+both the 1-D sweep axis and the 2-D grid column axis, and that every cap cell
+round-trips through `float(...)`.
+
 ### Silero vs energy-VAD segment counts (the headless proof)
 
 Measured over the seed corpus with `min_silence_ms=800` (the pipecat

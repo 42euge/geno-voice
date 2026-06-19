@@ -2706,6 +2706,88 @@ def test_render_sweep_csv_header_is_max_speech_axis_name():
     assert rows[1] == ["10.0", "1", "1.0"]
 
 
+# ---- CSV seconds (max_speech_s) inf-baseline coverage (iter-259) -------
+#
+# iter-257 pinned the HUMAN best: line %g formatting and iter-258 the JSON
+# best/top serialization on the seconds force-split-ceiling axis. The third
+# machine surface — the CSV emitter (render_vad_sweep_csv / render_vad_grid_csv)
+# — writes the raw axis value into the first column via the stdlib csv writer,
+# which renders a finite cap as "10.0" and the never-force-split baseline as
+# "inf" (str(float('inf'))), NOT the JSON-style "Infinity" token and NOT a blank.
+# iter-257/258 left that distinction untested; these close the seconds-axis
+# CSV hole on both the 1-D sweep and the 2-D grid column axis.
+
+
+def test_render_sweep_csv_max_speech_inf_baseline_writes_inf():
+    # The no-cap baseline (inf) must serialize as the bare token "inf" in the
+    # first column — not "Infinity" (JSON), not blank, not a float repr.
+    r_inf = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=20.0,
+        segments=[_Seg(0.0, 12.0)],
+    )
+    r_ten = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=20.0,
+        segments=[_Seg(0.0, 5.0), _Seg(5.0, 10.0)],
+    )
+    text = gv.render_vad_sweep_csv(
+        [float("inf"), 10.0], [r_inf, r_ten], name="rec.wav", axis="max_speech_s"
+    )
+    rows = list(csv.reader(io.StringIO(text)))
+    assert rows[0] == ["max_speech_s", "num_segments", "speech_s"]
+    # Baseline row: the cap column is exactly "inf" (csv writer stringifies
+    # float('inf') -> "inf"), and the cell parses back to math.inf.
+    assert rows[1][0] == "inf"
+    assert math.isinf(float(rows[1][0]))
+    assert rows[1][1] == "1"
+    # Finite cap stays a plain decimal, no gate-style truncation.
+    assert rows[2][0] == "10.0"
+    assert rows[2][1] == "2"
+    # Guard against the JSON serialization leaking into the CSV surface.
+    assert "Infinity" not in text
+
+
+def test_render_sweep_csv_max_speech_round_trips_with_inf():
+    # Every CSV cap cell parses back to its sweep value, inf included, so a
+    # downstream loadtxt/read_csv consumer recovers the seconds axis losslessly.
+    caps = [float("inf"), 10.0, 5.0]
+    results = [
+        _Result(name="rec.wav", sample_rate=16000, duration_s=20.0, segments=[_Seg(0.0, 12.0)]),
+        _Result(name="rec.wav", sample_rate=16000, duration_s=20.0,
+                 segments=[_Seg(0.0, 5.0), _Seg(5.0, 10.0)]),
+        _Result(name="rec.wav", sample_rate=16000, duration_s=20.0,
+                 segments=[_Seg(0.0, 2.5), _Seg(2.5, 5.0), _Seg(5.0, 7.5), _Seg(7.5, 10.0)]),
+    ]
+    text = gv.render_vad_sweep_csv(caps, results, name="rec.wav", axis="max_speech_s")
+    cells = gv.vad_segmentation_sweep(caps, results, axis="max_speech_s")
+    rows = list(csv.reader(io.StringIO(text)))
+    for csv_row, cell in zip(rows[1:], cells):
+        assert float(csv_row[0]) == cell["max_speech_s"]
+        assert int(csv_row[1]) == cell["num_segments"]
+
+
+def test_render_grid_csv_max_speech_col_axis_inf_baseline_writes_inf():
+    # Same guarantee on the 2-D grid COLUMN axis: the inf baseline column writes
+    # "inf", the finite cap writes "5.0", the held threshold row stays "0.3".
+    r_inf = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=20.0,
+        segments=[_Seg(0.0, 12.0)],
+    )
+    r_five = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=20.0,
+        segments=[_Seg(0.0, 2.5), _Seg(2.5, 5.0)],
+    )
+    text = gv.render_vad_grid_csv(
+        [0.3], [float("inf"), 5.0], [r_inf, r_five], name="rec.wav",
+        row_axis="threshold", col_axis="max_speech_s",
+    )
+    rows = list(csv.reader(io.StringIO(text)))
+    assert rows[0] == ["threshold", "max_speech_s", "num_segments", "speech_s"]
+    assert rows[1][:3] == ["0.3", "inf", "1"]
+    assert math.isinf(float(rows[1][1]))
+    assert rows[2][:3] == ["0.3", "5.0", "2"]
+    assert "Infinity" not in text
+
+
 # ---- --target JSON `best`/`top` on the seconds max_speech_s axis -------
 #
 # iter-257 pinned the HUMAN best: line %g formatting on the seconds axis;
