@@ -6038,6 +6038,106 @@ def test_render_grid_csv_consumer_rederives_json_scaled_target_pick():
     assert [c["distance"] for c in payload["top"]] == [2, 3, 3]
 
 
+def test_render_grid_csv_consumer_rederives_json_open_band_target_pick():
+    # iter-279: iter-275 pinned the cross-surface --target pick AGREEMENT (a CSV
+    # consumer re-parses the bare grid table back to cells and re-runs
+    # pick_best_grid_cell / pick_top_grid_cells to recover the JSON-embedded
+    # `best`/`top` identically) for a CLOSED (lo, hi) tolerance band — both edges
+    # bounded, so a count is in-band only when lo <= count <= hi. grid_cell_distance
+    # also accepts an iter-247 OPEN band, where ONE edge is None ("no bound on that
+    # side"): (lo, None) ("at least lo") scores 0 for any count >= lo and lo - count
+    # below it; (None, hi) ("at most hi") scores 0 for any count <= hi and count - hi
+    # above it. The open side simply SKIPS its bound check. This is a genuinely
+    # distinct distance shape from the closed band — one-sided, so the in-band region
+    # is unbounded above (or below) and arbitrarily many cells can tie at the floor.
+    # render_vad_grid_json threads the open band straight into the pickers (the
+    # target is opaque to them — they only forward it to grid_cell_distance); a CSV
+    # consumer re-running the SAME pickers with the SAME open band MUST recover the
+    # SAME pick. That cross-surface agreement under an OPEN band was never pinned — a
+    # regression that, say, coerced the open None edge to a finite bound (or dropped
+    # the unbounded side, collapsing the open band to a scalar at lo) on the JSON
+    # path while the CSV consumer still passed the open band would diverge the two
+    # surfaces yet ship green, because iter-275 only exercises a CLOSED band. Pin
+    # both surfaces to name the SAME in-band best cell and the SAME open-band-scored
+    # top shortlist, with a CLOSED-band control proving the unbounded upper side is
+    # load-bearing.
+    row_values = [0.3, 0.5]
+    col_values = [400.0, 800.0]
+    # 2×2 row-major counts 3/12/7/1, target = open band (5, None) ("at least 5").
+    # Open-band distances (count >= 5 → 0, else 5 - count):
+    #   - (0.3,400) count 3  → below lo=5 → dist 2
+    #   - (0.3,800) count 12 → >= 5       → dist 0 (in band — no upper bound)
+    #   - (0.5,400) count 7  → >= 5       → dist 0 (in band)
+    #   - (0.5,800) count 1  → below lo=5 → dist 4
+    # Two cells tie at the band floor (dist 0): (0.3,800) count 12 and (0.5,400)
+    # count 7. Row-major keeps (0.3,800) first, so the open-band best is (0.3,800).
+    # A CLOSED band (5, 9) would instead push count 12 OUT (above hi=9 → dist 3),
+    # leaving count 7 (0.5,400) as the lone in-band cell — a DIFFERENT pick. So the
+    # UNBOUNDED upper side genuinely changes the result, the whole point of this
+    # fixture.
+    results = [_cell_result(n) for n in (3, 12, 7, 1)]
+    target = (5, None)
+    csv_text = gv.render_vad_grid_csv(
+        row_values, col_values, results, name="rec.wav",
+        row_axis="threshold", col_axis="min_silence_ms",
+    )
+    payload = json.loads(
+        gv.render_vad_grid_json(
+            row_values, col_values, results, name="rec.wav",
+            row_axis="threshold", col_axis="min_silence_ms",
+            target=target, top=3,
+        )
+    )
+    # The JSON twin records the open band (a tuple serialises to a JSON list; the
+    # None edge becomes JSON null).
+    assert payload["target"] == [5, None]
+    # The CSV body still carries no pick columns — it is the bare grid.
+    assert "best" not in csv_text and "distance" not in csv_text
+    # A CSV consumer re-parses the flat table back to grid cells...
+    cells = [
+        {
+            "threshold": float(row["threshold"]),
+            "min_silence_ms": float(row["min_silence_ms"]),
+            "num_segments": int(row["num_segments"]),
+            "speech_s": float(row["speech_s"]),
+        }
+        for row in csv.DictReader(io.StringIO(csv_text))
+    ]
+    # ...and re-runs the SAME picker with the SAME open band. The CSV-derived best
+    # equals the JSON `best` (distance key stripped), and the re-derived open-band
+    # distance matches the one the JSON embedded (0 — inside the unbounded band).
+    csv_best = gv.pick_best_grid_cell(cells, target)
+    json_best = dict(payload["best"])
+    assert json_best.pop("distance") == gv.grid_cell_distance(csv_best, target)
+    assert csv_best == json_best
+    assert (csv_best["threshold"], csv_best["min_silence_ms"]) == (0.3, 800.0)
+    assert csv_best["num_segments"] == 12
+    assert payload["best"]["distance"] == 0
+    # CONTROL: a CLOSED band (5, 9) pushes count 12 OUT (above hi → dist 3), so the
+    # lone in-band cell is count 7 (0.5,400) — a DIFFERENT pick. Proves the test
+    # cannot pass by the open None edge silently collapsing to a finite bound on
+    # either surface; the UNBOUNDED upper side is load-bearing for the count-12 pick.
+    closed_best = gv.pick_best_grid_cell(cells, (5, 9))
+    assert closed_best != csv_best
+    assert (closed_best["threshold"], closed_best["min_silence_ms"]) == (0.5, 400.0)
+    assert closed_best["num_segments"] == 7
+    # The top shortlist agrees cell-for-cell (distance stripped), with the two
+    # in-band (dist-0) cells ordered row-major ahead of the out-of-band cell.
+    csv_top = gv.pick_top_grid_cells(cells, target, 3)
+    json_top = [dict(c) for c in payload["top"]]
+    for c in json_top:
+        c.pop("distance")
+    assert csv_top == json_top
+    # Head of the shortlist is the single best pick, on both surfaces.
+    assert csv_top[0] == csv_best
+    # Both band-floor (dist-0) cells lead, row-major, then the nearest below-lo cell.
+    assert [(c["threshold"], c["min_silence_ms"]) for c in csv_top] == [
+        (0.3, 800.0), (0.5, 400.0), (0.3, 400.0),
+    ]
+    # The two leading cells both scored the open-band floor (distance 0).
+    assert [c["distance"] for c in payload["top"][:2]] == [0, 0]
+
+
 # ---- cmd_vad_grid: end-to-end ------------------------------------------
 
 

@@ -303,7 +303,15 @@ raw distance 1 from it (scaled 3) loses to a cell at raw distance 2 from the
 carries no factors, picks the closer cell, and lands a *different* winner — and
 because the additive and multiplicative folds choose different cells for the same
 element set, the iter-277 weighted fixture cannot catch a JSON path that confused
-the two.
+the two. iter-279 carries the cross-surface pick agreement to an iter-247 *open*
+band — a `(lo, None)` ("at least `lo`") or `(None, hi)` ("at most `hi`") target,
+where one edge is unbounded so the open side simply skips its bound check. This is
+a distinct distance shape from the iter-275 *closed* band: the in-band region is
+one-sided and unbounded, so arbitrarily many cells tie at the floor. The fixture
+targets `(5, None)`, ties a count-12 and a count-7 cell at distance 0, and a
+*closed* `(5, 9)` control pushes count 12 back out (distance 3) to pick a different
+cell — so the test catches a JSON path that coerced the open `None` edge to a
+finite bound or collapsed the open band to a scalar at `lo`.
 
 **`--min-silences` — a second sweep axis (iter-238).** The default axis is the
 P(speech) gate (`--thresholds`); passing `--min-silences` instead sweeps the
