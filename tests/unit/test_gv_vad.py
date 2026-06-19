@@ -5634,6 +5634,92 @@ def test_render_grid_csv_consumer_rederives_json_speech_tie_break_pick():
     ]
 
 
+def test_render_grid_csv_consumer_rederives_json_band_target_pick():
+    # iter-275: iter-273/274 pinned the cross-surface --target pick AGREEMENT (a
+    # CSV consumer re-derives the JSON-embedded `best`/`top` identically) but ONLY
+    # for a SCALAR target (a single desired segment count). grid_cell_distance also
+    # accepts an iter-246 closed `(lo, hi)` TOLERANCE BAND: every count INSIDE the
+    # inclusive window scores distance 0 (all equally perfect), so a band makes
+    # MULTIPLE cells tie at the band floor where a scalar would separate them.
+    # render_vad_grid_json threads the band straight into pick_best_grid_cell /
+    # pick_top_grid_cells (target is opaque to the picker — it only forwards it to
+    # grid_cell_distance); a CSV consumer re-running the SAME pickers with the SAME
+    # band MUST recover the SAME pick. That cross-surface agreement under a band
+    # target was never pinned — a regression that, say, coerced the band tuple to a
+    # scalar on the JSON path (collapsing the in-band ties) while the CSV consumer
+    # still passed the band would diverge the two surfaces yet ship green, because
+    # iters 273/274 only exercise scalar targets. Pin both surfaces to name the SAME
+    # in-band best cell and the SAME band-scored top shortlist.
+    row_values = [0.3, 0.5]
+    col_values = [400.0, 800.0]
+    # 2×2 row-major counts 3/9/5/1, target = closed band (5, 9). Band distances:
+    #   - (0.3,400) count 3 → below lo=5 → dist 2
+    #   - (0.3,800) count 9 → at hi=9   → dist 0 (in band)
+    #   - (0.5,400) count 5 → at lo=5   → dist 0 (in band)
+    #   - (0.5,800) count 1 → below lo  → dist 4
+    # Two cells tie at the band floor (dist 0): (0.3,800) and (0.5,400). Row-major
+    # keeps (0.3,800) first, so the band best is (0.3,800). A SCALAR target of 5
+    # (the band's lower edge) would instead make count-5 the lone exact hit and
+    # pick (0.5,400) — so the band genuinely changes the result, the whole point
+    # of this fixture.
+    results = [_cell_result(n) for n in (3, 9, 5, 1)]
+    target = (5, 9)
+    csv_text = gv.render_vad_grid_csv(
+        row_values, col_values, results, name="rec.wav",
+        row_axis="threshold", col_axis="min_silence_ms",
+    )
+    payload = json.loads(
+        gv.render_vad_grid_json(
+            row_values, col_values, results, name="rec.wav",
+            row_axis="threshold", col_axis="min_silence_ms",
+            target=target, top=3,
+        )
+    )
+    # The JSON twin records the band target (a tuple serialises to a JSON list).
+    assert payload["target"] == [5, 9]
+    # The CSV body still carries no pick columns — it is the bare grid.
+    assert "best" not in csv_text and "distance" not in csv_text
+    # A CSV consumer re-parses the flat table back to grid cells...
+    cells = [
+        {
+            "threshold": float(row["threshold"]),
+            "min_silence_ms": float(row["min_silence_ms"]),
+            "num_segments": int(row["num_segments"]),
+            "speech_s": float(row["speech_s"]),
+        }
+        for row in csv.DictReader(io.StringIO(csv_text))
+    ]
+    # ...and re-runs the SAME picker with the SAME band target. The CSV-derived
+    # best equals the JSON `best` (distance key stripped), and the re-derived
+    # band distance matches the one the JSON embedded (0 — inside the band).
+    csv_best = gv.pick_best_grid_cell(cells, target)
+    json_best = dict(payload["best"])
+    assert json_best.pop("distance") == gv.grid_cell_distance(csv_best, target)
+    assert csv_best == json_best
+    assert (csv_best["threshold"], csv_best["min_silence_ms"]) == (0.3, 800.0)
+    # CONTROL: a SCALAR target of 5 (the band's lower edge) picks a DIFFERENT cell
+    # (count-5 (0.5,400), the lone exact hit), so this test could not pass by the
+    # band silently collapsing to a scalar on either surface.
+    scalar_best = gv.pick_best_grid_cell(cells, 5)
+    assert scalar_best != csv_best
+    assert (scalar_best["threshold"], scalar_best["min_silence_ms"]) == (0.5, 400.0)
+    # The top shortlist agrees cell-for-cell (distance stripped), with the two
+    # in-band (dist-0) cells ordered row-major ahead of the out-of-band cells.
+    csv_top = gv.pick_top_grid_cells(cells, target, 3)
+    json_top = [dict(c) for c in payload["top"]]
+    for c in json_top:
+        c.pop("distance")
+    assert csv_top == json_top
+    # Head of the shortlist is the single best pick, on both surfaces.
+    assert csv_top[0] == csv_best
+    # Both band-floor (dist-0) cells lead, row-major, then the nearest out-of-band.
+    assert [(c["threshold"], c["min_silence_ms"]) for c in csv_top] == [
+        (0.3, 800.0), (0.5, 400.0), (0.3, 400.0),
+    ]
+    # The two leading cells both scored the band floor (distance 0).
+    assert [c["distance"] for c in payload["top"][:2]] == [0, 0]
+
+
 # ---- cmd_vad_grid: end-to-end ------------------------------------------
 
 

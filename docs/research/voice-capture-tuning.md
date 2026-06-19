@@ -259,7 +259,16 @@ pick. The fixture is built so the two tie-breaks genuinely *disagree* (equal
 distance, different recovered speech → row-major and speech name different
 cells), so the test would catch a JSON path that silently dropped the tie-break
 and fell back to row-major — a divergence iter-273's default-tie-break fixture
-could not see.
+could not see. iter-275 generalises the pick agreement past the *scalar* target
+to an iter-246 closed `(lo, hi)` **tolerance band**: every count inside the
+inclusive window scores distance 0, so a band makes multiple cells tie at the
+band floor where a scalar would separate them. The JSON twin forwards the band
+opaquely to `grid_cell_distance`, and a CSV consumer re-running the pickers with
+the same band recovers the same in-band pick and band-scored shortlist. The
+fixture is built so a scalar at the band's lower edge would pick a *different*
+cell (the lone exact hit) than the band (whose floor ties two cells, broken
+row-major), so the test would catch a JSON path that collapsed the band tuple to
+a scalar.
 
 **`--min-silences` — a second sweep axis (iter-238).** The default axis is the
 P(speech) gate (`--thresholds`); passing `--min-silences` instead sweeps the
