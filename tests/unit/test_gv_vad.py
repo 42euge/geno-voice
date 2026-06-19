@@ -5553,6 +5553,87 @@ def test_render_grid_csv_consumer_rederives_json_best_pick():
     ]
 
 
+def test_render_grid_csv_consumer_rederives_json_speech_tie_break_pick():
+    # iter-274: iter-273 pinned the cross-surface --target pick AGREEMENT (a CSV
+    # consumer re-derives the JSON-embedded `best`/`top` identically) but ONLY
+    # for the DEFAULT tie_break="row-major" — distance ties broken by grid
+    # position. The JSON twin also accepts tie_break="speech", which breaks
+    # distance ties on recovered speech (most first, iter-243). render_vad_grid_json
+    # threads that tie_break into pick_best_grid_cell / pick_top_grid_cells; a CSV
+    # consumer re-running the SAME pickers with the SAME tie_break MUST recover the
+    # SAME speech-broken pick. That cross-surface agreement under the NON-default
+    # tie-break was never pinned — a regression that, say, dropped the tie_break
+    # argument on the JSON path (silently falling back to row-major) while the CSV
+    # consumer still passed "speech" would diverge the two surfaces yet ship green,
+    # because iter-273's test only exercises the default tie-break where the two
+    # tie-breaks happen to coincide. Pin both surfaces to name the SAME
+    # speech-broken best cell and the SAME speech-ordered top shortlist.
+    row_values = [0.3, 0.5]
+    col_values = [400.0, 800.0]
+    # 2×2 row-major counts 2/4/7/5. With _cell_result speech is coupled to count
+    # (n segments → n*0.5s), so cells at equal distance carry DIFFERENT speech and
+    # the two tie-breaks genuinely DISAGREE — the whole point of this fixture.
+    # target=3 distances row-major: 1,1,4,2.
+    #   - (0.3,400) dist 1, speech 1.0   - (0.3,800) dist 1, speech 2.0
+    #   - (0.5,400) dist 4, speech 3.5   - (0.5,800) dist 2, speech 2.5
+    # The two dist-1 cells tie: row-major would keep (0.3,400) first (earlier in
+    # the grid), but tie_break="speech" prefers (0.3,800) (2.0s > 1.0s recovered).
+    # So the speech best is (0.3,800), NOT the row-major pick — proving the
+    # tie-break actually flips the result on both surfaces.
+    results = [_cell_result(n) for n in (2, 4, 7, 5)]
+    target = 3
+    csv_text = gv.render_vad_grid_csv(
+        row_values, col_values, results, name="rec.wav",
+        row_axis="threshold", col_axis="min_silence_ms",
+    )
+    payload = json.loads(
+        gv.render_vad_grid_json(
+            row_values, col_values, results, name="rec.wav",
+            row_axis="threshold", col_axis="min_silence_ms",
+            target=target, top=3, tie_break="speech",
+        )
+    )
+    # The JSON twin records WHICH tie-break produced its pick.
+    assert payload["tie_break"] == "speech"
+    # The CSV body still carries no pick columns or tie_break — it is the bare grid.
+    assert "best" not in csv_text and "distance" not in csv_text
+    assert "tie_break" not in csv_text
+    # A CSV consumer re-parses the flat table back to grid cells...
+    cells = [
+        {
+            "threshold": float(row["threshold"]),
+            "min_silence_ms": float(row["min_silence_ms"]),
+            "num_segments": int(row["num_segments"]),
+            "speech_s": float(row["speech_s"]),
+        }
+        for row in csv.DictReader(io.StringIO(csv_text))
+    ]
+    # ...and re-runs the SAME picker with the SAME tie_break="speech". The
+    # CSV-derived best equals the JSON `best` (distance key stripped), and the
+    # re-derived distance matches the one the JSON embedded.
+    csv_best = gv.pick_best_grid_cell(cells, target, "speech")
+    json_best = dict(payload["best"])
+    assert json_best.pop("distance") == gv.grid_cell_distance(csv_best, target)
+    assert csv_best == json_best
+    # CONTROL: the speech pick is genuinely DIFFERENT from the row-major pick, so
+    # this test could not pass by both tie-breaks accidentally coinciding.
+    assert gv.pick_best_grid_cell(cells, target) != csv_best
+    assert (csv_best["threshold"], csv_best["min_silence_ms"]) == (0.3, 800.0)
+    # The top shortlist agrees cell-for-cell (distance stripped), including the
+    # speech-ordered tie among the two dist-1 cells (2.0s before 1.0s).
+    csv_top = gv.pick_top_grid_cells(cells, target, 3, "speech")
+    json_top = [dict(c) for c in payload["top"]]
+    for c in json_top:
+        c.pop("distance")
+    assert csv_top == json_top
+    # Head of the shortlist is the single best pick, on both surfaces.
+    assert csv_top[0] == csv_best
+    # The dist-1 tie resolved on speech (2.0s cell first), then the dist-2 cell.
+    assert [(c["threshold"], c["min_silence_ms"]) for c in csv_top] == [
+        (0.3, 800.0), (0.3, 400.0), (0.5, 800.0),
+    ]
+
+
 # ---- cmd_vad_grid: end-to-end ------------------------------------------
 
 

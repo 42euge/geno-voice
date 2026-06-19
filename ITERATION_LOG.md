@@ -24667,3 +24667,92 @@ proved by a pre-test smoke run).
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
    should track a curated subset, decide the policy and re-run
    `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
+
+## iter-274 — grid CSV consumer re-derives the JSON `--target` speech-tie-break pick
+
+**Branch:** `iter-274-grid-speech-tie` (merged ff to main, commit `4971caa`)
+**Date:** 2026-06-19
+
+**No STEER.md this lap.** The carried top-priority items (wire
+`ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()` in the desktop
+app) both need a Mac + mic + browser and can't run headless. "Ingest new
+recordings" stays corpus-gated. The COMBINED additive+multiplicative `--target`
+weight is a feature/design item, not a regression gap. iter-273 backlog item #4
+named the next pure increment directly: the `tie_break="speech"` variant of the
+cross-surface grid pick. I confirmed no existing test exercised a speech
+tie-break *cross-surface* (the speech tie-break tests at lines 4771+, 5211+,
+6222+ all pin a SINGLE surface in isolation; iter-273's cross-surface test pins
+only the DEFAULT row-major tie-break), so the gap is real, and took it.
+
+**The gap.** iter-273 closed the cross-surface `--target` pick agreement — a CSV
+consumer re-derives the JSON-embedded `best`/`top` identically — but ONLY for
+the default `tie_break="row-major"`. `render_vad_grid_json` also accepts
+`tie_break="speech"` (iter-243), which breaks distance ties on recovered speech
+(most first) and threads that into `pick_best_grid_cell` /
+`pick_top_grid_cells`. A CSV consumer re-running the SAME pickers with the SAME
+`"speech"` tie-break MUST recover the SAME speech-broken pick — but that
+cross-surface agreement under the NON-default tie-break was never pinned. A
+regression that dropped the `tie_break` argument on the JSON path (silently
+falling back to row-major) while a CSV consumer still passed `"speech"` would
+diverge the two surfaces yet ship green, because iter-273's fixture uses a grid
+where the two tie-breaks happen to coincide. No production code changed (the
+wiring was already correct — proved by the passing test on first run).
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+1 test, +86 lines).**
+  `test_render_grid_csv_consumer_rederives_json_speech_tie_break_pick` — a 2×2
+  `threshold × min_silence_ms` grid (row-major counts 2/4/7/5) with `target=3`,
+  `top=3`, `tie_break="speech"`. Because `_cell_result` couples speech to count
+  (n segments → n·0.5s), the two dist-1 cells `(0.3,400)` speech 1.0 and
+  `(0.3,800)` speech 2.0 carry DIFFERENT speech, so the two tie-breaks genuinely
+  DISAGREE: row-major keeps `(0.3,400)` first, but `"speech"` prefers `(0.3,800)`
+  (more recovered speech). Asserts the JSON payload records `tie_break ==
+  "speech"`; the CSV body carries no `best`/`distance`/`tie_break`; a CSV
+  `DictReader` consumer re-running `pick_best_grid_cell(cells, 3, "speech")`
+  recovers a `best` IDENTICAL to the JSON-embedded `best` (distance stripped,
+  re-derived distance matching); a CONTROL assert proves the speech pick `!=` the
+  row-major pick (so the test can't pass by the two tie-breaks coinciding); and
+  `pick_top_grid_cells(..., "speech")` recovers a shortlist agreeing cell-for-cell
+  with the JSON `top`, head = best, with the dist-1 tie ordered on speech
+  (`(0.3,800)` 2.0s before `(0.3,400)` 1.0s).
+- **`docs/research/voice-capture-tuning.md`.** Extended the grid cross-surface
+  paragraph: iter-274 extends iter-273's pick agreement to the non-default
+  `tie_break="speech"`, with a fixture built so the two tie-breaks genuinely
+  disagree (catching a JSON path that silently fell back to row-major).
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3854 passed** (3853 prior + 1 net new), run on the feature branch before
+  ff-merge AND re-run on main after the merge.
+- Focused: `pytest tests/unit/test_gv_vad.py -k "rederives_json_speech_tie_break_pick or rederives_json_best_pick"`
+  → **2 passed** (the new speech-tie pick-agreement test + the iter-273 default
+  twin it generalizes).
+- Integration: not re-run this lap (no corpus symlinked into this worktree; same
+  as prior corpus-gated laps — the change is pure CLI render logic fully covered
+  by the unit matrix).
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] COMBINED additive+multiplicative `--target` weight** — iter-250/251
+   give additive (`:penalty`), iter-252 multiplicative (`*factor`); an operator
+   might want both on one element (`5:1*1.5`). Larger design question (operator
+   precedence of `:` vs `*`) — scope before building. Pure, headless if pursued.
+   The only `--target` increment that is a FEATURE, not a regression-test gap.
+4. **[cli] The grid CSV↔JSON cross-surface contract is now closed on BOTH
+   tie-breaks:** the bare `grid` payload (finite + ROW-axis inf + COL-axis inf,
+   iters 270–272), the `--target` pick under `row-major` (iter-273) AND under
+   `speech` (iter-274). The likely-next pure increment is the cross-surface pick
+   agreement on a `(lo, hi)` TOLERANCE-BAND target (iter-246) or a `{"prefer": …}`
+   PREFERENCE target (iter-249): the band/preference distance is baked into
+   `grid_cell_distance` / `grid_cell_sort_key`, so a CSV consumer re-running the
+   pickers with the SAME band/preference target should recover the SAME pick the
+   JSON embedded — confirm no existing test already exercises a band or
+   preference target cross-surface before assuming a gap.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
+   should track a curated subset, decide the policy and re-run
+   `replay_silero.py --compare` + `gv vad` to refresh the comparison table.

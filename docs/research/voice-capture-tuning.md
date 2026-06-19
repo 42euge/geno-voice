@@ -251,7 +251,15 @@ pins that agreement: the CSV-derived best equals the JSON-embedded `best`
 (distance stripped), the re-derived distance matches, and the top shortlist
 agrees cell-for-cell — including the row-major order of two equidistant
 runners-up — so the pick is identical no matter which surface a tuning script
-reads.
+reads. iter-274 extends that pick agreement to the *non-default*
+`tie_break="speech"`: the JSON twin threads the tie-break into
+`pick_best_grid_cell` / `pick_top_grid_cells`, and a CSV consumer re-running the
+same pickers with the same `"speech"` tie-break recovers the same speech-broken
+pick. The fixture is built so the two tie-breaks genuinely *disagree* (equal
+distance, different recovered speech → row-major and speech name different
+cells), so the test would catch a JSON path that silently dropped the tie-break
+and fell back to row-major — a divergence iter-273's default-tie-break fixture
+could not see.
 
 **`--min-silences` — a second sweep axis (iter-238).** The default axis is the
 P(speech) gate (`--thresholds`); passing `--min-silences` instead sweeps the
