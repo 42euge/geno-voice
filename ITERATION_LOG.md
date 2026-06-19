@@ -22000,3 +22000,106 @@ lines in the sweep block.
 4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
    --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
    refresh the comparison table.
+
+## iter-248 — `gv vad-grid`/`vad-sweep` `--target A,B,C` set form
+
+**Branch:** `iter-248-target-set` (merged ff to main, commit `043a7f3`)
+**Date:** 2026-06-18
+
+**No STEER.md this lap.** The two top-priority next items carried since
+iter-227 (wire `ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()`
+in the desktop app) both need a Mac + mic + browser and can't run headless on
+the loop host. The recording corpus is unchanged since iter-231 (same 6 WAVs),
+so the "ingest new recordings" item had nothing to do. I took the
+headless-doable item from the iter-247 backlog: extend `--target` with a
+comma-separated SET form (item #3).
+
+**The gap.** iter-246 gave `--target` a closed `LO-HI` tolerance band and
+iter-247 the open-ended forms, but both express a CONTIGUOUS window. An
+operator whose acceptable counts are DISJOINT — "3 OR 5 segments, but nothing
+between" (two phrasings that each segment cleanly, the in-between count being a
+clipping/merge artefact) — had no way to say so. A band spanning both (`3-5`)
+would wrongly accept the bad middle count of 4.
+
+**What changed (`examples/gv.py`).**
+1. **`target_type`** — a comma now separates a SET, parsed to a `list` of
+   elements. The single-target scalar/band/open-band parsing is factored into a
+   new **`_parse_single_target`** helper that each set element reuses, so an
+   element gets the exact same rules (scalar `int`, closed/open `(lo, hi)`
+   band, the inverted-band and fractional/negative rejections). A set is deduped
+   preserving first-seen order; a single-element set (`3,3`) collapses to the
+   bare element so scalar/band output stays byte-for-byte unchanged. An empty
+   element (`3,`, `3,,5`, `,5`, bare `,`) is rejected as a typo.
+2. **`grid_cell_distance`** — a `list` target scores as the **MIN** distance
+   over its elements (recursing into the existing scalar/band branches), so a
+   count satisfying ANY listed target scores `0` and otherwise scores the gap to
+   the nearest one. Scalars and bands are unchanged.
+3. **`_format_target`** — a set renders comma-joined, each element via the
+   existing per-element formatter, so it reads back exactly as typed (`3,5,7`,
+   `3,5-7`, `3,5-,-7`). The `--json` `target` serialises as a JSON array of
+   elements (a band element nests as its own `[lo, hi]` array — `3,5-7` →
+   `[3, [5, 7]]`, a tuple → JSON array, no extra code).
+4. **Help text** for BOTH `--target` args (sweep + grid) documents the set form
+   (`3,5,7 = 3 OR 5 OR 7`).
+
+**The set rides the existing machinery untouched.** Because a set is just
+another lower-is-better distance key, `--top`, `--tie-break`, the pickers
+(`pick_best_grid_cell` / `pick_top_grid_cells` / `grid_cell_sort_key`), the
+shared `_render_pick_block` helper (iter-245), and the `--json` payload all flow
+through with NO parallel implementation. Only `target_type` (+ the extracted
+`_parse_single_target`), `grid_cell_distance`, and `_format_target` needed
+touching.
+
+**Scalar + band output is byte-for-byte unchanged.** Every prior scalar,
+closed- and open-band case (renderer, JSON, cmd-level, integration) passes
+without edits — a scalar still parses to a bare `int`, a band still parses to a
+tuple, and a single-element set collapses to the bare element.
+
+**Tests (`tests/unit/test_gv_vad.py`, +21 net).** `target_type` set parsing
+(incl. whitespace-trimmed elements, band/open-band elements, dedupe preserving
+order, single-element collapse to a bare scalar AND a bare band);
+empty-element rejection (`3,`, `,5`, `3,,5`, ` 3 , , 5 `, bare `,`) and
+malformed-element rejection (`3,a,5`, `3,5-3`); `_format_target` set rendering
+(scalars + band/open-band elements); `grid_cell_distance` min-over-elements for
+a set of scalars AND a set of bands; renderer + JSON set best-pick (set text
+renders as `3,5,7` not a list repr, JSON `target` is a nested array);
+`cmd_vad_grid` AND `cmd_vad_sweep` end-to-end with a set target; parser-level
+set parse. No torch import — bare dicts / the existing `_cell_result` stub.
+
+**Docs (`docs/research/voice-capture-tuning.md`).** A `--target A,B,C` set
+subsection under `gv vad-sweep` (the min-over-elements scoring rule,
+composition with band elements, the nested-array JSON form, the
+dedupe/collapse/empty-reject rules) + a quick-invocation line in the sweep
+block.
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3622 passed** (3601 prior + 21 net new), run on the feature branch before
+  ff-merge. Re-confirmed on main after merge: `pytest
+  tests/unit/test_gv_vad.py tests/unit/test_gv_cli.py` → **473 passed**.
+- Manual smoke (on the branch): `target_type('3,5,7')`→`[3, 5, 7]`,
+  `target_type('3,5-7')`→`[3, (5, 7)]`, `target_type('3,3')`→`3`,
+  `target_type('3,')`→ArgumentTypeError, `_format_target([3,(5,7)])`→`'3,5-7'`,
+  `grid_cell_distance(count=5, [3,5,7])`→`0`, `grid_cell_distance(count=4,
+  [3,5,7])`→`1`, `grid_cell_distance(count=9, [3,5,7])`→`2`,
+  `json.dumps([3,(5,7)])`→`[3, [5, 7]]`.
+- Integration: not re-run this lap (no corpus symlinked into this worktree;
+  same as prior corpus-gated laps — the change is pure CLI logic fully covered
+  by the unit matrix).
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] `gv vad-sweep`/`vad-grid` `--target` weighted/preference order** —
+   the set form treats every listed count as equally acceptable. An operator
+   who *prefers* 3 but would *accept* 5 has no way to bias the tie-break toward
+   the preferred element. A `--target 3>5>7` precedence form (or a secondary
+   sort key on set-element index) would break distance ties toward the
+   earlier-listed count. Pure, headless.
+4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
+   --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
+   refresh the comparison table.
