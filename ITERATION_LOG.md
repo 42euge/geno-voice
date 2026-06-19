@@ -25976,3 +25976,111 @@ test passing on first run).
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
    should track a curated subset, decide the policy and re-run
    `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
+
+## iter-286 — grid CSV ↔ JSON cross-surface scaled-set --target pick under speech tie-break
+
+- **Date:** 2026-06-19
+- **Branch:** iter-286-scaled-speech (ff-merged to main)
+- **Commit:** b9485a5
+
+**Why.** iter-274/281/282/283/284/285 pinned the grid CSV↔JSON cross-surface
+`--target` pick AGREEMENT — a CSV consumer re-parses the bare grid table back to
+cells and re-runs `pick_best_grid_cell` / `pick_top_grid_cells` to recover the
+JSON-embedded `best`/`top` identically — under the NON-DEFAULT
+`tie_break="speech"` for the SCALAR (iter-274), closed BAND (iter-281), flat SET
+(iter-282), OPEN band (iter-283), `{"prefer": [...]}` PREFERENCE (iter-284), and
+`{"weighted": [(element, penalty), ...]}` ADDITIVE set (iter-285). The iter-285
+backlog #4 named the LAST remaining speech-tie cross-surface gap among the dict
+forms: a `{"scaled": [(element, factor), ...]}` MULTIPLICATIVE set (iter-252)
+under `tie_break="speech"`. I confirmed no existing test round-trips a SCALED
+target *under the speech tie-break* cross-surface (iter-278 pins the scaled form
+only under row-major; the speech laps iter-281–285 cover band/set/open-band/
+preference/weighted), so the gap is real.
+
+**The distinct mechanism.** The scaled set is the MULTIPLICATIVE twin of the
+weighted set. Like the weighted set it folds its preference INTO
+`grid_cell_distance` and inserts NO secondary sort key (so `grid_cell_sort_key`
+under speech is a TWO-level `(scaled_distance, -speech_s)` — speech SECONDARY,
+NOT the preference's three-level key with a rank between distance and speech),
+but its cost is `|Δ| * factor` (GROWS with distance — a far cell on a
+high-factor element loses HARDER the farther it drifts) rather than the weighted
+set's `|Δ| + penalty` (a FIXED offset). So the cells that tie at the SCALED
+floor differ from the weighted set's PENALISED floor: an exact hit stays free on
+ANY factor (`0 * factor = 0`) but a near miss on a high-factor element is
+amplified. Pinning the scaled set under row-major (iter-278) and the weighted
+set under speech (iter-285) does NOT pin the scaled set under speech. A
+regression that dropped the `tie_break` on the JSON path (falling back to
+row-major) while the CSV consumer still passed `"speech"`, OR collapsed the
+`{"scaled": ...}` dict to a plain set on the JSON path (dropping the factors so
+which cells tie at the floor changes), would diverge the two surfaces yet ship
+green. No production code changed (the wiring was already correct — proved by
+the test passing on first run).
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+1 test).**
+  `test_render_grid_csv_consumer_rederives_json_scaled_target_speech_tie_pick`
+  — a 2×2 `threshold × min_silence_ms` grid (row-major counts 4/6/10/16) with
+  `target={"scaled": [(3, 3), (8, 1)]}`, `top=3`, `tie_break="speech"`. Scaled
+  distances `[3, 2, 2, 8]`: counts 6 and 10 tie at the floor 2 (each two off the
+  cheap ×1 accepted-8 element), while count 4 — one off the preferred 3 but blown
+  up by the ×3 factor — lands at scaled distance 3, OUT of the floor. With
+  `_cell_result` coupling speech to count (n→n*0.5s) the two floor cells carry
+  distinct speech (3.0/5.0s). Under `tie_break="speech"` the most-speech floor
+  cell, count 10 (0.5,400) at 5.0s, beats count 6 (0.3,800) at 3.0s. A ROW-MAJOR
+  control picks the earliest floor cell, count 6 — a DIFFERENT pick, proving the
+  tie-break flips the result. A flat-SET control `[3, 8]` (no factors) makes
+  count 4 the SOLE raw-distance-1 floor and elects it outright (no tie to
+  reorder) — a third distinct cell, proving the ×3 factor is load-bearing for
+  which cells tie. Asserts the JSON records `target == {"scaled": [[3, 3],
+  [8, 1]]}` AND `tie_break == "speech"`; the CSV body carries no `best`/
+  `distance`/`tie_break`/`scaled` columns; a CSV `DictReader` consumer re-running
+  `pick_best_grid_cell(cells, target, "speech")` recovers a `best` identical to
+  the JSON `best` (scaled distance 2, count 10); and `pick_top_grid_cells(...,
+  "speech")` recovers a shortlist agreeing cell-for-cell — the two floor cells
+  leading speech-ordered `[(0.5,400),(0.3,800)]` (speech `[5.0, 3.0]`) AHEAD of
+  the scaled-3 count-4 cell `(0.3,400)`, DESPITE count 4 being the nearest in RAW
+  terms (one off element 3) — `distance [2, 2, 3]` and `speech_s [5.0, 3.0, 2.0]`
+  proving the factor (distance) outranks both speech and raw proximity for the
+  order — the dist-8 count-16 cell never reaching the top 3.
+- **`docs/research/voice-capture-tuning.md`.** Extended the grid cross-surface
+  paragraph: iter-286 carries the speech tie-break onto the scaled set (the
+  two-level `(scaled_distance, -speech_s)` key with the factor in the distance,
+  cost growing with distance vs the weighted set's fixed offset), with the
+  row-major and flat-set controls explained, and noted that every dict form
+  (scalar, closed band, flat set, open band, preference, weighted set, scaled
+  set) is now cross-surface pinned under `tie_break="speech"`.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **3866 passed**
+(3865 prior + 1 net new), run on the feature branch before ff-merge.
+- Focused: `pytest tests/unit/test_gv_vad.py -k "rederives_json_scaled_target_speech_tie_pick or rederives_json_scaled_target_pick or rederives_json_weighted_target_speech_tie_pick"`
+  → **3 passed** (the new scaled+speech twin + the iter-278 scaled-under-
+  row-major twin it re-tie-breaks on speech + the iter-285 weighted+speech twin
+  it sits beside).
+- Integration: not re-run this lap (no corpus symlinked into this worktree; same
+  as prior corpus-gated laps — the change is pure CLI render logic fully covered
+  by the unit matrix).
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] COMBINED additive+multiplicative `--target` weight** — iter-250/251
+   give additive (`:penalty`), iter-252 multiplicative (`*factor`); an operator
+   might want both on one element (`5:1*1.5`). Larger design question (operator
+   precedence of `:` vs `*`) — scope before building. Pure, headless if pursued.
+   Still the ONLY `--target` increment that is a FEATURE, not a regression-test gap.
+4. **[cli] Speech-tie cross-surface contract now covers EVERY dict form:** scalar
+   (iter-274), closed band (iter-281), flat set (iter-282), open band (iter-283),
+   preference (iter-284), weighted set (iter-285), and scaled set (iter-286). The
+   dict-form speech matrix is COMPLETE. The remaining cross-surface gaps lie on
+   OTHER surfaces: the 1-D `vad-sweep` cross-surface forms (does the sweep CSV↔JSON
+   round-trip pin the same picks under each target form / tie-break?), or the
+   `simulate-mirror` grid pick round-trips. Confirm no existing test already
+   exercises the chosen form cross-surface before assuming a gap.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
+   should track a curated subset, decide the policy and re-run
+   `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
