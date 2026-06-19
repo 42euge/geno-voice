@@ -856,6 +856,9 @@ def _sweep_args(**over):
         min_silence_ms=800.0,
         speech_pad_ms=30.0,
         max_speech_s=float("inf"),
+        target=None,
+        top=None,
+        tie_break="row-major",
         json=False,
         csv=False,
     )
@@ -2873,3 +2876,380 @@ def test_cmd_vad_grid_csv_ignores_tie_break():
     assert rows[0] == ["threshold", "min_silence_ms", "num_segments", "speech_s"]
     assert len(rows) == 5  # header + 4 cells
     assert "tie_break" not in lines[0]
+
+
+# ====================================================================
+# iter-244 — gv vad-sweep --target / --top / --tie-break:
+# bring the iter-241→243 grid pick machinery to the 1-D sweep.
+# A sweep row {axis, num_segments, speech_s} carries the same keys a
+# grid cell does, so the shared pickers (pick_best_grid_cell /
+# pick_top_grid_cells / grid_cell_distance) apply unchanged.
+# ====================================================================
+
+
+# ---- parser: --target / --top / --tie-break flags ----------------------
+
+
+def test_vad_sweep_target_default_none():
+    args = gv.build_parser().parse_args(["vad-sweep", "rec.wav"])
+    assert args.target is None
+    assert args.top is None
+    assert args.tie_break == "row-major"
+
+
+def test_vad_sweep_target_parses_int():
+    args = gv.build_parser().parse_args(["vad-sweep", "rec.wav", "--target", "3"])
+    assert args.target == 3
+
+
+def test_vad_sweep_target_accepts_zero():
+    # nonneg_int_type accepts 0 (a degenerate but legal target).
+    args = gv.build_parser().parse_args(["vad-sweep", "rec.wav", "--target", "0"])
+    assert args.target == 0
+
+
+@pytest.mark.parametrize("raw", ["-1", "2.5", "high"])
+def test_vad_sweep_target_rejects_bad(raw):
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(["vad-sweep", "rec.wav", "--target", raw])
+
+
+def test_vad_sweep_top_parses_int():
+    args = gv.build_parser().parse_args(
+        ["vad-sweep", "rec.wav", "--target", "3", "--top", "2"]
+    )
+    assert args.top == 2
+
+
+@pytest.mark.parametrize("raw", ["0", "-1", "1.5", "x"])
+def test_vad_sweep_top_rejects_bad(raw):
+    # pos_int_type rejects 0 (a 0-length shortlist is meaningless), negatives,
+    # fractionals and non-ints.
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(["vad-sweep", "rec.wav", "--top", raw])
+
+
+def test_vad_sweep_tie_break_parses_speech():
+    args = gv.build_parser().parse_args(
+        ["vad-sweep", "rec.wav", "--target", "3", "--tie-break", "speech"]
+    )
+    assert args.tie_break == "speech"
+
+
+def test_vad_sweep_tie_break_rejects_unknown():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-sweep", "rec.wav", "--tie-break", "loudest"]
+        )
+
+
+# ---- render_vad_sweep: best / top block --------------------------------
+
+
+def _sweep_results(counts):
+    """One _Result per swept value, each with `n` zero-padded-length segments.
+
+    Speech seconds scale with index so tie-breaks have something to bite on.
+    """
+    out = []
+    for i, n in enumerate(counts):
+        per = 0.5 + 0.1 * i  # later values recover slightly more speech per seg
+        segs = [_Seg(2.0 * j, 2.0 * j + per) for j in range(n)]
+        out.append(
+            _Result(name="rec.wav", sample_rate=16000, duration_s=100.0, segments=segs)
+        )
+    return out
+
+
+def test_render_sweep_no_target_omits_best_line():
+    results = _sweep_results([3, 1])
+    lines = gv.render_vad_sweep([0.3, 0.9], results, name="rec.wav")
+    assert not any("best:" in ln for ln in lines)
+
+
+def test_render_sweep_best_line_names_closest_value():
+    # counts 5,3,1 at thresholds 0.3,0.5,0.7; target 3 → the 0.50 value (3 segs).
+    results = _sweep_results([5, 3, 1])
+    lines = gv.render_vad_sweep(
+        [0.3, 0.5, 0.7], results, name="rec.wav", target=3
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    assert "threshold=0.50" in best
+    assert "3 segments" in best
+    assert "|Δ|=0" in best
+    assert "target 3" in best
+
+
+def test_render_sweep_best_line_min_silence_axis_label():
+    results = _sweep_results([5, 3])
+    lines = gv.render_vad_sweep(
+        [400.0, 800.0], results, name="rec.wav", axis="min_silence_ms", target=3
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    # The label tracks the swept axis, and ms knobs format as bare ints.
+    assert "min_silence=800" in best
+
+
+def test_render_sweep_empty_with_target_reports_none():
+    lines = gv.render_vad_sweep([], [], name="rec.wav", target=3)
+    best = next(ln for ln in lines if "best:" in ln)
+    assert "none" in best
+    assert "empty sweep" in best
+
+
+def test_render_sweep_top_block_lists_closest_values():
+    # counts 5,4,3,1 at 0.3,0.5,0.7,0.9; target 3, top 2 → 0.70 (Δ0), then 0.50 (Δ1).
+    results = _sweep_results([5, 4, 3, 1])
+    lines = gv.render_vad_sweep(
+        [0.3, 0.5, 0.7, 0.9], results, name="rec.wav", target=3, top=2
+    )
+    top_idx = next(i for i, ln in enumerate(lines) if "top 2" in ln)
+    block = lines[top_idx + 1 : top_idx + 3]
+    assert "1." in block[0] and "threshold=0.70" in block[0] and "|Δ|=0" in block[0]
+    assert "2." in block[1] and "threshold=0.50" in block[1] and "|Δ|=1" in block[1]
+
+
+def test_render_sweep_top_ignored_without_target():
+    results = _sweep_results([5, 3, 1])
+    lines = gv.render_vad_sweep([0.3, 0.5, 0.7], results, name="rec.wav", top=2)
+    assert not any("top 2" in ln for ln in lines)
+    assert not any("best:" in ln for ln in lines)
+
+
+def test_render_sweep_top_head_equals_best():
+    results = _sweep_results([5, 4, 3, 1])
+    lines = gv.render_vad_sweep(
+        [0.3, 0.5, 0.7, 0.9], results, name="rec.wav", target=3, top=3
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    first_ranked = next(ln for ln in lines if ln.strip().startswith("1."))
+    # Both name the same swept value.
+    assert "threshold=0.70" in best
+    assert "threshold=0.70" in first_ranked
+
+
+# ---- render_vad_sweep_json: target / top / tie_break -------------------
+
+
+def test_render_sweep_json_no_target_omits_pick_keys():
+    results = _sweep_results([3, 1])
+    payload = json.loads(
+        gv.render_vad_sweep_json([0.3, 0.9], results, name="rec.wav")
+    )
+    assert "target" not in payload
+    assert "best" not in payload
+    assert "top" not in payload
+    assert "tie_break" not in payload
+
+
+def test_render_sweep_json_target_adds_best_and_distance():
+    results = _sweep_results([5, 3, 1])
+    payload = json.loads(
+        gv.render_vad_sweep_json([0.3, 0.5, 0.7], results, name="rec.wav", target=3)
+    )
+    assert payload["target"] == 3
+    assert payload["tie_break"] == "row-major"
+    assert payload["best"]["threshold"] == 0.5
+    assert payload["best"]["num_segments"] == 3
+    assert payload["best"]["distance"] == 0
+
+
+def test_render_sweep_json_top_list_ranked_head_equals_best():
+    results = _sweep_results([5, 4, 3, 1])
+    payload = json.loads(
+        gv.render_vad_sweep_json(
+            [0.3, 0.5, 0.7, 0.9], results, name="rec.wav", target=3, top=3
+        )
+    )
+    top = payload["top"]
+    # Distances non-decreasing, head == best.
+    dists = [c["distance"] for c in top]
+    assert dists == sorted(dists)
+    assert top[0]["threshold"] == payload["best"]["threshold"]
+
+
+def test_render_sweep_json_top_ignored_without_target():
+    results = _sweep_results([5, 3, 1])
+    payload = json.loads(
+        gv.render_vad_sweep_json([0.3, 0.5, 0.7], results, name="rec.wav", top=2)
+    )
+    assert "top" not in payload
+
+
+def test_render_sweep_json_empty_with_target_best_none():
+    payload = json.loads(
+        gv.render_vad_sweep_json([], [], name="rec.wav", target=3)
+    )
+    assert payload["target"] == 3
+    assert payload["best"] is None
+
+
+# ---- tie-break: speech vs row-major over a sweep -----------------------
+
+
+def _sweep_tied_count_varied_speech():
+    """Two swept values, both 4 segments, the second recovering more speech.
+
+    Both tie at |Δ|=1 from target 3, so only the tie-break decides the pick.
+    """
+    a = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=100.0,
+        segments=[_Seg(2.0 * j, 2.0 * j + 0.5) for j in range(4)],  # 2.0s
+    )
+    b = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=100.0,
+        segments=[_Seg(2.0 * j, 2.0 * j + 1.25) for j in range(4)],  # 5.0s
+    )
+    return a, b
+
+
+def test_render_sweep_speech_tie_break_prefers_most_speech():
+    a, b = _sweep_tied_count_varied_speech()
+    lines = gv.render_vad_sweep(
+        [0.3, 0.7], [a, b], name="rec.wav", target=3, tie_break="speech"
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    # Higher-speech (later, 0.70) value wins the tie, not the earlier one.
+    assert "threshold=0.70" in best
+
+
+def test_render_sweep_default_tie_break_keeps_earlier_value():
+    a, b = _sweep_tied_count_varied_speech()
+    lines = gv.render_vad_sweep([0.3, 0.7], [a, b], name="rec.wav", target=3)
+    best = next(ln for ln in lines if "best:" in ln)
+    assert "threshold=0.30" in best
+
+
+def test_render_sweep_json_speech_tie_break_in_payload():
+    a, b = _sweep_tied_count_varied_speech()
+    payload = json.loads(
+        gv.render_vad_sweep_json(
+            [0.3, 0.7], [a, b], name="rec.wav", target=3, tie_break="speech"
+        )
+    )
+    assert payload["tie_break"] == "speech"
+    assert payload["best"]["threshold"] == 0.7
+
+
+# ---- cmd_vad_sweep: end-to-end threading -------------------------------
+
+
+def _count_by_threshold_seg(wav, params=None):
+    # 5,3,1 segments at gates 0.3,0.5,0.7 (higher gate → fewer segments).
+    n = 5 if params.threshold < 0.4 else (3 if params.threshold < 0.6 else 1)
+    return _Result(
+        name="rec.wav", sample_rate=16000, duration_s=100.0,
+        segments=[_Seg(2.0 * j, 2.0 * j + 0.5) for j in range(n)],
+    )
+
+
+def test_cmd_vad_sweep_target_emits_best_line():
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(thresholds=[0.3, 0.5, 0.7], target=3),
+        log=lines.append,
+        segmenter=_count_by_threshold_seg,
+        availability=lambda: True,
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    assert "threshold=0.50" in best and "3 segments" in best
+
+
+def test_cmd_vad_sweep_no_target_no_best_line():
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(thresholds=[0.3, 0.5, 0.7]),
+        log=lines.append,
+        segmenter=_count_by_threshold_seg,
+        availability=lambda: True,
+    )
+    assert not any("best:" in ln for ln in lines)
+
+
+def test_cmd_vad_sweep_json_carries_target_and_best():
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(thresholds=[0.3, 0.5, 0.7], target=3, top=2, json=True),
+        log=lines.append,
+        segmenter=_count_by_threshold_seg,
+        availability=lambda: True,
+    )
+    payload = json.loads(lines[0])
+    assert payload["target"] == 3
+    assert payload["best"]["threshold"] == 0.5
+    assert payload["top"][0]["threshold"] == 0.5
+    assert [c["distance"] for c in payload["top"]] == sorted(
+        c["distance"] for c in payload["top"]
+    )
+
+
+def test_cmd_vad_sweep_csv_ignores_target_top_tiebreak():
+    # CSV stays a pure data grid — none of the pick flags add a column/line.
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(
+            thresholds=[0.3, 0.5, 0.7], target=3, top=2,
+            tie_break="speech", csv=True,
+        ),
+        log=lines.append,
+        segmenter=_count_by_threshold_seg,
+        availability=lambda: True,
+    )
+    rows = list(csv.reader(io.StringIO(lines[0])))
+    assert rows[0] == ["threshold", "num_segments", "speech_s"]
+    assert len(rows) == 4  # header + 3 swept values
+    assert "best" not in lines[0] and "target" not in lines[0]
+
+
+def test_cmd_vad_sweep_speech_tie_break_picks_most_speech():
+    # Two gates, both 4 segments; the higher gate recovers more speech here.
+    def seg(wav, params=None):
+        speech = 5.0 if params.threshold >= 0.6 else 2.0
+        per = speech / 4
+        return _Result(
+            name="rec.wav", sample_rate=16000, duration_s=100.0,
+            segments=[_Seg(2.0 * j, 2.0 * j + per) for j in range(4)],
+        )
+
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(thresholds=[0.3, 0.7], target=3, tie_break="speech"),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    assert "threshold=0.70" in best
+
+
+def test_cmd_vad_sweep_unavailable_target_no_crash():
+    # The unavailable branch threads target/top/tie_break and still just hints.
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(target=3, top=2, json=True),
+        log=lines.append,
+        segmenter=lambda *a, **k: (_ for _ in ()).throw(AssertionError("no")),
+        availability=lambda: False,
+    )
+    assert len(lines) == 1
+    assert json.loads(lines[0])["available"] is False
+
+
+def test_cmd_vad_sweep_target_on_min_silence_axis():
+    # --target works on the hangover axis too (label tracks the swept axis).
+    def seg(wav, params=None):
+        n = 5 if params.min_silence_ms < 600.0 else 3
+        return _Result(
+            name="rec.wav", sample_rate=16000, duration_s=100.0,
+            segments=[_Seg(2.0 * j, 2.0 * j + 0.5) for j in range(n)],
+        )
+
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(thresholds=[0.3, 0.5, 0.7, 0.9], min_silences=[400.0, 800.0], target=3),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    assert "min_silence=800" in best and "3 segments" in best

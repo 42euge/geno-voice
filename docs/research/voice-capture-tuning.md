@@ -151,6 +151,7 @@ gv vad-sweep recording.wav                                  # 0.3,0.5,0.7,0.9 (d
 gv vad-sweep recording.wav --thresholds 0.1,0.3,0.5,0.7,0.9 # custom gates
 gv vad-sweep recording.wav --json                           # machine-readable rows
 gv vad-sweep recording.wav --csv                            # flat CSV for plots (iter-237)
+gv vad-sweep recording.wav --target 3                       # data-driven best-value pick (iter-244)
 ```
 
 The human report is a small table — the WAV name, a `threshold / segments /
@@ -280,6 +281,55 @@ each row by that name. Integration tests pin that each speech-sweep row equals a
 independent `gv vad --json` run at that floor, that segments are monotone
 non-increasing across rising floors, and that `--csv` agrees with `--json` on
 this axis — all over the real corpus.
+
+#### `--target` / `--top` / `--tie-break` — a data-driven best-value pick (iter-244)
+
+`gv vad-grid` gained a data-driven best-cell pick across iter-241→243; iter-244
+brings the **same machinery to the 1-D sweep**, closing the sweep↔grid feature
+gap. A sweep row carries the same `num_segments` / `speech_s` keys a grid cell
+does, so the very same pickers (`pick_best_grid_cell`, `pick_top_grid_cells`,
+`grid_cell_distance`, `grid_cell_sort_key`) drive the sweep pick unchanged — no
+parallel implementation.
+
+```bash
+gv vad-sweep recording.wav --thresholds 0.3,0.5,0.7,0.9 --target 3            # best swept value
+gv vad-sweep recording.wav --thresholds 0.3,0.5,0.7,0.9 --target 3 --top 3    # ranked shortlist
+gv vad-sweep recording.wav --thresholds 0.3,0.5,0.7,0.9 --target 3 --tie-break speech
+gv vad-sweep recording.wav --min-silences 400,800 --threshold 0.7 --target 3  # works on any swept axis
+```
+
+`--target N` (the segment count you expect) surfaces a trailing `best:` line
+naming the swept value whose recovered segment count is closest to `N`, scored by
+`|num_segments - N|`. `--top K` lists the K closest values as a ranked shortlist
+(nearest first), its head always the `best:` value. `--tie-break {row-major,speech}`
+breaks equal-distance ties: `row-major` (the default) keeps the earlier swept
+value (output unchanged byte-for-byte from iter-236); `speech` prefers the value
+that recovered the most speech (clips the talker least). Over
+`voice-20260618-110355.wav` with `--target 3 --top 3`:
+
+```
+silero VAD sweep — voice-20260618-110355.wav
+  threshold  segments  speech
+       0.30         5   17.3s
+       0.50         5   16.2s
+       0.70         4   15.5s
+       0.90         4   15.2s
+  best: threshold=0.70 (4 segments, |Δ|=1 from target 3)
+  top 3 (closest to target 3):
+    1. threshold=0.70  4 segments  |Δ|=1
+    2. threshold=0.90  4 segments  |Δ|=1
+    3. threshold=0.30  5 segments  |Δ|=2
+```
+
+The semantics match `gv vad-grid`'s `--target`/`--top`/`--tie-break` exactly (see
+above): distance is always the primary key, `--top` rides along with `--target`,
+and all three are derived views — `--json` adds `target` / `tie_break` / `best` /
+`top` keys (`best`/`top` cells augmented with a `distance` key), but the flat
+`--csv` data grid ignores them. Without `--target` the output is byte-for-byte the
+iter-236 shape — no pick keys leak in. Integration tests pin, over the real
+corpus, that the `best` minimises `|num_segments - target|` over the same sweep the
+run tabulated, the `top` head equals `best`, and the absent-target payload keeps
+the iter-236 shape.
 
 ### `gv vad-grid` — a 2-D knob grid (iter-240)
 

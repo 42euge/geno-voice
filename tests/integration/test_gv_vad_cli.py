@@ -233,6 +233,9 @@ def _sweep_args(wav: Path, **over):
         min_silence_ms=800.0,
         speech_pad_ms=30.0,
         max_speech_s=float("inf"),
+        target=None,
+        top=None,
+        tie_break="row-major",
         json=False,
         csv=False,
     )
@@ -445,6 +448,54 @@ def test_gv_vad_sweep_speech_axis_csv_matches_json():
     for csv_row, json_row in zip(csv_rows, json_rows):
         assert int(csv_row["num_segments"]) == json_row["num_segments"]
         assert abs(float(csv_row["speech_s"]) - json_row["speech_s"]) <= 0.01
+
+
+# ---- iter-244: gv vad-sweep --target / --top / --tie-break -------------
+
+
+def test_gv_vad_sweep_best_pick_is_closest_value_to_target():
+    """iter-244: ``gv vad-sweep --target N`` over THE GATE recording picks the
+    swept value whose recovered segment count is genuinely closest to the target
+    — the ``best`` it surfaces must minimise ``|num_segments - target|`` over the
+    very same sweep the run tabulated (no off-by-one, no stale row)."""
+    wav = RECORDINGS_DIR / CONTINUOUS_31S
+    if not wav.exists():
+        pytest.skip(f"{CONTINUOUS_31S} not present")
+
+    thresholds = [0.3, 0.5, 0.7, 0.9]
+    target = 3
+    payload = json.loads(
+        _run_sweep(wav, thresholds=thresholds, target=target, top=2, json=True)[0]
+    )
+    assert payload["target"] == target
+    assert payload["tie_break"] == "row-major"
+    best = payload["best"]
+    assert best is not None
+    distances = [abs(r["num_segments"] - target) for r in payload["sweep"]]
+    assert best["distance"] == min(distances)
+    assert abs(best["num_segments"] - target) == best["distance"]
+    # The shortlist head equals best; its distances are the K smallest, sorted.
+    top = payload["top"]
+    assert top[0] == best
+    dists = [r["distance"] for r in top]
+    assert dists == sorted(dists)
+    assert dists == sorted(distances)[: len(top)]
+
+
+def test_gv_vad_sweep_target_absent_keeps_iter236_payload():
+    """Without ``--target`` the sweep JSON payload is byte-for-byte the iter-236
+    shape over THE GATE recording — no ``best`` / ``target`` / ``top`` /
+    ``tie_break`` keys leak in."""
+    wav = RECORDINGS_DIR / CONTINUOUS_31S
+    if not wav.exists():
+        pytest.skip(f"{CONTINUOUS_31S} not present")
+    payload = json.loads(
+        _run_sweep(wav, thresholds=[0.3, 0.7], json=True)[0]
+    )
+    assert "best" not in payload
+    assert "target" not in payload
+    assert "top" not in payload
+    assert "tie_break" not in payload
 
 
 # ---- iter-240: gv vad-grid (2-D gate × ms-knob grid) -------------------

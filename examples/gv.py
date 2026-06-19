@@ -737,7 +737,10 @@ def vad_segmentation_sweep(values, results, *, axis="threshold"):
     ]
 
 
-def render_vad_sweep(values, results, *, name, axis="threshold"):
+def render_vad_sweep(
+    values, results, *, name, axis="threshold", target=None, top=None,
+    tie_break="row-major",
+):
     """Render a sweep as a plain-text table.
 
     The human-readable twin of :func:`render_vad_sweep_json`, mirroring the
@@ -749,6 +752,21 @@ def render_vad_sweep(values, results, *, name, axis="threshold"):
     are typically non-increasing (higher gates admit less speech); a longer
     hangover merges adjacent regions, so the silence sweep tends to FEWER
     segments as the value rises — the elbow marks the knob getting too strict.
+
+    iter-244 brings the iter-241→243 grid pick machinery to the 1-D sweep,
+    closing the sweep↔grid feature gap. When ``target`` (a desired segment
+    count) is given, a trailing ``best:`` line names the data-driven pick — the
+    swept value whose recovered segment count is closest to ``target`` (via the
+    shared :func:`pick_best_grid_cell`, since a sweep row carries the same
+    ``num_segments`` / ``speech_s`` keys a grid cell does). ``target=None`` (the
+    default) omits the line, keeping the iter-236 output unchanged. When ``top``
+    (a positive shortlist length) is ALSO given, a ``top N:`` block follows
+    listing the ``top`` values closest to ``target``, ranked nearest-first
+    (:func:`pick_top_grid_cells`); its head is always the ``best:`` value.
+    ``top`` is ignored without a ``target``. ``tie_break`` selects how
+    equal-distance rows order: ``"row-major"`` (the default) keeps sweep order;
+    ``"speech"`` breaks ties on recovered speech (most first) — the same seam as
+    the grid.
     """
     if any(r is None for r in results):
         return [
@@ -766,10 +784,38 @@ def render_vad_sweep(values, results, *, name, axis="threshold"):
             f"  {_format_sweep_axis_value(axis, row[axis]):>9}  "
             f"{row['num_segments']:>8}  {row['speech_s']:>5.1f}s"
         )
+    if target is not None:
+        best = pick_best_grid_cell(rows, target, tie_break)
+        if best is None:
+            lines.append(
+                f"  best: none (empty sweep; target {target} segments)"
+            )
+        else:
+            lines.append(
+                f"  best: {label}="
+                f"{_format_sweep_axis_value(axis, best[axis])} "
+                f"({best['num_segments']} segments, "
+                f"|Δ|={grid_cell_distance(best, target)} from target {target})"
+            )
+            if top is not None:
+                ranked = pick_top_grid_cells(rows, target, top, tie_break)
+                lines.append(
+                    f"  top {len(ranked)} (closest to target {target}):"
+                )
+                for rank, row in enumerate(ranked, start=1):
+                    lines.append(
+                        f"    {rank}. {label}="
+                        f"{_format_sweep_axis_value(axis, row[axis])}  "
+                        f"{row['num_segments']} segments  "
+                        f"|Δ|={grid_cell_distance(row, target)}"
+                    )
     return lines
 
 
-def render_vad_sweep_json(values, results, *, name, axis="threshold"):
+def render_vad_sweep_json(
+    values, results, *, name, axis="threshold", target=None, top=None,
+    tie_break="row-major",
+):
     """Render a sweep as a JSON string.
 
     Machine-readable twin of :func:`render_vad_sweep`, so the sweep can feed a
@@ -778,6 +824,15 @@ def render_vad_sweep_json(values, results, *, name, axis="threshold"):
     same name). Any ``None`` in ``results`` → ``{"available": false}`` + install
     hint, mirroring :func:`render_vad_json`. Pure: returns a single JSON string
     built from the results' attributes.
+
+    iter-244: when ``target`` (a desired segment count) is given the payload
+    gains a ``"target"`` int, a ``"tie_break"`` string, and a ``"best"`` row —
+    :func:`pick_best_grid_cell`'s pick over the sweep rows, augmented with a
+    ``"distance"`` key (``|num_segments - target|``). When ``top`` is ALSO given
+    the payload gains a ``"top"`` list of the closest ``top`` rows
+    (:func:`pick_top_grid_cells`), each with the same ``"distance"`` key — its
+    head equals ``"best"``. ``target=None`` (the default) omits all of them,
+    keeping the iter-236 payload unchanged; ``top`` is ignored without a target.
     """
     if any(r is None for r in results):
         return json.dumps(
@@ -790,12 +845,27 @@ def render_vad_sweep_json(values, results, *, name, axis="threshold"):
             },
             indent=2,
         )
+    rows = vad_segmentation_sweep(values, results, axis=axis)
     payload = {
         "available": True,
         "name": name,
         "axis": axis,
-        "sweep": vad_segmentation_sweep(values, results, axis=axis),
+        "sweep": rows,
     }
+    if target is not None:
+        payload["target"] = target
+        payload["tie_break"] = tie_break
+        best = pick_best_grid_cell(rows, target, tie_break)
+        payload["best"] = (
+            None
+            if best is None
+            else {**best, "distance": grid_cell_distance(best, target)}
+        )
+        if top is not None:
+            payload["top"] = [
+                {**row, "distance": grid_cell_distance(row, target)}
+                for row in pick_top_grid_cells(rows, target, top, tie_break)
+            ]
     return json.dumps(payload, indent=2)
 
 
@@ -1413,6 +1483,16 @@ def cmd_vad_sweep(args, *, log=print, segmenter=None, availability=None):
 
     as_json = getattr(args, "json", False)
     as_csv = getattr(args, "csv", False)
+    # iter-244: --target (a desired segment count) drives the data-driven
+    # best-value pick, mirroring vad-grid's iter-241→243 machinery; None (the
+    # default) leaves the iter-236 output unchanged. --top extends it to a
+    # ranked shortlist of the N closest values; --tie-break selects how
+    # equal-distance values order ("row-major" keeps sweep order, "speech"
+    # prefers the value that recovered most speech). All three are derived
+    # views, so the CSV emitter (a pure data grid) ignores them.
+    target = getattr(args, "target", None)
+    top = getattr(args, "top", None)
+    tie_break = getattr(args, "tie_break", "row-major")
 
     # Pick the swept axis: --min-silences sweeps the hangover, --min-speeches the
     # minimum-speech floor (both with the gate held at scalar --threshold);
@@ -1433,11 +1513,17 @@ def cmd_vad_sweep(args, *, log=print, segmenter=None, availability=None):
 
     if not availability():
         if as_json:
-            log(render_vad_sweep_json([], [None], name=args.wav, axis=axis))
+            log(render_vad_sweep_json(
+                [], [None], name=args.wav, axis=axis, target=target, top=top,
+                tie_break=tie_break,
+            ))
         elif as_csv:
             log(render_vad_sweep_csv([], [None], name=args.wav, axis=axis))
         else:
-            for line in render_vad_sweep([], [None], name=args.wav, axis=axis):
+            for line in render_vad_sweep(
+                [], [None], name=args.wav, axis=axis, target=target, top=top,
+                tie_break=tie_break,
+            ):
                 log(line)
         return
 
@@ -1463,11 +1549,17 @@ def cmd_vad_sweep(args, *, log=print, segmenter=None, availability=None):
     # report; fall back to the raw path only if the sweep is empty.
     name = results[0].name if results else args.wav
     if as_json:
-        log(render_vad_sweep_json(values, results, name=name, axis=axis))
+        log(render_vad_sweep_json(
+            values, results, name=name, axis=axis, target=target, top=top,
+            tie_break=tie_break,
+        ))
     elif as_csv:
         log(render_vad_sweep_csv(values, results, name=name, axis=axis))
     else:
-        for line in render_vad_sweep(values, results, name=name, axis=axis):
+        for line in render_vad_sweep(
+            values, results, name=name, axis=axis, target=target, top=top,
+            tie_break=tie_break,
+        ):
             log(line)
 
 
@@ -2045,6 +2137,34 @@ def build_parser():
         dest="max_speech_s",
         help="Force-split regions longer than this, in seconds — shared by "
         "all runs; 'inf'/'none' never splits (default: inf)",
+    )
+    vad_sweep.add_argument(
+        "--target",
+        type=nonneg_int_type,
+        default=None,
+        dest="target",
+        help="Desired segment count — when given, a data-driven 'best:' pick "
+        "names the swept value whose recovered segment count is closest to it "
+        "(the same machinery as vad-grid's --target); omit for just the table",
+    )
+    vad_sweep.add_argument(
+        "--top",
+        type=pos_int_type,
+        default=None,
+        dest="top",
+        help="With --target, also list the N swept values closest to the target "
+        "as a ranked shortlist (nearest first) so the runners-up are visible, "
+        "not just the single 'best:' pick; ignored without --target",
+    )
+    vad_sweep.add_argument(
+        "--tie-break",
+        choices=("row-major", "speech"),
+        default="row-major",
+        dest="tie_break",
+        help="How to break ties between values equally close to --target: "
+        "'row-major' (default) keeps the earlier swept value; 'speech' prefers "
+        "the value that recovered the most speech (clips the talker least); "
+        "ignored without --target",
     )
     vad_sweep_fmt = vad_sweep.add_mutually_exclusive_group()
     vad_sweep_fmt.add_argument(
