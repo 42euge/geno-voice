@@ -346,6 +346,74 @@ def test_format_target_set():
     assert gv._format_target([3, (5, None), (None, 7)]) == "3,5-,-7"
 
 
+# ---- target_type: '>'-separated PREFERENCE-ORDER form (iter-249) -------
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("3>5>7", {"prefer": [3, 5, 7]}),
+        ("0>2", {"prefer": [0, 2]}),
+        (" 3 > 5 > 7 ", {"prefer": [3, 5, 7]}),  # whitespace around each trimmed
+        ("3>5-7", {"prefer": [3, (5, 7)]}),  # an element may itself be a band
+        ("3>5->-7", {"prefer": [3, (5, None), (None, 7)]}),  # ...or an open band
+    ],
+)
+def test_target_type_preference_parses_to_prefer_dict(raw, expected):
+    # iter-249: '>' joins a PREFERENCE order, each element a scalar or band; the
+    # whole thing parses to a {"prefer": [...]} dict preserving listed order.
+    value = gv.target_type(raw)
+    assert value == expected
+    assert isinstance(value, dict)
+
+
+def test_target_type_preference_dedupes_preserving_order():
+    # iter-249: a repeated preference element is collapsed, first-seen order kept.
+    assert gv.target_type("5>3>5>3") == {"prefer": [5, 3]}
+
+
+def test_target_type_single_element_preference_collapses_to_bare_element():
+    # iter-249: a preference whose elements collapse to one reduces to that bare
+    # element so scalar/band output stays byte-for-byte unchanged.
+    value = gv.target_type("3>3")
+    assert value == 3
+    assert isinstance(value, int)
+    band = gv.target_type("3-5>3-5")
+    assert band == (3, 5)
+    assert isinstance(band, tuple)
+
+
+@pytest.mark.parametrize("raw", ["3>", ">5", "3>>5", " 3 > > 5 ", ">"])
+def test_target_type_rejects_empty_preference_element(raw):
+    # iter-249: an empty element (trailing/leading/doubled '>') is a typo.
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.target_type(raw)
+
+
+def test_target_type_rejects_malformed_preference_element():
+    # iter-249: each element must itself parse — a bad element fails the whole one.
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.target_type("3>a>5")
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.target_type("3>5-3")  # inverted band element
+
+
+@pytest.mark.parametrize("raw", ["3,5>7", "3>5,7", "3,5-7>9"])
+def test_target_type_rejects_mixing_set_and_preference(raw):
+    # iter-249: ',' (flat set) and '>' (ranked preference) are different
+    # composition operators; stacking them in one target is ambiguous.
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.target_type(raw)
+
+
+def test_format_target_preference():
+    # iter-249: a preference renders '>'-joined, each element via _format_target,
+    # so it reads back exactly as typed.
+    assert gv._format_target({"prefer": [3, 5, 7]}) == "3>5>7"
+    assert gv._format_target({"prefer": [3, (5, 7)]}) == "3>5-7"
+    assert gv._format_target({"prefer": [3, (5, None), (None, 7)]}) == "3>5->-7"
+
+
 # ---- max_speech_type: the force-split bound ----------------------------
 
 
@@ -2213,6 +2281,33 @@ def test_grid_cell_distance_set_of_bands_is_min_over_elements():
     assert gv.grid_cell_distance({"num_segments": 6}, target) == 1  # 7 - 6
 
 
+def test_grid_cell_distance_preference_is_min_over_elements():
+    # iter-249: a preference scores IDENTICALLY to a set — the MIN distance to any
+    # listed element. The precedence only affects tie-breaking, never distance.
+    target = {"prefer": [3, 5, 7]}
+    for n in (3, 5, 7):
+        assert gv.grid_cell_distance({"num_segments": n}, target) == 0
+    assert gv.grid_cell_distance({"num_segments": 4}, target) == 1
+    assert gv.grid_cell_distance({"num_segments": 9}, target) == 2
+    # Equal to the same set, element-for-element.
+    for n in range(0, 10):
+        assert gv.grid_cell_distance(
+            {"num_segments": n}, target
+        ) == gv.grid_cell_distance({"num_segments": n}, [3, 5, 7])
+
+
+def test_preference_rank_is_index_of_nearest_element():
+    # iter-249: the rank is the index of the earliest preference element at the
+    # minimum distance — count 3 ranks 0 (satisfies element 0), count 5 ranks 1.
+    prefer = [3, 5, 7]
+    assert gv._preference_rank({"num_segments": 3}, prefer) == 0
+    assert gv._preference_rank({"num_segments": 5}, prefer) == 1
+    assert gv._preference_rank({"num_segments": 7}, prefer) == 2
+    # A count between two elements ranks toward the nearest; ties go earliest.
+    assert gv._preference_rank({"num_segments": 4}, prefer) == 0  # |4-3|=1 vs |4-5|=1
+    assert gv._preference_rank({"num_segments": 6}, prefer) == 1  # |6-5|=1 vs |6-7|=1
+
+
 def test_pick_best_grid_cell_closest_to_target():
     # Counts 4,3,2,1 over the 2×2 grid; target 3 picks the second cell exactly.
     cells = _grid_cells([4, 3, 2, 1])
@@ -2315,6 +2410,50 @@ def test_grid_cell_sort_key_row_major_is_distance_only():
 def test_grid_cell_sort_key_speech_adds_negated_speech():
     cell = {"num_segments": 7, "speech_s": 4.0}
     assert gv.grid_cell_sort_key(cell, 5, "speech") == (2, -4.0)
+
+
+def test_grid_cell_sort_key_preference_inserts_rank_after_distance():
+    # iter-249: a preference target adds the preference rank as the secondary key,
+    # right after distance. Two satisfying counts are distance-0 but rank differs.
+    target = {"prefer": [3, 5]}
+    assert gv.grid_cell_sort_key({"num_segments": 3, "speech_s": 1.0}, target) == (0, 0)
+    assert gv.grid_cell_sort_key({"num_segments": 5, "speech_s": 9.0}, target) == (0, 1)
+
+
+def test_grid_cell_sort_key_preference_then_speech_orders_keys():
+    # iter-249: with both a preference target and the speech tie-break, the key is
+    # (distance, preference_rank, -speech_s) — preference outranks speech.
+    target = {"prefer": [3, 5]}
+    cell = {"num_segments": 5, "speech_s": 4.0}
+    assert gv.grid_cell_sort_key(cell, target, "speech") == (0, 1, -4.0)
+
+
+def test_pick_best_grid_cell_preference_breaks_tie_toward_preferred():
+    # iter-249: counts 5 and 3 both satisfy preference 3>5 (distance 0). The
+    # preference picks the 3-count cell even though the 5-count one is EARLIER in
+    # row-major order and recovered MORE speech — preference outranks both.
+    cells = _seg_speech_cells([(5, 9.0), (3, 1.0)])
+    best = gv.pick_best_grid_cell(cells, {"prefer": [3, 5]})
+    assert best["num_segments"] == 3
+
+
+def test_pick_best_grid_cell_preference_does_not_override_distance():
+    # iter-249: a closer cell still wins regardless of preference order — distance
+    # remains the primary key. Count 4 (distance 0 to element 1 '4') beats count 9
+    # even though 9 satisfies the MORE-preferred element 0 only at distance 3... so
+    # use a case where the preferred element is far: prefer 8>4, counts 9 and 4.
+    cells = _seg_speech_cells([(9, 1.0), (4, 1.0)])
+    best = gv.pick_best_grid_cell(cells, {"prefer": [8, 4]})
+    # count 9 → dist 1 (to 8); count 4 → dist 0 (to 4). Distance wins: pick 4.
+    assert best["num_segments"] == 4
+
+
+def test_pick_top_grid_cells_preference_orders_runners_up():
+    # iter-249: three cells all satisfy preference 3>5>7 (distance 0); the shortlist
+    # ranks them by preference order, most-preferred first.
+    cells = _seg_speech_cells([(7, 9.0), (3, 1.0), (5, 2.0)])
+    top = gv.pick_top_grid_cells(cells, {"prefer": [3, 5, 7]}, 3)
+    assert [c["num_segments"] for c in top] == [3, 5, 7]
 
 
 def test_pick_best_grid_cell_speech_tie_break_prefers_most_speech():
@@ -2580,6 +2719,37 @@ def test_render_grid_json_carries_set_target():
         )
     )
     assert payload["target"] == [3, 5, 7]
+    assert payload["best"]["num_segments"] == 5
+    assert payload["best"]["distance"] == 0
+
+
+def test_render_grid_preference_target_breaks_tie_toward_preferred():
+    # iter-249: counts 3 and 5 both satisfy preference 5>3 (distance 0); the
+    # preference picks the 5-count cell even though the 3-count cell is earlier in
+    # row-major order. The preference renders as "5>3", not a dict repr.
+    results = [_cell_result(n) for n in (3, 5)]
+    lines = gv.render_vad_grid(
+        [0.3], [400.0, 800.0], results, name="rec.wav", target={"prefer": [5, 3]},
+    )
+    best_line = lines[-1]
+    assert best_line.lstrip().startswith("best:")
+    assert "5 segments" in best_line
+    assert "|Δ|=0" in best_line
+    assert "target 5>3" in best_line
+    assert "prefer" not in best_line
+
+
+def test_render_grid_json_carries_preference_target():
+    # iter-249: a preference target serialises as {"prefer": [...]} — a JSON object
+    # carrying the listed order (a band element nests as its own [lo, hi] array).
+    results = [_cell_result(n) for n in (4, 5)]
+    payload = json.loads(
+        gv.render_vad_grid_json(
+            [0.3], [400.0, 800.0], results, name="rec.wav",
+            target={"prefer": [3, (5, 7)]},
+        )
+    )
+    assert payload["target"] == {"prefer": [3, [5, 7]]}
     assert payload["best"]["num_segments"] == 5
     assert payload["best"]["distance"] == 0
 
@@ -3116,6 +3286,53 @@ def test_cmd_vad_sweep_set_target_picks_satisfying_value():
     assert "7 segments" in text
     assert "target 3,5,7" in text
     assert "[3, 5, 7]" not in text
+
+
+def test_cmd_vad_grid_preference_target_breaks_tie_toward_preferred():
+    # iter-249, grid form: low gate → 3 segments, high gate → 5. Both satisfy
+    # preference 5>3 (distance 0), so the preference picks the 5-count cell even
+    # though the 3-count cell is earlier in row-major order.
+    def seg(wav, params=None):
+        n = 3 if params.threshold < 0.5 else 5
+        return _cell_result(n)
+
+    lines: List[str] = []
+    gv.cmd_vad_grid(
+        _grid_args(
+            thresholds=[0.3, 0.5], min_silences=[400.0],
+            target={"prefer": [5, 3]},
+        ),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    text = "\n".join(lines)
+    assert "best:" in text
+    assert "5 segments" in text
+    assert "target 5>3" in text
+    assert "prefer" not in text
+
+
+def test_cmd_vad_sweep_preference_target_breaks_tie_toward_preferred():
+    # iter-249, sweep form: low gate → 7 segments, high gate → 3. Both satisfy
+    # preference 3>7 (distance 0), so the preference picks the 3-count value even
+    # though the 7-count value is swept earlier.
+    def seg(wav, params=None):
+        n = 7 if params.threshold < 0.5 else 3
+        return _cell_result(n)
+
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(thresholds=[0.3, 0.7], target={"prefer": [3, 7]}),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    text = "\n".join(lines)
+    assert "best:" in text
+    assert "3 segments" in text
+    assert "target 3>7" in text
+    assert "prefer" not in text
 
 
 def test_cmd_vad_grid_csv_ignores_target():

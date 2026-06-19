@@ -268,34 +268,78 @@ def target_type(raw):
     and a degenerate set whose elements all collapse to one (``3,3``) reduces to
     that bare element, keeping scalar/band output byte-for-byte unchanged.
 
+    iter-249 adds the ``>``-separated PREFERENCE-ORDER form: ``--target 3>5>7``
+    means "prefer 3 segments, accept 5, tolerate 7 as a last resort". Like the
+    set it accepts ANY listed count (distance is the MIN to any element, so all
+    listed counts score 0), but UNLIKE the set it carries a precedence so a
+    distance TIE breaks toward the earlier-listed (more preferred) element — the
+    operator who would rather have 3 regions but settles for 5 finally has a way
+    to say which wins when both are reachable. It parses to a ``{"prefer":
+    [...]}`` dict (each element a scalar or band, so ``3>5-7`` composes), deduped
+    preserving order, and a single-element preference (``3>3``) collapses to the
+    bare element so scalar/band output stays byte-for-byte unchanged. Mixing
+    ``,`` and ``>`` in one target is rejected — they are different composition
+    operators (a flat OR vs a ranked OR) and stacking them is ambiguous.
+
     Each present band edge is a non-negative whole number (reusing
     :func:`nonneg_int_type`'s rules — ``0`` is legitimate, negatives/fractionals
     are rejected), the band separator is a single ``-``, and for a CLOSED band
     ``lo <= hi`` (an inverted band is a typo, not a degenerate window). Exactly
     one edge may be empty (the open forms); a bare ``-`` with both edges empty
     is meaningless and rejected. A bare count with no ``-`` is the scalar form.
-    An empty set element (``3,``, ``3,,5``) is rejected. Pure and
-    side-effect-free for direct unit testing; raises
+    An empty set/preference element (``3,``, ``3,,5``, ``3>``, ``>5``) is
+    rejected. Pure and side-effect-free for direct unit testing; raises
     :class:`argparse.ArgumentTypeError` on any malformed input.
     """
     text = raw.strip() if isinstance(raw, str) else raw
+    # iter-249: ',' (a flat set) and '>' (a ranked preference) are different
+    # composition operators; stacking them in one target is ambiguous, so reject.
+    if isinstance(text, str) and "," in text and ">" in text:
+        raise argparse.ArgumentTypeError(
+            f"target cannot mix ',' (set) and '>' (preference), got {raw!r}"
+        )
+    # iter-249: '>' separates a PREFERENCE order — prefer the earlier-listed
+    # count, accept the later ones; the precedence breaks distance ties (see
+    # grid_cell_sort_key). Parses to a {"prefer": [...]} dict so it is distinct
+    # from the flat-set list. A single-element preference collapses to the bare
+    # element.
+    if isinstance(text, str) and ">" in text:
+        elements = _parse_target_collection(text, raw, ">", "preference")
+        return elements[0] if len(elements) == 1 else {"prefer": elements}
     # iter-248: a comma separates a SET of acceptable targets, each element
     # itself a scalar or a band. The set scores as the MIN distance to any
     # element (see grid_cell_distance), so '3,5' accepts 3 OR 5 but nothing
     # between. A single-element set collapses to that bare element.
     if isinstance(text, str) and "," in text:
-        parts = [p.strip() for p in text.split(",")]
-        if any(p == "" for p in parts):
-            raise argparse.ArgumentTypeError(
-                f"target set must be comma-separated targets, got {raw!r}"
-            )
-        elements = []
-        for part in parts:
-            element = _parse_single_target(part)
-            if element not in elements:  # dedupe, preserve first-seen order
-                elements.append(element)
+        elements = _parse_target_collection(text, raw, ",", "set")
         return elements[0] if len(elements) == 1 else elements
     return _parse_single_target(text)
+
+
+def _parse_target_collection(text, raw, sep, kind):
+    """Split, validate, parse, and dedupe a ``--target`` set/preference collection.
+
+    Factored out of :func:`target_type` in iter-249 so the comma-separated SET
+    (iter-248) and ``>``-separated PREFERENCE (iter-249) forms share one
+    splitter: both split on ``sep``, reject any empty element (a leading/
+    trailing/doubled separator is a typo), parse each element via
+    :func:`_parse_single_target` (so each may itself be a scalar or band), and
+    dedupe preserving first-seen order. Returns the element ``list`` (never
+    collapsed — the caller decides how a single-element collection reduces).
+    ``kind`` ("set"/"preference") names the form in the error message. Pure;
+    raises :class:`argparse.ArgumentTypeError` on an empty or malformed element.
+    """
+    parts = [p.strip() for p in text.split(sep)]
+    if any(p == "" for p in parts):
+        raise argparse.ArgumentTypeError(
+            f"target {kind} must be {sep!r}-separated targets, got {raw!r}"
+        )
+    elements = []
+    for part in parts:
+        element = _parse_single_target(part)
+        if element not in elements:  # dedupe, preserve first-seen order
+            elements.append(element)
+    return elements
 
 
 def _parse_single_target(text):
@@ -335,10 +379,14 @@ def _format_target(target):
     the empty edge empty so they read back exactly as typed: ``(3, None)`` →
     ``3-`` ("at least 3"), ``(None, 5)`` → ``-5`` ("at most 5"). iter-248's set
     form renders each element comma-joined so it reads back as typed:
-    ``[3, 5, 7]`` → ``3,5,7``, ``[3, (5, 7)]`` → ``3,5-7``. Used by
+    ``[3, 5, 7]`` → ``3,5,7``, ``[3, (5, 7)]`` → ``3,5-7``. iter-249's
+    preference form (a ``{"prefer": [...]}`` dict) renders ``>``-joined so it too
+    reads back as typed: ``{"prefer": [3, 5, 7]}`` → ``3>5>7``. Used by
     :func:`_render_pick_block` so the ``best:`` / ``top N:`` lines read naturally
     for any form without each call site re-deriving the format. Pure.
     """
+    if isinstance(target, dict):
+        return ">".join(_format_target(element) for element in target["prefer"])
     if isinstance(target, list):
         return ",".join(_format_target(element) for element in target)
     if isinstance(target, tuple):
@@ -1113,11 +1161,18 @@ def grid_cell_distance(cell, target):
     - **set (iter-248)** — a ``list`` of elements (each a scalar or a band):
       the MIN distance to any element, so a count that satisfies ANY listed
       target scores ``0`` and otherwise scores the gap to the nearest one.
+    - **preference (iter-249)** — a ``{"prefer": [...]}`` dict: distance is the
+      MIN over its elements, IDENTICAL to the set — the precedence affects only
+      tie-breaking (:func:`grid_cell_sort_key`), never the distance, so two
+      counts that both satisfy the preference are equidistant here and the
+      preference order decides between them at the sort-key layer.
 
     Pure — reads only ``cell["num_segments"]``, an int, so it never touches
     torch.
     """
     count = cell["num_segments"]
+    if isinstance(target, dict):
+        return min(grid_cell_distance(cell, element) for element in target["prefer"])
     if isinstance(target, list):
         return min(grid_cell_distance(cell, element) for element in target)
     if isinstance(target, tuple):
@@ -1145,13 +1200,42 @@ def grid_cell_sort_key(cell, target, tie_break="row-major"):
       pick than merely the earlier one in the grid), via a ``-speech_s``
       secondary key.
 
+    iter-249: when ``target`` is a ``{"prefer": [...]}`` PREFERENCE form, the
+    operator's stated precedence is the FIRST tie-break (stronger intent than
+    grid position or recovered speech), inserted as a secondary key right after
+    distance and before the ``tie_break`` key — so among cells at equal distance,
+    the one nearest a more-preferred element (lower :func:`_preference_rank`)
+    wins, and the ``tie_break`` (row-major/speech) only decides cells that ALSO
+    tie on preference rank. For a non-preference target the key is byte-for-byte
+    the iter-243 shape (no preference key inserted).
+
     Pure — reads only ``cell["num_segments"]`` and, for ``"speech"`` ties,
     ``cell["speech_s"]``. Never touches torch.
     """
     distance = grid_cell_distance(cell, target)
+    keys = [distance]
+    if isinstance(target, dict):
+        keys.append(_preference_rank(cell, target["prefer"]))
     if tie_break == "speech":
-        return (distance, -cell["speech_s"])
-    return (distance,)
+        keys.append(-cell["speech_s"])
+    return tuple(keys)
+
+
+def _preference_rank(cell, prefer):
+    """Index of the ``prefer`` element a cell's count sits nearest — lower better.
+
+    iter-249's tie-break input for the ``{"prefer": [...]}`` PREFERENCE target.
+    Returns the index of the EARLIEST preference element achieving the minimum
+    distance to the cell's ``num_segments``: a cell that satisfies element 0
+    (distance 0) ranks ``0`` and beats one that only satisfies element 1
+    (rank ``1``), so :func:`grid_cell_sort_key` leans the pick toward the
+    operator's more-preferred count when several are equally close. Earliest-wins
+    on a distance tie among elements (``list.index`` of the min), matching the
+    earliest-tie rule everywhere else. Pure — reads only ``cell["num_segments"]``
+    via :func:`grid_cell_distance`.
+    """
+    distances = [grid_cell_distance(cell, element) for element in prefer]
+    return distances.index(min(distances))
 
 
 def pick_best_grid_cell(cells, target, tie_break="row-major"):
@@ -2306,11 +2390,13 @@ def build_parser():
         default=None,
         dest="target",
         help="Desired segment count (e.g. 3), closed band (e.g. 3-5), "
-        "open band (3- = at least 3, -5 = at most 5), or set (3,5,7 = 3 OR 5 "
-        "OR 7) — when given, a data-driven 'best:' pick names the swept value "
-        "whose recovered segment count is closest to it (a band/set scores 0 "
-        "anywhere it is satisfied); the same machinery as vad-grid's --target; "
-        "omit for just the table",
+        "open band (3- = at least 3, -5 = at most 5), set (3,5,7 = 3 OR 5 "
+        "OR 7), or preference (3>5>7 = prefer 3, accept 5, then 7) — when given, "
+        "a data-driven 'best:' pick names the swept value whose recovered "
+        "segment count is closest to it (a band/set/preference scores 0 anywhere "
+        "it is satisfied; a preference breaks ties toward the earlier-listed "
+        "count); the same machinery as vad-grid's --target; omit for just the "
+        "table",
     )
     vad_sweep.add_argument(
         "--top",
@@ -2433,11 +2519,13 @@ def build_parser():
         default=None,
         dest="target",
         help="Desired segment count (e.g. 3), closed band (e.g. 3-5), "
-        "open band (3- = at least 3, -5 = at most 5), or set (3,5,7 = 3 OR 5 "
-        "OR 7) — when given, a data-driven 'best:' pick names the cell whose "
-        "recovered segment count is closest to it (a band/set scores 0 "
-        "anywhere it is satisfied); the vad-grid analogue of simulate-mirror "
-        "--grid's best pick; omit for just the table",
+        "open band (3- = at least 3, -5 = at most 5), set (3,5,7 = 3 OR 5 "
+        "OR 7), or preference (3>5>7 = prefer 3, accept 5, then 7) — when given, "
+        "a data-driven 'best:' pick names the cell whose recovered segment count "
+        "is closest to it (a band/set/preference scores 0 anywhere it is "
+        "satisfied; a preference breaks ties toward the earlier-listed count); "
+        "the vad-grid analogue of simulate-mirror --grid's best pick; omit for "
+        "just the table",
     )
     vad_grid.add_argument(
         "--top",

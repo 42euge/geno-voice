@@ -156,6 +156,7 @@ gv vad-sweep recording.wav --target 3-5                     # tolerance band: 0 
 gv vad-sweep recording.wav --target 3-                      # open band: at least 3 regions (iter-247)
 gv vad-sweep recording.wav --target -5                      # open band: at most 5 regions (iter-247)
 gv vad-sweep recording.wav --target 3,5,7                   # set: 3 OR 5 OR 7 regions (iter-248)
+gv vad-sweep recording.wav --target 3>5>7                   # preference: prefer 3, accept 5, then 7 (iter-249)
 ```
 
 The human report is a small table — the WAV name, a `threshold / segments /
@@ -408,6 +409,36 @@ Everything else — `--top`, `--tie-break`, the pickers — flows through the sa
 deduped preserving first-seen order, and a single-element set (`3,3`) collapses
 to the bare element so scalar/band output stays byte-for-byte unchanged. An empty
 element (`3,`, `3,,5`) is rejected as a typo.
+
+#### `--target A>B>C` — a preference order (iter-249)
+
+A SET treats every listed count as equally acceptable; but an operator often
+**prefers** one count yet would **settle** for another — "prefer 3 regions, but 5
+is fine, and 7 only as a last resort". iter-249 lets `--target` take a
+`>`-separated PREFERENCE order: `--target 3>5>7` accepts ANY listed count (the
+distance is the same min-over-elements as a set, so all listed counts score `0`),
+but UNLIKE a set it carries a precedence so a distance **tie** breaks toward the
+**earlier-listed** (more-preferred) count. Each element is itself a scalar or a
+band, so they compose — `--target 3>5-7` means "prefer 3, else anywhere from 5 to
+7".
+
+```bash
+gv vad-sweep recording.wav --thresholds 0.3,0.5,0.7,0.9 --target 3>5>7   # prefer 3, accept 5, then 7
+gv vad-grid  recording.wav --thresholds 0.3,0.5,0.7 --min-silences 400,800 --target 3>5-7  # prefer 3, else a 5-7 band
+```
+
+The preference is the **first** tie-break — stronger intent than grid position or
+recovered speech (`--tie-break speech`), so among cells equally close to the
+target the one nearest a more-preferred count wins; `--tie-break` only decides
+cells that ALSO tie on preference rank. The `best:` / `top N:` lines render a
+preference `>`-joined exactly as typed (`3>5>7`), and the `--json` `target`
+serialises as a `{"prefer": [...]}` object carrying the listed order (a band
+element nests as its own `[lo, hi]` array — `3>5-7` → `{"prefer": [3, [5, 7]]}`).
+A preference is deduped preserving first-seen order, and a single-element
+preference (`3>3`) collapses to the bare element so scalar/band output stays
+byte-for-byte unchanged. An empty element (`3>`, `>5`) is rejected as a typo, and
+mixing `,` (set) with `>` (preference) in one target is rejected — they are
+different composition operators.
 
 ### `gv vad-grid` — a 2-D knob grid (iter-240)
 
