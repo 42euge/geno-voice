@@ -21485,3 +21485,106 @@ by eye — the very cross-reading the data-driven pick was meant to eliminate.
 4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
    --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
    refresh the comparison table.
+
+## iter-243 — `gv vad-grid --tie-break`: a secondary ranking key for distance ties
+
+**Branch:** `iter-243-vad-grid-tiebreak` (merged ff to main, commit `978dc8a`)
+**Date:** 2026-06-18
+
+**No STEER.md this lap.** The two top-priority next items carried since
+iter-227 (wire `ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()`
+in the desktop app) both need a Mac + mic + browser and can't run headless on
+the loop host. The recording corpus is unchanged since iter-231 (same 6 WAVs),
+so the "ingest new recordings" item had nothing to do. I took the first
+headless-doable item from the iter-242 backlog: `gv vad-grid --top` secondary
+sort key (item #3) — break equal-distance ties on a defensible criterion
+instead of bare row-major order.
+
+**The gap.** iter-241 shipped `gv vad-grid --target N` (score every cell by
+`|num_segments - N|`, surface the closest as `best:`); iter-242 extended it to
+`--top K` (a ranked shortlist of the K closest). Both ranked PURELY on
+segment-count distance, breaking ties by row-major order — so the cell shown
+first among equals was merely the earlier one in the grid, not necessarily the
+more defensible one. When the winning cell sits at a knob extreme the operator
+distrusts (the highest gate, the longest hangover), they could not tell whether
+an equally-close cell recovered more of the talker without re-reading the table
+by eye — the very cross-reading the data-driven pick was meant to eliminate.
+
+**What changed.**
+1. **`grid_cell_sort_key(cell, target, tie_break)`** (`examples/gv.py`) — a new
+   pure helper that factors the ranking key out of both pickers. The PRIMARY
+   key is always `grid_cell_distance` (`|num_segments - target|`); `tie_break`
+   decides the secondary: `"speech"` appends `-speech_s` (most speech first),
+   `"row-major"` (the default) appends nothing so a stable sort preserves the
+   original row-major order. Reads only `num_segments` and, for speech ties,
+   `speech_s` — never touches torch.
+2. **`pick_best_grid_cell` / `pick_top_grid_cells`** take a `tie_break` arg and
+   route through the shared key, so the shortlist head stays identical to the
+   single pick under the same tie-break. `pick_best_grid_cell` is now a `min`
+   over the key (was a hand-rolled scan) — same earliest-tie semantics under
+   `row-major`.
+3. **`render_vad_grid` / `render_vad_grid_json`** thread `tie_break`. The JSON
+   payload gains a `"tie_break"` field (only when `--target` is present) so a
+   consumer knows which ordering produced `best`/`top`. CSV stays a pure data
+   grid — a derived ordering is not a per-cell column, the same rationale that
+   keeps `--target`/`--top`/`name` out of the CSV body.
+4. **`cmd_vad_grid`** reads `args.tie_break` and threads it into the human/json
+   renderers (available + unavailable branches).
+5. **Parser:** new `--tie-break {row-major,speech}` (default `row-major`) on the
+   `vad-grid` subcommand, beside `--target`/`--top`. Unknown choices rejected by
+   argparse `choices=`.
+6. **Tests.**
+   - `tests/unit/test_gv_vad.py` (**+21**, now 274 in-file): `--tie-break`
+     parser flag (default, speech parse, unknown-choice rejection);
+     `grid_cell_sort_key` (row-major = distance-only tuple, speech = distance +
+     negated speech); `pick_best_grid_cell` speech tie-break prefers most speech
+     / row-major keeps earlier / distance still dominates / empty→None;
+     `pick_top_grid_cells` speech ordering + head == best; renderer best-line +
+     JSON `tie_break` key (present with target, default row-major, absent
+     without target) + JSON top-list speech ordering; `cmd_vad_grid` end-to-end
+     (speech picks high-speech cell, default keeps earlier, json carries key,
+     csv ignores it). NO torch import — driven through the injected segmenter
+     seam.
+   - `tests/integration/test_gv_vad_cli.py` (**+2**): over THE GATE recording
+     the `speech` pick recovers the MAX speech among all cells tied at the
+     winning distance and is a real grid member; without `--tie-break` the
+     payload reports the `row-major` default. Skips without corpus/package.
+   - `tests/unit/test_gv_cli.py`: unchanged — no new handler this lap
+     (`vad-grid` was already in the pinned map since iter-240).
+7. **Docs** (`docs/research/voice-capture-tuning.md`) — a `--tie-break`
+   subsection under `gv vad-grid`: the row-major-vs-speech contrast, the
+   distance-stays-primary invariant, the verified real-corpus example, the JSON
+   `tie_break` field, and the CSV-ignores / rides-with-target rules.
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3516 passed** (3495 prior + 21 new), run on the feature branch before
+  ff-merge. Re-confirmed on main after merge: `pytest
+  tests/unit/test_gv_vad.py tests/unit/test_gv_cli.py` → **367 passed**.
+- Integration: `python -m pytest tests/integration/test_gv_vad_cli.py` →
+  **27 passed** (25 prior + 2 new; corpus symlinked into the worktree, symlink
+  removed before commit so it is not tracked). silero-vad IS installed on this
+  host, so these ran against the real model.
+- Manual smoke on the branch over `voice-20260618-110355.wav`:
+  `gv vad-grid … --thresholds 0.3,0.5,0.7,0.9 --min-silences 400,800 --target 3
+  --top 4 --tie-break speech` → among the two |Δ|=1 cells (0.70/800 at 15.5s,
+  0.90/800 at 15.2s) it picked the higher-speech 0.70/800, and the top-4 block
+  re-ordered the |Δ|=2 runners-up by recovered speech (0.30/800 before
+  0.50/800) vs the default row-major order (0.30/400 before 0.30/800);
+  `--json` carried `"tie_break": "speech"`.
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] `gv vad-grid` tie-break parity for `gv vad-sweep`** — the 1-D sweeps
+   (`--thresholds` / `--min-silences` / `--min-speeches`) have no `--target`
+   pick at all, let alone a tie-break. Bring the iter-241→243 pick machinery to
+   the 1-D sweep so the operator gets the same data-driven best-cell + tie-break
+   there, closing the sweep↔grid feature gap.
+4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
+   --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
+   refresh the comparison table.
