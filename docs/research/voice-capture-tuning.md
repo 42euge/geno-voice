@@ -321,7 +321,19 @@ control equal to the set's first element `3` picks a different, nearer-to-3 cell
 so the test catches a JSON path that kept only the first element (collapsing the
 set to a scalar) or coerced the list to a closed band. With this, every
 `grid_cell_distance` target form (scalar, closed band, open band, set, preference,
-weighted, scaled) is cross-surface pinned.
+weighted, scaled) is cross-surface pinned. iter-281 carries the round-trip to the
+remaining *independent* seam: the non-default `tie_break="speech"`. The target
+FORM decides which cells tie at the band floor (`grid_cell_distance`); the
+tie-break decides how those tied cells ORDER (`grid_cell_sort_key`). Until now the
+speech tie-break was round-tripped cross-surface only for a *scalar* target
+(iter-274); every other form was pinned only under the default row-major
+tie-break. The fixture pairs a *closed* band `(4, 6)` — which ties THREE cells at
+distance 0, far more than a scalar ever produces — with `tie_break="speech"`, so
+the three in-band cells order by recovered speech (most first) rather than grid
+position. A row-major control picks the earliest in-band cell instead, so the test
+catches a JSON path that dropped the tie-break (falling back to row-major) or
+coerced the band to a scalar (undoing the multi-cell tie the speech tie-break needs
+to bite).
 
 **`--min-silences` — a second sweep axis (iter-238).** The default axis is the
 P(speech) gate (`--thresholds`); passing `--min-silences` instead sweeps the
