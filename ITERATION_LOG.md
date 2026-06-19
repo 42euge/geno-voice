@@ -21704,3 +21704,99 @@ three parser flags that mirror the grid's.
 4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
    --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
    refresh the comparison table.
+
+## iter-245 — Unify the sweep + grid pick block into `_render_pick_block`
+
+**Branch:** `iter-245-pick-block` (merged ff to main, commit `dbcabe8`)
+**Date:** 2026-06-18
+
+**No STEER.md this lap.** The two top-priority next items carried since
+iter-227 (wire `ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()`
+in the desktop app) both need a Mac + mic + browser and can't run headless on
+the loop host. The recording corpus is unchanged since iter-231 (same 6 WAVs),
+so the "ingest new recordings" item had nothing to do. I took the first
+headless-doable item from the iter-244 backlog: unify the sweep + grid pick
+block into one shared renderer helper (item #3).
+
+**The gap.** The data-driven pick block — the `best:` line naming the
+cell whose recovered segment count is closest to `--target`, plus the optional
+`top N (closest to target N):` shortlist — grew across iter-241→244 and was
+copy-pasted onto BOTH `render_vad_sweep` (1-D) and `render_vad_grid` (2-D). The
+two ~25-line copies were byte-identical except for (a) how many axis labels
+precede the segment count and (b) the empty-table noun (`"sweep"` vs `"grid"`).
+That left them one careless format tweak away from silently disagreeing — the
+exact cross-surface drift the data-driven pick was meant to eliminate.
+
+**What changed.**
+1. **`_render_pick_block(cells, target, top, tie_break, *, format_axes,
+   empty_noun)`** (`examples/gv.py`) — a new pure helper that owns the ENTIRE
+   pick scaffold: the `best:` line, the `|Δ|` distance, the `top N:` header, the
+   ranked rows, and the `best: none (empty <noun>; …)` empty-input message. It
+   defers ONLY the per-cell axis section to a caller-supplied
+   `format_axes(cell)` callable (`threshold=0.70` for the sweep,
+   `threshold=0.70 min_silence=800` for the grid), and fills the empty-table
+   noun from `empty_noun`. Returns the list of lines to append — empty when
+   `target is None` — so each renderer stays a single `lines.extend(...)`. Reads
+   only the `num_segments` / `speech_s` keys both shapes share (via the existing
+   pickers); never touches torch.
+2. **`render_vad_sweep`** drops its inline copy and calls the helper with a
+   one-line `lambda row: f"{label}={_format_sweep_axis_value(axis, row[axis])}"`
+   and `empty_noun="sweep"`.
+3. **`render_vad_grid`** drops its inline copy and calls the helper with the
+   two-axis formatter (`row_label=… col_label=…`) and `empty_noun="grid"`.
+4. **JSON twins / pickers untouched.** `render_vad_sweep_json` /
+   `render_vad_grid_json` carry the pick as structured keys (`best`/`top`/
+   `tie_break`/`distance`), not the formatted block, so there was nothing to
+   unify there; `pick_best_grid_cell` / `pick_top_grid_cells` /
+   `grid_cell_distance` / `grid_cell_sort_key` already shared the grid pickers
+   since iter-244. CSV renderers untouched (a derived pick is not a per-cell
+   column).
+
+**Output is byte-for-byte unchanged.** All 309 prior `test_gv_vad.py` cases —
+which assert EXACT output strings for both the sweep and grid surfaces — pass
+without a single edit, and a manual smoke (below) confirms the two blocks render
+exactly as in iter-244.
+
+**Tests.**
+- `tests/unit/test_gv_vad.py` (**+8**, now 317 in-file): `_render_pick_block`
+  driven in isolation — `target=None` → `[]`; empty `cells` → the single
+  noun-bearing `best: none` line; `best:` line built via `format_axes` + the
+  `|Δ|` distance; `top` block ranked nearest-first with head == best; `top` moot
+  without a target; `speech` tie-break re-orders equal-distance rows by recovered
+  speech; `top` clamped to the cell count; and a cross-surface guarantee test
+  feeding the SAME cells through a 1-axis and a 2-axis formatter and asserting
+  everything around the axis section is identical (the drift-prevention
+  contract). NO torch import — bare dicts with the shared keys.
+- `tests/unit/test_gv_cli.py`: unchanged — no new handler this lap (pure
+  internal refactor of two existing renderers).
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3559 passed** (3551 prior + 8 new), run on the feature branch before
+  ff-merge. Re-confirmed on main after merge: `pytest
+  tests/unit/test_gv_vad.py tests/unit/test_gv_cli.py` → **410 passed**.
+- Integration: `python -m pytest tests/integration/test_gv_vad_cli.py` →
+  **39 passed** (unchanged from iter-244; corpus symlinked into the worktree,
+  symlink removed before commit so it is not tracked). silero-vad IS installed
+  on this host, so these ran against the real model.
+- Manual smoke on the branch: `render_vad_sweep([0.3,0.5,0.7], …, target=3,
+  top=2)` and `render_vad_grid([0.3,0.7], [400,800], …, target=3, top=2)` both
+  rendered the `best:` line + `top 2 (closest to target 3):` block exactly as
+  iter-244 produced (segment counts, `|Δ|`, ranking order all identical).
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] `gv vad-grid`/`vad-sweep` `--target` accept a RANGE** — the pick
+   currently scores against a single desired segment count. An operator who
+   wants "between 3 and 5 regions" must eyeball the table. A `--target LO-HI`
+   form (distance 0 inside the band, else distance to the nearest edge) would
+   extend the same `_render_pick_block` machinery to a tolerance window. Pure,
+   headless.
+4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
+   --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
+   refresh the comparison table.
