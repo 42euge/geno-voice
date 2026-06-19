@@ -23467,3 +23467,103 @@ already correct — this lap proves and guards it).
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
    should track a curated subset, decide the policy and re-run
    `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
+
+## iter-262 — `gv --target` banded (lo-hi) regression tests on the seconds `max_speech_s` axis
+
+**Branch:** `iter-262-band-seconds` (merged ff to main, commit `656ae58`)
+**Date:** 2026-06-19
+
+**No STEER.md this lap.** The two top-priority next items carried since
+iter-227 (wire `ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()`
+in the desktop app) both need a Mac + mic + browser and can't run headless on
+the loop host. "Ingest new recordings" stays corpus-gated (large untracked
+WAVs, no corpus symlinked into the worktree). The COMBINED
+additive+multiplicative `--target` weight item is again a larger design
+question — scope before building. So I took the iter-261 backlog item #4's
+first concrete sub-option: pin the BANDED `--target lo-hi` form (iter-246) on
+the SECONDS `max_speech_s` axis (iter-257→261 all used a SCALAR target).
+
+**The gap.** iter-246 shipped the banded `--target lo-hi` form (a count
+*window* scoring distance 0 for any cell inside the band, else distance to the
+nearer edge); iter-247 added the open-edge forms (`lo-` "at least", `-hi` "at
+most"). iter-255/257 added the seconds `max_speech_s` force-split-ceiling axis.
+These seams are orthogonal, but they had never been exercised TOGETHER on a
+render surface: every seconds-axis target test from iter-257 through iter-261
+used a SCALAR target, and every band-target render test
+(`test_render_*_band_*`) sweeps the threshold/min_silence axis — so the
+band-scoring path and the `%g` seconds formatting had no JOINT coverage. The
+band pick block ranks by `num_segments` (axis-agnostic), so it already works on
+the seconds sweep — a regression that broke EITHER (a band score that mishandled
+the seconds axis, or a `%g`→`.2f` drift on the band-CHOSEN cap) would have
+shipped green while the threshold-axis band tests stayed passing. This lap
+closes that hole; no production code changed (the wiring was already correct —
+this lap proves and guards it, verified by a pre-test smoke run).
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+5 tests, +1 helper `_max_speech_cells`, +128 lines).**
+  1. `test_render_sweep_band_target_on_max_speech_axis_formats_seconds` — caps
+     `inf, 10, 5` (counts 1, 4, 2); band `3-5` puts the 10s cap (4 segs) inside
+     the band (`|Δ|=0`); the `best:` line names `max_speech=10`, renders
+     `target 3-5` (not the `(3, 5)` tuple repr), no `10.00` / `max_speech=10.0`
+     leak.
+  2. `test_render_sweep_band_target_best_can_name_inf_max_speech` — caps
+     `inf, 5` (counts 1, 2); "at most" band `-1` satisfied only by the no-cap
+     `inf` baseline (1 seg); renders `max_speech=inf` / `target -1`, no `None`
+     leak, no `inf.00`.
+  3. `test_render_sweep_open_band_at_least_on_max_speech_axis_formats_seconds` —
+     caps `inf, 10, 5`; "at least 3" band `3-` picks the 10s cap (4 segs,
+     `|Δ|=0`); renders `target 3-`, no `None` leak, no `10.00`.
+  4. `test_render_grid_band_target_on_max_speech_col_axis_formats_seconds` — the
+     2-D grid COLUMN-axis twin: 1×2 grid over caps `inf, 5` (counts 1, 4); band
+     `3-5` picks the 5s cell (4 segs, `|Δ|=0`); held threshold row renders
+     `threshold=0.30`, no `5.00` leak.
+  5. `test_render_grid_json_band_target_carries_seconds_max_speech` — the grid
+     JSON machine surface carries the band as the `[3, 5]` array and emits
+     `best.max_speech_s == 5.0` (a finite seconds number), distance 0.
+- **`docs/research/voice-capture-tuning.md`.** A paragraph under the iter-257→261
+  `--target` seconds subsection covering the banded form on `max_speech_s`: band
+  rendering (`3-5` / `3-` / `-1`, no tuple/None repr), `%g`-compact chosen cap,
+  `[lo, hi]` grid JSON with a finite-seconds best cap, across the 1-D sweep and
+  the 2-D grid column axis. Two copy-paste invocations (sweep band, grid band
+  `--json`).
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3828 passed** (3823 prior + 5 net new), run on the feature branch before
+  ff-merge AND re-run on main after the merge (both 3828).
+- Focused: `pytest tests/unit/test_gv_vad.py -k "band_target_on_max_speech or
+  band_target_best_can_name_inf or open_band_at_least_on_max_speech or
+  band_target_carries_seconds"` → **5 passed**.
+- Pre-test smoke (Python, on the branch): `render_vad_sweep([inf,10,5], ...,
+  axis="max_speech_s", target=(3,5))` → `best: max_speech=10 (4 segments,
+  |Δ|=0 from target 3-5)`; open band `(3,None)` → `max_speech=5 ... target 3-`;
+  `(None,2)` → `max_speech=inf ... target -2`; grid `(3,5)` →
+  `threshold=0.30 max_speech=5 ... target 3-5`. Confirmed the wiring was already
+  correct before writing the assertions.
+- Integration: not re-run this lap (no corpus symlinked into this worktree;
+  same as prior corpus-gated laps — the change is pure CLI render logic fully
+  covered by the unit matrix).
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] COMBINED additive+multiplicative `--target` weight** — iter-250/251
+   give additive (`:penalty`), iter-252 multiplicative (`*factor`); an operator
+   might want both on one element (`5:1*1.5`). Larger design question (operator
+   precedence of `:` vs `*`) — scope before building. Pure, headless if pursued.
+4. **[cli] seconds-axis target coverage now spans scalar + banded + tie-break.**
+   iter-257→261 pinned scalar (`best:`, JSON, CSV, `top N:`, `--tie-break`),
+   iter-262 the BANDED `lo-hi`/open-edge form. The remaining untested
+   seconds-axis target forms: the comma SET form (iter-248,
+   `--target 3,5,7` on `max_speech_s`), the `{"prefer": [...]}` preference
+   (iter-249), and the `{"weighted": ...}` / `{"scaled": ...}` weighted forms
+   (iter-250/252) — confirm none is already covered on the seconds axis before
+   assuming a gap. Each is a small, pure, headless increment.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
+   should track a curated subset, decide the policy and re-run
+   `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
