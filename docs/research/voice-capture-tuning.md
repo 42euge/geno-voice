@@ -349,9 +349,22 @@ not capped by an upper edge. Under `tie_break="speech"` those three in-band cell
 order by recovered speech (most first); a row-major control picks the earliest
 instead, and a CLOSED-band control `(5, 8)` pushes the highest count out (above
 the finite hi) and picks a DIFFERENT cell, proving the unbounded upper side is
-load-bearing for the speech-broken pick. With this every documented target form is
-now cross-surface pinned under the default row-major tie-break, and the scalar,
-closed band, flat set, and open band are pinned under `tie_break="speech"`.
+load-bearing for the speech-broken pick. iter-284 carries the speech tie-break onto
+the `{"prefer": [...]}` *preference* form — the first speech twin whose precedence
+lives at the SORT-KEY layer, not the distance. `grid_cell_distance` treats a
+preference identically to a flat set (the min over its elements), so the preference
+rank (iter-249) enters as a SECONDARY sort key; under `tie_break="speech"` the key
+becomes the THREE-level `(distance, preference_rank, -speech_s)`, making speech only
+the TERTIARY decider — biting solely among cells tied on both distance and rank. A
+`{"prefer": [5, 9]}` target over counts 4/6/8/1 ties counts 4, 6, 8 at distance 1;
+the rank splits them (counts 4 and 6 nearer the more-preferred 5 outrank count 8
+nearer 9, DESPITE count 8 carrying the most speech), and speech then picks count 6
+over count 4 among the rank-0 pair. A row-major control picks count 4 instead, and a
+flat-SET control `[5, 9]` (no preference rank) drops the key to two-level and elects
+the most-speech-overall count 8 — proving the preference rank, not just speech, is
+load-bearing. With this every documented target form is now cross-surface pinned
+under the default row-major tie-break, and the scalar, closed band, flat set, open
+band, and preference are pinned under `tie_break="speech"`.
 
 **`--min-silences` — a second sweep axis (iter-238).** The default axis is the
 P(speech) gate (`--thresholds`); passing `--min-silences` instead sweeps the
