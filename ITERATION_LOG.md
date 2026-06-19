@@ -25611,3 +25611,125 @@ passing test on first run).
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
    should track a curated subset, decide the policy and re-run
    `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
+
+## iter-283 — grid CSV consumer re-derives the JSON `--target` open-band pick under the speech tie-break
+
+**Branch:** `iter-283-grid-open-band-speech-tie` (merged ff to main, commit `e0971b6`)
+**Date:** 2026-06-19
+
+**No STEER.md this lap.** The carried operator items (wire `ContinuousListener`
+→ `/vad/silero/stream`; adopt `prewarm()` in the desktop app) both need a Mac +
+mic + browser and can't run headless; "ingest new recordings" stays corpus-gated;
+the COMBINED additive+multiplicative `--target` weight is a feature/design item,
+not a regression gap. iter-282 backlog item #4 named this exact increment: with
+the speech tie-break now cross-surface pinned for the scalar (iter-274), closed
+band (iter-281), and flat set (iter-282), "the OPEN band under speech is the next
+distinct twin — a one-sided unbounded distance produces ties at the open floor
+that the speech tie-break can reorder, and the iter-274/281/282 speech fixtures
+never exercise the unbounded side." I confirmed no existing test round-trips an
+OPEN band target *under the speech tie-break* cross-surface (iter-279 pins the
+open band only under row-major; iter-281/282 pin speech only for a band/set), so
+the gap is real, and took the open band + speech-tie form.
+
+**The gap.** iter-273–282 pinned the grid CSV↔JSON cross-surface `--target` pick
+AGREEMENT — a CSV consumer re-parses the bare grid table back to cells and
+re-runs `pick_best_grid_cell` / `pick_top_grid_cells` to recover the
+JSON-embedded `best`/`top` identically. Every documented `grid_cell_distance`
+FORM (scalar, closed band, open band, set, preference, weighted, scaled) is
+pinned under the default row-major tie-break, but the NON-DEFAULT
+`tie_break="speech"` — which breaks distance ties on recovered speech (most
+first, iter-243) instead of grid position — was round-tripped cross-surface only
+for a SCALAR (iter-274, no ties to reorder), a closed BAND (iter-281, three
+dist-0 ties between one lo/hi pair), and a flat SET (iter-282, three dist-0 exact
+hits on distinct elements). The target FORM and the tie-break are INDEPENDENT
+seams: the form decides which cells tie at the floor (`grid_cell_distance`), the
+tie-break decides how those tied cells ORDER (`grid_cell_sort_key`). An OPEN band
+`(lo, None)`/`(None, hi)` (iter-247) produces multi-cell ties like a closed band,
+but via the UNBOUNDED side — the open edge simply SKIPS its bound check, so the
+in-band region is open above (or below) and ARBITRARILY many cells tie at the
+floor, not capped by an upper edge the way a closed band's ties are. Pinning the
+open band under row-major (iter-279) and the closed band under speech (iter-281)
+does NOT pin the open band under speech. A regression that dropped the
+`tie_break` on the JSON path (falling back to row-major) while the CSV consumer
+still passed `"speech"`, OR coerced the open `None` edge to a finite bound
+(collapsing the unbounded side and dropping the cell that only ties because the
+upper bound is absent), would diverge the two surfaces yet ship green — a failure
+mode neither iter-279 (open band, no speech reordering) nor iter-281 (closed
+band, bounded ties) can catch. No production code changed (the wiring was already
+correct — proved by the passing test on first run).
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+1 test).**
+  `test_render_grid_csv_consumer_rederives_json_open_band_target_speech_tie_pick`
+  — a 2×2 `threshold × min_silence_ms` grid (row-major counts 5/9/7/2) with
+  `target=(5, None)` (open band, "at least 5"), `top=3`, `tie_break="speech"`.
+  Counts 5, 9 and 7 all sit in the unbounded band (dist 0); with `_cell_result`
+  coupling speech to count (n→n*0.5s) they carry distinct speech (2.5/4.5/3.5s).
+  Row-major would keep the earliest in-band cell (count 5, `(0.3,400)`), but
+  `tie_break="speech"` prefers the MOST-speech in-band cell (count 9, `(0.3,800)`
+  at 4.5s) — a DIFFERENT pick, proving the tie-break flips the result on both
+  surfaces. A ROW-MAJOR control picks count 5 (the JSON path did not silently
+  drop the tie-break), and a CLOSED-band control `(5, 8)` pushes count 9 OUT
+  (above hi=8 → dist 1) and, under the SAME speech tie-break, picks count 7
+  `(0.5,400)` at 3.5s — proving the UNBOUNDED upper side is load-bearing for the
+  count-9 pick. Asserts the JSON records `target == [5, None]` AND
+  `tie_break == "speech"`; the CSV body carries no `best`/`distance`/`tie_break`
+  columns; a CSV `DictReader` consumer re-running
+  `pick_best_grid_cell(cells, target, "speech")` recovers a `best` identical to
+  the JSON `best` (distance 0); and `pick_top_grid_cells(..., "speech")` recovers
+  a shortlist agreeing cell-for-cell, all three in-band cells leading
+  SPEECH-ORDERED `[(0.3,800),(0.5,400),(0.3,400)]` with distances `[0,0,0]` and
+  speech `[4.5,3.5,2.5]` (NOT the row-major order), the dist-3 out-of-band cell
+  never reaching the top 3.
+- **`docs/research/voice-capture-tuning.md`.** Extended the grid cross-surface
+  paragraph: iter-283 carries the speech tie-break onto the open band (the
+  unbounded-side tie mechanism vs the closed band's bounded ties), with the
+  row-major and closed-band controls explained, and noted that the scalar, closed
+  band, flat set, and open band are now cross-surface pinned under
+  `tie_break="speech"`.
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3863 passed** (3862 prior + 1 net new), run on the feature branch before
+  ff-merge.
+- Focused: `pytest tests/unit/test_gv_vad.py -k "rederives_json_open_band_target_speech_tie_pick or rederives_json_open_band_target_pick or rederives_json_band_target_speech_tie_pick"`
+  → **3 passed** (the new open-band+speech twin + the iter-279 open-band-under-
+  row-major twin it re-tie-breaks on speech + the iter-281 closed-band+speech
+  twin it sits beside).
+- Pre-test smoke (Python, on the branch): the 2×2 grid (counts 5/9/7/2) → open
+  band `(5, None)` distances `[0, 0, 0, 3]`; row-major best `(0.3,400)` count 5,
+  speech best `(0.3,800)` count 9; closed-band `(5, 8)` speech best `(0.5,400)`
+  count 7 — confirming the speech tie-break flips the pick among the three
+  in-band ties, the unbounded upper side is load-bearing, and the wiring was
+  already correct before writing the assertion. speech `top`
+  `[(0.3,800),(0.5,400),(0.3,400)]` speech `[4.5,3.5,2.5]`.
+- Integration: not re-run this lap (no corpus symlinked into this worktree; same
+  as prior corpus-gated laps — the change is pure CLI render logic fully covered
+  by the unit matrix).
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] COMBINED additive+multiplicative `--target` weight** — iter-250/251
+   give additive (`:penalty`), iter-252 multiplicative (`*factor`); an operator
+   might want both on one element (`5:1*1.5`). Larger design question (operator
+   precedence of `:` vs `*`) — scope before building. Pure, headless if pursued.
+   Still the ONLY `--target` increment that is a FEATURE, not a regression-test gap.
+4. **[cli] Speech-tie cross-surface contract now covers scalar (iter-274), closed
+   band (iter-281), flat set (iter-282), and open band (iter-283).** The remaining
+   speech-tie cross-surface gaps under the OTHER forms: a `{"prefer": …}` /
+   `{"weighted": …}` / `{"scaled": …}` dict target under `tie_break="speech"`
+   (only scalar + closed band + set + open band are pinned under speech). The
+   `{"prefer": …}` form under speech is the next distinct twin — a soft preference
+   that scores 0 for the preferred value and a tie-broken fallback otherwise, so
+   it ties differently from the hard band/set forms. Alternatively the 1-D
+   `vad-sweep` cross-surface forms, or the `simulate-mirror` grid pick round-trips.
+   Confirm no existing test already exercises the chosen form cross-surface before
+   assuming a gap.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
+   should track a curated subset, decide the policy and re-run
+   `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
