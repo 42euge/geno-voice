@@ -341,9 +341,17 @@ inside one lo/hi pair. Under `tie_break="speech"` those three in-set cells order
 recovered speech (most first); a row-major control picks the earliest instead, and a
 scalar control of the set's head element `3` (the only cell that hits it) picks a
 DIFFERENT cell, proving the set's tail elements are load-bearing for the multi-cell
-tie the speech tie-break reorders. With this every documented target form is now
-cross-surface pinned under the default row-major tie-break, and the scalar, closed
-band, and flat set are pinned under `tie_break="speech"`.
+tie the speech tie-break reorders. iter-283 carries the speech tie-break onto the
+*open* band `(5, None)` ("at least 5"). Like a closed band it produces multi-cell
+ties, but via the UNBOUNDED side: the open edge simply SKIPS its bound check, so
+the in-band region is open above and arbitrarily many cells tie at the floor —
+not capped by an upper edge. Under `tie_break="speech"` those three in-band cells
+order by recovered speech (most first); a row-major control picks the earliest
+instead, and a CLOSED-band control `(5, 8)` pushes the highest count out (above
+the finite hi) and picks a DIFFERENT cell, proving the unbounded upper side is
+load-bearing for the speech-broken pick. With this every documented target form is
+now cross-surface pinned under the default row-major tie-break, and the scalar,
+closed band, flat set, and open band are pinned under `tie_break="speech"`.
 
 **`--min-silences` — a second sweep axis (iter-238).** The default axis is the
 P(speech) gate (`--thresholds`); passing `--min-silences` instead sweeps the
