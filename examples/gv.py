@@ -239,6 +239,27 @@ def nonneg_int_type(raw):
     return value
 
 
+def pos_int_type(raw):
+    """Argparse ``type`` for ``gv vad-grid --top``: a shortlist length.
+
+    The number of closest grid cells to surface as a ranked shortlist beside
+    the single ``best:`` pick. A shortlist of ``0`` cells is meaningless and a
+    fractional/negative count is nonsensical, so this requires a whole number
+    ``>= 1`` — the difference from :func:`nonneg_int_type` (where ``0`` is a
+    legitimate "expect silence" target). Pure and side-effect-free for direct
+    unit testing; raises :class:`argparse.ArgumentTypeError` otherwise.
+    """
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(
+            f"top must be a whole number, got {raw!r}"
+        )
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"top must be >= 1, got {value}")
+    return value
+
+
 def max_speech_type(raw):
     """Argparse ``type`` for ``gv vad --max-speech-s``: force-split bound.
 
@@ -889,6 +910,27 @@ def pick_best_grid_cell(cells, target):
     return best
 
 
+def pick_top_grid_cells(cells, target, k):
+    """Rank the ``k`` grid cells closest to ``target`` (a shortlist, not one pick).
+
+    iter-242's generalisation of :func:`pick_best_grid_cell`: where the single
+    picker names the closest cell, this returns the closest ``k`` as a ranked
+    list (nearest first), so an operator sees the runners-up — useful when the
+    very best cell sits at a knob extreme they distrust, or when two cells tie
+    on segment count and they want to break the tie on another axis by eye.
+
+    Stable ordering: sorts by :func:`grid_cell_distance` only, and Python's sort
+    is stable, so cells at equal distance keep their row-major order. This makes
+    the shortlist's head identical to :func:`pick_best_grid_cell`'s pick (both
+    honour the earliest-tie rule). ``k`` is clamped to the grid size, so a
+    shortlist longer than the grid simply returns every cell ranked. Returns
+    ``[]`` for an empty grid. Pure — reads nothing, mutates nothing (sorts a
+    shallow copy).
+    """
+    ranked = sorted(cells, key=lambda c: grid_cell_distance(c, target))
+    return ranked[:k]
+
+
 def render_vad_grid(
     row_values,
     col_values,
@@ -898,6 +940,7 @@ def render_vad_grid(
     row_axis="threshold",
     col_axis="min_silence_ms",
     target=None,
+    top=None,
 ):
     """Render a 2-D grid sweep as a plain-text table.
 
@@ -915,8 +958,14 @@ def render_vad_grid(
     line names the data-driven pick — the cell whose segment count is closest
     to ``target`` (the :func:`pick_best_grid_cell` analogue of
     :func:`render_grid`'s best line). ``target=None`` (the default) omits the
-    line, keeping the iter-240 output unchanged. Pure: returns a list of
-    strings.
+    line, keeping the iter-240 output unchanged.
+
+    When ``top`` (a positive shortlist length) is ALSO given, a ``top N:`` block
+    follows the ``best:`` line listing the ``top`` cells closest to ``target``,
+    ranked nearest-first (:func:`pick_top_grid_cells`), so the operator sees the
+    runners-up — the head of the shortlist is always the ``best:`` cell. ``top``
+    is ignored without a ``target`` (there is no distance to rank by). Pure:
+    returns a list of strings.
     """
     if any(r is None for r in results):
         return [
@@ -953,6 +1002,20 @@ def render_vad_grid(
                 f"({best['num_segments']} segments, "
                 f"|Δ|={grid_cell_distance(best, target)} from target {target})"
             )
+            if top is not None:
+                ranked = pick_top_grid_cells(cells, target, top)
+                lines.append(
+                    f"  top {len(ranked)} (closest to target {target}):"
+                )
+                for rank, cell in enumerate(ranked, start=1):
+                    lines.append(
+                        f"    {rank}. {row_label}="
+                        f"{_format_sweep_axis_value(row_axis, cell[row_axis])} "
+                        f"{col_label}="
+                        f"{_format_sweep_axis_value(col_axis, cell[col_axis])}  "
+                        f"{cell['num_segments']} segments  "
+                        f"|Δ|={grid_cell_distance(cell, target)}"
+                    )
     return lines
 
 
@@ -965,6 +1028,7 @@ def render_vad_grid_json(
     row_axis="threshold",
     col_axis="min_silence_ms",
     target=None,
+    top=None,
 ):
     """Render a 2-D grid sweep as a JSON string.
 
@@ -979,7 +1043,12 @@ def render_vad_grid_json(
     ``"target"`` int and a ``"best"`` cell — :func:`pick_best_grid_cell`'s pick,
     the cell whose segment count is closest to the target, augmented with a
     ``"distance"`` key (``|num_segments - target|``). ``target=None`` (the
-    default) omits both keys, keeping the iter-240 payload unchanged. Pure:
+    default) omits both keys, keeping the iter-240 payload unchanged.
+
+    When ``top`` (a positive shortlist length) is ALSO given, the payload gains
+    a ``"top"`` list of the closest ``top`` cells (:func:`pick_top_grid_cells`),
+    ranked nearest-first, each augmented with the same ``"distance"`` key — its
+    head equals ``"best"``. ``top`` is ignored without a ``target``. Pure:
     returns a single JSON string.
     """
     if any(r is None for r in results):
@@ -1011,6 +1080,11 @@ def render_vad_grid_json(
             if best is None
             else {**best, "distance": grid_cell_distance(best, target)}
         )
+        if top is not None:
+            payload["top"] = [
+                {**cell, "distance": grid_cell_distance(cell, target)}
+                for cell in pick_top_grid_cells(cells, target, top)
+            ]
     return json.dumps(payload, indent=2)
 
 
@@ -1393,8 +1467,11 @@ def cmd_vad_grid(args, *, log=print, segmenter=None, availability=None):
     # --target (a desired segment count) drives the data-driven best-cell pick;
     # None (the default) leaves the iter-240 output unchanged. The CSV emitter is
     # a pure data grid, so it ignores the target (the pick is a derived scalar,
-    # not a per-cell column).
+    # not a per-cell column). --top extends that pick into a ranked shortlist of
+    # the N closest cells; it rides along with --target (no target = no distance
+    # to rank by) and is likewise CSV-irrelevant.
     target = getattr(args, "target", None)
+    top = getattr(args, "top", None)
 
     # Rows are always the gate; the column axis is whichever ms list was passed
     # (--min-speeches → floor; else --min-silences → hangover, the default). The
@@ -1415,7 +1492,7 @@ def cmd_vad_grid(args, *, log=print, segmenter=None, availability=None):
             log(
                 render_vad_grid_json(
                     [], [], unavailable, name=args.wav,
-                    row_axis=row_axis, col_axis=col_axis, target=target,
+                    row_axis=row_axis, col_axis=col_axis, target=target, top=top,
                 )
             )
         elif as_csv:
@@ -1428,7 +1505,7 @@ def cmd_vad_grid(args, *, log=print, segmenter=None, availability=None):
         else:
             for line in render_vad_grid(
                 [], [], unavailable, name=args.wav,
-                row_axis=row_axis, col_axis=col_axis, target=target,
+                row_axis=row_axis, col_axis=col_axis, target=target, top=top,
             ):
                 log(line)
         return
@@ -1461,7 +1538,7 @@ def cmd_vad_grid(args, *, log=print, segmenter=None, availability=None):
         log(
             render_vad_grid_json(
                 row_values, col_values, results, name=name,
-                row_axis=row_axis, col_axis=col_axis, target=target,
+                row_axis=row_axis, col_axis=col_axis, target=target, top=top,
             )
         )
     elif as_csv:
@@ -1474,7 +1551,7 @@ def cmd_vad_grid(args, *, log=print, segmenter=None, availability=None):
     else:
         for line in render_vad_grid(
             row_values, col_values, results, name=name,
-            row_axis=row_axis, col_axis=col_axis, target=target,
+            row_axis=row_axis, col_axis=col_axis, target=target, top=top,
         ):
             log(line)
 
@@ -2030,6 +2107,15 @@ def build_parser():
         "names the cell whose recovered segment count is closest to it (the "
         "vad-grid analogue of simulate-mirror --grid's best pick); omit for "
         "just the table",
+    )
+    vad_grid.add_argument(
+        "--top",
+        type=pos_int_type,
+        default=None,
+        dest="top",
+        help="With --target, also list the N cells closest to the target as a "
+        "ranked shortlist (nearest first) so the runners-up are visible, not "
+        "just the single 'best:' pick; ignored without --target",
     )
     vad_grid_fmt = vad_grid.add_mutually_exclusive_group()
     vad_grid_fmt.add_argument(

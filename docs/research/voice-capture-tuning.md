@@ -364,6 +364,46 @@ grid). Without `--target` the output is byte-for-byte the iter-240 shape — no
 surfaced pick genuinely minimises `|num_segments - target|` over the very grid
 the run tabulated, over the real corpus.
 
+#### `--top` — a ranked shortlist, not just the single best (iter-242)
+
+The single `best:` pick hides the runners-up: if the winning cell sits at a knob
+extreme you distrust (the highest gate, the longest hangover), you can't see how
+close the next-best cell came without re-reading the table by eye. Adding
+`--top K` (a positive count) lists the **K cells closest to the target**, ranked
+nearest-first — the head of the shortlist is always the `best:` cell, so it
+extends the pick rather than replacing it.
+
+```
+gv vad-grid recording.wav --thresholds 0.3,0.5,0.7 --min-silences 400,800 --target 3 --top 3
+```
+
+```
+silero VAD grid — voice-20260618-110355.wav (threshold × min_silence)
+    threshold  min_silence  segments  speech
+         0.30          400         5   16.1s
+         0.30          800         5   17.3s
+         0.50          400         5   15.7s
+         0.50          800         5   16.2s
+         0.70          400         6   14.2s
+         0.70          800         4   15.5s
+  best: threshold=0.70 min_silence=800 (4 segments, |Δ|=1 from target 3)
+  top 3 (closest to target 3):
+    1. threshold=0.70 min_silence=800  4 segments  |Δ|=1
+    2. threshold=0.30 min_silence=400  5 segments  |Δ|=2
+    3. threshold=0.30 min_silence=800  5 segments  |Δ|=2
+```
+
+The ranking sorts purely by `|num_segments - target|`, and the sort is stable,
+so cells at equal distance keep their row-major order — making the shortlist head
+identical to the single `best:` pick. `K` is clamped to the grid size, so a
+shortlist longer than the grid simply ranks every cell. `--json` adds a `"top"`
+list (each cell augmented with the same `"distance"` key, head equal to
+`"best"`); like `--target`, `--top` is a derived view, not a per-cell column, so
+`--csv` ignores it. `--top` rides along with `--target` — without a target there
+is no distance to rank by, so the shortlist is omitted. An integration test pins
+that the `K` listed distances are the `K` smallest over the whole tabulated grid,
+over the real corpus.
+
 ### Silero vs energy-VAD segment counts (the headless proof)
 
 Measured over the seed corpus with `min_silence_ms=800` (the pipecat

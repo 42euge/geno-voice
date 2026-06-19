@@ -197,6 +197,29 @@ def test_nonneg_int_rejects_non_integers(raw):
         gv.nonneg_int_type(raw)
 
 
+# ---- pos_int_type: the vad-grid --top shortlist length -----------------
+
+
+@pytest.mark.parametrize("raw", ["1", "3", "42"])
+def test_pos_int_accepts_positive(raw):
+    value = gv.pos_int_type(raw)
+    assert isinstance(value, int)
+    assert value >= 1
+
+
+@pytest.mark.parametrize("raw", ["0", "-1", "-5"])
+def test_pos_int_rejects_zero_and_negative(raw):
+    # Unlike nonneg_int_type, zero is rejected — a 0-cell shortlist is useless.
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.pos_int_type(raw)
+
+
+@pytest.mark.parametrize("raw", ["many", "", "1.5", "2x"])
+def test_pos_int_rejects_non_integers(raw):
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.pos_int_type(raw)
+
+
 # ---- max_speech_type: the force-split bound ----------------------------
 
 
@@ -1788,6 +1811,7 @@ def _grid_args(**over):
         speech_pad_ms=30.0,
         max_speech_s=float("inf"),
         target=None,
+        top=None,
         json=False,
         csv=False,
     )
@@ -1883,6 +1907,30 @@ def test_vad_grid_rejects_fractional_target():
         gv.build_parser().parse_args(["vad-grid", "rec.wav", "--target", "1.5"])
 
 
+def test_vad_grid_top_defaults_none():
+    args = gv.build_parser().parse_args(["vad-grid", "rec.wav"])
+    assert args.top is None
+
+
+def test_vad_grid_top_parses_int():
+    args = gv.build_parser().parse_args(
+        ["vad-grid", "rec.wav", "--target", "3", "--top", "5"]
+    )
+    assert args.top == 5
+    assert isinstance(args.top, int)
+
+
+def test_vad_grid_rejects_zero_top():
+    # A 0-cell shortlist is meaningless — pos_int_type rejects it.
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(["vad-grid", "rec.wav", "--top", "0"])
+
+
+def test_vad_grid_rejects_negative_top():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(["vad-grid", "rec.wav", "--top", "-2"])
+
+
 # ---- vad_segmentation_grid: pure core ----------------------------------
 
 
@@ -1971,6 +2019,50 @@ def test_pick_best_grid_cell_exact_zero_target():
     cells = _grid_cells([3, 0, 2, 1])
     best = gv.pick_best_grid_cell(cells, 0)
     assert best["num_segments"] == 0
+
+
+# ---- pick_top_grid_cells: the ranked shortlist -------------------------
+
+
+def test_pick_top_grid_cells_ranked_nearest_first():
+    # Counts 4,3,2,1 over the 2×2 grid; target 1 ranks 1,2,3 (distances 0,1,2).
+    cells = _grid_cells([4, 3, 2, 1])
+    top = gv.pick_top_grid_cells(cells, 1, 3)
+    assert [c["num_segments"] for c in top] == [1, 2, 3]
+
+
+def test_pick_top_grid_cells_head_is_the_best_pick():
+    # The shortlist head must equal pick_best_grid_cell's single pick.
+    cells = _grid_cells([4, 3, 2, 1])
+    top = gv.pick_top_grid_cells(cells, 2, 3)
+    assert top[0] == gv.pick_best_grid_cell(cells, 2)
+
+
+def test_pick_top_grid_cells_stable_on_ties():
+    # Counts 2,4,2,4; target 3 → all |Δ|=1. Stable sort keeps row-major order.
+    cells = _grid_cells([2, 4, 2, 4])
+    top = gv.pick_top_grid_cells(cells, 3, 4)
+    assert [(c["threshold"], c["min_silence_ms"]) for c in top] == [
+        (0.3, 400.0), (0.3, 800.0), (0.5, 400.0), (0.5, 800.0),
+    ]
+
+
+def test_pick_top_grid_cells_clamps_k_to_grid_size():
+    # k larger than the grid simply returns every cell ranked.
+    cells = _grid_cells([4, 1], row_values=[0.3], col_values=[400.0, 800.0])
+    top = gv.pick_top_grid_cells(cells, 1, 10)
+    assert len(top) == 2
+
+
+def test_pick_top_grid_cells_empty_is_empty_list():
+    assert gv.pick_top_grid_cells([], 3, 5) == []
+
+
+def test_pick_top_grid_cells_does_not_mutate_input():
+    cells = _grid_cells([4, 3, 2, 1])
+    before = [c["num_segments"] for c in cells]
+    gv.pick_top_grid_cells(cells, 1, 2)
+    assert [c["num_segments"] for c in cells] == before
 
 
 # ---- renderers ----------------------------------------------------------
@@ -2087,6 +2179,93 @@ def test_render_grid_json_best_is_none_for_empty_grid():
     )
     assert payload["target"] == 3
     assert payload["best"] is None
+
+
+# ---- the --top ranked shortlist in the renderers -----------------------
+
+
+def test_render_grid_omits_top_block_without_top():
+    # --target alone keeps just the best line; no "top N" block.
+    results = [_cell_result(n) for n in (4, 3, 2, 1)]
+    lines = gv.render_vad_grid(
+        [0.3, 0.5], [400.0, 800.0], results, name="rec.wav", target=1,
+    )
+    assert not any("top " in ln for ln in lines)
+
+
+def test_render_grid_top_requires_target():
+    # top without target → no distance to rank by, so no shortlist appears.
+    results = [_cell_result(n) for n in (4, 3, 2, 1)]
+    lines = gv.render_vad_grid(
+        [0.3, 0.5], [400.0, 800.0], results, name="rec.wav", top=3,
+    )
+    assert not any("top " in ln for ln in lines)
+    assert not any("best:" in ln for ln in lines)
+
+
+def test_render_grid_appends_top_block_with_target_and_top():
+    # 2×2 grid counts 4,3,2,1; target 1, top 3 → ranks 1,2,3 (distances 0,1,2).
+    results = [_cell_result(n) for n in (4, 3, 2, 1)]
+    lines = gv.render_vad_grid(
+        [0.3, 0.5], [400.0, 800.0], results, name="rec.wav", target=1, top=3,
+    )
+    text = "\n".join(lines)
+    assert "top 3 (closest to target 1):" in text
+    # Three ranked rows, nearest first.
+    assert "1. " in text and "2. " in text and "3. " in text
+    rank1 = next(ln for ln in lines if ln.lstrip().startswith("1."))
+    assert "1 segments" in rank1 and "|Δ|=0" in rank1
+
+
+def test_render_grid_top_block_clamps_to_grid_size():
+    # top 10 over a 2-cell grid lists only the 2 real cells.
+    results = [_cell_result(n) for n in (4, 1)]
+    lines = gv.render_vad_grid(
+        [0.3], [400.0, 800.0], results, name="rec.wav", target=1, top=10,
+    )
+    assert "top 2 (closest to target 1):" in "\n".join(lines)
+
+
+def test_render_grid_top_block_omitted_for_empty_grid():
+    # Empty grid → best: none, and no shortlist block.
+    lines = gv.render_vad_grid([], [], [], name="rec.wav", target=3, top=5)
+    assert lines[-1].lstrip().startswith("best: none")
+    assert not any("top " in ln for ln in lines)
+
+
+def test_render_grid_json_omits_top_without_top():
+    results = [_cell_result(n) for n in (4, 1)]
+    payload = json.loads(
+        gv.render_vad_grid_json(
+            [0.3], [400.0, 800.0], results, name="rec.wav", target=2,
+        )
+    )
+    assert "top" not in payload
+
+
+def test_render_grid_json_carries_top_list():
+    results = [_cell_result(n) for n in (4, 3, 2, 1)]
+    payload = json.loads(
+        gv.render_vad_grid_json(
+            [0.3, 0.5], [400.0, 800.0], results, name="rec.wav",
+            target=1, top=3,
+        )
+    )
+    assert [c["num_segments"] for c in payload["top"]] == [1, 2, 3]
+    assert [c["distance"] for c in payload["top"]] == [0, 1, 2]
+    # Head of the shortlist equals best.
+    assert payload["top"][0] == payload["best"]
+
+
+def test_render_grid_json_top_ignored_without_target():
+    results = [_cell_result(n) for n in (4, 1)]
+    payload = json.loads(
+        gv.render_vad_grid_json(
+            [0.3], [400.0, 800.0], results, name="rec.wav", top=3,
+        )
+    )
+    assert "top" not in payload
+    assert "best" not in payload
 
 
 def test_render_grid_csv_header_and_rows():
@@ -2349,3 +2528,95 @@ def test_cmd_vad_grid_no_target_omits_best_line():
         availability=lambda: True,
     )
     assert "best:" not in "\n".join(lines)
+
+
+def test_cmd_vad_grid_top_emits_shortlist_block():
+    # Fewer segments at a higher gate; target 1, top 2 lists the two closest.
+    def seg(wav, params=None):
+        n = 3 if params.threshold < 0.5 else 1
+        return _cell_result(n)
+
+    lines: List[str] = []
+    gv.cmd_vad_grid(
+        _grid_args(
+            thresholds=[0.3, 0.5], min_silences=[400.0, 800.0],
+            target=1, top=2,
+        ),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    text = "\n".join(lines)
+    assert "best:" in text
+    assert "top 2 (closest to target 1):" in text
+
+
+def test_cmd_vad_grid_top_in_json_branch():
+    def seg(wav, params=None):
+        n = 3 if params.threshold < 0.5 else 1
+        return _cell_result(n)
+
+    lines: List[str] = []
+    gv.cmd_vad_grid(
+        _grid_args(
+            thresholds=[0.3, 0.5], min_silences=[400.0, 800.0],
+            target=1, top=2, json=True,
+        ),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    payload = json.loads(lines[0])
+    assert len(payload["top"]) == 2
+    # Closest first; the head equals best.
+    assert payload["top"][0] == payload["best"]
+    assert payload["top"][0]["distance"] <= payload["top"][1]["distance"]
+
+
+def test_cmd_vad_grid_csv_ignores_top():
+    # CSV is a pure data grid — --top adds no shortlist rows.
+    def seg(wav, params=None):
+        return _cell_result(2)
+
+    lines: List[str] = []
+    gv.cmd_vad_grid(
+        _grid_args(
+            thresholds=[0.3, 0.5], min_silences=[400.0, 800.0],
+            target=1, top=2, csv=True,
+        ),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    rows = list(csv.reader(io.StringIO(lines[0])))
+    assert len(rows) == 5  # header + 4 cells, no shortlist rows
+    assert "top" not in lines[0]
+
+
+def test_cmd_vad_grid_top_without_target_omits_shortlist():
+    # --top rides along with --target; alone it adds nothing.
+    def seg(wav, params=None):
+        return _cell_result(2)
+
+    lines: List[str] = []
+    gv.cmd_vad_grid(
+        _grid_args(thresholds=[0.3, 0.5], min_silences=[400.0, 800.0], top=2),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    text = "\n".join(lines)
+    assert "top " not in text
+    assert "best:" not in text
+
+
+def test_cmd_vad_grid_top_unavailable_branch_no_crash():
+    # silero absent → install hint, no shortlist, no crash even with --top.
+    lines: List[str] = []
+    gv.cmd_vad_grid(
+        _grid_args(target=1, top=3),
+        log=lines.append,
+        segmenter=lambda wav, params=None: _cell_result(1),
+        availability=lambda: False,
+    )
+    assert any("silero VAD unavailable" in ln for ln in lines)

@@ -461,6 +461,7 @@ def _grid_args(wav: Path, **over):
         speech_pad_ms=30.0,
         max_speech_s=float("inf"),
         target=None,
+        top=None,
         json=False,
         csv=False,
     )
@@ -597,3 +598,55 @@ def test_gv_vad_grid_target_absent_keeps_iter240_payload():
     )
     assert "best" not in payload
     assert "target" not in payload
+
+
+# ---- iter-242: gv vad-grid --top (ranked shortlist) --------------------
+
+
+def test_gv_vad_grid_top_shortlist_is_closest_k_cells_ranked():
+    """iter-242: ``gv vad-grid --target N --top K`` over THE GATE recording
+    surfaces the K cells genuinely closest to the target, ranked nearest-first,
+    over the very same grid the run tabulated. The shortlist head equals
+    ``best``, distances are non-decreasing, and each listed distance is among
+    the K smallest of the whole grid."""
+    wav = RECORDINGS_DIR / CONTINUOUS_31S
+    if not wav.exists():
+        pytest.skip(f"{CONTINUOUS_31S} not present")
+
+    thresholds = [0.3, 0.5, 0.7, 0.9]
+    min_silences = [400.0, 800.0]
+    target, k = 3, 3
+    payload = json.loads(
+        _run_grid(
+            wav, thresholds=thresholds, min_silences=min_silences,
+            target=target, top=k, json=True,
+        )[0]
+    )
+    top = payload["top"]
+    assert len(top) == k
+    # Head of the shortlist is the single best pick.
+    assert top[0] == payload["best"]
+    # Distances are non-decreasing (ranked nearest-first).
+    dists = [c["distance"] for c in top]
+    assert dists == sorted(dists)
+    # Each is a real cell of the grid, and the K listed are the K smallest
+    # distances over the whole tabulated grid.
+    all_dists = sorted(abs(c["num_segments"] - target) for c in payload["grid"])
+    assert dists == all_dists[:k]
+
+
+def test_gv_vad_grid_top_absent_keeps_iter241_payload():
+    """Without ``--top`` the JSON payload keeps the iter-241 shape over THE GATE
+    recording — ``best`` / ``target`` present, but no ``top`` list leaks in."""
+    wav = RECORDINGS_DIR / CONTINUOUS_31S
+    if not wav.exists():
+        pytest.skip(f"{CONTINUOUS_31S} not present")
+    payload = json.loads(
+        _run_grid(
+            wav, thresholds=[0.3, 0.7], min_silences=[400.0, 800.0],
+            target=3, json=True,
+        )[0]
+    )
+    assert "best" in payload
+    assert "target" in payload
+    assert "top" not in payload
