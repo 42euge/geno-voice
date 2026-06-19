@@ -2687,6 +2687,85 @@ def test_render_grid_target_on_max_speech_col_axis_formats_seconds():
     assert "max_speech=5.00" not in best
 
 
+# ---- --target `top N:` HUMAN shortlist on the seconds max_speech_s axis ----
+#
+# iter-257 pinned the HUMAN best: line %g formatting on the seconds force-split
+# ceiling axis, but covered ONLY the single best: line — NOT the `top N:`
+# shortlist lines, which route through the SAME format_axes closure (and thus
+# the same _format_sweep_axis_value %g path). iter-258 (JSON) and iter-259 (CSV)
+# closed the machine surfaces. These close the last seconds-axis hole: the
+# human `top N:` rows must render each picked SECONDS value via %g — compact
+# (10, 5), the no-cap baseline as "inf" — with no gate-style 0.00 / inf.00 leak,
+# on both the 1-D sweep and the 2-D grid column axis.
+
+
+def test_render_sweep_target_top_list_formats_seconds():
+    # Caps inf, 10, 5; segment counts 1, 2, 4; target 2, top 3. The shortlist
+    # ranks nearest-first by num_segments (10s @ |Δ|=0, then inf @ 1 and 5s @ 2,
+    # ties broken row-major). Every top row must name its SECONDS cap via %g.
+    r_inf = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=20.0,
+        segments=[_Seg(0.0, 12.0)],
+    )
+    r_ten = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=20.0,
+        segments=[_Seg(0.0, 5.0), _Seg(5.0, 10.0)],
+    )
+    r_five = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=20.0,
+        segments=[_Seg(0.0, 2.5), _Seg(2.5, 5.0), _Seg(5.0, 7.5), _Seg(7.5, 10.0)],
+    )
+    lines = gv.render_vad_sweep(
+        [float("inf"), 10.0, 5.0], [r_inf, r_ten, r_five],
+        name="rec.wav", axis="max_speech_s", target=2, top=3,
+    )
+    # The shortlist header names the count it ranks toward.
+    assert any("top 3 (closest to target 2)" in ln for ln in lines)
+    top_rows = [ln for ln in lines if ln.lstrip().startswith(("1.", "2.", "3."))]
+    assert len(top_rows) == 3
+    joined = "\n".join(top_rows)
+    # Each swept cap appears compactly: 10, 5, and the no-cap baseline inf.
+    assert "max_speech=10" in joined
+    assert "max_speech=5" in joined
+    assert "max_speech=inf" in joined
+    # The nearest cell (10s, |Δ|=0) heads the shortlist.
+    assert top_rows[0].lstrip().startswith("1.")
+    assert "max_speech=10" in top_rows[0]
+    assert "|Δ|=0" in top_rows[0]
+    # No gate-style trailing zeros and no inf.00 leak anywhere in the shortlist.
+    assert "10.00" not in joined
+    assert "max_speech=10.0" not in joined
+    assert "5.00" not in joined
+    assert "inf.00" not in joined
+
+
+def test_render_grid_target_top_list_on_max_speech_col_axis_formats_seconds():
+    # The seconds force-split ceiling is also a grid COLUMN axis; the `top N:`
+    # rows must format the col value via %g too. 1×2 grid over caps inf, 5 with
+    # counts 1, 4; target 3, top 2 → the 5s cell (|Δ|=1) heads, inf (|Δ|=2) next.
+    r_inf = _cell_result(1)
+    r_tight = _cell_result(4)
+    lines = gv.render_vad_grid(
+        [0.3], [float("inf"), 5.0], [r_inf, r_tight],
+        name="rec.wav", col_axis="max_speech_s", target=3, top=2,
+    )
+    assert any("top 2 (closest to target 3)" in ln for ln in lines)
+    top_rows = [ln for ln in lines if ln.lstrip().startswith(("1.", "2."))]
+    assert len(top_rows) == 2
+    joined = "\n".join(top_rows)
+    # Both the seconds col value and the held threshold row render compactly.
+    assert "max_speech=5" in joined
+    assert "max_speech=inf" in joined
+    assert "threshold=0.30" in joined
+    # The 5s cell (4 segs, |Δ|=1) heads the shortlist.
+    assert top_rows[0].lstrip().startswith("1.")
+    assert "max_speech=5" in top_rows[0]
+    assert "|Δ|=1" in top_rows[0]
+    # No gate-style 5.00 / inf.00 leak on the seconds column.
+    assert "max_speech=5.00" not in joined
+    assert "inf.00" not in joined
+
+
 def test_render_sweep_json_carries_max_speech_axis():
     r = _Result(name="rec.wav", sample_rate=16000, duration_s=5.0, segments=[_Seg(0.0, 1.0)])
     payload = json.loads(

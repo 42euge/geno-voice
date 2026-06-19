@@ -795,7 +795,11 @@ gv vad-grid  recording.wav --thresholds 0.3,0.5 --max-speeches 5,10,inf --target
 
 Unit tests pin that the `best:` line names the seconds value with `%g` (no
 `0.00` leak) on both the 1-D sweep axis and the 2-D grid column axis, and that an
-`inf` winner renders as `inf`.
+`inf` winner renders as `inf`. The `--top` shortlist rows share the same
+`format_axes` closure as the `best:` line, so they inherit the same `%g`
+rendering; iter-260 pins that too — each `top N:` row names its seconds cap
+compactly (`max_speech=10`, the no-cap baseline as `max_speech=inf`, no `5.00` /
+`inf.00` leak), on both the 1-D sweep and the 2-D grid column axis.
 
 The same pick on the `--json` surface (iter-258) carries the bare seconds value,
 not the human-formatted string: the `best` cell (and each `top` cell) holds
