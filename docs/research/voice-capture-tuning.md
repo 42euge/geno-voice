@@ -833,6 +833,22 @@ Unit tests pin the `inf` baseline writing as `inf` (not `Infinity`, not blank) o
 both the 1-D sweep axis and the 2-D grid column axis, and that every cap cell
 round-trips through `float(...)`.
 
+The `--tie-break speech` secondary key (iter-243) is orthogonal to the axis: it
+breaks distance ties on recovered speech (most first) regardless of which knob is
+swept. iter-261 pins the two seams *together* on the seconds axis — when two caps
+tie on segment count, `--tie-break speech` names the cap that recovers the most
+speech (e.g. the no-cap `inf` baseline over a clipping finite cap), and that
+winner still renders compactly (`max_speech=inf`, never `inf.00`; the finite cap
+never `10.00`) on the `best:` line *and* the `--top` shortlist rows, across both
+the 1-D sweep and the 2-D grid column axis. The default `row-major` tie-break
+keeps the earlier finite cap, proving the seconds axis honours the
+earliest-tie rule like every other axis:
+
+```bash
+gv vad-sweep recording.wav --max-speeches 10,inf --target 3 --tie-break speech  # most-speech cap wins
+gv vad-grid  recording.wav --thresholds 0.3 --max-speeches 5,inf --target 3 --top 2 --tie-break speech
+```
+
 ### Silero vs energy-VAD segment counts (the headless proof)
 
 Measured over the seed corpus with `min_silence_ms=800` (the pipecat

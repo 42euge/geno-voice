@@ -23374,3 +23374,96 @@ changed (the wiring was already correct — this lap proves and guards it).
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
    should track a curated subset, decide the policy and re-run
    `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
+
+## iter-261 — `--tie-break speech` regression test on the seconds `max_speech_s` axis
+
+**Branch:** `iter-261-tiebreak-seconds` (merged ff to main)
+**Date:** 2026-06-19
+
+**No STEER.md this lap.** The two top-priority next items carried since
+iter-227 (wire `ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()`
+in the desktop app) both need a Mac + mic + browser and can't run headless on
+the loop host. "Ingest new recordings" stays corpus-gated (large untracked
+WAVs, no corpus symlinked into the worktree). The COMBINED
+additive+multiplicative `--target` weight item is again a larger design
+question — scope before building. So I took the iter-260 backlog item #4's
+concrete sub-option: pin the `--tie-break speech` ordering on the SECONDS
+`max_speech_s` axis (iter-257→260 all used the default `row-major`).
+
+**The gap.** iter-243 shipped the `--tie-break speech` secondary key (break
+distance ties on recovered speech, most first); iter-255/257 added the seconds
+`max_speech_s` force-split-ceiling axis. These two seams are orthogonal, but
+they had never been exercised TOGETHER on a render surface: every
+speech-tie-break render test (`test_render_sweep_speech_tie_break_*`,
+`test_render_grid_speech_tie_break_*`) sweeps the threshold/min_silence axis, so
+the `%g` seconds formatting and the `-speech_s` secondary key had no JOINT
+coverage. A regression that broke EITHER — a tie-break that ignored speech on
+the seconds axis, or a `%g`→`.2f` drift on the tie-break-CHOSEN cap (the
+`best:` line and `--top` rows route through the same `format_axes` closure /
+`_format_sweep_axis_value` `%g` path) — would have shipped green while the
+threshold-axis tie-break tests stayed passing. This lap closes that last
+seconds-axis × tie-break hole; no production code changed (the wiring was
+already correct — this lap proves and guards it).
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+4 tests, +~75 lines).**
+  1. `test_render_sweep_speech_tie_break_on_max_speech_seconds_axis` — caps
+     `10, inf`, both 4 segments (|Δ|=1 from target 3), the `inf` baseline
+     recovering MORE speech (5.0s vs 2.0s). `--tie-break speech` must name the
+     `inf` cap, rendered compactly as `max_speech=inf` (never `inf.00`); the
+     finite cap never leaks `10.00`.
+  2. `test_render_sweep_default_tie_break_keeps_earlier_max_speech_cap` — same
+     caps/tie, default `row-major` keeps the EARLIER finite `10` cap (rendered
+     `max_speech=10 `, no `10.00`), proving the seconds axis honours the
+     earliest-tie rule like the threshold axis.
+  3. `test_render_grid_speech_tie_break_on_max_speech_col_axis_seconds` — the
+     2-D grid twin on the COLUMN seconds axis: a 1×2 grid over caps `5, inf`,
+     both 4 segments, the `inf` baseline recovering more speech. Speech
+     tie-break names the `inf` cap (`max_speech=inf`), the held threshold row
+     stays `threshold=0.30`, no `inf.00` / `5.00` leak.
+  4. `test_render_grid_speech_tie_break_on_max_speech_col_axis_orders_top_list`
+     — same grid, `--top 2`: the higher-speech `inf` cap heads the shortlist
+     (`max_speech=inf` at row 1, `max_speech=5` at row 2), both rendered
+     compactly (no `.2f` gate-style leak).
+- **`docs/research/voice-capture-tuning.md`.** A paragraph under the iter-257→259
+  `--target` seconds subsection noting `--tie-break speech` is orthogonal to the
+  axis, that iter-261 pins the two seams together on the seconds axis (most-speech
+  cap wins, still renders `%g`-compact on `best:` and `--top` rows across sweep
+  and grid), and that the default `row-major` keeps the earlier cap. Two
+  copy-paste `--tie-break speech` invocations (1-D sweep, 2-D grid).
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3823 passed** (3819 prior + 4 net new), run on the feature branch before
+  ff-merge.
+- Focused: `pytest tests/unit/test_gv_vad.py -k "max_speech_seconds_axis or
+  max_speech_cap or max_speech_col_axis_seconds or max_speech_col_axis_orders"`
+  → **4 passed**.
+- Integration: not re-run this lap (no corpus symlinked into this worktree;
+  same as prior corpus-gated laps — the change is pure CLI render logic fully
+  covered by the unit matrix).
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] COMBINED additive+multiplicative `--target` weight** — iter-250/251
+   give additive (`:penalty`), iter-252 multiplicative (`*factor`); an operator
+   might want both on one element (`5:1*1.5`). Larger design question (operator
+   precedence of `:` vs `*`) — scope before building. Pure, headless if pursued.
+4. **[cli] seconds-axis surface coverage is now COMPLETE across all four render
+   surfaces AND both tie-breaks** — iter-257 (human `best:`), iter-258 (JSON),
+   iter-259 (CSV), iter-260 (human `top N:` shortlist), iter-261
+   (`--tie-break speech`) all pin `max_speech_s`. A natural next pure/headless
+   increment: extend the seconds-axis coverage to the BANDED `--target lo-hi`
+   form (iter-246) on `max_speech_s` (the iter-257→261 tests all used a scalar
+   target), or to the `{"prefer": [...]}` / `{"weighted": ...}` / `{"scaled": ...}`
+   target forms (iter-249/250/252) on the seconds axis — confirm none is already
+   covered before assuming a gap.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
+   should track a curated subset, decide the policy and re-run
+   `replay_silero.py --compare` + `gv vad` to refresh the comparison table.

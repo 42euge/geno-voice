@@ -5525,6 +5525,86 @@ def test_render_sweep_json_speech_tie_break_in_payload():
     assert payload["best"]["threshold"] == 0.7
 
 
+# ---- tie-break: speech tie-break on the SECONDS max_speech_s axis -------
+#
+# iter-243's speech tie-break and iter-255/257's max_speech_s seconds axis are
+# orthogonal seams that had never been exercised TOGETHER on a render surface:
+# every speech-tie-break render test (above, and the grid twin) sweeps the
+# threshold/min_silence axis, so the %g seconds formatting and the -speech_s
+# secondary key had no joint coverage. A regression that broke EITHER (a
+# tie-break that ignored speech on the seconds axis, or a %g→.2f drift on the
+# tie-break-chosen cap) would have shipped green. These pin both at once: the
+# tie-break picks the most-speech cap AND that cap renders compactly.
+
+
+def test_render_sweep_speech_tie_break_on_max_speech_seconds_axis():
+    # Two caps (10s, never-split inf), both 4 segments (|Δ|=1 from target 3);
+    # the inf baseline recovers MORE speech (5.0s vs 2.0s). The speech tie-break
+    # must name the inf cap, and it must render as the compact "max_speech=inf"
+    # — not a gate-style "inf.00", and the finite cap must not leak "10.00".
+    a, b = _sweep_tied_count_varied_speech()
+    lines = gv.render_vad_sweep(
+        [10.0, float("inf")], [a, b], name="rec.wav",
+        axis="max_speech_s", target=3, tie_break="speech",
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    assert "max_speech=inf" in best
+    text = "\n".join(lines)
+    assert "max_speech=inf.00" not in text
+    assert "max_speech=10.00" not in text
+
+
+def test_render_sweep_default_tie_break_keeps_earlier_max_speech_cap():
+    # Same caps and tie, default row-major tie-break keeps the EARLIER finite
+    # 10s cap (rendered compactly), proving the seconds axis honours the
+    # earliest-tie rule just like the threshold axis.
+    a, b = _sweep_tied_count_varied_speech()
+    lines = gv.render_vad_sweep(
+        [10.0, float("inf")], [a, b], name="rec.wav",
+        axis="max_speech_s", target=3,
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    assert "max_speech=10 " in best
+    assert "max_speech=10.00" not in "\n".join(lines)
+
+
+def test_render_grid_speech_tie_break_on_max_speech_col_axis_seconds():
+    # The 2-D grid twin on the COLUMN seconds axis: a 1×2 grid over caps
+    # (5s, inf), both 4 segments (|Δ|=1 from target 3), the inf baseline
+    # recovering more speech. Speech tie-break names the inf cap, rendered as
+    # the compact "max_speech=inf"; the held threshold row stays "threshold=0.30"
+    # and no gate-style "inf.00" / "5.00" leak appears.
+    results = [_result_n_speech(4, 2.0), _result_n_speech(4, 5.0)]
+    lines = gv.render_vad_grid(
+        [0.3], [5.0, float("inf")], results, name="rec.wav",
+        col_axis="max_speech_s", target=3, tie_break="speech",
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    assert "max_speech=inf" in best
+    assert "threshold=0.30" in best
+    text = "\n".join(lines)
+    assert "max_speech=inf.00" not in text
+    assert "max_speech=5.00" not in text
+
+
+def test_render_grid_speech_tie_break_on_max_speech_col_axis_orders_top_list():
+    # Same grid, --top 2: the speech tie-break puts the higher-speech inf cap
+    # FIRST in the shortlist, and both shortlist rows render the seconds caps
+    # compactly (max_speech=inf / max_speech=5), never a .2f gate-style leak.
+    results = [_result_n_speech(4, 2.0), _result_n_speech(4, 5.0)]
+    lines = gv.render_vad_grid(
+        [0.3], [5.0, float("inf")], results, name="rec.wav",
+        col_axis="max_speech_s", target=3, top=2, tie_break="speech",
+    )
+    shortlist = [ln for ln in lines if ln.lstrip().startswith(("1.", "2."))]
+    assert len(shortlist) == 2
+    assert "max_speech=inf" in shortlist[0]  # most-speech cap heads the list
+    assert "max_speech=5" in shortlist[1]
+    text = "\n".join(shortlist)
+    assert "max_speech=inf.00" not in text
+    assert "max_speech=5.00" not in text
+
+
 # ---- cmd_vad_sweep: end-to-end threading -------------------------------
 
 
