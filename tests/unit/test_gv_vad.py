@@ -5822,6 +5822,114 @@ def test_render_grid_csv_consumer_rederives_json_preference_target_pick():
     assert [c["distance"] for c in payload["top"][:2]] == [0, 0]
 
 
+def test_render_grid_csv_consumer_rederives_json_weighted_target_pick():
+    # iter-277: iter-273/274/275/276 pinned the cross-surface --target pick
+    # AGREEMENT (a CSV consumer re-parses the bare grid table back to cells and
+    # re-runs pick_best_grid_cell / pick_top_grid_cells to recover the
+    # JSON-embedded `best`/`top` identically) for a SCALAR target under both
+    # tie-breaks (iter-273/274), a closed (lo, hi) tolerance BAND (iter-275), and a
+    # {"prefer": [...]} PREFERENCE (iter-276). Those forms fall into two camps:
+    # scalar/band fold their whole cost into grid_cell_distance, and the preference
+    # carries its precedence at the SORT-KEY layer (grid_cell_distance treats it as
+    # a flat set; only grid_cell_sort_key ranks the tie). A {"weighted": [...]}
+    # target (iter-250) is the first cross-surface form whose preference is folded
+    # back INTO the distance MULTIPLICATIVELY/ADDITIVELY: each element scores its
+    # raw |Δ| PLUS its penalty, and the set takes the MIN over those penalised
+    # distances. So unlike iter-276's preference (which only breaks EXACT-distance
+    # ties), a weight can OVERRIDE a raw-distance gap — a less-preferred-but-closer
+    # cell can LOSE to a preferred-but-farther one. That is a DIFFERENT failure mode
+    # than iter-276: here the agreement lives in the distance, not a sort key, so a
+    # regression that dropped the penalties on the JSON path (collapsing the
+    # weighted set to a plain set of its elements) while the CSV consumer still
+    # passed the weights would diverge the two surfaces yet ship green, because
+    # iters 273/274/275/276 never exercise a form whose weight overrides a distance
+    # gap. Pin both surfaces to name the SAME weight-flipped best cell and the SAME
+    # weight-scored top shortlist, with a flat-SET control proving the penalties
+    # genuinely change the pick.
+    row_values = [0.3, 0.5]
+    col_values = [400.0, 800.0]
+    # 2×2 row-major counts 6/4/8/1, target = weighted preferred-3 / accepted-6
+    # ({"weighted": [(3, 0), (6, 2)]}). Penalised distance = MIN over elements of
+    # (|Δ to element| + penalty):
+    #   - (0.3,400) count 6 → min(|6-3|+0, |6-6|+2) = min(3, 2) = 2
+    #   - (0.3,800) count 4 → min(|4-3|+0, |4-6|+2) = min(1, 4) = 1
+    #   - (0.5,400) count 8 → min(|8-3|+0, |8-6|+2) = min(5, 4) = 4
+    #   - (0.5,800) count 1 → min(|1-3|+0, |1-6|+2) = min(2, 7) = 2
+    # Count 6 lands EXACTLY on the accepted element 6 (raw distance 0) but pays its
+    # +2 penalty → 2; count 4 is raw distance 1 from the preferred 3 (penalty 0) →
+    # 1, so the penalty flips the best to (0.3,800) count 4 — the weight OVERRIDES
+    # the raw-distance gap. A flat SET of the same two elements [3, 6] carries NO
+    # penalties: count 6 then scores raw distance 0 (an exact hit) and WINS, picking
+    # (0.3,400) count 6 — a DIFFERENT cell. The weights genuinely change the result,
+    # the whole point of this fixture.
+    results = [_cell_result(n) for n in (6, 4, 8, 1)]
+    target = {"weighted": [(3, 0), (6, 2)]}
+    csv_text = gv.render_vad_grid_csv(
+        row_values, col_values, results, name="rec.wav",
+        row_axis="threshold", col_axis="min_silence_ms",
+    )
+    payload = json.loads(
+        gv.render_vad_grid_json(
+            row_values, col_values, results, name="rec.wav",
+            row_axis="threshold", col_axis="min_silence_ms",
+            target=target, top=3,
+        )
+    )
+    # The JSON twin records the weighted target as {"weighted": [[element, penalty],
+    # ...]}, preserving the listed order (tuples serialise to JSON lists).
+    assert payload["target"] == {"weighted": [[3, 0], [6, 2]]}
+    # The CSV body still carries no pick columns — it is the bare grid.
+    assert "best" not in csv_text and "distance" not in csv_text
+    assert "weighted" not in csv_text
+    # A CSV consumer re-parses the flat table back to grid cells...
+    cells = [
+        {
+            "threshold": float(row["threshold"]),
+            "min_silence_ms": float(row["min_silence_ms"]),
+            "num_segments": int(row["num_segments"]),
+            "speech_s": float(row["speech_s"]),
+        }
+        for row in csv.DictReader(io.StringIO(csv_text))
+    ]
+    # ...and re-runs the SAME picker with the SAME weighted target. The CSV-derived
+    # best equals the JSON `best` (distance key stripped), and the re-derived
+    # penalised distance matches the one the JSON embedded (1 — the preferred-3
+    # element at raw distance 1, no penalty).
+    csv_best = gv.pick_best_grid_cell(cells, target)
+    json_best = dict(payload["best"])
+    assert json_best.pop("distance") == gv.grid_cell_distance(csv_best, target)
+    assert csv_best == json_best
+    assert (csv_best["threshold"], csv_best["min_silence_ms"]) == (0.3, 800.0)
+    assert csv_best["num_segments"] == 4
+    assert payload["best"]["distance"] == 1
+    # CONTROL: a flat SET of the SAME two elements [3, 6] carries NO penalties, so
+    # count 6 (an exact hit on element 6, raw distance 0) BEATS count 4 (raw
+    # distance 1 from element 3) and picks a DIFFERENT cell ((0.3,400) count 6).
+    # Proves the test cannot pass by the weights silently dropping to a plain set
+    # on either surface — the +2 penalty is load-bearing for the flip.
+    set_best = gv.pick_best_grid_cell(cells, [3, 6])
+    assert set_best != csv_best
+    assert (set_best["threshold"], set_best["min_silence_ms"]) == (0.3, 400.0)
+    assert set_best["num_segments"] == 6
+    # The top shortlist agrees cell-for-cell (distance stripped). The penalty-1
+    # count-4 cell leads, then the two penalty-2 cells (count-6 (0.3,400) ahead of
+    # count-1 (0.5,800), row-major among equal penalised distance).
+    csv_top = gv.pick_top_grid_cells(cells, target, 3)
+    json_top = [dict(c) for c in payload["top"]]
+    for c in json_top:
+        c.pop("distance")
+    assert csv_top == json_top
+    # Head of the shortlist is the single best pick, on both surfaces.
+    assert csv_top[0] == csv_best
+    # Weight-flipped winner first, then the penalty-2 cells row-major.
+    assert [(c["threshold"], c["min_silence_ms"]) for c in csv_top] == [
+        (0.3, 800.0), (0.3, 400.0), (0.5, 800.0),
+    ]
+    # The penalised distances the JSON embedded: the lone penalty-1 winner, then
+    # the two penalty-2 cells.
+    assert [c["distance"] for c in payload["top"]] == [1, 2, 2]
+
+
 # ---- cmd_vad_grid: end-to-end ------------------------------------------
 
 

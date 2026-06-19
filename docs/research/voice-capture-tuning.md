@@ -279,7 +279,20 @@ the same preference-broken pick. The fixture ties two cells at distance 0 and
 adds a flat-`set` control of the same two elements: the set falls back to the
 row-major tie (the earlier cell), while the preference flips the pick toward the
 more-preferred element — so the test catches a JSON path that flattened the
-`{"prefer": …}` dict to a plain set and dropped the preference rank key.
+`{"prefer": …}` dict to a plain set and dropped the preference rank key. iter-277
+carries the pick agreement to the first form whose preference is folded back
+*into* the distance rather than living at the sort-key layer: an iter-250
+`{"weighted": […]}` target, where each element scores its raw `|Δ|` *plus* its
+penalty and the set takes the min over those penalised distances. Unlike a
+preference (which only breaks exact-distance ties), a weight can *override* a
+raw-distance gap — a less-preferred-but-closer cell can lose to a
+preferred-but-farther one. The fixture lands one cell exactly on the
+penalty-bearing accepted element (raw distance 0, penalised 2) and another at raw
+distance 1 from the penalty-free preferred element (penalised 1), so the penalty
+flips the pick; a flat-`set` control of the same two elements carries no
+penalties, lets the exact hit win, and picks a *different* cell — so the test
+catches a JSON path that dropped the penalties and collapsed the weighted set to
+a plain set of its elements.
 
 **`--min-silences` — a second sweep axis (iter-238).** The default axis is the
 P(speech) gate (`--thresholds`); passing `--min-silences` instead sweeps the
