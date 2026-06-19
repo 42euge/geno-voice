@@ -235,7 +235,14 @@ different textual forms across the surfaces — the CSV writes the bare token
 reads back as `float('inf')`) — so a grid with `max_speech_s` rows `[inf, 5]`
 crossed with `speech_pad_ms` columns now proves both surfaces recover the
 sentinel as `float('inf')` in the *same* cells, with no `Infinity` spelling
-leaking into the CSV body.
+leaking into the CSV body. iter-272 mirrors that inf grid twin with the
+sentinel on the **column** axis (iter-271 placed it on the row axis): a
+`threshold` rows × `max_speech_s` columns grid with `[inf, 5]` columns rides
+the inf baseline in the second CSV column of *every* row, and both surfaces
+still recover it as `float('inf')` in the same row-major cells — closing the
+cross-surface gap left by the iter-267 col-axis inf test, which round-tripped
+the CSV only against the shared data layer, never directly against the JSON
+emitter.
 
 **`--min-silences` — a second sweep axis (iter-238).** The default axis is the
 P(speech) gate (`--thresholds`); passing `--min-silences` instead sweeps the

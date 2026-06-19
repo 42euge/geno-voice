@@ -5422,6 +5422,65 @@ def test_render_grid_csv_round_trips_to_json_twin_with_inf_on_nondefault_axes():
     assert parsed == grid
 
 
+def test_render_grid_csv_round_trips_to_json_twin_with_inf_on_col_axis():
+    # iter-272: iter-271's cross-surface inf grid twin
+    # (test_render_grid_csv_round_trips_to_json_twin_with_inf_on_nondefault_axes)
+    # placed the inf no-cap baseline on the ROW axis — so it rode the FIRST
+    # column of the CSV, where the swept row value sits, and the round-trip
+    # consumers key on that first column. But cmd_vad_grid's seconds force-split
+    # cap is naturally a COLUMN axis, and render_vad_grid_csv/json are both
+    # axis-agnostic, so the inf sentinel can land in the SECOND CSV column
+    # (the col_axis position) of every row. iter-267's multi-row col-axis inf
+    # test (test_render_grid_csv_max_speech_col_axis_multi_row_round_trips_with_inf)
+    # exercises a col-axis inf ONCE PER ROW, but round-trips the CSV against the
+    # SHARED data layer (vad_segmentation_grid cells), NOT directly against
+    # render_vad_grid_json — so the two MACHINE surfaces were never round-tripped
+    # against each other with the inf baseline on the column axis. A regression
+    # that stringified the col-axis inf as "Infinity"/"inf.00"/blank on one
+    # surface but kept "inf" on the other, or that emitted the inf token in a
+    # different column position across surfaces, would have shipped green while
+    # iter-271's row-axis inf twin and the iter-267 shared-data-layer inf test
+    # stayed passing. Pin the CSV body and the JSON `grid` payload to describe
+    # the SAME segmentation — col-axis inf baseline included — cell for cell, on
+    # a non-default axis pair (threshold rows × max_speech_s columns), proving
+    # the sentinel survives in the SECOND CSV column of every row.
+    row_values = [0.3, 0.5]
+    col_values = [float("inf"), 5.0]
+    # 2 rows × 2 cols = 4 cells, row-major: (0.3,inf),(0.3,5),(0.5,inf),(0.5,5)
+    # with counts 1/2/3/4 — the inf baseline rides the FIRST column of EVERY row.
+    results = [_cell_result(n) for n in (1, 2, 3, 4)]
+    csv_text = gv.render_vad_grid_csv(
+        row_values, col_values, results, name="rec.wav",
+        row_axis="threshold", col_axis="max_speech_s",
+    )
+    grid = json.loads(
+        gv.render_vad_grid_json(
+            row_values, col_values, results, name="rec.wav",
+            row_axis="threshold", col_axis="max_speech_s",
+        )
+    )["grid"]
+    # Neither surface may leak the JSON Infinity spelling into the CSV body.
+    assert "Infinity" not in csv_text
+    csv_rows = list(csv.DictReader(io.StringIO(csv_text)))
+    assert csv_rows[0].keys() >= {
+        "threshold", "max_speech_s", "num_segments", "speech_s"
+    }
+    parsed = [
+        {
+            "threshold": float(row["threshold"]),
+            "max_speech_s": float(row["max_speech_s"]),
+            "num_segments": int(row["num_segments"]),
+            "speech_s": float(row["speech_s"]),
+        }
+        for row in csv_rows
+    ]
+    # The col-axis inf baseline survives BOTH surfaces as float('inf'), riding
+    # the SAME cells (the first column of each row → row-major positions 0 and 2).
+    assert [math.isinf(p["max_speech_s"]) for p in parsed] == [True, False, True, False]
+    assert [math.isinf(c["max_speech_s"]) for c in grid] == [True, False, True, False]
+    assert parsed == grid
+
+
 # ---- cmd_vad_grid: end-to-end ------------------------------------------
 
 
