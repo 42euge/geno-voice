@@ -568,17 +568,19 @@ gate *and* hangover together?") meant running several 1-D sweeps and
 cross-reading them by hand. `gv vad-grid` tabulates the cartesian product of TWO
 knobs in one pass — the VAD analogue of `simulate-mirror --grid` (base_wpm ×
 strength). The **row** axis is always the P(speech) gate (`--thresholds`); the
-**column** axis is a millisecond knob — `--min-silences` (the hangover, the
-default), `--min-speeches` (the floor), or `--speech-pads` (the symmetric region
-padding, iter-254), mutually exclusive. The non-column ms knob is held at its
-scalar (`--min-silence-ms` / `--min-speech-ms` / `--speech-pad-ms`); every other
-knob is shared across all cells.
+**column** axis is `--min-silences` (the hangover, the default), `--min-speeches`
+(the floor), or `--speech-pads` (the symmetric region padding, iter-254) — all
+millisecond knobs — or `--max-speeches` (the force-split ceiling, in *seconds*,
+iter-255), mutually exclusive. The non-column knob is held at its scalar
+(`--min-silence-ms` / `--min-speech-ms` / `--speech-pad-ms` / `--max-speech-s`);
+every other knob is shared across all cells.
 
 ```
 gv vad-grid recording.wav                                       # gate × hangover (defaults)
 gv vad-grid recording.wav --thresholds 0.3,0.5,0.7 --min-silences 400,800
 gv vad-grid recording.wav --thresholds 0.5,0.7 --min-speeches 50,200,400  # gate × floor
 gv vad-grid recording.wav --thresholds 0.5,0.7 --speech-pads 0,20,40,80   # gate × padding
+gv vad-grid recording.wav --thresholds 0.5,0.7 --max-speeches 5,10,20,inf # gate × ceiling
 gv vad-grid recording.wav --json                                # machine-readable cells
 gv vad-grid recording.wav --csv                                 # flat CSV for plots/pivots
 ```
@@ -592,6 +594,20 @@ tightens. The list is parsed by the same `nonneg_float_list_type` validator as
 the other ms column axes and formats as bare integers (`40`, not `0.04`); the
 shared `--speech-pad-ms` scalar is held fixed under the other two column axes and
 ignored while `--speech-pads` is the column.
+
+The `--max-speeches` column (iter-255) crosses the gate against the *force-split
+ceiling* `max_speech_s` — Silero splits any region longer than this many seconds,
+so a tight cap chops a long monologue into more (shorter) segments while `inf`
+(the default) never splits. It is the only column axis measured in **seconds**,
+not milliseconds, so it gets its own `max_speech_list_type` validator (each token
+runs through the scalar `max_speech_type`, so the `inf`/`none`/`off` "never split"
+sentinels carry through per element — include `inf` to anchor the no-cap
+baseline) and its own `%g` formatter, which prints compact seconds (`5`, `12.5`)
+and renders the sentinel as `inf` (no gate-style `0.00` leak). The shared
+`--max-speech-s` scalar is held fixed under the three ms column axes and ignored
+while `--max-speeches` is the column. Crossing the ceiling against the gate shows
+where the force-split count climbs as the cap tightens, and whether a tighter gate
+already keeps regions short enough that the cap never fires.
 
 Cells are emitted in **row-major** order (each gate's full row of columns, then
 the next gate). The human table is one row per cell (not a matrix) so each

@@ -742,6 +742,33 @@ def max_speech_type(raw):
     return value
 
 
+def max_speech_list_type(raw):
+    """Argparse ``type`` for ``gv vad-grid --max-speeches``: a seconds list.
+
+    iter-255 adds the force-split ceiling ``max_speech_s`` as a fourth vad-grid
+    column axis (after the hangover, the speech floor, and the region padding —
+    all millisecond knobs). Unlike those, this is a SECONDS knob, so it gets its
+    own list validator rather than sharing :func:`nonneg_float_list_type`: it
+    parses a comma-separated list (e.g. ``"5,10,inf"``) into ``[5.0, 10.0,
+    inf]`` at the parser, each token validated by :func:`max_speech_type` so the
+    ``inf``/``none``/``off`` "never split" sentinels and the positive-only rule
+    (a ``0`` second cap would split forever) carry through per element.
+    Duplicates and unsorted input are preserved as given (the operator may want
+    a specific column order). Rejects an empty list. Pure and side-effect-free
+    for direct unit testing — the seconds twin of :func:`nonneg_float_list_type`.
+    """
+    if not isinstance(raw, str):
+        raise argparse.ArgumentTypeError(
+            f"a seconds list must be a string, got {raw!r}"
+        )
+    tokens = [t.strip() for t in raw.split(",") if t.strip()]
+    if not tokens:
+        raise argparse.ArgumentTypeError(
+            f"a seconds list must be non-empty and comma-separated, got {raw!r}"
+        )
+    return [max_speech_type(tok) for tok in tokens]
+
+
 def wpm_list_type(raw):
     """Argparse ``type`` for ``--wpms``: parse a comma-separated WPM arc.
 
@@ -1136,26 +1163,37 @@ def render_vad_diff_json(result_a, result_b, *, label_a, label_b):
 # gv vad-sweep axis metadata. iter-236 swept only the P(speech) gate; iter-238
 # adds the trailing-silence hangover as a second axis; iter-239 adds the
 # minimum-speech floor as a third; iter-253 adds the symmetric region padding
-# (speech_pad_ms) as a fourth. Each entry gives the human-table column label
-# (right-justified to 9, matching the original "threshold" width) and the
-# per-value display formatter — a gate prints with 2 decimals (0.30), a
-# millisecond knob (hangover, speech floor, or pad) as a bare integer (800). The
-# dict key is also the row key emitted by vad_segmentation_sweep and the CSV/JSON
-# column name, so a consumer reads which dimension was swept straight off the
-# data. All millisecond axes format identically, so they're grouped below.
+# (speech_pad_ms) as a fourth. iter-254 added speech_pad_ms as a vad-grid column
+# axis; iter-255 adds the force-split ceiling (max_speech_s) as a vad-grid column
+# axis — the first SECONDS axis (every prior axis is the gate or a millisecond
+# knob). Each entry gives the human-table column label (right-justified to 9,
+# matching the original "threshold" width) and the per-value display formatter —
+# a gate prints with 2 decimals (0.30), a millisecond knob (hangover, speech
+# floor, or pad) as a bare integer (800), and the seconds ceiling compactly
+# (5, 12.5, inf) via %g. The dict key is also the row key emitted by
+# vad_segmentation_sweep and the CSV/JSON column name, so a consumer reads which
+# dimension was swept straight off the data. Millisecond axes format identically,
+# so they're grouped below; the seconds axis is its own group.
 _SWEEP_MS_AXES = ("min_silence_ms", "min_speech_ms", "speech_pad_ms")
+_SWEEP_SECONDS_AXES = ("max_speech_s",)
 _SWEEP_AXIS_LABEL = {
     "threshold": "threshold",
     "min_silence_ms": "min_silence",
     "min_speech_ms": "min_speech",
     "speech_pad_ms": "speech_pad",
+    "max_speech_s": "max_speech",
 }
 
 
 def _format_sweep_axis_value(axis, value):
-    """Format one swept-axis value for the human table (gate vs. ms knob)."""
+    """Format one swept-axis value for the human table (gate / ms / seconds knob)."""
     if axis in _SWEEP_MS_AXES:
         return f"{value:.0f}"
+    if axis in _SWEEP_SECONDS_AXES:
+        # %g gives a compact seconds value (5, 12.5) and renders inf as "inf"
+        # (the never-force-split sentinel), so an operator can include the
+        # baseline cap in the sweep without a special-cased branch.
+        return f"{value:g}"
     return f"{value:.2f}"
 
 
@@ -2162,13 +2200,14 @@ def cmd_vad_grid(args, *, log=print, segmenter=None, availability=None):
     knobs so the elbow is readable in two dimensions at once.
 
     The ROW axis is always the P(speech) gate (``--thresholds``). The COLUMN
-    axis is a millisecond knob: ``--min-silences`` (the trailing-silence
-    hangover, the default), ``--min-speeches`` (the minimum-speech floor), or
-    ``--speech-pads`` (the symmetric region padding, iter-254) — mutually
-    exclusive, exactly one column axis per run. Whichever ms knob is NOT the
-    column axis is held fixed at its scalar (``--min-silence-ms`` /
-    ``--min-speech-ms`` / ``--speech-pad-ms``), and every other knob is shared
-    across all cells.
+    axis is ``--min-silences`` (the trailing-silence hangover, the default),
+    ``--min-speeches`` (the minimum-speech floor), ``--speech-pads`` (the
+    symmetric region padding, iter-254) — all millisecond knobs — or
+    ``--max-speeches`` (the force-split ceiling, in SECONDS, iter-255) —
+    mutually exclusive, exactly one column axis per run. Whichever knob is NOT
+    the column axis is held fixed at its scalar (``--min-silence-ms`` /
+    ``--min-speech-ms`` / ``--speech-pad-ms`` / ``--max-speech-s``), and every
+    other knob is shared across all cells.
 
     Same injected-dependency contract as :func:`cmd_vad_sweep`: ``segmenter`` /
     ``availability`` default to the real :mod:`vad.silero` functions, imported
@@ -2197,20 +2236,24 @@ def cmd_vad_grid(args, *, log=print, segmenter=None, availability=None):
     # speech (most first). A derived ordering, so CSV ignores it too.
     tie_break = getattr(args, "tie_break", "row-major")
 
-    # Rows are always the gate; the column axis is whichever ms list was passed
-    # (--min-speeches → floor; --speech-pads → region padding; else
-    # --min-silences → hangover, the default). The parser's mutex guarantees at
-    # most one ms list is set.
+    # Rows are always the gate; the column axis is whichever list was passed
+    # (--min-speeches → floor; --speech-pads → region padding; --max-speeches →
+    # force-split ceiling, seconds; else --min-silences → hangover, the
+    # default). The parser's mutex guarantees at most one column list is set.
     row_axis = "threshold"
     row_values = args.thresholds
     min_speeches = getattr(args, "min_speeches", None)
     speech_pads = getattr(args, "speech_pads", None)
+    max_speeches = getattr(args, "max_speeches", None)
     if min_speeches is not None:
         col_axis = "min_speech_ms"
         col_values = min_speeches
     elif speech_pads is not None:
         col_axis = "speech_pad_ms"
         col_values = speech_pads
+    elif max_speeches is not None:
+        col_axis = "max_speech_s"
+        col_values = max_speeches
     else:
         col_axis = "min_silence_ms"
         col_values = args.min_silences
@@ -2245,8 +2288,8 @@ def cmd_vad_grid(args, *, log=print, segmenter=None, availability=None):
 
     def _seg(row_value, col_value):
         # The two grid axes take (row_value, col_value); every other dimension
-        # is held at its scalar knob. Whichever ms knob is NOT the column axis is
-        # held fixed at its scalar.
+        # is held at its scalar knob. Whichever ms knob (or the seconds ceiling)
+        # is NOT the column axis is held fixed at its scalar.
         min_silence_ms = (
             col_value if col_axis == "min_silence_ms" else args.min_silence_ms
         )
@@ -2256,12 +2299,15 @@ def cmd_vad_grid(args, *, log=print, segmenter=None, availability=None):
         speech_pad_ms = (
             col_value if col_axis == "speech_pad_ms" else args.speech_pad_ms
         )
+        max_speech_s = (
+            col_value if col_axis == "max_speech_s" else args.max_speech_s
+        )
         params = SileroParams(
             threshold=row_value,
             min_speech_ms=min_speech_ms,
             min_silence_ms=min_silence_ms,
             speech_pad_ms=speech_pad_ms,
-            max_speech_s=args.max_speech_s,
+            max_speech_s=max_speech_s,
         )
         return segmenter(args.wav, params=params)
 
@@ -2805,16 +2851,18 @@ def build_parser():
     # gv vad-grid — segment one WAV across a 2-D knob grid and tabulate the
     # result. The 2-D analogue of iter-236's vad-sweep (and the direct
     # counterpart of simulate-mirror --grid): rows are always the P(speech)
-    # gate (--thresholds); the column axis is a millisecond knob, either the
-    # trailing-silence hangover (--min-silences, default), the minimum-speech
-    # floor (--min-speeches), or the region padding (--speech-pads, iter-254),
-    # mutually exclusive. The non-column ms knob is held at its scalar; every
-    # other knob is shared across all cells.
+    # gate (--thresholds); the column axis is the trailing-silence hangover
+    # (--min-silences, default, ms), the minimum-speech floor (--min-speeches,
+    # ms), the region padding (--speech-pads, iter-254, ms), or the force-split
+    # ceiling (--max-speeches, iter-255, SECONDS), mutually exclusive. The
+    # non-column knob is held at its scalar; every other knob is shared across
+    # all cells.
     vad_grid = sub.add_parser(
         "vad-grid",
         help="Offline Silero VAD — segment a WAV across a 2-D grid (gate "
-        "--thresholds × an ms column axis: --min-silences hangover, "
-        "--min-speeches floor, or --speech-pads region padding) and tabulate "
+        "--thresholds × a column axis: --min-silences hangover, "
+        "--min-speeches floor, --speech-pads region padding (ms), or "
+        "--max-speeches force-split ceiling (seconds)) and tabulate "
         "segment-count / speech-seconds per cell (read the elbow in two "
         "dimensions at once)",
     )
@@ -2830,10 +2878,10 @@ def build_parser():
         "(default: 0.3,0.5,0.7,0.9)",
     )
     # The column axis: --min-silences (default) OR --min-speeches OR
-    # --speech-pads, never more than one. The default list lives on
-    # --min-silences so a bare `vad-grid rec.wav` sweeps gate × hangover; a
-    # group default isn't "provided", so the mutex only fires when two are
-    # passed explicitly.
+    # --speech-pads OR --max-speeches, never more than one. The default list
+    # lives on --min-silences so a bare `vad-grid rec.wav` sweeps gate ×
+    # hangover; a group default isn't "provided", so the mutex only fires when
+    # two are passed explicitly.
     vad_grid_col = vad_grid.add_mutually_exclusive_group()
     vad_grid_col.add_argument(
         "--min-silences",
@@ -2842,7 +2890,7 @@ def build_parser():
         dest="min_silences",
         help="Comma-separated trailing-silence hangovers in ms — the grid "
         "COLUMN axis (default: 400,600,800,1000; mutually exclusive with "
-        "--min-speeches / --speech-pads)",
+        "--min-speeches / --speech-pads / --max-speeches)",
     )
     vad_grid_col.add_argument(
         "--min-speeches",
@@ -2851,8 +2899,8 @@ def build_parser():
         dest="min_speeches",
         help="Comma-separated minimum-speech floors in ms to use as the grid "
         "COLUMN axis instead of the hangover (e.g. 50,100,200,400); the "
-        "non-column ms knob is held at its scalar (mutually exclusive with "
-        "--min-silences / --speech-pads)",
+        "non-column knob is held at its scalar (mutually exclusive with "
+        "--min-silences / --speech-pads / --max-speeches)",
     )
     vad_grid_col.add_argument(
         "--speech-pads",
@@ -2861,8 +2909,19 @@ def build_parser():
         dest="speech_pads",
         help="Comma-separated symmetric region paddings in ms to use as the "
         "grid COLUMN axis instead of the hangover (e.g. 0,20,40,80); the "
-        "non-column ms knob is held at its scalar (mutually exclusive with "
-        "--min-silences / --min-speeches)",
+        "non-column knob is held at its scalar (mutually exclusive with "
+        "--min-silences / --min-speeches / --max-speeches)",
+    )
+    vad_grid_col.add_argument(
+        "--max-speeches",
+        type=max_speech_list_type,
+        default=None,
+        dest="max_speeches",
+        help="Comma-separated force-split ceilings in SECONDS to use as the "
+        "grid COLUMN axis instead of the hangover (e.g. 5,10,20,inf); 'inf'/"
+        "'none'/'off' never splits, so include it for the no-cap baseline; the "
+        "non-column knob is held at its scalar (mutually exclusive with "
+        "--min-silences / --min-speeches / --speech-pads)",
     )
     vad_grid.add_argument(
         "--min-speech-ms",
@@ -2870,8 +2929,9 @@ def build_parser():
         default=vad_min_speech_default,
         dest="min_speech_ms",
         help="Drop speech regions shorter than this, in ms — held fixed across "
-        "all cells when the column axis is --min-silences/--speech-pads; "
-        f"ignored when sweeping --min-speeches (default: {vad_min_speech_default})",
+        "all cells when the column axis is --min-silences/--speech-pads/"
+        "--max-speeches; ignored when sweeping --min-speeches (default: "
+        f"{vad_min_speech_default})",
     )
     vad_grid.add_argument(
         "--min-silence-ms",
@@ -2879,8 +2939,9 @@ def build_parser():
         default=vad_min_silence_default,
         dest="min_silence_ms",
         help="Trailing silence before a region ends, in ms — held fixed across "
-        "all cells when the column axis is --min-speeches/--speech-pads; ignored "
-        f"when sweeping --min-silences (default: {vad_min_silence_default})",
+        "all cells when the column axis is --min-speeches/--speech-pads/"
+        "--max-speeches; ignored when sweeping --min-silences (default: "
+        f"{vad_min_silence_default})",
     )
     vad_grid.add_argument(
         "--speech-pad-ms",
@@ -2888,16 +2949,19 @@ def build_parser():
         default=vad_speech_pad_default,
         dest="speech_pad_ms",
         help="Symmetric padding added to each region, in ms — held fixed across "
-        "all cells when the column axis is --min-silences/--min-speeches; "
-        f"ignored when sweeping --speech-pads (default: {vad_speech_pad_default})",
+        "all cells when the column axis is --min-silences/--min-speeches/"
+        "--max-speeches; ignored when sweeping --speech-pads (default: "
+        f"{vad_speech_pad_default})",
     )
     vad_grid.add_argument(
         "--max-speech-s",
         type=max_speech_type,
         default=vad_max_speech_default,
         dest="max_speech_s",
-        help="Force-split regions longer than this, in seconds — shared by "
-        "all cells; 'inf'/'none' never splits (default: inf)",
+        help="Force-split regions longer than this, in seconds — held fixed "
+        "across all cells when the column axis is --min-silences/--min-speeches/"
+        "--speech-pads; ignored when sweeping --max-speeches; 'inf'/'none' "
+        "never splits (default: inf)",
     )
     vad_grid.add_argument(
         "--target",

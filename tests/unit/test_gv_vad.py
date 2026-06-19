@@ -624,6 +624,69 @@ def test_max_speech_rejects_nan():
         gv.max_speech_type("nan")
 
 
+# ---- max_speech_list_type: the --max-speeches seconds list (iter-255) ----
+
+
+def test_max_speech_list_parses_seconds():
+    assert gv.max_speech_list_type("5,10,20") == [5.0, 10.0, 20.0]
+
+
+def test_max_speech_list_accepts_inf_sentinels_per_token():
+    # Each token runs through max_speech_type, so the never-split sentinels
+    # carry through per element — an operator can sweep the no-cap baseline in.
+    assert gv.max_speech_list_type("5,inf,none,off") == [
+        5.0, float("inf"), float("inf"), float("inf"),
+    ]
+
+
+def test_max_speech_list_strips_blanks_and_trailing_comma():
+    assert gv.max_speech_list_type(" 5 , 10 ,") == [5.0, 10.0]
+
+
+def test_max_speech_list_preserves_order_and_dupes():
+    assert gv.max_speech_list_type("10,5,10") == [10.0, 5.0, 10.0]
+
+
+def test_max_speech_list_rejects_zero_member():
+    # A 0-second cap would force-split forever — rejected per token like the
+    # scalar max_speech_type.
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.max_speech_list_type("5,0")
+
+
+def test_max_speech_list_rejects_negative_member():
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.max_speech_list_type("5,-1")
+
+
+@pytest.mark.parametrize("raw", ["", " ", ",", " , "])
+def test_max_speech_list_rejects_empty(raw):
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.max_speech_list_type(raw)
+
+
+def test_max_speech_list_rejects_non_string():
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.max_speech_list_type(5.0)
+
+
+# ---- _format_sweep_axis_value: the seconds axis (iter-255) ---------------
+
+
+def test_format_sweep_axis_value_seconds_is_compact():
+    # %g: bare integers stay bare (no ".00"), fractionals keep the decimal.
+    assert gv._format_sweep_axis_value("max_speech_s", 5.0) == "5"
+    assert gv._format_sweep_axis_value("max_speech_s", 12.5) == "12.5"
+
+
+def test_format_sweep_axis_value_seconds_renders_inf():
+    assert gv._format_sweep_axis_value("max_speech_s", float("inf")) == "inf"
+
+
+def test_max_speech_axis_label():
+    assert gv._SWEEP_AXIS_LABEL["max_speech_s"] == "max_speech"
+
+
 # ---- render_vad_segments: pure presentation ----------------------------
 
 
@@ -2425,6 +2488,7 @@ def _grid_args(**over):
         min_silences=[400.0, 800.0],
         min_speeches=None,
         speech_pads=None,
+        max_speeches=None,
         min_speech_ms=250.0,
         min_silence_ms=800.0,
         speech_pad_ms=30.0,
@@ -2530,6 +2594,149 @@ def test_vad_grid_speeches_and_speech_pads_mutually_exclusive():
         gv.build_parser().parse_args(
             ["vad-grid", "rec.wav", "--min-speeches", "50,100", "--speech-pads", "0,40"]
         )
+
+
+# iter-255 — gv vad-grid --max-speeches: a fourth column-axis option, the
+# force-split ceiling (SECONDS, not ms); the four column axes are mutually
+# exclusive.
+
+
+def test_vad_grid_max_speeches_column_axis():
+    args = gv.build_parser().parse_args(
+        ["vad-grid", "rec.wav", "--max-speeches", "5,10,inf"]
+    )
+    assert args.max_speeches == [5.0, 10.0, float("inf")]
+    # The hangover list keeps its default; the handler picks the ceiling column.
+    assert args.min_silences == [400.0, 600.0, 800.0, 1000.0]
+    assert args.min_speeches is None
+    assert args.speech_pads is None
+
+
+def test_vad_grid_max_speeches_default_is_none():
+    # Without --max-speeches the ceiling axis is off (None), so the default
+    # column axis stays the hangover.
+    args = gv.build_parser().parse_args(["vad-grid", "rec.wav"])
+    assert args.max_speeches is None
+
+
+def test_vad_grid_max_speeches_rejects_zero_member():
+    # A 0-second cap would split forever — rejected like the scalar knob.
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(["vad-grid", "rec.wav", "--max-speeches", "5,0"])
+
+
+def test_vad_grid_max_speeches_rejects_negative_member():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(["vad-grid", "rec.wav", "--max-speeches", "5,-1"])
+
+
+def test_vad_grid_silences_and_max_speeches_mutually_exclusive():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-grid", "rec.wav", "--min-silences", "400,800", "--max-speeches", "5,10"]
+        )
+
+
+def test_vad_grid_speeches_and_max_speeches_mutually_exclusive():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-grid", "rec.wav", "--min-speeches", "50,100", "--max-speeches", "5,10"]
+        )
+
+
+def test_vad_grid_pads_and_max_speeches_mutually_exclusive():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-grid", "rec.wav", "--speech-pads", "0,40", "--max-speeches", "5,10"]
+        )
+
+
+def test_cmd_vad_grid_max_speech_column_sweeps_ceiling():
+    # The segmenter sees the SWEPT max_speech_s with the gate; the three ms
+    # knobs are held at their scalars (incl. the --max-speech-s scalar, which is
+    # the swept axis now so it's never used as a held value).
+    captured = []
+
+    def seg(wav, params=None):
+        captured.append(params)
+        return _cell_result(1)
+
+    gv.cmd_vad_grid(
+        _grid_args(
+            thresholds=[0.3, 0.5], max_speeches=[5.0, 10.0],
+            min_silence_ms=777.0, min_speech_ms=333.0, speech_pad_ms=44.0,
+            max_speech_s=999.0,
+        ),
+        log=lambda *a: None,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert [(p.threshold, p.max_speech_s) for p in captured] == [
+        (0.3, 5.0), (0.3, 10.0), (0.5, 5.0), (0.5, 10.0),
+    ]
+    assert {p.min_silence_ms for p in captured} == {777.0}
+    assert {p.min_speech_ms for p in captured} == {333.0}
+    assert {p.speech_pad_ms for p in captured} == {44.0}
+    # The shared --max-speech-s scalar (999) is the swept axis now, so it is
+    # never used as a held value.
+    assert 999.0 not in {p.max_speech_s for p in captured}
+
+
+def test_cmd_vad_grid_max_speech_column_sweeps_inf():
+    # 'inf' is a legitimate swept value (the no-cap baseline) and must flow
+    # through to the segmenter unchanged.
+    captured = []
+
+    def seg(wav, params=None):
+        captured.append(params)
+        return _cell_result(1)
+
+    gv.cmd_vad_grid(
+        _grid_args(thresholds=[0.3], max_speeches=[5.0, float("inf")]),
+        log=lambda *a: None,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert [p.max_speech_s for p in captured] == [5.0, float("inf")]
+
+
+def test_cmd_vad_grid_max_speech_column_json_axis():
+    # The JSON payload names the swept column axis so a consumer knows the grid
+    # crossed gate × ceiling.
+    def seg(wav, params=None):
+        return _cell_result(1)
+
+    lines: List[str] = []
+    gv.cmd_vad_grid(
+        _grid_args(thresholds=[0.3, 0.5], max_speeches=[5.0, 10.0], json=True),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    payload = json.loads(lines[0])
+    assert payload["row_axis"] == "threshold"
+    assert payload["col_axis"] == "max_speech_s"
+    assert [c["max_speech_s"] for c in payload["grid"]] == [5.0, 10.0, 5.0, 10.0]
+
+
+def test_cmd_vad_grid_max_speech_column_human_label():
+    # The human table labels the ceiling column "max_speech" and formats
+    # compact seconds via %g (no gate-style 0.00 leak, inf shown as "inf").
+    def seg(wav, params=None):
+        return _cell_result(1)
+
+    lines: List[str] = []
+    gv.cmd_vad_grid(
+        _grid_args(thresholds=[0.3, 0.5], max_speeches=[5.0, float("inf")]),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    text = "\n".join(lines)
+    assert "max_speech" in text
+    # Compact-seconds formatting, not "5.00", and the no-cap baseline as "inf".
+    assert "5.00" not in text
+    assert "inf" in text
 
 
 def test_vad_grid_rejects_out_of_range_threshold():
