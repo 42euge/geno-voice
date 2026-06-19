@@ -1812,6 +1812,7 @@ def _grid_args(**over):
         max_speech_s=float("inf"),
         target=None,
         top=None,
+        tie_break="row-major",
         json=False,
         csv=False,
     )
@@ -1929,6 +1930,25 @@ def test_vad_grid_rejects_zero_top():
 def test_vad_grid_rejects_negative_top():
     with pytest.raises(SystemExit):
         gv.build_parser().parse_args(["vad-grid", "rec.wav", "--top", "-2"])
+
+
+def test_vad_grid_tie_break_defaults_row_major():
+    args = gv.build_parser().parse_args(["vad-grid", "rec.wav"])
+    assert args.tie_break == "row-major"
+
+
+def test_vad_grid_tie_break_parses_speech():
+    args = gv.build_parser().parse_args(
+        ["vad-grid", "rec.wav", "--target", "3", "--tie-break", "speech"]
+    )
+    assert args.tie_break == "speech"
+
+
+def test_vad_grid_rejects_unknown_tie_break():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-grid", "rec.wav", "--tie-break", "alphabetical"]
+        )
 
 
 # ---- vad_segmentation_grid: pure core ----------------------------------
@@ -2063,6 +2083,78 @@ def test_pick_top_grid_cells_does_not_mutate_input():
     before = [c["num_segments"] for c in cells]
     gv.pick_top_grid_cells(cells, 1, 2)
     assert [c["num_segments"] for c in cells] == before
+
+
+# ---- iter-243: grid_cell_sort_key + --tie-break ------------------------
+
+
+def _seg_speech_cells(pairs):
+    """Build minimal cell dicts from (num_segments, speech_s) pairs.
+
+    The pickers read only those two keys, so a hand-built dict suffices to test
+    tie ordering with EQUAL segment counts but DIFFERENT recovered speech —
+    which ``_grid_cells`` (speech coupled to count) cannot express.
+    """
+    return [
+        {
+            "threshold": 0.3 + 0.1 * i,
+            "min_silence_ms": 400.0,
+            "num_segments": n,
+            "speech_s": s,
+        }
+        for i, (n, s) in enumerate(pairs)
+    ]
+
+
+def test_grid_cell_sort_key_row_major_is_distance_only():
+    cell = {"num_segments": 7, "speech_s": 4.0}
+    assert gv.grid_cell_sort_key(cell, 5) == (2,)
+    assert gv.grid_cell_sort_key(cell, 5, "row-major") == (2,)
+
+
+def test_grid_cell_sort_key_speech_adds_negated_speech():
+    cell = {"num_segments": 7, "speech_s": 4.0}
+    assert gv.grid_cell_sort_key(cell, 5, "speech") == (2, -4.0)
+
+
+def test_pick_best_grid_cell_speech_tie_break_prefers_most_speech():
+    # Both cells are |Δ|=1 from target 3; speech tie-break picks the 5.0s cell
+    # even though the 2.0s cell is earlier in row-major order.
+    cells = _seg_speech_cells([(4, 2.0), (4, 5.0)])
+    best = gv.pick_best_grid_cell(cells, 3, "speech")
+    assert best["speech_s"] == 5.0
+
+
+def test_pick_best_grid_cell_row_major_keeps_earlier_on_tie():
+    # Same tie, but the default tie-break keeps the earlier (2.0s) cell.
+    cells = _seg_speech_cells([(4, 2.0), (4, 5.0)])
+    best = gv.pick_best_grid_cell(cells, 3)
+    assert best["speech_s"] == 2.0
+
+
+def test_pick_best_grid_cell_speech_does_not_override_distance():
+    # A closer cell wins regardless of speech: distance is the primary key.
+    cells = _seg_speech_cells([(4, 9.0), (3, 0.1)])
+    best = gv.pick_best_grid_cell(cells, 3, "speech")
+    assert best["num_segments"] == 3
+
+
+def test_pick_top_grid_cells_speech_tie_break_orders_runners_up():
+    # Three cells all |Δ|=1 from target 3; speech tie-break ranks them by
+    # recovered speech, most first.
+    cells = _seg_speech_cells([(4, 1.0), (2, 3.0), (4, 2.0)])
+    top = gv.pick_top_grid_cells(cells, 3, 3, "speech")
+    assert [c["speech_s"] for c in top] == [3.0, 2.0, 1.0]
+
+
+def test_pick_top_grid_cells_speech_head_is_best_pick():
+    cells = _seg_speech_cells([(4, 1.0), (4, 5.0)])
+    top = gv.pick_top_grid_cells(cells, 3, 2, "speech")
+    assert top[0] == gv.pick_best_grid_cell(cells, 3, "speech")
+
+
+def test_pick_best_grid_cell_empty_is_none_with_tie_break():
+    assert gv.pick_best_grid_cell([], 3, "speech") is None
 
 
 # ---- renderers ----------------------------------------------------------
@@ -2266,6 +2358,88 @@ def test_render_grid_json_top_ignored_without_target():
     )
     assert "top" not in payload
     assert "best" not in payload
+
+
+def _result_n_speech(n, speech_s):
+    """A _Result with ``n`` segments whose durations sum to ``speech_s``.
+
+    Lets a renderer test build cells with EQUAL segment counts but DIFFERENT
+    recovered speech — needed to exercise the speech tie-break end-to-end.
+    """
+    if n == 0:
+        return _Result(name="rec.wav", sample_rate=16000, duration_s=10.0)
+    per = speech_s / n
+    segs = [_Seg(2.0 * i, 2.0 * i + per) for i in range(n)]
+    return _Result(name="rec.wav", sample_rate=16000, duration_s=100.0, segments=segs)
+
+
+def test_render_grid_speech_tie_break_picks_most_speech():
+    # 1×2 grid, both cells 4 segments (|Δ|=1 from target 3) but col0 recovers
+    # 2.0s, col1 5.0s. Speech tie-break names the 5.0s cell (min_silence=800),
+    # not the earlier col0.
+    results = [_result_n_speech(4, 2.0), _result_n_speech(4, 5.0)]
+    lines = gv.render_vad_grid(
+        [0.3], [400.0, 800.0], results, name="rec.wav",
+        target=3, tie_break="speech",
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    assert "min_silence=800" in best
+
+
+def test_render_grid_row_major_default_keeps_earlier_tie():
+    # Same grid, default tie-break keeps the earlier (min_silence=400) cell.
+    results = [_result_n_speech(4, 2.0), _result_n_speech(4, 5.0)]
+    lines = gv.render_vad_grid(
+        [0.3], [400.0, 800.0], results, name="rec.wav", target=3,
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    assert "min_silence=400" in best
+
+
+def test_render_grid_json_carries_tie_break_key():
+    results = [_cell_result(n) for n in (4, 1)]
+    payload = json.loads(
+        gv.render_vad_grid_json(
+            [0.3], [400.0, 800.0], results, name="rec.wav",
+            target=2, tie_break="speech",
+        )
+    )
+    assert payload["tie_break"] == "speech"
+
+
+def test_render_grid_json_tie_break_defaults_row_major():
+    results = [_cell_result(n) for n in (4, 1)]
+    payload = json.loads(
+        gv.render_vad_grid_json(
+            [0.3], [400.0, 800.0], results, name="rec.wav", target=2,
+        )
+    )
+    assert payload["tie_break"] == "row-major"
+
+
+def test_render_grid_json_tie_break_absent_without_target():
+    # No target → no pick keys at all, tie_break included.
+    results = [_cell_result(n) for n in (4, 1)]
+    payload = json.loads(
+        gv.render_vad_grid_json(
+            [0.3], [400.0, 800.0], results, name="rec.wav",
+        )
+    )
+    assert "tie_break" not in payload
+
+
+def test_render_grid_json_speech_tie_break_orders_top_list():
+    # Two 4-segment cells (|Δ|=1) with different speech; speech tie-break puts
+    # the higher-speech cell first in the top list.
+    results = [_result_n_speech(4, 2.0), _result_n_speech(4, 5.0)]
+    payload = json.loads(
+        gv.render_vad_grid_json(
+            [0.3], [400.0, 800.0], results, name="rec.wav",
+            target=3, top=2, tie_break="speech",
+        )
+    )
+    assert payload["top"][0]["speech_s"] == 5.0
+    assert payload["top"][0] == payload["best"]
 
 
 def test_render_grid_csv_header_and_rows():
@@ -2620,3 +2794,82 @@ def test_cmd_vad_grid_top_unavailable_branch_no_crash():
         availability=lambda: False,
     )
     assert any("silero VAD unavailable" in ln for ln in lines)
+
+
+def _tied_count_varied_speech_seg(wav, params=None):
+    """Every cell has 4 segments, but a longer hangover recovers more speech.
+
+    Lets a cmd-level test exercise the speech tie-break: all cells are equally
+    distant from a target of 3, so only the tie-break decides the pick.
+    """
+    speech_s = 5.0 if params.min_silence_ms >= 800.0 else 2.0
+    per = speech_s / 4
+    segs = [_Seg(2.0 * i, 2.0 * i + per) for i in range(4)]
+    return _Result(name="rec.wav", sample_rate=16000, duration_s=100.0, segments=segs)
+
+
+def test_cmd_vad_grid_speech_tie_break_picks_most_speech():
+    # All cells |Δ|=1 from target 3; speech tie-break names the high-speech
+    # (min_silence=800) cell, not the earlier row-major one.
+    lines: List[str] = []
+    gv.cmd_vad_grid(
+        _grid_args(
+            thresholds=[0.3, 0.5], min_silences=[400.0, 800.0],
+            target=3, tie_break="speech",
+        ),
+        log=lines.append,
+        segmenter=_tied_count_varied_speech_seg,
+        availability=lambda: True,
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    assert "min_silence=800" in best
+
+
+def test_cmd_vad_grid_default_tie_break_keeps_earlier_cell():
+    # Same grid, default row-major tie-break keeps the earlier (400) cell.
+    lines: List[str] = []
+    gv.cmd_vad_grid(
+        _grid_args(
+            thresholds=[0.3, 0.5], min_silences=[400.0, 800.0], target=3,
+        ),
+        log=lines.append,
+        segmenter=_tied_count_varied_speech_seg,
+        availability=lambda: True,
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    assert "min_silence=400" in best
+
+
+def test_cmd_vad_grid_tie_break_in_json_payload():
+    lines: List[str] = []
+    gv.cmd_vad_grid(
+        _grid_args(
+            thresholds=[0.3, 0.5], min_silences=[400.0, 800.0],
+            target=3, tie_break="speech", json=True,
+        ),
+        log=lines.append,
+        segmenter=_tied_count_varied_speech_seg,
+        availability=lambda: True,
+    )
+    payload = json.loads(lines[0])
+    assert payload["tie_break"] == "speech"
+    # The pick is the high-speech cell.
+    assert payload["best"]["min_silence_ms"] == 800.0
+
+
+def test_cmd_vad_grid_csv_ignores_tie_break():
+    # CSV is a pure data grid — --tie-break adds no column / changes no rows.
+    lines: List[str] = []
+    gv.cmd_vad_grid(
+        _grid_args(
+            thresholds=[0.3, 0.5], min_silences=[400.0, 800.0],
+            target=3, tie_break="speech", csv=True,
+        ),
+        log=lines.append,
+        segmenter=_tied_count_varied_speech_seg,
+        availability=lambda: True,
+    )
+    rows = list(csv.reader(io.StringIO(lines[0])))
+    assert rows[0] == ["threshold", "min_silence_ms", "num_segments", "speech_s"]
+    assert len(rows) == 5  # header + 4 cells
+    assert "tie_break" not in lines[0]

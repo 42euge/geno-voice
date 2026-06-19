@@ -404,6 +404,37 @@ is no distance to rank by, so the shortlist is omitted. An integration test pins
 that the `K` listed distances are the `K` smallest over the whole tabulated grid,
 over the real corpus.
 
+#### `--tie-break` — a secondary ranking key (iter-243)
+
+The `--target` pick and the `--top` shortlist rank purely on segment-count
+distance; cells at equal distance fall back to **row-major order** — so the
+runner-up shown first is merely the earlier cell in the grid, not necessarily the
+more defensible one. When the winning cell sits at a knob extreme you distrust
+(the highest gate, the longest hangover), you can't tell whether an equally-close
+cell recovered more of the talker.
+
+`--tie-break` selects how those distance ties break:
+
+- **`row-major`** (the default) — keep the earlier grid cell, the iter-241/242
+  behaviour, output unchanged byte-for-byte.
+- **`speech`** — among cells equally close to the target, prefer the one that
+  recovered the **most speech seconds** (it clips the talker least, so it is the
+  more defensible pick than merely the earlier one).
+
+```bash
+gv vad-grid recording.wav --thresholds 0.3,0.5,0.7 --min-silences 400,800 --target 3 --tie-break speech
+```
+
+Distance is always the PRIMARY key — `--tie-break speech` never lets a
+farther-from-target cell win; it only re-orders cells already tied on distance.
+`--json` reports the choice in a `"tie_break"` field (`"row-major"` or
+`"speech"`) so a consumer knows which tie-break produced the `best`/`top`
+ordering; like `--target`/`--top` it is a derived ordering, not a per-cell column,
+so `--csv` ignores it, and it rides along with `--target` (no target → no pick to
+order, field omitted). An integration test pins that, over the real corpus, the
+`speech` pick recovers the maximum speech among all cells tied at the winning
+distance.
+
 ### Silero vs energy-VAD segment counts (the headless proof)
 
 Measured over the seed corpus with `min_silence_ms=800` (the pipecat

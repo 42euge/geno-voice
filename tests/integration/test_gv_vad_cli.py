@@ -462,6 +462,7 @@ def _grid_args(wav: Path, **over):
         max_speech_s=float("inf"),
         target=None,
         top=None,
+        tie_break="row-major",
         json=False,
         csv=False,
     )
@@ -650,3 +651,55 @@ def test_gv_vad_grid_top_absent_keeps_iter241_payload():
     assert "best" in payload
     assert "target" in payload
     assert "top" not in payload
+
+
+# ---- iter-243: gv vad-grid --tie-break (secondary ranking key) ---------
+
+
+def test_gv_vad_grid_speech_tie_break_picks_most_speech_among_ties():
+    """iter-243: over THE GATE recording, ``--tie-break speech`` must pick a
+    best cell whose recovered speech is the MAX among all cells equally close to
+    the target — and that cell is a real member of the tabulated grid. Compared
+    against the same grid computed once, so the assertion holds whatever the
+    real model's segment counts come out to."""
+    wav = RECORDINGS_DIR / CONTINUOUS_31S
+    if not wav.exists():
+        pytest.skip(f"{CONTINUOUS_31S} not present")
+
+    thresholds = [0.3, 0.5, 0.7, 0.9]
+    min_silences = [400.0, 800.0]
+    target = 3
+    payload = json.loads(
+        _run_grid(
+            wav, thresholds=thresholds, min_silences=min_silences,
+            target=target, tie_break="speech", json=True,
+        )[0]
+    )
+    assert payload["tie_break"] == "speech"
+    best = payload["best"]
+    grid = payload["grid"]
+    best_dist = abs(best["num_segments"] - target)
+    # Among every cell at the winning distance, best recovered the most speech.
+    tied = [c for c in grid if abs(c["num_segments"] - target) == best_dist]
+    assert best["speech_s"] == max(c["speech_s"] for c in tied)
+    # And it is genuinely one of the tabulated cells (no fabricated pick).
+    assert any(
+        c["threshold"] == best["threshold"]
+        and c["min_silence_ms"] == best["min_silence_ms"]
+        for c in grid
+    )
+
+
+def test_gv_vad_grid_tie_break_defaults_row_major_in_payload():
+    """Without ``--tie-break`` the JSON payload reports the row-major default and
+    the iter-241/242 keys are otherwise unchanged over THE GATE recording."""
+    wav = RECORDINGS_DIR / CONTINUOUS_31S
+    if not wav.exists():
+        pytest.skip(f"{CONTINUOUS_31S} not present")
+    payload = json.loads(
+        _run_grid(
+            wav, thresholds=[0.3, 0.7], min_silences=[400.0, 800.0],
+            target=3, json=True,
+        )[0]
+    )
+    assert payload["tie_break"] == "row-major"

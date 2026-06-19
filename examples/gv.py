@@ -884,33 +884,53 @@ def grid_cell_distance(cell, target):
     return abs(cell["num_segments"] - target)
 
 
-def pick_best_grid_cell(cells, target):
+def grid_cell_sort_key(cell, target, tie_break="row-major"):
+    """Ranking sort key for one grid cell against ``target`` — lower sorts first.
+
+    iter-243's tie-break seam for the data-driven pickers. The PRIMARY key is
+    always :func:`grid_cell_distance` (``|num_segments - target|``); ``tie_break``
+    decides how cells at EQUAL distance order:
+
+    - ``"row-major"`` (the default) adds no secondary key, so a stable sort
+      leaves equal-distance cells in their original row-major order — the
+      iter-241/242 earliest-tie rule, unchanged byte-for-byte.
+    - ``"speech"`` breaks the tie on recovered speech seconds, MOST speech
+      first (a tied cell that clips less of the talker is the more defensible
+      pick than merely the earlier one in the grid), via a ``-speech_s``
+      secondary key.
+
+    Pure — reads only ``cell["num_segments"]`` and, for ``"speech"`` ties,
+    ``cell["speech_s"]``. Never touches torch.
+    """
+    distance = grid_cell_distance(cell, target)
+    if tie_break == "speech":
+        return (distance, -cell["speech_s"])
+    return (distance,)
+
+
+def pick_best_grid_cell(cells, target, tie_break="row-major"):
     """Pick the grid cell whose ``num_segments`` is closest to ``target``.
 
     iter-240 shipped ``gv vad-grid`` tabulating the gate × ms-knob cartesian
     product; this is iter-241's data-driven picker over that table — the VAD
     counterpart of :func:`pick_best_mirror_config` (``simulate-mirror --grid``).
-    Scores every cell with :func:`grid_cell_distance` and returns the one with
-    the smallest distance to the target segment count — the ``(threshold, ms)``
-    pair that segments the recording into closest to the number of regions the
-    operator expects.
+    Scores every cell with :func:`grid_cell_sort_key` and returns the one with
+    the smallest key — the ``(threshold, ms)`` pair that segments the recording
+    into closest to the number of regions the operator expects.
 
     Earliest-tie rule (matching :func:`pick_best_mirror_config` and the VAD
-    sweep): on an exact distance tie the earlier cell in row-major order wins,
-    so a stable grid ordering yields a stable pick. ``None`` when ``cells`` is
-    empty. Pure — reads nothing, mutates nothing.
+    sweep): with the default ``tie_break="row-major"``, on an exact distance tie
+    the earlier cell in row-major order wins, so a stable grid ordering yields a
+    stable pick. iter-243's ``tie_break="speech"`` instead breaks distance ties
+    on recovered speech (most first). ``None`` when ``cells`` is empty. Pure —
+    reads nothing, mutates nothing.
     """
-    best = None
-    best_distance = None
-    for cell in cells:
-        d = grid_cell_distance(cell, target)
-        if best_distance is None or d < best_distance:
-            best = cell
-            best_distance = d
-    return best
+    if not cells:
+        return None
+    return min(cells, key=lambda c: grid_cell_sort_key(c, target, tie_break))
 
 
-def pick_top_grid_cells(cells, target, k):
+def pick_top_grid_cells(cells, target, k, tie_break="row-major"):
     """Rank the ``k`` grid cells closest to ``target`` (a shortlist, not one pick).
 
     iter-242's generalisation of :func:`pick_best_grid_cell`: where the single
@@ -919,15 +939,17 @@ def pick_top_grid_cells(cells, target, k):
     very best cell sits at a knob extreme they distrust, or when two cells tie
     on segment count and they want to break the tie on another axis by eye.
 
-    Stable ordering: sorts by :func:`grid_cell_distance` only, and Python's sort
-    is stable, so cells at equal distance keep their row-major order. This makes
-    the shortlist's head identical to :func:`pick_best_grid_cell`'s pick (both
-    honour the earliest-tie rule). ``k`` is clamped to the grid size, so a
-    shortlist longer than the grid simply returns every cell ranked. Returns
-    ``[]`` for an empty grid. Pure — reads nothing, mutates nothing (sorts a
-    shallow copy).
+    Stable ordering: sorts by :func:`grid_cell_sort_key`, and Python's sort is
+    stable. With the default ``tie_break="row-major"`` the key carries no
+    secondary, so cells at equal distance keep their row-major order; iter-243's
+    ``tie_break="speech"`` breaks those ties on recovered speech (most first).
+    Either way the shortlist's head is identical to :func:`pick_best_grid_cell`'s
+    pick under the same ``tie_break`` (both honour the same ordering). ``k`` is
+    clamped to the grid size, so a shortlist longer than the grid simply returns
+    every cell ranked. Returns ``[]`` for an empty grid. Pure — reads nothing,
+    mutates nothing (sorts a shallow copy).
     """
-    ranked = sorted(cells, key=lambda c: grid_cell_distance(c, target))
+    ranked = sorted(cells, key=lambda c: grid_cell_sort_key(c, target, tie_break))
     return ranked[:k]
 
 
@@ -941,6 +963,7 @@ def render_vad_grid(
     col_axis="min_silence_ms",
     target=None,
     top=None,
+    tie_break="row-major",
 ):
     """Render a 2-D grid sweep as a plain-text table.
 
@@ -964,8 +987,13 @@ def render_vad_grid(
     follows the ``best:`` line listing the ``top`` cells closest to ``target``,
     ranked nearest-first (:func:`pick_top_grid_cells`), so the operator sees the
     runners-up — the head of the shortlist is always the ``best:`` cell. ``top``
-    is ignored without a ``target`` (there is no distance to rank by). Pure:
-    returns a list of strings.
+    is ignored without a ``target`` (there is no distance to rank by).
+
+    iter-243's ``tie_break`` selects how equal-distance cells order within the
+    pick and the shortlist: ``"row-major"`` (the default) keeps the original
+    grid order (the iter-241/242 behaviour, unchanged); ``"speech"`` breaks
+    distance ties on recovered speech (most first). Pure: returns a list of
+    strings.
     """
     if any(r is None for r in results):
         return [
@@ -988,7 +1016,7 @@ def render_vad_grid(
             f"{cell['num_segments']:>8}  {cell['speech_s']:>5.1f}s"
         )
     if target is not None:
-        best = pick_best_grid_cell(cells, target)
+        best = pick_best_grid_cell(cells, target, tie_break)
         if best is None:
             lines.append(
                 f"  best: none (empty grid; target {target} segments)"
@@ -1003,7 +1031,7 @@ def render_vad_grid(
                 f"|Δ|={grid_cell_distance(best, target)} from target {target})"
             )
             if top is not None:
-                ranked = pick_top_grid_cells(cells, target, top)
+                ranked = pick_top_grid_cells(cells, target, top, tie_break)
                 lines.append(
                     f"  top {len(ranked)} (closest to target {target}):"
                 )
@@ -1029,6 +1057,7 @@ def render_vad_grid_json(
     col_axis="min_silence_ms",
     target=None,
     top=None,
+    tie_break="row-major",
 ):
     """Render a 2-D grid sweep as a JSON string.
 
@@ -1048,8 +1077,13 @@ def render_vad_grid_json(
     When ``top`` (a positive shortlist length) is ALSO given, the payload gains
     a ``"top"`` list of the closest ``top`` cells (:func:`pick_top_grid_cells`),
     ranked nearest-first, each augmented with the same ``"distance"`` key — its
-    head equals ``"best"``. ``top`` is ignored without a ``target``. Pure:
-    returns a single JSON string.
+    head equals ``"best"``. ``top`` is ignored without a ``target``.
+
+    iter-243: when ``target`` is given the payload also carries a
+    ``"tie_break"`` string naming how equal-distance cells were ordered
+    (``"row-major"`` — the default — or ``"speech"``), so a consumer knows which
+    tie-break produced the ``best`` / ``top`` ordering. ``target=None`` omits it
+    along with the other pick keys. Pure: returns a single JSON string.
     """
     if any(r is None for r in results):
         return json.dumps(
@@ -1074,7 +1108,8 @@ def render_vad_grid_json(
     }
     if target is not None:
         payload["target"] = target
-        best = pick_best_grid_cell(cells, target)
+        payload["tie_break"] = tie_break
+        best = pick_best_grid_cell(cells, target, tie_break)
         payload["best"] = (
             None
             if best is None
@@ -1083,7 +1118,7 @@ def render_vad_grid_json(
         if top is not None:
             payload["top"] = [
                 {**cell, "distance": grid_cell_distance(cell, target)}
-                for cell in pick_top_grid_cells(cells, target, top)
+                for cell in pick_top_grid_cells(cells, target, top, tie_break)
             ]
     return json.dumps(payload, indent=2)
 
@@ -1472,6 +1507,11 @@ def cmd_vad_grid(args, *, log=print, segmenter=None, availability=None):
     # to rank by) and is likewise CSV-irrelevant.
     target = getattr(args, "target", None)
     top = getattr(args, "top", None)
+    # iter-243: --tie-break selects how equal-distance cells order within the
+    # pick / shortlist. "row-major" (the default) keeps the original grid order
+    # (iter-241/242 behaviour, byte-for-byte); "speech" breaks ties on recovered
+    # speech (most first). A derived ordering, so CSV ignores it too.
+    tie_break = getattr(args, "tie_break", "row-major")
 
     # Rows are always the gate; the column axis is whichever ms list was passed
     # (--min-speeches → floor; else --min-silences → hangover, the default). The
@@ -1493,6 +1533,7 @@ def cmd_vad_grid(args, *, log=print, segmenter=None, availability=None):
                 render_vad_grid_json(
                     [], [], unavailable, name=args.wav,
                     row_axis=row_axis, col_axis=col_axis, target=target, top=top,
+                    tie_break=tie_break,
                 )
             )
         elif as_csv:
@@ -1506,6 +1547,7 @@ def cmd_vad_grid(args, *, log=print, segmenter=None, availability=None):
             for line in render_vad_grid(
                 [], [], unavailable, name=args.wav,
                 row_axis=row_axis, col_axis=col_axis, target=target, top=top,
+                tie_break=tie_break,
             ):
                 log(line)
         return
@@ -1539,6 +1581,7 @@ def cmd_vad_grid(args, *, log=print, segmenter=None, availability=None):
             render_vad_grid_json(
                 row_values, col_values, results, name=name,
                 row_axis=row_axis, col_axis=col_axis, target=target, top=top,
+                tie_break=tie_break,
             )
         )
     elif as_csv:
@@ -1552,6 +1595,7 @@ def cmd_vad_grid(args, *, log=print, segmenter=None, availability=None):
         for line in render_vad_grid(
             row_values, col_values, results, name=name,
             row_axis=row_axis, col_axis=col_axis, target=target, top=top,
+            tie_break=tie_break,
         ):
             log(line)
 
@@ -2116,6 +2160,16 @@ def build_parser():
         help="With --target, also list the N cells closest to the target as a "
         "ranked shortlist (nearest first) so the runners-up are visible, not "
         "just the single 'best:' pick; ignored without --target",
+    )
+    vad_grid.add_argument(
+        "--tie-break",
+        choices=("row-major", "speech"),
+        default="row-major",
+        dest="tie_break",
+        help="How to break ties between cells equally close to --target: "
+        "'row-major' (default) keeps the earlier grid cell; 'speech' prefers "
+        "the cell that recovered the most speech (clips the talker least); "
+        "ignored without --target",
     )
     vad_grid_fmt = vad_grid.add_mutually_exclusive_group()
     vad_grid_fmt.add_argument(
