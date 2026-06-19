@@ -24756,3 +24756,103 @@ wiring was already correct — proved by the passing test on first run).
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
    should track a curated subset, decide the policy and re-run
    `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
+
+## iter-275 — grid CSV consumer re-derives the JSON `--target` tolerance-band pick
+
+**Branch:** `iter-275-grid-band-target` (merged ff to main, commit `4c9d6bc`)
+**Date:** 2026-06-19
+
+**No STEER.md this lap.** The carried top-priority items (wire
+`ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()` in the desktop
+app) both need a Mac + mic + browser and can't run headless. "Ingest new
+recordings" stays corpus-gated. The COMBINED additive+multiplicative `--target`
+weight is a feature/design item, not a regression gap. iter-274 backlog item #4
+named the next pure increment directly: the cross-surface pick agreement on a
+`(lo, hi)` TOLERANCE-BAND target (iter-246) or a `{"prefer": …}` PREFERENCE
+target (iter-249). I confirmed no existing test exercises a band or preference
+target *cross-surface* (the only `rederives_json_*` cross-surface tests are the
+scalar iter-273 default-tie and iter-274 speech-tie twins), so the gap is real,
+and took the band variant.
+
+**The gap.** iter-273/274 pinned the cross-surface `--target` pick AGREEMENT — a
+CSV consumer re-parses the bare grid table back to cells and re-runs
+`pick_best_grid_cell` / `pick_top_grid_cells` to recover the JSON-embedded
+`best`/`top` identically — but ONLY for a SCALAR target (a single desired
+segment count), under both tie-breaks (row-major iter-273, speech iter-274).
+`grid_cell_distance` also accepts an iter-246 closed `(lo, hi)` TOLERANCE BAND:
+every count INSIDE the inclusive window scores distance `0` (all equally
+perfect), so a band makes MULTIPLE cells tie at the band floor where a scalar
+would separate them. `render_vad_grid_json` threads the target opaquely into the
+pickers (the picker only forwards it to `grid_cell_distance`), so a CSV consumer
+re-running the SAME pickers with the SAME band MUST recover the SAME pick. That
+cross-surface agreement under a band target was never pinned — a regression that
+coerced the band tuple to a scalar on the JSON path (collapsing the in-band ties)
+while a CSV consumer still passed the band would diverge the two surfaces yet
+ship green, because iters 273/274 only exercise scalar targets. No production
+code changed (the wiring was already correct — proved by the passing test on
+first run).
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+1 test, +86 lines).**
+  `test_render_grid_csv_consumer_rederives_json_band_target_pick` — a 2×2
+  `threshold × min_silence_ms` grid (row-major counts 3/9/5/1) with
+  `target=(5, 9)`, `top=3`. Band distances row-major are 2/0/0/4: two cells sit
+  INSIDE the band (count 9 at `hi`, count 5 at `lo` → both dist 0) and tie at the
+  band floor, broken row-major to `(0.3,800)`. Asserts the JSON payload records
+  `target == [5, 9]` (a tuple serialises to a JSON list); the CSV body carries no
+  `best`/`distance`; a CSV `DictReader` consumer re-running
+  `pick_best_grid_cell(cells, (5, 9))` recovers a `best` IDENTICAL to the
+  JSON-embedded `best` (distance stripped, re-derived band distance matching); a
+  CONTROL assert proves a SCALAR target of `5` (the band's lower edge) picks a
+  DIFFERENT cell (count-5 `(0.5,400)`, the lone exact hit), so the test can't
+  pass by the band silently collapsing to a scalar; and `pick_top_grid_cells`
+  recovers a shortlist agreeing cell-for-cell with the JSON `top`, head = best,
+  with BOTH band-floor (dist-0) cells leading row-major (`(0.3,800)` then
+  `(0.5,400)`) ahead of the nearest out-of-band cell, and `top[:2]` distances
+  both `0`.
+- **`docs/research/voice-capture-tuning.md`.** Extended the grid cross-surface
+  paragraph: iter-275 generalises the pick agreement past the scalar target to an
+  iter-246 closed `(lo, hi)` tolerance band, with a fixture built so a scalar at
+  the band's lower edge picks a different cell (catching a JSON path that
+  collapsed the band to a scalar).
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3855 passed** (3854 prior + 1 net new), run on the feature branch before
+  ff-merge AND re-run on main after the merge (both 3855).
+- Focused: `pytest tests/unit/test_gv_vad.py -k "rederives_json_band_target_pick or rederives_json_best_pick"`
+  → **2 passed** (the new band-target pick-agreement test + the iter-273 scalar
+  default-tie twin it generalises).
+- Integration: not re-run this lap (no corpus symlinked into this worktree; same
+  as prior corpus-gated laps — the change is pure CLI render logic fully covered
+  by the unit matrix).
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] COMBINED additive+multiplicative `--target` weight** — iter-250/251
+   give additive (`:penalty`), iter-252 multiplicative (`*factor`); an operator
+   might want both on one element (`5:1*1.5`). Larger design question (operator
+   precedence of `:` vs `*`) — scope before building. Pure, headless if pursued.
+   The only `--target` increment that is a FEATURE, not a regression-test gap.
+4. **[cli] The grid CSV↔JSON cross-surface `--target` pick contract now covers:**
+   scalar under row-major (iter-273) and speech (iter-274) tie-breaks, plus a
+   closed `(lo, hi)` tolerance band (iter-275). The likely-next pure increment is
+   the `{"prefer": …}` PREFERENCE target (iter-249) cross-surface: the preference
+   distance is the MIN over its elements (IDENTICAL to a set) but its precedence
+   is a tie-break key inside `grid_cell_sort_key`, so a CSV consumer re-running
+   the pickers with the SAME `{"prefer": …}` should recover the SAME
+   preference-ordered pick the JSON embedded — build a fixture where the
+   preference precedence genuinely changes the pick (two equidistant cells, the
+   more-preferred one winning) so a JSON path that dropped the preference key
+   would diverge. Also still open: the OPEN band `(lo, None)`/`(None, hi)`
+   (iter-247), the SET target (iter-248), and the weighted/scaled sets
+   (iter-250/252) cross-surface. Confirm no existing test already exercises the
+   chosen form cross-surface before assuming a gap.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
+   should track a curated subset, decide the policy and re-run
+   `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
