@@ -22232,3 +22232,136 @@ block.
 4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
    --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
    refresh the comparison table.
+
+## iter-250 — `gv vad-grid`/`vad-sweep` `--target A,B:W` weighted set
+
+**Branch:** `iter-250-weighted-target` (merged ff to main, commit `c698647`)
+**Date:** 2026-06-18
+
+**No STEER.md this lap.** The two top-priority next items carried since
+iter-227 (wire `ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()`
+in the desktop app) both need a Mac + mic + browser and can't run headless on
+the loop host. The recording corpus is unchanged since iter-231 (same 6 WAVs),
+so the "ingest new recordings" item had nothing to do. I took the
+headless-doable item from the iter-249 backlog: extend `--target` with a
+`:penalty` WEIGHTED-SET form (item #3).
+
+**The gap.** iter-249's `>` preference (`--target 3>5>7`) breaks only an EXACT
+distance TIE toward the earlier-listed count. An operator who wants the
+preferred count to win even when it sits at a slightly LARGER raw distance —
+"I'll take 3 segments at distance 1 over 8 at distance 0, because 8 is
+over-segmenting" — had no expression. A preference cannot override a
+raw-distance gap; it only orders cells that are already equidistant.
+
+**What changed (`examples/gv.py`).**
+1. **`target_type`** — a `:` on a comma-set element marks a WEIGHTED set,
+   parsed to a `{"weighted": [(element, penalty), ...]}` dict (distinct from the
+   flat-set `list` and the prefer `dict`). A `:` weight REQUIRES a `,` set (a
+   lone penalty is a constant offset that cannot change a pick) and cannot be
+   combined with `>` (both express preference, so stacking is ambiguous) — both
+   are rejected up front via `has_set`/`has_pref`/`has_weight` flags. The
+   split/validate/dedupe lives in a new **`_parse_weighted_set`** helper: an
+   element with no `:` carries penalty `0` (the iter-248 element, unweighted);
+   each base reuses `_parse_single_target` (so a band may be weighted —
+   `3,5-7:2`); penalties reuse `nonneg_int_type`; dedupe is on the ELEMENT
+   preserving first-seen order (the first penalty wins); a collapse to one
+   element drops the now-useless penalty and reduces to the bare element
+   (keeping scalar/band output byte-for-byte unchanged).
+2. **`grid_cell_distance`** — a `{"weighted": ...}` set scores as the **MIN**
+   over each element's `(raw distance + penalty)`, so a count routes through
+   whichever element is cheapest and never pays a distant element's penalty.
+   This is what lets a preferred count win at a larger raw distance: a count on
+   the accepted element exactly (raw 0) still pays its penalty, while a count
+   one off the preferred element (raw 1, penalty 0) scores below it.
+3. **`grid_cell_sort_key`** — a weighted set inserts NO secondary key (its
+   preference is already in the distance), so equal penalised distance is a
+   genuine tie left to `--tie-break`. The iter-249 preference-rank insertion is
+   now guarded on `"prefer" in target` so the weighted dict doesn't wrongly
+   take that branch.
+4. **`_format_target`** — a weighted set renders comma-joined with each NON-zero
+   penalty appended as `:penalty` (a zero penalty stays bare), so it reads back
+   exactly as typed (`{"weighted": [(3, 0), (5, 2)]}` → `3,5:2`). The `--json`
+   `target` serialises as `{"weighted": [[element, penalty], ...]}` (tuples →
+   JSON arrays — a band element nests as its own `[lo, hi]`).
+5. **Help text** for BOTH `--target` args (sweep + grid) documents the weighted
+   form (`3,5:2 = prefer 3, accept 5 but 2 segments worse`).
+
+**The weighted set rides the existing machinery untouched.** Because distance
+is the same lower-is-better key and the weight only enters the distance,
+`--top`, `--tie-break`, the pickers (`pick_best_grid_cell` /
+`pick_top_grid_cells`), the shared `_render_pick_block` helper (iter-245), and
+the `--json` payload all flow through with NO parallel implementation. Only
+`target_type` (+ the new `_parse_weighted_set`), `grid_cell_distance`,
+`grid_cell_sort_key` (the guard tweak), and `_format_target` needed touching.
+
+**Scalar + band + set + preference output is byte-for-byte unchanged.** Every
+prior case (renderer, JSON, cmd-level, sort-key, distance) passes without edits
+— a scalar still parses to a bare `int`, a band to a tuple, a set to a `list`,
+a preference to a `{"prefer": ...}` dict, and the non-preference sort key
+carries no extra component.
+
+**Subtlety worth recording (test math).** Because the distance is `min` over
+`(raw + penalty)`, a penalty only "bites" a count when the penalised element is
+its CHEAPEST route. With adjacent elements (`3,4:2`) a count near `4` routes
+through `3` instead and never pays the penalty. The override-the-gap tests
+therefore need a GAP between the preferred and accepted elements (`3,8:3`): a
+count landing exactly on `8` pays the +3, while a count one or two off `3` pays
+only its raw distance, so the preferred count wins. My first draft used
+adjacent counts and the 5 override tests failed (the implementation was right,
+the test arithmetic wrong) — fixed by spacing the elements.
+
+**Tests (`tests/unit/test_gv_vad.py`, +32).** `target_type` weighted parse
+(incl. band/open-band elements, whitespace-trim, explicit-`0` penalty,
+dedupe-on-element-first-penalty-wins, single-element collapse to a bare
+scalar); empty-element rejection (`3:2,`, `,5:2`, `3:2,,5`); malformed-element
+rejection (bad penalty `5:a`, negative `5:-1`, bad base `a:2`, inverted band
+`5-3:2`); weight-without-set rejection (`3:2`, `3-5:2`); weight-mixed-with-
+preference rejection (`3,5:2>7`, `3>5:2`, `3:2,5>7`); `_format_target`
+rendering; `grid_cell_distance` min-over-penalised-elements AND the
+preferred-wins-at-larger-raw-distance case; `grid_cell_sort_key` no-secondary-
+key; `pick_best_grid_cell` override-distance-gap; renderer + JSON set best-pick
+(weighted text renders as `3,8:3` not a dict repr, JSON `target` is a nested
+array, `|Δ|` is the PENALISED distance); `cmd_vad_grid` AND `cmd_vad_sweep`
+end-to-end with a weighted target. No torch import — bare dicts / the existing
+`_cell_result` / `_seg_speech_cells` stubs.
+
+**Docs (`docs/research/voice-capture-tuning.md`).** A `--target A,B:W` weighted
+subsection under `gv vad-sweep` (the additive-penalty rule, the
+min-over-cheapest-route scoring, composition with band elements, the
+`{"weighted": [...]}` JSON form, the requires-set/no-preference-mix/dedupe/
+collapse rules) + a quick-invocation line in the sweep block.
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3679 passed** (3650 prior + 29 net new), run on the feature branch before
+  ff-merge. Re-confirmed on main after merge: `pytest
+  tests/unit/test_gv_vad.py tests/unit/test_gv_cli.py` → **530 passed**.
+- Manual smoke (on the branch): `target_type('3,5:2')`→`{'weighted':[(3,0),(5,2)]}`,
+  `target_type('3:1,5:2')`→`{'weighted':[(3,1),(5,2)]}`,
+  `target_type('3,5-7:2')`→`{'weighted':[(3,0),((5,7),2)]}`,
+  `target_type('3:2,3:5')`→`3` (collapse), `_format_target(...)`→`'3,5:2'`,
+  `grid_cell_distance(count=5, 3,5:2)`→`2`, `grid_cell_distance(count=4,
+  3,5:2)`→`1`, `json.dumps(target_type('3,5-7:2'))`→`{"weighted": [[3, 0],
+  [[5, 7], 2]]}`. Rejected: `3:2`, `3-5:2`, `3,5:a`, `3,5:2>7`, `3>5:2`,
+  `3,5:-1`, `3:2,`.
+- Integration: not re-run this lap (no corpus symlinked into this worktree;
+  same as prior corpus-gated laps — the change is pure CLI logic fully covered
+  by the unit matrix).
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] `gv vad-sweep`/`vad-grid` `--target` weighted band/open-band weight,
+   or a fractional weight** — the iter-250 weight is a whole-number additive
+   penalty on each set element. A fractional penalty (`3,5:1.5`) would give
+   finer control over how strongly preference outweighs distance; or a
+   per-element weight could be a multiplier (`distance * weight`) for operators
+   who think in proportional rather than additive terms. Pure, headless —
+   reuses `grid_cell_distance`'s min-over-elements.
+4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
+   --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
+   refresh the comparison table.
