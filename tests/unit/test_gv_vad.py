@@ -2766,6 +2766,134 @@ def test_render_grid_target_top_list_on_max_speech_col_axis_formats_seconds():
     assert "inf.00" not in joined
 
 
+# ---- --target BANDED (lo-hi) form on the seconds max_speech_s axis ---------
+#
+# iter-246 shipped the banded `--target lo-hi` form (a [lo, hi] count window
+# scoring distance 0 for any cell inside the band, else distance to the nearer
+# edge); iter-247 added the open-edge forms (`lo-` "at least", `-hi" "at most").
+# iter-255/257 added the seconds `max_speech_s` force-split-ceiling axis. Every
+# seconds-axis target test from iter-257→261 used a SCALAR target, and every
+# band-target render test (test_render_*_band_*) swept the threshold/min_silence
+# axis — so the band-scoring path and the `%g` seconds formatting had no JOINT
+# coverage. The band pick block ranks by num_segments (axis-agnostic), so it
+# already works on the seconds sweep — these pin that the best: line names the
+# band-chosen SECONDS cap via %g (compact 10/5, the no-cap baseline as "inf"),
+# renders the band as "lo-hi"/"lo-"/"-hi" (not a tuple repr), and never leaks a
+# gate-style 0.00 / inf.00, on both the 1-D sweep and the 2-D grid column axis.
+
+
+def _max_speech_cells():
+    # Caps inf, 10, 5 over a 20s clip; segment counts 1, 4, 2.
+    r_inf = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=20.0,
+        segments=[_Seg(0.0, 12.0)],
+    )
+    r_ten = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=20.0,
+        segments=[_Seg(0.0, 5.0), _Seg(5.0, 10.0), _Seg(10.0, 13.0), _Seg(13.0, 16.0)],
+    )
+    r_five = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=20.0,
+        segments=[_Seg(0.0, 5.0), _Seg(5.0, 10.0)],
+    )
+    return r_inf, r_ten, r_five
+
+
+def test_render_sweep_band_target_on_max_speech_axis_formats_seconds():
+    # Caps inf, 10, 5; counts 1, 4, 2. Band 3-5 puts the 10s cap (4 segs) inside
+    # the band (|Δ|=0), winning over inf (short by 2) and 5s (5s lands at 2, short
+    # by 1). The best: line names the SECONDS cap via %g and renders the band.
+    r_inf, r_ten, r_five = _max_speech_cells()
+    lines = gv.render_vad_sweep(
+        [float("inf"), 10.0, 5.0], [r_inf, r_ten, r_five],
+        name="rec.wav", axis="max_speech_s", target=(3, 5),
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    assert "max_speech=10" in best
+    assert "4 segments" in best
+    assert "|Δ|=0" in best
+    # The band renders as "3-5", not a tuple repr.
+    assert "target 3-5" in best
+    assert "(3, 5)" not in best
+    # Compact %g — no gate-style trailing zeros on the seconds cap.
+    assert "10.00" not in best
+    assert "max_speech=10.0" not in best
+
+
+def test_render_sweep_band_target_best_can_name_inf_max_speech():
+    # An "at most" band (-2) is satisfied only by the no-cap baseline (inf, 1 seg);
+    # the 10s cap (4) is over by 2 and the 5s cap (2) lands exactly on the upper
+    # edge — wait, 2 ≤ 2 so 5s ALSO satisfies. Use caps inf, 5 (counts 1, 2) and
+    # band -1 so only inf (1 seg) lands inside; it must render the sentinel "inf".
+    r_inf, _r_ten, r_five = _max_speech_cells()
+    lines = gv.render_vad_sweep(
+        [float("inf"), 5.0], [r_inf, r_five],
+        name="rec.wav", axis="max_speech_s", target=(None, 1),
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    assert "max_speech=inf" in best
+    assert "1 segments" in best
+    assert "|Δ|=0" in best
+    # The open "at most" band renders as "-1", with no None leak or inf.00.
+    assert "target -1" in best
+    assert "None" not in best
+    assert "inf.00" not in best
+
+
+def test_render_sweep_open_band_at_least_on_max_speech_axis_formats_seconds():
+    # An "at least 3" band (3-) is satisfied by the 10s cap (4 segs, |Δ|=0); the
+    # inf baseline (1) and 5s cap (2) both fall short. The best: line names the
+    # 10s cap via %g and renders the open band as "3-" with no None leak.
+    r_inf, r_ten, r_five = _max_speech_cells()
+    lines = gv.render_vad_sweep(
+        [float("inf"), 10.0, 5.0], [r_inf, r_ten, r_five],
+        name="rec.wav", axis="max_speech_s", target=(3, None),
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    assert "max_speech=10" in best
+    assert "4 segments" in best
+    assert "|Δ|=0" in best
+    assert "target 3-" in best
+    assert "None" not in best
+    assert "10.00" not in best
+
+
+def test_render_grid_band_target_on_max_speech_col_axis_formats_seconds():
+    # The seconds force-split ceiling is also a vad-grid COLUMN axis; the banded
+    # best: line must format the col value via %g too. 1×2 grid over caps inf, 5
+    # (counts 1, 4); band 3-5 puts the 5s cell (4 segs) inside the band (|Δ|=0),
+    # winning over the inf baseline (short by 2).
+    lines = gv.render_vad_grid(
+        [0.3], [float("inf"), 5.0], [_cell_result(1), _cell_result(4)],
+        name="rec.wav", col_axis="max_speech_s", target=(3, 5),
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    assert "max_speech=5" in best
+    assert "threshold=0.30" in best
+    assert "4 segments" in best
+    assert "|Δ|=0" in best
+    assert "target 3-5" in best
+    assert "(3, 5)" not in best
+    # Seconds col formats compactly — no 5.00 leak.
+    assert "max_speech=5.00" not in best
+
+
+def test_render_grid_json_band_target_carries_seconds_max_speech():
+    # The grid JSON surface must carry a band target on the seconds col axis as a
+    # [lo, hi] array AND emit the chosen cap as a finite seconds number (5.0), with
+    # distance 0 when the count lands inside the band.
+    payload = json.loads(
+        gv.render_vad_grid_json(
+            [0.3], [float("inf"), 5.0], [_cell_result(1), _cell_result(4)],
+            name="rec.wav", col_axis="max_speech_s", target=(3, 5),
+        )
+    )
+    assert payload["target"] == [3, 5]
+    assert payload["best"]["num_segments"] == 4
+    assert payload["best"]["distance"] == 0
+    assert payload["best"]["max_speech_s"] == 5.0
+
+
 def test_render_sweep_json_carries_max_speech_axis():
     r = _Result(name="rec.wav", sample_rate=16000, duration_s=5.0, segments=[_Seg(0.0, 1.0)])
     payload = json.loads(

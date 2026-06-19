@@ -849,6 +849,23 @@ gv vad-sweep recording.wav --max-speeches 10,inf --target 3 --tie-break speech  
 gv vad-grid  recording.wav --thresholds 0.3 --max-speeches 5,inf --target 3 --top 2 --tie-break speech
 ```
 
+The banded `--target lo-hi` form (iter-246) — a count *window* scoring distance
+0 for any cell inside the band, else distance to the nearer edge — and its
+open-edge variants (`lo-` "at least", `-hi` "at most", iter-247) are likewise
+orthogonal to the swept knob. iter-262 pins the band-scoring path *together* with
+the seconds axis: a band on `max_speech_s` picks the in-band cap, renders the
+band as `3-5` / `3-` / `-1` (never a `(3, 5)` tuple repr or a `None` leak), and
+names the chosen SECONDS cap compactly (`max_speech=10`, the no-cap baseline as
+`max_speech=inf`, never `10.00` / `inf.00`) on the `best:` line across both the
+1-D sweep and the 2-D grid column axis. The grid JSON surface carries the band as
+a `[lo, hi]` array and emits the chosen cap as a finite seconds number
+(`best.max_speech_s == 5.0`):
+
+```bash
+gv vad-sweep recording.wav --max-speeches 5,10,inf --target 3-5            # in-band cap wins
+gv vad-grid  recording.wav --thresholds 0.3 --max-speeches 5,inf --target 3-5 --json
+```
+
 ### Silero vs energy-VAD segment counts (the headless proof)
 
 Measured over the seed corpus with `min_silence_ms=800` (the pipecat
