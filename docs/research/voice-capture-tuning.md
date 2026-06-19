@@ -866,6 +866,22 @@ gv vad-sweep recording.wav --max-speeches 5,10,inf --target 3-5            # in-
 gv vad-grid  recording.wav --thresholds 0.3 --max-speeches 5,inf --target 3-5 --json
 ```
 
+The comma SET form (`--target 2,4,6`, iter-248) — where a cell scores its
+distance to the NEAREST listed element, so any cell landing on a listed count
+scores 0 — is the same shape of orthogonal seam. iter-263 pins it *together*
+with the seconds axis: a set on `max_speech_s` picks the cap that lands on (or
+nearest) a listed count, renders the set as `2,4,6` (never a `[2, 4, 6]` list
+repr), and names the chosen SECONDS cap compactly (`max_speech=10`, the no-cap
+baseline as `max_speech=inf`, never `10.00` / `inf.00`) on the `best:` line
+across both the 1-D sweep and the 2-D grid column axis. The grid JSON surface
+carries the set as a JSON array and emits the chosen cap as a finite seconds
+number (`best.max_speech_s == 5.0`):
+
+```bash
+gv vad-sweep recording.wav --max-speeches 5,10,inf --target 2,4,6          # cap on a listed count wins
+gv vad-grid  recording.wav --thresholds 0.3 --max-speeches 5,inf --target 2,4,6 --json
+```
+
 ### Silero vs energy-VAD segment counts (the headless proof)
 
 Measured over the seed corpus with `min_silence_ms=800` (the pipecat

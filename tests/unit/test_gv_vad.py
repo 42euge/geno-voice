@@ -2894,6 +2894,99 @@ def test_render_grid_json_band_target_carries_seconds_max_speech():
     assert payload["best"]["max_speech_s"] == 5.0
 
 
+# ---- --target comma SET form on the seconds max_speech_s axis --------------
+#
+# iter-248 shipped the comma SET form (`--target 3,5,7`): a cell scores its
+# distance to the NEAREST set element, so any cell landing on a listed count
+# scores 0. iter-255/257 added the seconds `max_speech_s` force-split-ceiling
+# axis. Every seconds-axis target test from iter-257→262 used a SCALAR or BANDED
+# target, and every SET-target render test (test_render_grid_*_set_*) swept the
+# threshold/min_silence axis — so the set-scoring path and the `%g` seconds
+# formatting had no JOINT coverage. The pick block ranks by num_segments
+# (axis-agnostic), so it already works on the seconds sweep — these pin that the
+# best: line names the set-chosen SECONDS cap via %g (compact 10/5, the no-cap
+# baseline as "inf"), renders the set as "2,4,6" (not a list repr), never leaks
+# a gate-style 0.00 / inf.00, and that the grid JSON carries the set as a JSON
+# array with a finite-seconds best cap — on both the 1-D sweep and 2-D grid.
+
+
+def test_render_sweep_set_target_on_max_speech_axis_formats_seconds():
+    # Caps inf, 10, 5; counts 1, 4, 2. Set 2,4,6 lands exactly on the 10s cap
+    # (4 segs, |Δ|=0), winning over inf (nearest element 2, off by 1) and 5s
+    # (lands on element 2, |Δ|=0 too — but row order puts 10s first). The best:
+    # line names the SECONDS cap via %g and renders the set as "2,4,6".
+    r_inf, r_ten, r_five = _max_speech_cells()
+    lines = gv.render_vad_sweep(
+        [float("inf"), 10.0, 5.0], [r_inf, r_ten, r_five],
+        name="rec.wav", axis="max_speech_s", target=[2, 4, 6],
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    assert "max_speech=10" in best
+    assert "4 segments" in best
+    assert "|Δ|=0" in best
+    # The set renders as "2,4,6", not a list repr.
+    assert "target 2,4,6" in best
+    assert "[2, 4, 6]" not in best
+    # Compact %g — no gate-style trailing zeros on the seconds cap.
+    assert "10.00" not in best
+    assert "max_speech=10.0" not in best
+
+
+def test_render_sweep_set_target_best_can_name_inf_max_speech():
+    # When the no-cap baseline (inf) lands on a set element and the swept caps
+    # don't, the best: line must render the sentinel as "inf", not "inf.00".
+    # Caps inf, 5 (counts 1, 2); set 1,7 lands on inf (1 seg, |Δ|=0); 5s (2) is
+    # off by 1 from the nearer element 1.
+    r_inf, _r_ten, r_five = _max_speech_cells()
+    lines = gv.render_vad_sweep(
+        [float("inf"), 5.0], [r_inf, r_five],
+        name="rec.wav", axis="max_speech_s", target=[1, 7],
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    assert "max_speech=inf" in best
+    assert "1 segments" in best
+    assert "|Δ|=0" in best
+    assert "target 1,7" in best
+    assert "[1, 7]" not in best
+    assert "inf.00" not in best
+
+
+def test_render_grid_set_target_on_max_speech_col_axis_formats_seconds():
+    # The seconds force-split ceiling is also a vad-grid COLUMN axis; the set
+    # best: line must format the col value via %g too. 1×2 grid over caps inf, 5
+    # (counts 1, 4); set 2,4,6 lands on the 5s cell (4 segs, |Δ|=0), winning over
+    # the inf baseline (1 seg, off by 1 from element 2).
+    lines = gv.render_vad_grid(
+        [0.3], [float("inf"), 5.0], [_cell_result(1), _cell_result(4)],
+        name="rec.wav", col_axis="max_speech_s", target=[2, 4, 6],
+    )
+    best = next(ln for ln in lines if "best:" in ln)
+    assert "max_speech=5" in best
+    assert "threshold=0.30" in best
+    assert "4 segments" in best
+    assert "|Δ|=0" in best
+    assert "target 2,4,6" in best
+    assert "[2, 4, 6]" not in best
+    # Seconds col formats compactly — no 5.00 leak.
+    assert "max_speech=5.00" not in best
+
+
+def test_render_grid_json_set_target_carries_seconds_max_speech():
+    # The grid JSON surface must carry a set target on the seconds col axis as a
+    # JSON array AND emit the chosen cap as a finite seconds number (5.0), with
+    # distance 0 when the count lands on a set element.
+    payload = json.loads(
+        gv.render_vad_grid_json(
+            [0.3], [float("inf"), 5.0], [_cell_result(1), _cell_result(4)],
+            name="rec.wav", col_axis="max_speech_s", target=[2, 4, 6],
+        )
+    )
+    assert payload["target"] == [2, 4, 6]
+    assert payload["best"]["num_segments"] == 4
+    assert payload["best"]["distance"] == 0
+    assert payload["best"]["max_speech_s"] == 5.0
+
+
 def test_render_sweep_json_carries_max_speech_axis():
     r = _Result(name="rec.wav", sample_rate=16000, duration_s=5.0, segments=[_Seg(0.0, 1.0)])
     payload = json.loads(
