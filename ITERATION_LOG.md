@@ -23772,3 +23772,126 @@ contrast (`4>2` → 10s cap / 4 segs; flat `4,2` → 5s cap / 2 segs).
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
    should track a curated subset, decide the policy and re-run
    `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
+
+## iter-265 — `gv --target` weighted set (a,b:p) regression tests on the seconds `max_speech_s` axis
+
+**Branch:** `iter-265-weighted-seconds` (merged ff to main, commit `0189ffe`)
+**Date:** 2026-06-19
+
+**No STEER.md this lap.** The top-priority carried items (wire
+`ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()` in the desktop
+app) both need a Mac + mic + browser and can't run headless on the loop host.
+"Ingest new recordings" stays corpus-gated. The COMBINED
+additive+multiplicative `--target` weight item is again a larger design
+question. So I took iter-264 backlog item #4's next concrete sub-option: pin
+the additive-penalty WEIGHTED set form (`--target 3,6:2`, iter-250) on the
+SECONDS `max_speech_s` axis — the last untested weighted-form-on-seconds
+combination after iter-257→264 covered scalar, banded, flat-SET, and the
+ranked PREFERENCE forms.
+
+**The gap.** iter-250 shipped the additive-penalty WEIGHTED set: a `{"weighted":
+[(element, penalty), ...]}` dict whose DISTANCE is the MIN over each element's
+RAW distance PLUS its penalty. Unlike the iter-249 preference (which folds
+intent only into the tie-break, never the distance), the weight enters the
+distance itself, so a cheaper (lower-penalty) element can win even at a LARGER
+raw distance — it overrides a distance GAP, not merely an exact tie. iter-255/257
+added the seconds `max_speech_s` force-split-ceiling axis. These seams are
+orthogonal but had never been exercised TOGETHER on a render surface: every
+weighted render test (iter-250) swept the threshold/min-silence axis, and every
+seconds-axis target test from iter-257→264 used a scalar/band/set/preference
+target. So the penalised-distance picker and the `%g` seconds formatting had no
+JOINT coverage. A regression that broke EITHER (a weighted distance mishandling
+the seconds axis, a `%g`→`.2f` drift on the weighted-CHOSEN cap, the `:penalty`
+rendering, or the JSON carrying the `{"weighted": [...]}` dict) would have
+shipped green while the threshold-axis weighted tests stayed passing. This lap
+closes that hole; no production code changed (the wiring was already correct —
+proved by a pre-test smoke run).
+
+**The discriminating behaviour.** The weighted form differs from the flat set in
+that the penalty changes the WINNER, not just a tie order. `--target 3,6:2`
+makes the bare `3` free and the `6` cost `+2`, so a cap one segment off the free
+`3` (penalised `1`) beats a cap sitting exactly on the costly `6` (penalised
+`2`) — the flat set `3,6` would pick the on-`6` cap (raw distance `0`). The
+smoke run confirmed this contrast: weighted `3,6:2` over caps inf/10/5
+(counts 1/4/6) picks the 10s cap (`|Δ|=1`); the flat `3,6` picks the 5s cap
+(`|Δ|=0`). One test isolates the GAP override explicitly with a huge `+9`
+penalty so the no-cap baseline wins despite a swept cap landing exactly on a
+listed element.
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+4 tests, +122 lines).**
+  1. `test_render_sweep_weighted_target_on_max_speech_axis_formats_seconds` —
+     caps `inf, 10, 5` (counts 1, 4, 6); weighted `3,6:2` picks the 10s cap
+     (`|Δ|=1`, penalised) over the 5s cap sitting on the costly `6`; `best:`
+     names `max_speech=10`, renders `target 3,6:2` (not a `{"weighted": ...}`
+     dict repr), no `10.00` / `max_speech=10.0` leak.
+  2. `test_render_sweep_weighted_target_overrides_gap_not_just_tie` — caps
+     `inf, 5` (counts 1, 6); weighted `3,6:9` (huge penalty) makes the inf
+     baseline win at `|Δ|=2` even though the 5s cap sits exactly on element `6`
+     — proving the penalty changes the WINNER, not a tie; renders
+     `max_speech=inf` / `target 3,6:9`, no `inf.00`.
+  3. `test_render_grid_weighted_target_on_max_speech_col_axis_formats_seconds` —
+     the 2-D grid COLUMN-axis twin: 1×2 grid over caps `inf, 5` (counts 6, 4);
+     weighted `3,6:2` picks the 5s cap (`|Δ|=1`) OVERRIDING the earlier inf row
+     (which sits on the costly `6`); held threshold row renders `threshold=0.30`,
+     no `5.00` leak.
+  4. `test_render_grid_json_weighted_target_carries_seconds_max_speech` — the
+     grid JSON machine surface carries the weighted set as its
+     `{"weighted": [[3, 0], [6, 2]]}` dict (each pair a 2-element array,
+     distinct from a flat-set scalar array) and emits `best.max_speech_s == 5.0`
+     (a finite seconds number) with the penalised distance `1`.
+- **`docs/research/voice-capture-tuning.md`.** A paragraph under the iter-257→264
+  `--target` seconds subsection covering the weighted form on `max_speech_s`
+  (the GAP-override twist vs the preference's tie-only fold, `3,6:2` rendering
+  with no dict repr, `%g`-compact chosen cap, `{"weighted": [...]}` JSON carry,
+  across the 1-D sweep and the 2-D grid column axis). Two copy-paste invocations
+  (sweep weighted, grid weighted `--json`).
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3840 passed** (3836 prior + 4 net new), run on the feature branch before
+  ff-merge AND re-run on main after the merge (both 3840).
+- Focused: `pytest tests/unit/test_gv_vad.py -k "weighted_target_on_max_speech
+  or weighted_target_overrides_gap or weighted_target_carries_seconds"` →
+  **4 passed**.
+- Pre-test smoke (Python, on the branch): `render_vad_sweep([inf,10,5], ...,
+  axis="max_speech_s", target={"weighted":[(3,0),(6,2)]})` → `best:
+  max_speech=10 (4 segments, |Δ|=1 from target 3,6:2)`; flat set `[3,6]` over
+  the same caps → `max_speech=5 (6 segments, |Δ|=0)` (the CONTRAST proving the
+  penalty); weighted `3,6:9` over caps `inf,5` → `max_speech=inf (1 segments,
+  |Δ|=2)` (gap override); grid `{"weighted":[(3,0),(6,2)]}` over caps `inf,5`
+  (counts 6,4) → `threshold=0.30 max_speech=5 (4 segments, |Δ|=1)`, flat `[3,6]`
+  → `max_speech=inf (6 segments, |Δ|=0)`; grid JSON → `target {"weighted": [[3,
+  0], [6, 2]]}, best 4 segs, dist 1, max_speech_s 5.0`. Confirmed the wiring was
+  already correct before writing the assertions.
+- Integration: not re-run this lap (no corpus symlinked into this worktree;
+  same as prior corpus-gated laps — the change is pure CLI render logic fully
+  covered by the unit matrix).
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] COMBINED additive+multiplicative `--target` weight** — iter-250/251
+   give additive (`:penalty`), iter-252 multiplicative (`*factor`); an operator
+   might want both on one element (`5:1*1.5`). Larger design question (operator
+   precedence of `:` vs `*`) — scope before building. Pure, headless if pursued.
+4. **[cli] seconds-axis target coverage now spans scalar + banded + SET +
+   preference + weighted + tie-break.** iter-257→261 pinned scalar, iter-262
+   the BANDED form, iter-263 the comma SET, iter-264 the ranked PREFERENCE
+   `a>b`, iter-265 the additive-penalty WEIGHTED `a,b:p`. The remaining
+   untested seconds-axis target form: the `{"scaled": ...}` MULTIPLICATIVE set
+   (iter-252) — the multiplicative twin of the weighted set, where each
+   element's distance is RAW × factor (an exact hit stays free, cost grows with
+   distance). Its discriminating fixture differs from iter-265's: the factor
+   scales WITH distance rather than offsetting by a fixed amount, so the contrast
+   vs the flat set shows at a non-zero raw distance where the factor amplifies
+   the gap. Confirm it is not already covered on the seconds axis before
+   assuming a gap. A small, pure, headless increment.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
+   should track a curated subset, decide the policy and re-run
+   `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
