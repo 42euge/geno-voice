@@ -5930,6 +5930,114 @@ def test_render_grid_csv_consumer_rederives_json_weighted_target_pick():
     assert [c["distance"] for c in payload["top"]] == [1, 2, 2]
 
 
+def test_render_grid_csv_consumer_rederives_json_scaled_target_pick():
+    # iter-278: iter-277 carried the cross-surface --target pick AGREEMENT (a CSV
+    # consumer re-parses the bare grid table back to cells and re-runs
+    # pick_best_grid_cell / pick_top_grid_cells to recover the JSON-embedded
+    # `best`/`top` identically) to the first form whose preference is folded back
+    # INTO the distance: a {"weighted": [(element, penalty), ...]} set (iter-250),
+    # whose penalty is an ADDITIVE offset (raw |Δ| + penalty). This is the
+    # MULTIPLICATIVE twin — a {"scaled": [(element, factor), ...]} set (iter-252),
+    # whose cost is raw |Δ| TIMES its factor. The distinction matters: the weighted
+    # penalty is a FIXED offset (it shifts every distance by the same amount, so it
+    # can flip a near-tie), but a scaled factor GROWS with distance — a far cell on
+    # a high-factor element loses HARDER the farther it drifts, while an exact hit
+    # stays free on any factor (0 * factor = 0). So a regression that dropped the
+    # factors on the JSON path (collapsing the scaled set to a plain set of its
+    # elements) while the CSV consumer still applied them would diverge the two
+    # surfaces yet ship green — a failure mode iter-277's ADDITIVE fixture cannot
+    # catch, because the additive and multiplicative folds produce different winners
+    # for the same element set. Pin both surfaces to name the SAME factor-flipped
+    # best cell and the SAME factor-scored top shortlist, with a flat-SET control
+    # proving the factors genuinely change the pick.
+    row_values = [0.3, 0.5]
+    col_values = [400.0, 800.0]
+    # 2×2 row-major counts 4/6/1/2, target = preferred-3 (heavily scaled ×3) /
+    # accepted-8 (×1) ({"scaled": [(3, 3), (8, 1)]}). Scaled distance = MIN over
+    # elements of (|Δ to element| * factor):
+    #   - (0.3,400) count 4 → min(|4-3|*3, |4-8|*1) = min(3, 4) = 3
+    #   - (0.3,800) count 6 → min(|6-3|*3, |6-8|*1) = min(9, 2) = 2
+    #   - (0.5,400) count 1 → min(|1-3|*3, |1-8|*1) = min(6, 7) = 6
+    #   - (0.5,800) count 2 → min(|2-3|*3, |2-8|*1) = min(3, 6) = 3
+    # Count 4 is raw distance 1 from the preferred element 3, but the ×3 factor
+    # blows that up to 3; count 6 is raw distance 2 from the accepted element 8, and
+    # the ×1 factor leaves it at 2 — so the factor flips the best to (0.3,800)
+    # count 6, a preferred-but-farther-on-the-cheap-element cell beating a
+    # closer-but-heavily-scaled one. A flat SET of the same two elements [3, 8]
+    # carries NO factors: count 4 then scores raw distance 1 (nearest element 3) and
+    # WINS, picking (0.3,400) count 4 — a DIFFERENT cell. The factors genuinely
+    # change the result, the whole point of this fixture. (Note this also differs
+    # from iter-277's ADDITIVE weighted fixture, whose +penalty would have left
+    # count 4 the winner here — only the multiplicative grow-with-distance fold
+    # produces the count-6 flip.)
+    results = [_cell_result(n) for n in (4, 6, 1, 2)]
+    target = {"scaled": [(3, 3), (8, 1)]}
+    csv_text = gv.render_vad_grid_csv(
+        row_values, col_values, results, name="rec.wav",
+        row_axis="threshold", col_axis="min_silence_ms",
+    )
+    payload = json.loads(
+        gv.render_vad_grid_json(
+            row_values, col_values, results, name="rec.wav",
+            row_axis="threshold", col_axis="min_silence_ms",
+            target=target, top=3,
+        )
+    )
+    # The JSON twin records the scaled target as {"scaled": [[element, factor],
+    # ...]}, preserving the listed order (tuples serialise to JSON lists).
+    assert payload["target"] == {"scaled": [[3, 3], [8, 1]]}
+    # The CSV body still carries no pick columns — it is the bare grid.
+    assert "best" not in csv_text and "distance" not in csv_text
+    assert "scaled" not in csv_text
+    # A CSV consumer re-parses the flat table back to grid cells...
+    cells = [
+        {
+            "threshold": float(row["threshold"]),
+            "min_silence_ms": float(row["min_silence_ms"]),
+            "num_segments": int(row["num_segments"]),
+            "speech_s": float(row["speech_s"]),
+        }
+        for row in csv.DictReader(io.StringIO(csv_text))
+    ]
+    # ...and re-runs the SAME picker with the SAME scaled target. The CSV-derived
+    # best equals the JSON `best` (distance key stripped), and the re-derived
+    # scaled distance matches the one the JSON embedded (2 — the accepted-8 element
+    # at raw distance 2, ×1 factor).
+    csv_best = gv.pick_best_grid_cell(cells, target)
+    json_best = dict(payload["best"])
+    assert json_best.pop("distance") == gv.grid_cell_distance(csv_best, target)
+    assert csv_best == json_best
+    assert (csv_best["threshold"], csv_best["min_silence_ms"]) == (0.3, 800.0)
+    assert csv_best["num_segments"] == 6
+    assert payload["best"]["distance"] == 2
+    # CONTROL: a flat SET of the SAME two elements [3, 8] carries NO factors, so
+    # count 4 (raw distance 1 from element 3) BEATS count 6 (raw distance 2 from
+    # element 8) and picks a DIFFERENT cell ((0.3,400) count 4). Proves the test
+    # cannot pass by the factors silently dropping to a plain set on either surface
+    # — the ×3 factor on element 3 is load-bearing for the flip.
+    set_best = gv.pick_best_grid_cell(cells, [3, 8])
+    assert set_best != csv_best
+    assert (set_best["threshold"], set_best["min_silence_ms"]) == (0.3, 400.0)
+    assert set_best["num_segments"] == 4
+    # The top shortlist agrees cell-for-cell (distance stripped). The scaled-2
+    # count-6 cell leads, then the two scaled-3 cells (count-4 (0.3,400) ahead of
+    # count-2 (0.5,800), row-major among equal scaled distance).
+    csv_top = gv.pick_top_grid_cells(cells, target, 3)
+    json_top = [dict(c) for c in payload["top"]]
+    for c in json_top:
+        c.pop("distance")
+    assert csv_top == json_top
+    # Head of the shortlist is the single best pick, on both surfaces.
+    assert csv_top[0] == csv_best
+    # Factor-flipped winner first, then the scaled-3 cells row-major.
+    assert [(c["threshold"], c["min_silence_ms"]) for c in csv_top] == [
+        (0.3, 800.0), (0.3, 400.0), (0.5, 800.0),
+    ]
+    # The scaled distances the JSON embedded: the lone scaled-2 winner, then the
+    # two scaled-3 cells.
+    assert [c["distance"] for c in payload["top"]] == [2, 3, 3]
+
+
 # ---- cmd_vad_grid: end-to-end ------------------------------------------
 
 

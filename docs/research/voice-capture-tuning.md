@@ -292,7 +292,18 @@ distance 1 from the penalty-free preferred element (penalised 1), so the penalty
 flips the pick; a flat-`set` control of the same two elements carries no
 penalties, lets the exact hit win, and picks a *different* cell — so the test
 catches a JSON path that dropped the penalties and collapsed the weighted set to
-a plain set of its elements.
+a plain set of its elements. iter-278 carries the same proof to the
+*multiplicative* twin: an iter-252 `{"scaled": […]}` target, where each element's
+cost is raw `|Δ|` *times* its factor. The distinction from the additive weight is
+that a factor *grows* with distance — a far cell on a high-factor element loses
+harder the farther it drifts, while an exact hit stays free on any factor
+(`0 × factor = 0`). The fixture scales the preferred element by `×3` so a cell at
+raw distance 1 from it (scaled 3) loses to a cell at raw distance 2 from the
+`×1` accepted element (scaled 2); a flat-`set` control of the same two elements
+carries no factors, picks the closer cell, and lands a *different* winner — and
+because the additive and multiplicative folds choose different cells for the same
+element set, the iter-277 weighted fixture cannot catch a JSON path that confused
+the two.
 
 **`--min-silences` — a second sweep axis (iter-238).** The default axis is the
 P(speech) gate (`--thresholds`); passing `--min-silences` instead sweeps the
