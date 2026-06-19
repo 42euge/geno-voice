@@ -23104,3 +23104,98 @@ correct, this lap proves and guards it).
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
    should track a curated subset, decide the policy and re-run
    `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
+
+## iter-258 — `gv --target` JSON `best`/`top` regression test on the seconds `max_speech_s` axis
+
+**Branch:** `iter-258-target-seconds-json` (merged ff to main, commit `e94d99f`)
+**Date:** 2026-06-19
+
+**No STEER.md this lap.** The two top-priority next items carried since
+iter-227 (wire `ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()`
+in the desktop app) both need a Mac + mic + browser and can't run headless on
+the loop host. "Ingest new recordings" stays corpus-gated (large untracked
+WAVs, no corpus symlinked into the worktree). The COMBINED
+additive+multiplicative `--target` weight item is again "a larger design
+question — scope before building." So I took the iter-257 backlog item #4, the
+clean, small, pure, headless increment: pin the `--target` pick's JSON `best`/
+`top` rendering on the SECONDS `max_speech_s` axis.
+
+**The gap.** iter-257 pinned the HUMAN `best:` line `%g` formatting when the
+`--target` pick lands on the seconds force-split ceiling axis (the
+`--max-speeches` sweep/grid axis from iter-255/256). The parallel MACHINE
+surface — the `--json` `best` cell and the `top` shortlist — was uncovered.
+The pick machinery (`pick_best_grid_cell` / `pick_top_grid_cells`, ranked on
+`num_segments`) is axis-agnostic and emits the swept axis key verbatim into the
+JSON cell, so it already works — but there was NO test pinning that the JSON
+`best`/`top` cell carries the picked seconds value as a bare number, nor that
+the `inf` no-cap baseline survives a JSON round-trip. A serialization
+regression (e.g. someone stringifying the axis value) would have shipped
+silently. This lap closes that hole; no production code changed (the wiring was
+already correct, this lap proves and guards it).
+
+**The round-trip detail.** Python's `json.dumps` emits the `Infinity` token for
+`float('inf')`, which `json.loads` reads back as `float('inf')` — so the no-cap
+baseline survives without a custom sentinel. The tests assert `math.isinf` on
+the recovered value rather than depending on the textual token, so they stay
+robust if the emitter ever switches to a string sentinel.
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+5 tests, +`import math`).**
+  1. `test_render_sweep_json_target_best_carries_seconds_max_speech` — caps
+     `inf, 10, 5`, counts `1, 2, 4`, `target 2` → the `10`s cell; asserts
+     `best.max_speech_s == 10.0`, `num_segments == 2`, `distance == 0`, and
+     `axis == "max_speech_s"`.
+  2. `test_render_sweep_json_best_inf_max_speech_survives_round_trip` — the
+     `inf` baseline as best cell round-trips to `float('inf')` (`math.isinf`).
+  3. `test_render_sweep_json_top_list_carries_seconds_max_speech` — the `top`
+     shortlist names each cell by `max_speech_s`; head == `best`, distances
+     non-decreasing, the `inf` baseline present in the list.
+  4. `test_render_grid_json_target_best_carries_seconds_col_axis` — same
+     guarantee on the 2-D grid COLUMN axis: `best.max_speech_s == 10.0` plus the
+     held row gate `threshold == 0.3`.
+  5. `test_render_grid_json_best_inf_col_axis_survives_round_trip` — the `inf`
+     column baseline round-trips to `float('inf')`.
+- **`docs/research/voice-capture-tuning.md`.** The iter-257 `--target` seconds
+  subsection gains a paragraph on the `--json` surface: `best`/`top` cells carry
+  the bare seconds number (the `Infinity` token round-tripping to `inf`), with
+  two copy-paste `--json` invocations (1-D sweep, 2-D grid) and a note that unit
+  tests pin both surfaces.
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3814 passed** (3809 prior + 5 net new), run on the feature branch before
+  ff-merge.
+- Focused: `pytest tests/unit/test_gv_vad.py -k "json_target_best_carries_seconds
+  or best_inf_max_speech_survives or json_top_list_carries_seconds or
+  json_best_inf_col_axis"` → **5 passed**.
+- Re-confirmed on main after merge: `pytest tests/unit/test_gv_vad.py` →
+  **572 passed**.
+- Manual smoke (Python): `json.dumps({"max_speech_s": float("inf")})` →
+  `{"max_speech_s": Infinity}`; `json.loads(...)["max_speech_s"]` → `inf`,
+  `math.isinf` true.
+- Integration: not re-run this lap (no corpus symlinked into this worktree;
+  same as prior corpus-gated laps — the change is pure CLI render logic fully
+  covered by the unit matrix).
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] COMBINED additive+multiplicative `--target` weight** — iter-250/251
+   give additive (`:penalty`), iter-252 multiplicative (`*factor`); an operator
+   might want both on one element (`5:1*1.5`). Larger design question (operator
+   precedence of `:` vs `*`) — scope before building. Pure, headless if pursued.
+4. **[cli] `--target` `--csv` on the seconds axis** — iter-257 pins the HUMAN
+   `best:` line and iter-258 the JSON `best`/`top` on `max_speech_s`; the CSV
+   emitter (`render_vad_sweep_csv` / `render_vad_grid_csv`) writes the raw axis
+   value into the first column. An explicit test that the CSV seconds column
+   carries `10.0` / `inf` (and that `inf` writes as `inf`, not `Infinity` or a
+   blank) would complete the seconds-axis surface coverage. Small, pure,
+   headless.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
+   should track a curated subset, decide the policy and re-run
+   `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
