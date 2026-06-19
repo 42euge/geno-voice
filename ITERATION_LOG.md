@@ -22693,3 +22693,102 @@ exclusive" fix, and a quick-invocation line in the command block.
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
    should track a curated subset, decide the policy and re-run
    `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
+
+## iter-254 — `gv vad-grid` `--speech-pads` third column-axis option (region padding)
+
+**Branch:** `iter-254-grid-speech-pad-axis` (merged ff to main, commit `2557240`)
+**Date:** 2026-06-19
+
+**No STEER.md this lap.** The two top-priority next items carried since
+iter-227 (wire `ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()`
+in the desktop app) both need a Mac + mic + browser and can't run headless on
+the loop host. The "ingest new recordings" item stays corpus-gated — the new
+WAVs under `fixtures/recordings/` are large, untracked local artifacts (no
+corpus symlinked into the worktree). The COMBINED additive+multiplicative
+`--target` weight item was explicitly flagged "a larger design question — scope
+before building," and the `--target` micro-syntax has already grown for seven
+consecutive laps (iter-246→252). So I took the iter-253 backlog item #3, a clean
+parallel increment in the SAME `gv vad-grid` surface: add `--speech-pads` as a
+third selectable column axis.
+
+**The gap.** iter-253 added `speech_pad_ms` (the symmetric padding Silero adds
+to each end of every recovered region) as a fourth `gv vad-sweep` 1-D axis, but
+the 2-D `gv vad-grid` (gate × ms knob) still offered only `--min-silences` (the
+hangover, default) or `--min-speeches` (the floor) as its column. An operator
+who wanted to cross the P(speech) gate against padding directly — to see where
+the clip-vs-merge padding elbow shifts as the gate tightens — had to run several
+1-D pad sweeps and cross-read them by hand.
+
+**What changed (`examples/gv.py`).** The `{axis}` machinery built across
+iter-238/239 is fully generic, so this is the axis-addition pattern applied
+again, not a new mechanism:
+1. **`cmd_vad_grid`** reads a new `speech_pads` arg and selects `col_axis`
+   `"speech_pad_ms"` when set (a new `elif` after the `min_speeches` branch,
+   before the `min_silences` default). The `_seg` closure now holds
+   `speech_pad_ms` at its scalar UNLESS it is the column axis — the same
+   hold-the-non-column-ms-knob logic the silence/speech axes already used.
+2. **The parser** gains `--speech-pads` in the existing column mutex group
+   (`nonneg_float_list_type`, the same validator as the other ms axes), so all
+   three column options stay mutually exclusive. Help text on the subcommand,
+   the new arg, and the three scalar knobs updated (`--speech-pad-ms` now
+   "ignored when sweeping `--speech-pads`"; `--min-silence-ms` /
+   `--min-speech-ms` "held fixed … when the column axis is …/`--speech-pads`").
+3. **Docstring** on `cmd_vad_grid` names the third column option.
+
+**The renderers, labels, and pick block flow through untouched.** The
+human/JSON/CSV renderers, `_SWEEP_AXIS_LABEL` (already maps `speech_pad_ms` →
+`"speech_pad"` from iter-253), the bare-integer ms formatting
+(`_format_sweep_axis_value`), and the `--target`/`--top`/`--tie-break` pick block
+all read `_SWEEP_AXIS_LABEL.get(axis, axis)` and the `col_axis` name, so NO
+per-surface change was needed — only the handler axis selection and the parser.
+
+**Tests (`tests/unit/test_gv_vad.py`, +9 net).** Parser wiring (parse, default
+`None`, allow `0`, reject a negative member, the TWO new mutual-exclusion pairs
+against `--min-silences` and `--min-speeches`); `cmd_vad_grid` end-to-end
+asserting the segmenter sees the SWEPT `speech_pad_ms` with the gate and the
+other two ms knobs held at their scalars (the shared `--speech-pad-ms` scalar
+`999` is NOT used as a swept value); the JSON branch carries `col_axis:
+"speech_pad_ms"` and the right per-cell pad values; the human table labels the
+column `speech_pad` and formats bare integers (no `0.00` gate leak). `_grid_args`
+gained `speech_pads=None` so every prior grid test still constructs cleanly.
+
+**Docs (`docs/research/voice-capture-tuning.md`).** The `gv vad-grid` column-axis
+list now names `--speech-pads` as the third option (with the
+`--speech-pad-ms` held/ignored note), a quick-invocation line (gate × padding),
+and a paragraph on the clip-vs-merge trade-off, the shared validator, and the
+bare-integer formatting.
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3763 passed** (3754 prior + 9 net new), run on the feature branch before
+  ff-merge. Re-confirmed on main after merge: `pytest
+  tests/unit/test_gv_vad.py` → **521 passed**.
+- Manual smoke (on the branch): `parse_args(['vad-grid','rec.wav',
+  '--speech-pads','0,20,40'])` → `speech_pads == [0.0, 20.0, 40.0]`;
+  `_SWEEP_AXIS_LABEL['speech_pad_ms']` → `'speech_pad'`;
+  `_format_sweep_axis_value('speech_pad_ms', 40.0)` → `'40'`.
+- Integration: not re-run this lap (no corpus symlinked into this worktree;
+  same as prior corpus-gated laps — the change is pure CLI logic fully covered
+  by the unit matrix).
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] `gv vad-grid` `--max-speeches` column axis** — `vad-grid` now offers
+   the gate × {hangover, floor, padding}; the one remaining real `SileroParams`
+   knob without a grid column is `max_speech_s` (the force-split ceiling). It is
+   a SECONDS knob, not ms, so it would need its own `_SWEEP_AXIS_LABEL` entry and
+   a seconds formatter (the iter-253 `vad-sweep` axes are all ms) — a slightly
+   larger increment than this lap. Pure, headless if pursued.
+4. **[cli] COMBINED additive+multiplicative `--target` weight** — iter-250/251
+   give additive (`:penalty`), iter-252 multiplicative (`*factor`); an operator
+   might want both on one element (`5:1*1.5`). Larger design question (operator
+   precedence of `:` vs `*`) — scope before building. Pure, headless if pursued.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
+   should track a curated subset, decide the policy and re-run
+   `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
