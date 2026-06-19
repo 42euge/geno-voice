@@ -153,6 +153,8 @@ gv vad-sweep recording.wav --json                           # machine-readable r
 gv vad-sweep recording.wav --csv                            # flat CSV for plots (iter-237)
 gv vad-sweep recording.wav --target 3                       # data-driven best-value pick (iter-244)
 gv vad-sweep recording.wav --target 3-5                     # tolerance band: 0 distance inside (iter-246)
+gv vad-sweep recording.wav --target 3-                      # open band: at least 3 regions (iter-247)
+gv vad-sweep recording.wav --target -5                      # open band: at most 5 regions (iter-247)
 ```
 
 The human report is a small table — the WAV name, a `threshold / segments /
@@ -356,6 +358,30 @@ behaviour, since a scalar still parses to a bare `int` and a degenerate band
 `(n, n)` reduces to the scalar distance to `n`. Edges are non-negative whole
 numbers and `LO <= HI` (an inverted band is rejected as a typo). A `--target`
 with no `-` is the scalar form, exactly as before.
+
+#### `--target N-` / `--target -N` — open-ended bands (iter-247)
+
+A closed `LO-HI` band caps both ends, but often only one end matters — "at
+least 3 regions, however many more is fine" or "at most 5, the fewer the
+better". iter-247 lets either edge be **empty**: `--target 3-` means "at least
+3" (`(3, None)` — no upper bound) and `--target -5` means "at most 5"
+(`(None, 5)` — no lower bound). The open side simply skips its bound check, so
+any count on the satisfied side scores distance `0` and only the closed edge can
+produce a non-zero gap.
+
+```bash
+gv vad-sweep recording.wav --thresholds 0.3,0.5,0.7,0.9 --target 3-   # at least 3 regions
+gv vad-grid  recording.wav --thresholds 0.3,0.5,0.7 --min-silences 400,800 --target -5  # at most 5
+```
+
+The `best:` / `top N:` lines render an open band exactly as typed (`3-`, `-5`),
+and the `--json` `target` carries the open edge as `null` (`[3, null]`,
+`[null, 5]`). Everything else — `--top`, `--tie-break`, the pickers — flows
+through the same `grid_cell_distance` machinery, since an open band is still a
+`(lo, hi)` tuple (with `None` marking the open edge). Note `--target -1` now
+parses as the open band "at most 1", not a (rejected) negative count — a bare
+negative segment count is no longer expressible, which is harmless since nobody
+targets a negative count.
 
 ### `gv vad-grid` — a 2-D knob grid (iter-240)
 

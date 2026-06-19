@@ -246,10 +246,23 @@ def test_target_type_rejects_inverted_band(raw):
         gv.target_type(raw)
 
 
-@pytest.mark.parametrize("raw", ["-1", "3-", "-5", "3-5-7", "", "a-b", "1.5-2"])
+@pytest.mark.parametrize("raw", ["3-5-7", "", "a-b", "1.5-2", "-", " - ", "3.0-"])
 def test_target_type_rejects_malformed(raw):
     with pytest.raises(argparse.ArgumentTypeError):
         gv.target_type(raw)
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [("3-", (3, None)), ("-5", (None, 5)), ("0-", (0, None)), ("-0", (None, 0)),
+     (" 3- ", (3, None)), (" -5 ", (None, 5))],
+)
+def test_target_type_open_band_parses_to_tuple(raw, expected):
+    # iter-247: an empty edge is the open form — '3-' = at least 3 → (3, None);
+    # '-5' = at most 5 → (None, 5). One edge None, the other a non-negative int.
+    value = gv.target_type(raw)
+    assert value == expected
+    assert isinstance(value, tuple)
 
 
 # ---- _format_target: scalar vs band display ----------------------------
@@ -263,6 +276,14 @@ def test_format_target_scalar():
 def test_format_target_band():
     assert gv._format_target((3, 5)) == "3-5"
     assert gv._format_target((0, 2)) == "0-2"
+
+
+def test_format_target_open_band():
+    # iter-247: an open edge stays empty so it reads back exactly as typed.
+    assert gv._format_target((3, None)) == "3-"
+    assert gv._format_target((None, 5)) == "-5"
+    assert gv._format_target((0, None)) == "0-"
+    assert gv._format_target((None, 0)) == "-0"
 
 
 # ---- max_speech_type: the force-split bound ----------------------------
@@ -1946,9 +1967,12 @@ def test_vad_grid_target_zero_allowed():
     assert args.target == 0
 
 
-def test_vad_grid_rejects_negative_target():
-    with pytest.raises(SystemExit):
-        gv.build_parser().parse_args(["vad-grid", "rec.wav", "--target", "-1"])
+def test_vad_grid_target_dash_n_is_open_band_at_most():
+    # iter-247: '-1' is no longer a (rejected) negative scalar — it is the open
+    # band "at most 1" → (None, 1). A bare negative count is no longer
+    # expressible, which is fine: nobody targets a negative segment count.
+    args = gv.build_parser().parse_args(["vad-grid", "rec.wav", "--target", "-1"])
+    assert args.target == (None, 1)
 
 
 def test_vad_grid_rejects_fractional_target():
@@ -2080,6 +2104,22 @@ def test_grid_cell_distance_degenerate_band_equals_scalar():
     for n in (0, 3, 7):
         cell = {"num_segments": n + 2}
         assert gv.grid_cell_distance(cell, (n, n)) == gv.grid_cell_distance(cell, n)
+
+
+def test_grid_cell_distance_open_band_at_least():
+    # iter-247: (3, None) = "at least 3" — 0 for any count >= 3, gap below.
+    for n in (3, 4, 9):
+        assert gv.grid_cell_distance({"num_segments": n}, (3, None)) == 0
+    assert gv.grid_cell_distance({"num_segments": 1}, (3, None)) == 2  # 3 - 1
+    assert gv.grid_cell_distance({"num_segments": 0}, (3, None)) == 3  # 3 - 0
+
+
+def test_grid_cell_distance_open_band_at_most():
+    # iter-247: (None, 5) = "at most 5" — 0 for any count <= 5, gap above.
+    for n in (0, 3, 5):
+        assert gv.grid_cell_distance({"num_segments": n}, (None, 5)) == 0
+    assert gv.grid_cell_distance({"num_segments": 7}, (None, 5)) == 2  # 7 - 5
+    assert gv.grid_cell_distance({"num_segments": 6}, (None, 5)) == 1  # just above
 
 
 def test_pick_best_grid_cell_closest_to_target():
@@ -2333,6 +2373,36 @@ def test_render_grid_band_empty_grid_renders_band_text():
     assert "target 3-5 segments" in lines[-1]
 
 
+def test_render_grid_open_band_at_least_picks_satisfying_cell():
+    # iter-247: counts 4 and 1; band 3- ("at least 3") satisfies the 4-count cell
+    # (|Δ|=0) and the 1-count cell is short by 2, so the 4-count cell wins.
+    results = [_cell_result(n) for n in (4, 1)]
+    lines = gv.render_vad_grid(
+        [0.3], [400.0, 800.0], results, name="rec.wav", target=(3, None),
+    )
+    best_line = lines[-1]
+    assert best_line.lstrip().startswith("best:")
+    assert "4 segments" in best_line
+    assert "|Δ|=0" in best_line
+    # The open band renders as "3-", not a tuple repr with None.
+    assert "target 3-" in best_line
+    assert "None" not in best_line
+
+
+def test_render_grid_open_band_at_most_picks_satisfying_cell():
+    # iter-247: counts 4 and 8; band -5 ("at most 5") satisfies the 4-count cell
+    # (|Δ|=0) and the 8-count cell is over by 3, so the 4-count cell wins.
+    results = [_cell_result(n) for n in (4, 8)]
+    lines = gv.render_vad_grid(
+        [0.3], [400.0, 800.0], results, name="rec.wav", target=(None, 5),
+    )
+    best_line = lines[-1]
+    assert "4 segments" in best_line
+    assert "|Δ|=0" in best_line
+    assert "target -5" in best_line
+    assert "None" not in best_line
+
+
 def test_render_grid_json_omits_best_and_target_without_target():
     results = [_cell_result(n) for n in (4, 1)]
     payload = json.loads(
@@ -2367,6 +2437,30 @@ def test_render_grid_json_carries_band_target():
     assert payload["target"] == [3, 5]
     assert payload["best"]["num_segments"] == 4
     assert payload["best"]["distance"] == 0
+
+
+def test_render_grid_json_carries_open_band_target():
+    # iter-247: an open band serialises with null for the open edge — (3, None)
+    # → [3, null], (None, 5) → [null, 5]. The satisfied cell scores distance 0.
+    results = [_cell_result(n) for n in (4, 1)]
+    at_least = json.loads(
+        gv.render_vad_grid_json(
+            [0.3], [400.0, 800.0], results, name="rec.wav", target=(3, None),
+        )
+    )
+    assert at_least["target"] == [3, None]
+    assert at_least["best"]["num_segments"] == 4
+    assert at_least["best"]["distance"] == 0
+
+    at_most = json.loads(
+        gv.render_vad_grid_json(
+            [0.3], [400.0, 800.0], [_cell_result(n) for n in (4, 8)],
+            name="rec.wav", target=(None, 5),
+        )
+    )
+    assert at_most["target"] == [None, 5]
+    assert at_most["best"]["num_segments"] == 4
+    assert at_most["best"]["distance"] == 0
 
 
 def test_render_grid_json_best_is_none_for_empty_grid():
@@ -2815,6 +2909,50 @@ def test_cmd_vad_sweep_band_target_picks_in_band_value():
     assert "target 3-5" in text
 
 
+def test_cmd_vad_grid_open_band_target_picks_satisfying_cell():
+    # iter-247: low gate → 4 segments, high gate → 1. Band 3- ("at least 3")
+    # satisfies the 4-count cell (|Δ|=0), so it wins over the short 1-count cell.
+    def seg(wav, params=None):
+        n = 4 if params.threshold < 0.5 else 1
+        return _cell_result(n)
+
+    lines: List[str] = []
+    gv.cmd_vad_grid(
+        _grid_args(
+            thresholds=[0.3, 0.5], min_silences=[400.0, 800.0], target=(3, None),
+        ),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    text = "\n".join(lines)
+    assert "best:" in text
+    assert "4 segments" in text
+    assert "target 3-" in text
+    assert "None" not in text
+
+
+def test_cmd_vad_sweep_open_band_target_picks_satisfying_value():
+    # iter-247, sweep form: low gate → 4 segments, high gate → 8. Band -5
+    # ("at most 5") satisfies the 4-count threshold (|Δ|=0), so it wins.
+    def seg(wav, params=None):
+        n = 4 if params.threshold < 0.5 else 8
+        return _cell_result(n)
+
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(thresholds=[0.3, 0.7], target=(None, 5)),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    text = "\n".join(lines)
+    assert "best:" in text
+    assert "4 segments" in text
+    assert "target -5" in text
+    assert "None" not in text
+
+
 def test_cmd_vad_grid_csv_ignores_target():
     # CSV is a pure data grid — --target adds no best row/column.
     def seg(wav, params=None):
@@ -3051,10 +3189,17 @@ def test_vad_sweep_target_accepts_zero():
     assert args.target == 0
 
 
-@pytest.mark.parametrize("raw", ["-1", "2.5", "high"])
+@pytest.mark.parametrize("raw", ["2.5", "high", "5-3"])
 def test_vad_sweep_target_rejects_bad(raw):
     with pytest.raises(SystemExit):
         gv.build_parser().parse_args(["vad-sweep", "rec.wav", "--target", raw])
+
+
+def test_vad_sweep_target_dash_n_is_open_band_at_most():
+    # iter-247: '-1' parses as the open band "at most 1" → (None, 1), not a
+    # rejected negative scalar.
+    args = gv.build_parser().parse_args(["vad-sweep", "rec.wav", "--target", "-1"])
+    assert args.target == (None, 1)
 
 
 def test_vad_sweep_top_parses_int():
