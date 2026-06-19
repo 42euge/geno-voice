@@ -25080,3 +25080,112 @@ by the passing test on first run).
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
    should track a curated subset, decide the policy and re-run
    `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
+
+## iter-278 — grid CSV consumer re-derives the JSON `--target` scaled pick
+
+**Branch:** `iter-278-grid-scaled-target` (merged ff to main, commit `1bba8b1`)
+**Date:** 2026-06-19
+
+**No STEER.md this lap.** The carried operator items (wire
+`ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()` in the desktop
+app) both need a Mac + mic + browser and can't run headless; "ingest new
+recordings" stays corpus-gated; the COMBINED additive+multiplicative `--target`
+weight is a feature/design item, not a regression gap. iter-277 backlog item #4
+named the next pure increment: "the scaled twin is the most natural next step
+(closest sibling to iter-277)." I confirmed no existing test round-trips a
+`{"scaled": …}` target *cross-surface* (only the iter-273/274 scalar, iter-275
+band, iter-276 preference, and iter-277 weighted twins exist; the scaled-set unit
+tests pin a single surface in isolation), so the gap is real, and took the scaled
+form.
+
+**The gap.** iter-273–277 pinned the grid CSV↔JSON cross-surface `--target` pick
+AGREEMENT — a CSV consumer re-parses the bare grid table back to cells and
+re-runs `pick_best_grid_cell` / `pick_top_grid_cells` to recover the
+JSON-embedded `best`/`top` identically — across forms split into camps:
+scalar/band fold their whole cost into `grid_cell_distance`; the
+`{"prefer": …}` carries its precedence at the SORT-KEY layer; and iter-277's
+`{"weighted": …}` was the first whose preference is folded back INTO the distance
+as an ADDITIVE offset (raw `|Δ|` + penalty). A `{"scaled": …}` target (iter-252)
+is the MULTIPLICATIVE twin: each element's cost is raw `|Δ|` TIMES its factor.
+The distinction is load-bearing — the weighted penalty is a FIXED offset (shifts
+every distance by the same amount, can flip a near-tie), but a scaled factor
+GROWS with distance: a far cell on a high-factor element loses HARDER the farther
+it drifts, while an exact hit stays free on any factor (`0 * factor = 0`). So a
+regression that dropped the factors on the JSON path (collapsing the scaled set
+to a plain set of its elements) while the CSV consumer still applied them would
+diverge the two surfaces yet ship green — a failure mode iter-277's ADDITIVE
+fixture cannot catch, because the additive and multiplicative folds choose
+DIFFERENT winners for the same element set. No production code changed (the
+wiring was already correct — proved by the passing test on first run).
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+1 test).**
+  `test_render_grid_csv_consumer_rederives_json_scaled_target_pick` — a 2×2
+  `threshold × min_silence_ms` grid (row-major counts 4/6/1/2) with
+  `target={"scaled": [(3, 3), (8, 1)]}`, `top=3`. Count 4 is raw distance 1 from
+  the preferred element 3, but the ×3 factor blows it up to 3; count 6 is raw
+  distance 2 from the ×1 accepted element 8, leaving it at 2 — so the factor flips
+  the best to `(0.3,800)` count 6. A flat SET control of the same two elements
+  `[3, 8]` carries no factors, picks the closer count-4 cell `(0.3,400)`, and
+  lands a DIFFERENT winner, proving the ×3 factor is load-bearing for the flip
+  (and that the additive iter-277 fold would have left count 4 the winner — only
+  the multiplicative grow-with-distance fold produces the count-6 flip). Asserts
+  the JSON records `target == {"scaled": [[3, 3], [8, 1]]}`; the CSV body carries
+  no `best`/`distance`/`scaled` columns; a CSV `DictReader` consumer re-running
+  `pick_best_grid_cell` recovers a `best` identical to the JSON `best` (distance
+  stripped, re-derived scaled distance `2` matching); and `pick_top_grid_cells`
+  recovers a shortlist agreeing cell-for-cell, the scaled-2 winner ahead of the
+  two scaled-3 cells (row-major), `top` distances `[2, 3, 3]`.
+- **`docs/research/voice-capture-tuning.md`.** Extended the grid cross-surface
+  paragraph: iter-278 carries the pick agreement to the multiplicative twin of
+  iter-277's weighted target — an iter-252 scaled target — explaining that a
+  factor grows with distance (vs the weighted fixed offset) and that the additive
+  fixture cannot catch a JSON path confusing the two folds.
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3858 passed** (3857 prior + 1 net new), run on the feature branch before
+  ff-merge.
+- Focused: `pytest tests/unit/test_gv_vad.py -k "rederives_json_scaled_target_pick or rederives_json_weighted_target_pick"`
+  → **2 passed** (the new scaled twin + the iter-277 weighted twin it
+  generalises multiplicatively).
+- Pre-test smoke (Python, on the branch): the 2×2 grid (counts 4/6/1/2) → JSON
+  `best` = `(0.3,800)` count 6 dist 2; a CSV consumer re-running
+  `pick_best_grid_cell(cells, {"scaled": [(3,3),(8,1)]})` recovered the SAME
+  cell, while the SET control `[3, 8]` picked `(0.3,400)` count 4 — confirming the
+  ×3 factor flips the pick and the wiring was already correct before writing the
+  assertion. `top` dists `[2, 3, 3]`.
+- Integration: not re-run this lap (no corpus symlinked into this worktree; same
+  as prior corpus-gated laps — the change is pure CLI render logic fully covered
+  by the unit matrix).
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] COMBINED additive+multiplicative `--target` weight** — iter-250/251
+   give additive (`:penalty`), iter-252 multiplicative (`*factor`); an operator
+   might want both on one element (`5:1*1.5`). Larger design question (operator
+   precedence of `:` vs `*`) — scope before building. Pure, headless if pursued.
+   The only `--target` increment that is a FEATURE, not a regression-test gap.
+4. **[cli] The grid CSV↔JSON cross-surface `--target` pick contract now covers:**
+   scalar under row-major (iter-273) and speech (iter-274) tie-breaks, a closed
+   `(lo, hi)` tolerance band (iter-275), the `{"prefer": …}` PREFERENCE form
+   (iter-276 — precedence at the sort-key layer), the `{"weighted": …}`
+   ADDITIVELY-penalised form (iter-277 — fixed offset folded into the distance),
+   and the `{"scaled": …}` MULTIPLICATIVELY-penalised form (iter-278 — factor
+   folded into the distance, growing with distance). The likely-next pure
+   increments still open cross-surface: the OPEN band `(lo, None)`/`(None, hi)`
+   (iter-247 — a half-bounded distance, distinct from the closed band iter-275
+   already covers), and the flat SET target (iter-248 — note iter-276/277/278
+   CONTROLS already exercise a set pick but do not round-trip it against a JSON
+   set surface, so a dedicated set twin is the smallest remaining gap). The open
+   band is the most distinct remaining failure mode (one-sided distance). Confirm
+   no existing test already exercises the chosen form cross-surface before
+   assuming a gap.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
+   should track a curated subset, decide the policy and re-run
+   `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
