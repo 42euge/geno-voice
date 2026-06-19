@@ -22792,3 +22792,122 @@ bare-integer formatting.
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
    should track a curated subset, decide the policy and re-run
    `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
+
+## iter-255 — `gv vad-grid` `--max-speeches` fourth column-axis (force-split ceiling, seconds)
+
+**Branch:** `iter-255-grid-max-speech-axis` (merged ff to main, commit `92b8ab6`)
+**Date:** 2026-06-19
+
+**No STEER.md this lap.** The two top-priority next items carried since
+iter-227 (wire `ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()`
+in the desktop app) both need a Mac + mic + browser and can't run headless on
+the loop host. The "ingest new recordings" item stays corpus-gated (large
+untracked WAVs, no corpus symlinked into the worktree). The COMBINED
+additive+multiplicative `--target` weight item was again flagged "a larger
+design question — scope before building," and the `--target` micro-syntax has
+already grown for many consecutive laps. So I took the iter-254 backlog item #3,
+the clean parallel increment in the SAME `gv vad-grid` surface: add
+`--max-speeches` (the force-split ceiling) as a fourth selectable column axis —
+the LAST real `SileroParams` knob without a grid column.
+
+**The gap.** iter-254 added `--speech-pads` (region padding) as the third
+column option, leaving `max_speech_s` — the only remaining real knob — usable
+only as a shared scalar held across all cells. An operator who wanted to cross
+the P(speech) gate against the force-split cap directly (to see where a long
+monologue starts getting chopped into more segments as the cap tightens, and
+whether a tighter gate already keeps regions short enough that the cap never
+fires) had to run several 1-D passes and cross-read them by hand.
+
+**The twist: it's a SECONDS axis, not ms.** Every prior grid/sweep axis is the
+P(speech) gate or a millisecond knob. `max_speech_s` is the first axis measured
+in seconds, so unlike the iter-254 `--speech-pads` clone it needed two new
+pieces of machinery rather than only an axis selection:
+1. **`max_speech_list_type`** (`examples/gv.py`) — the seconds twin of
+   `nonneg_float_list_type`. Each token runs through the scalar
+   `max_speech_type`, so the `inf`/`none`/`off` "never split" sentinels and the
+   positive-only rule (a `0`s cap would force-split forever) carry through per
+   element. An operator can include `inf` to anchor the no-cap baseline in the
+   sweep. Rejects empty/non-string like the ms validator.
+2. **`_SWEEP_SECONDS_AXES` + a third `_format_sweep_axis_value` branch** — a new
+   `_SWEEP_AXIS_LABEL["max_speech_s"] = "max_speech"` entry and a `%g` formatter
+   that prints compact seconds (`5`, `12.5`) and renders the sentinel as `inf`,
+   with no gate-style `0.00` leak and no ms-style integer truncation.
+
+**What changed (`examples/gv.py`).**
+- **`cmd_vad_grid`** reads a new `max_speeches` arg and selects `col_axis`
+  `"max_speech_s"` (a new `elif` after the `speech_pads` branch, before the
+  `min_silences` default). The `_seg` closure now holds `max_speech_s` at its
+  scalar UNLESS it is the column axis — the same hold-the-non-column-knob logic
+  the ms axes already used.
+- **The parser** gains `--max-speeches` in the existing column mutex group
+  (`max_speech_list_type`), so all FOUR column options stay mutually exclusive.
+  Help text on the subcommand, the new arg, and the four scalar knobs updated
+  (`--max-speech-s` "ignored when sweeping `--max-speeches`"; the three ms knobs
+  "held fixed … when the column axis is …/`--max-speeches`").
+- **Docstring** on `cmd_vad_grid` names the fourth column option and that it is
+  in seconds.
+
+**The renderers, JSON/CSV emitters, and pick block flow through untouched.**
+They all read `col_axis` and `_SWEEP_AXIS_LABEL.get(axis, axis)` /
+`_format_sweep_axis_value(axis, …)`, so NO per-surface change was needed — only
+the handler axis selection, the two new format/validator helpers, and the
+parser.
+
+**Tests (`tests/unit/test_gv_vad.py`, +25 net).** `max_speech_list_type` matrix
+(parse seconds, `inf`/`none`/`off` sentinels per token, blank/trailing-comma
+stripping, order/dupes preserved, zero member rejected, negative member
+rejected, empty rejected, non-string rejected); the seconds formatter (compact
+`%g`, `inf` rendering) and the axis label; parser wiring (parse, default `None`,
+zero/negative rejection, the THREE new mutual-exclusion pairs against
+`--min-silences`/`--min-speeches`/`--speech-pads`); `cmd_vad_grid` end-to-end
+asserting the segmenter sees the SWEPT `max_speech_s` with the gate and the
+three ms knobs held at their scalars (the shared `--max-speech-s` scalar `999`
+is NOT used as a swept value), that `inf` flows through unchanged, the JSON
+branch carries `col_axis: "max_speech_s"` with the right per-cell values, and
+the human table labels the column `max_speech` with compact seconds (no `5.00`,
+`inf` shown). `_grid_args` gained `max_speeches=None` so every prior grid test
+still constructs cleanly.
+
+**Docs (`docs/research/voice-capture-tuning.md`).** The `gv vad-grid` column-axis
+list now names `--max-speeches` as the fourth option (seconds, not ms), a
+quick-invocation line (gate × ceiling), and a paragraph on the force-split
+semantics, the dedicated seconds validator/formatter, the `inf` no-cap baseline,
+and the held/ignored scalar behaviour.
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3788 passed** (3763 prior + 25 net new), run on the feature branch before
+  ff-merge. Re-confirmed on main after merge: `pytest
+  tests/unit/test_gv_vad.py` → **546 passed**.
+- Manual smoke (on the branch): `parse_args(['vad-grid','rec.wav',
+  '--max-speeches','5,10,inf'])` → `max_speeches == [5.0, 10.0, inf]`;
+  `_SWEEP_AXIS_LABEL['max_speech_s']` → `'max_speech'`;
+  `_format_sweep_axis_value('max_speech_s', 5.0)` → `'5'`;
+  `_format_sweep_axis_value('max_speech_s', 12.5)` → `'12.5'`;
+  `_format_sweep_axis_value('max_speech_s', inf)` → `'inf'`;
+  `max_speech_list_type('5,none,off')` → `[5.0, inf, inf]`.
+- Integration: not re-run this lap (no corpus symlinked into this worktree;
+  same as prior corpus-gated laps — the change is pure CLI logic fully covered
+  by the unit matrix).
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] `gv vad-sweep` `--max-speeches` axis** — iter-255 adds the
+   force-split ceiling as a `vad-grid` COLUMN axis; the 1-D `gv vad-sweep` still
+   offers only the gate + the three ms knobs. Adding `max_speech_s` as a fifth
+   1-D sweep axis would complete the symmetry (every grid column axis also a
+   sweep axis). Reuses the same `max_speech_list_type` + `_SWEEP_SECONDS_AXES`
+   machinery added this lap. Pure, headless.
+4. **[cli] COMBINED additive+multiplicative `--target` weight** — iter-250/251
+   give additive (`:penalty`), iter-252 multiplicative (`*factor`); an operator
+   might want both on one element (`5:1*1.5`). Larger design question (operator
+   precedence of `:` vs `*`) — scope before building. Pure, headless if pursued.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
+   should track a curated subset, decide the policy and re-run
+   `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
