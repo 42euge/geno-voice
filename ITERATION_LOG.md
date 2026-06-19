@@ -24383,3 +24383,97 @@ was already correct — proved by a pre-test smoke run).
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
    should track a curated subset, decide the policy and re-run
    `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
+
+## iter-271 — grid CSV ↔ JSON cross-surface round-trip with `inf` baseline on non-default axes
+
+**Branch:** `iter-271-grid-inf-roundtrip` (merged ff to main, commit `fffa0d1`)
+**Date:** 2026-06-19
+
+**No STEER.md this lap.** The carried top-priority items (wire
+`ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()` in the desktop
+app) both need a Mac + mic + browser and can't run headless on the loop host.
+"Ingest new recordings" stays corpus-gated. The COMBINED
+additive+multiplicative `--target` weight is a feature/design item, not a
+regression-test gap. So I took iter-270 backlog item #4: extend the 2-D grid
+CSV↔JSON cross-surface round-trip to an `inf` (`max_speech_s`) baseline cell on
+a non-default axis pair.
+
+**The gap.** iter-270 shipped
+`test_render_grid_csv_round_trips_to_json_twin_on_nondefault_axes` — the 2-D
+analogue of the iter-268/269 1-D twins — proving `render_vad_grid_csv` parses
+back to the EXACT `render_vad_grid_json` `grid` payload on a non-default
+`row_axis`/`col_axis`. But every cell in that test carried a FINITE seconds
+value. The `inf` no-cap baseline (the never-force-split sentinel) takes two
+DIFFERENT textual forms across the two machine surfaces: `render_vad_grid_csv`
+writes the bare token `inf` (so a `loadtxt`/`read_csv` consumer recovers it via
+`float("inf")`), while `render_vad_grid_json` relies on Python's `json` emitting
+the bare `Infinity` token that `json.loads` reads back as `float('inf')`.
+iter-267 pinned each surface's inf handling in ISOLATION (CSV writes `inf` —
+`test_render_grid_csv_max_speech_*_inf_*`; JSON round-trips `Infinity` —
+`test_render_grid_json_best_inf_col_axis_survives_round_trip`), and
+`test_render_grid_csv_max_speech_col_axis_multi_row_round_trips_with_inf`
+round-trips the CSV against the SHARED `vad_segmentation_grid` data layer — but
+the two emitters were never round-tripped DIRECTLY against each other with an
+inf cell present, and never on a non-default axis pair. A regression that let
+one surface stringify the sentinel as `Infinity`/`inf.00`/blank while the other
+kept `inf`, or that parsed the inf row position differently between surfaces,
+would have shipped green while iter-270's finite-only twin and the per-surface
+inf tests stayed passing. No production code changed (the wiring was already
+correct — proved by a pre-test smoke run).
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+1 test, +57 lines).**
+  `test_render_grid_csv_round_trips_to_json_twin_with_inf_on_nondefault_axes` —
+  a 2×2 grid (`max_speech_s` rows `[inf, 5.0]` × `speech_pad_ms` columns
+  `[30, 90]`, row-major counts 1/1/2/2, the inf baseline riding the FIRST
+  column); asserts the CSV `DictReader` rows parse back to the EXACT `--json`
+  `grid` payload, with the inf baseline recovered as `float('inf')` in the SAME
+  cells on both surfaces (`[True, True, False, False]` on each), no `Infinity`
+  spelling leaking into the CSV body, and the first two CSV columns keyed by the
+  swept axis names. The inf-cell analogue of iter-270's finite-only grid twin.
+- **`docs/research/voice-capture-tuning.md`.** Extended the iter-270 grid
+  round-trip paragraph: iter-271 proves both surfaces recover the inf sentinel
+  as `float('inf')` in the same cells despite the `inf`/`Infinity` textual split.
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3851 passed** (3850 prior + 1 net new), run on the feature branch before
+  ff-merge AND re-run on main after the merge (both 3851).
+- Focused: `pytest tests/unit/test_gv_vad.py -k "round_trips_to_json_twin"` →
+  **5 passed** (3 one-D ms-axis twins + iter-270 finite grid twin + the new
+  iter-271 inf grid twin).
+- Pre-test smoke (Python, on the branch): a 2×2 `max_speech_s × speech_pad_ms`
+  grid with `max_speech_s` rows `[inf, 5.0]` → CSV writes `inf,30.0,1,0.5` /
+  `inf,90.0,1,0.5` / `5.0,30.0,2,1.0` / `5.0,90.0,2,1.0`; CSV `DictReader` rows
+  parsed back to the JSON `grid` payload identically (`parsed == grid` True,
+  `Infinity` not in CSV text, inf flags matched on both surfaces). Confirmed the
+  wiring was already correct before writing the assertion.
+- Integration: not re-run this lap (no corpus symlinked into this worktree; same
+  as prior corpus-gated laps — the change is pure CLI render logic fully covered
+  by the unit matrix).
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] COMBINED additive+multiplicative `--target` weight** — iter-250/251
+   give additive (`:penalty`), iter-252 multiplicative (`*factor`); an operator
+   might want both on one element (`5:1*1.5`). Larger design question (operator
+   precedence of `:` vs `*`) — scope before building. Pure, headless if pursued.
+   This remains the only `--target` increment that is a FEATURE (new
+   parse/semantics), not a regression-test gap.
+4. **[cli] The CSV↔JSON cross-surface round-trip is now closed on the 1-D sweep
+   (all five axes) AND the 2-D grid (finite non-default pair in iter-270, inf
+   baseline in iter-271).** The likely-next pure increment is a grid CSV↔JSON
+   round-trip where the inf baseline rides the COLUMN axis (iter-271 placed it on
+   the ROW axis) on a non-default pair, OR a multi-row grid where inf appears in
+   every row — confirm whether the multi-row col-axis inf test
+   (`..._multi_row_round_trips_with_inf`) already covers the cross-surface case
+   or only the shared-data-layer case before assuming a gap.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
+   should track a curated subset, decide the policy and re-run
+   `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
