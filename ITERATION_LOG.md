@@ -25733,3 +25733,134 @@ correct — proved by the passing test on first run).
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
    should track a curated subset, decide the policy and re-run
    `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
+
+## iter-284 — grid CSV ↔ JSON cross-surface `--target` preference pick under speech tie-break
+
+**Branch:** `iter-284-grid-prefer-speech-tie` (merged ff to main, commit `37a6002`)
+**Date:** 2026-06-19
+
+**No STEER.md this lap.** The carried operator items (wire `ContinuousListener`
+→ `/vad/silero/stream`; adopt `prewarm()` in the desktop app) both need a Mac +
+mic + browser and can't run headless; "ingest new recordings" stays corpus-gated;
+the COMBINED additive+multiplicative `--target` weight is a feature/design item,
+not a regression gap. iter-283 backlog item #4 named this exact increment: with
+the speech tie-break now cross-surface pinned for the scalar (iter-274), closed
+band (iter-281), flat set (iter-282), and open band (iter-283), "the `{"prefer": …}`
+form under speech is the next distinct twin — a soft preference that scores 0 [MIN
+over elements] for the preferred value and a tie-broken fallback otherwise, so it
+ties differently from the hard band/set forms." I confirmed no existing test
+round-trips a PREFERENCE target *under the speech tie-break* cross-surface
+(iter-276 pins the preference only under row-major; iter-281/282/283 pin speech
+only for a band/set/open-band — all forms that fold their whole cost into the
+distance), so the gap is real, and took the preference + speech-tie form.
+
+**The gap.** iter-273–283 pinned the grid CSV↔JSON cross-surface `--target` pick
+AGREEMENT — a CSV consumer re-parses the bare grid table back to cells and
+re-runs `pick_best_grid_cell` / `pick_top_grid_cells` to recover the
+JSON-embedded `best`/`top` identically. Under the NON-DEFAULT `tie_break="speech"`
+(breaks distance ties on recovered speech, most first, iter-243) the round-trip
+was pinned for a SCALAR (iter-274), closed BAND (iter-281), flat SET (iter-282),
+and OPEN band (iter-283). All four of those forms fold their WHOLE cost into
+`grid_cell_distance`, so under speech `grid_cell_sort_key` is a TWO-level key
+`(distance, -speech_s)` — speech is the SECONDARY tie-break. A `{"prefer": [...]}`
+PREFERENCE target (iter-249) is the first cross-surface form whose precedence
+lives at the SORT-KEY layer, not the distance: `grid_cell_distance` treats a
+preference IDENTICALLY to a flat set (the MIN over its elements), and
+`grid_cell_sort_key` inserts `_preference_rank` as a SECONDARY key, so under
+`tie_break="speech"` the key is a THREE-level `(distance, preference_rank,
+-speech_s)` — speech is only the TERTIARY decider, biting solely among cells tied
+on BOTH distance AND rank. That is a DISTINCT mechanism from every prior speech
+twin: the band/set/open-band ties reorder PURELY on speech (no rank layer between
+distance and speech), whereas here the preference rank OUTRANKS speech — a
+less-speech cell nearer a more-preferred element must beat a more-speech cell
+nearer a less-preferred one. Pinning the preference under row-major (iter-276) and
+the band/set/open-band under speech (iter-281/282/283) does NOT pin the preference
+under speech. A regression that dropped the `tie_break` on the JSON path (falling
+back to row-major) while the CSV consumer still passed `"speech"`, OR flattened
+the `{"prefer": ...}` dict to a plain set on the JSON path (dropping the rank key
+so speech jumps from tertiary to secondary), would diverge the two surfaces yet
+ship green — a failure mode neither iter-276 (preference, no speech reordering)
+nor iter-281/282/283 (two-level key, speech secondary) can catch. No production
+code changed (the wiring was already correct — proved by the passing test on
+first run).
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+1 test).**
+  `test_render_grid_csv_consumer_rederives_json_preference_target_speech_tie_pick`
+  — a 2×2 `threshold × min_silence_ms` grid (row-major counts 4/6/8/1) with
+  `target={"prefer": [5, 9]}`, `top=3`, `tie_break="speech"`. Counts 4, 6, 8 all
+  sit at distance 1 (each one off its nearest preference element). With
+  `_cell_result` coupling speech to count (n→n*0.5s) they carry distinct speech
+  (2.0/3.0/4.0s). The preference rank SPLITS the dist-1 tie: counts 4 and 6
+  (rank 0, nearer the MORE-preferred 5) outrank count 8 (rank 1, nearer 9)
+  REGARDLESS of speech — even though count 8 has the MOST speech (4.0s). Among the
+  two rank-0 cells, `tie_break="speech"` then prefers count 6 (0.3,800) at 3.0s
+  over count 4 at 2.0s. Row-major would keep count 4 (the earliest rank-0 cell) —
+  a DIFFERENT pick, proving the tie-break flips the result. A ROW-MAJOR control
+  picks count 4; a flat-SET control `[5, 9]` (no preference rank) drops the key to
+  two-level and elects the MOST-speech-overall count 8 (0.5,400) — proving the
+  preference rank is load-bearing (flattening to a set changes the pick). Asserts
+  the JSON records `target == {"prefer": [5, 9]}` AND `tie_break == "speech"`; the
+  CSV body carries no `best`/`distance`/`tie_break`/`prefer` columns; a CSV
+  `DictReader` consumer re-running `pick_best_grid_cell(cells, target, "speech")`
+  recovers a `best` identical to the JSON `best` (distance 1, count 6); and
+  `pick_top_grid_cells(..., "speech")` recovers a shortlist agreeing cell-for-cell,
+  the two rank-0 cells leading speech-ordered `[(0.3,800),(0.3,400)]` (speech
+  `[3.0,2.0]`) AHEAD of the most-speech rank-1 cell `(0.5,400)` (count 8, speech
+  4.0) — `speech_s [3.0, 2.0, 4.0]` proving speech is subordinate to the rank —
+  the dist-4 out-of-preference cell never reaching the top 3.
+- **`docs/research/voice-capture-tuning.md`.** Extended the grid cross-surface
+  paragraph: iter-284 carries the speech tie-break onto the preference form (the
+  three-level `(distance, preference_rank, -speech_s)` sort key, speech only
+  tertiary), with the row-major and set controls explained, and noted that the
+  scalar, closed band, flat set, open band, and preference are now cross-surface
+  pinned under `tie_break="speech"`.
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3864 passed** (3863 prior + 1 net new), run on the feature branch before
+  ff-merge.
+- Focused: `pytest tests/unit/test_gv_vad.py -k "rederives_json_preference_target_speech_tie_pick or rederives_json_preference_target_pick or rederives_json_open_band_target_speech_tie_pick"`
+  → **3 passed** (the new preference+speech twin + the iter-276 preference-under-
+  row-major twin it re-tie-breaks on speech + the iter-283 open-band+speech twin
+  it sits beside).
+- Pre-test smoke (Python, on the branch): the 2×2 grid (counts 4/6/8/1) →
+  preference `{"prefer":[5,9]}` distances `[1, 1, 1, 4]`; speech sort keys
+  `[(1,0,-2.0),(1,0,-3.0),(1,1,-4.0),(4,0,-0.5)]`; preference+speech best count 6
+  `(0.3,800)`, row-major best count 4 `(0.3,400)`, set+speech best count 8
+  `(0.5,400)` — confirming the rank outranks speech (count 8 has most speech yet
+  loses to the rank-0 pair) and the wiring was already correct before writing the
+  assertion. preference+speech `top` `[(6,3.0),(4,2.0),(8,4.0)]`.
+- Integration: not re-run this lap (no corpus symlinked into this worktree; same
+  as prior corpus-gated laps — the change is pure CLI render logic fully covered
+  by the unit matrix).
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] COMBINED additive+multiplicative `--target` weight** — iter-250/251
+   give additive (`:penalty`), iter-252 multiplicative (`*factor`); an operator
+   might want both on one element (`5:1*1.5`). Larger design question (operator
+   precedence of `:` vs `*`) — scope before building. Pure, headless if pursued.
+   Still the ONLY `--target` increment that is a FEATURE, not a regression-test gap.
+4. **[cli] Speech-tie cross-surface contract now covers scalar (iter-274), closed
+   band (iter-281), flat set (iter-282), open band (iter-283), and preference
+   (iter-284).** The remaining speech-tie cross-surface gaps under the OTHER forms:
+   a `{"weighted": …}` / `{"scaled": …}` dict target under `tie_break="speech"`.
+   These two fold their preference back INTO the distance (additive penalty /
+   multiplicative factor), so — UNLIKE the preference — they insert NO secondary
+   sort key (the speech key stays SECONDARY, like the band/set/open-band forms),
+   but the distance itself carries a non-integer/penalised value, so the cells
+   that tie at the floor differ from any unweighted form. The `{"weighted": …}`
+   form under speech is the next distinct twin: pick penalties so two cells tie at
+   equal PENALISED distance (not raw), then let the speech tie-break reorder them
+   cross-surface. Alternatively the 1-D `vad-sweep` cross-surface forms, or the
+   `simulate-mirror` grid pick round-trips. Confirm no existing test already
+   exercises the chosen form cross-surface before assuming a gap.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
+   should track a curated subset, decide the policy and re-run
+   `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
