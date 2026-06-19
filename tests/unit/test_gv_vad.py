@@ -6138,6 +6138,107 @@ def test_render_grid_csv_consumer_rederives_json_open_band_target_pick():
     assert [c["distance"] for c in payload["top"][:2]] == [0, 0]
 
 
+def test_render_grid_csv_consumer_rederives_json_set_target_pick():
+    # iter-280: iter-273–279 pinned the cross-surface --target pick AGREEMENT (a
+    # CSV consumer re-parses the bare grid table back to cells and re-runs
+    # pick_best_grid_cell / pick_top_grid_cells to recover the JSON-embedded
+    # `best`/`top` identically) across the scalar (iter-273/274), closed band
+    # (iter-275), {"prefer": …} (iter-276), {"weighted": …} (iter-277),
+    # {"scaled": …} (iter-278), and OPEN band (iter-279) target forms. The one
+    # documented grid_cell_distance form never round-tripped cross-surface is the
+    # flat SET (iter-248): a plain list of elements scored by the MIN distance to
+    # ANY element, so a count that satisfies any listed target scores 0. The
+    # iter-276/277/278 fixtures use a flat-set CONTROL to prove their dict forms
+    # diverge from it, but NONE of them round-trips a bare list against a JSON set
+    # surface — the set itself was only ever the foil, never the pinned subject.
+    # render_vad_grid_json threads the set straight into the pickers (the target
+    # is opaque to them — they only forward it to grid_cell_distance); a CSV
+    # consumer re-running the SAME pickers with the SAME set MUST recover the SAME
+    # pick. That agreement under a flat set was never pinned — a regression that,
+    # say, kept only the first element (collapsing the set to a scalar) or coerced
+    # the list to a closed (lo, hi) band on the JSON path while the CSV consumer
+    # still passed the full set would diverge the two surfaces yet ship green,
+    # because no prior fixture exercises a set as the JSON-embedded target. Pin
+    # both surfaces to name the SAME min-distance best cell and the SAME
+    # set-scored top shortlist, with a SCALAR control (the set's own first
+    # element) proving the second set element is load-bearing.
+    row_values = [0.3, 0.5]
+    col_values = [400.0, 800.0]
+    # 2×2 row-major counts 9/8/5/1, target = flat set [3, 8] (satisfy EITHER 3 or
+    # 8). Set distances (min over the two elements, |count - 3| vs |count - 8|):
+    #   - (0.3,400) count 9  → min(6, 1) = 1
+    #   - (0.3,800) count 8  → min(5, 0) = 0 (exact hit on element 8)
+    #   - (0.5,400) count 5  → min(2, 3) = 2
+    #   - (0.5,800) count 1  → min(2, 7) = 2
+    # Count 8 is an exact hit on the SECOND set element (dist 0), so the set best
+    # is (0.3,800). A SCALAR control of the set's FIRST element, 3, would instead
+    # score [6, 5, 2, 2] and pick the nearest-to-3 cell, count 5 (0.5,400) — a
+    # DIFFERENT pick. So the second set element (8) genuinely changes the result,
+    # the whole point of this fixture: the set is not silently collapsing to its
+    # head element on either surface.
+    results = [_cell_result(n) for n in (9, 8, 5, 1)]
+    target = [3, 8]
+    csv_text = gv.render_vad_grid_csv(
+        row_values, col_values, results, name="rec.wav",
+        row_axis="threshold", col_axis="min_silence_ms",
+    )
+    payload = json.loads(
+        gv.render_vad_grid_json(
+            row_values, col_values, results, name="rec.wav",
+            row_axis="threshold", col_axis="min_silence_ms",
+            target=target, top=3,
+        )
+    )
+    # The JSON twin records the set (a list serialises straight to a JSON array).
+    assert payload["target"] == [3, 8]
+    # The CSV body still carries no pick columns — it is the bare grid.
+    assert "best" not in csv_text and "distance" not in csv_text
+    # A CSV consumer re-parses the flat table back to grid cells...
+    cells = [
+        {
+            "threshold": float(row["threshold"]),
+            "min_silence_ms": float(row["min_silence_ms"]),
+            "num_segments": int(row["num_segments"]),
+            "speech_s": float(row["speech_s"]),
+        }
+        for row in csv.DictReader(io.StringIO(csv_text))
+    ]
+    # ...and re-runs the SAME picker with the SAME set. The CSV-derived best equals
+    # the JSON `best` (distance key stripped), and the re-derived set distance
+    # matches the one the JSON embedded (0 — exact hit on element 8).
+    csv_best = gv.pick_best_grid_cell(cells, target)
+    json_best = dict(payload["best"])
+    assert json_best.pop("distance") == gv.grid_cell_distance(csv_best, target)
+    assert csv_best == json_best
+    assert (csv_best["threshold"], csv_best["min_silence_ms"]) == (0.3, 800.0)
+    assert csv_best["num_segments"] == 8
+    assert payload["best"]["distance"] == 0
+    # CONTROL: a SCALAR equal to the set's FIRST element, 3, scores [6, 5, 2, 2]
+    # and picks the nearest-to-3 cell, count 5 (0.5,400) — a DIFFERENT pick.
+    # Proves the test cannot pass by the set silently collapsing to its head
+    # element on either surface; the SECOND element (8) is load-bearing for the
+    # count-8 pick.
+    scalar_best = gv.pick_best_grid_cell(cells, 3)
+    assert scalar_best != csv_best
+    assert (scalar_best["threshold"], scalar_best["min_silence_ms"]) == (0.5, 400.0)
+    assert scalar_best["num_segments"] == 5
+    # The top shortlist agrees cell-for-cell (distance stripped), with the exact-hit
+    # cell leading ahead of the two next-nearest cells.
+    csv_top = gv.pick_top_grid_cells(cells, target, 3)
+    json_top = [dict(c) for c in payload["top"]]
+    for c in json_top:
+        c.pop("distance")
+    assert csv_top == json_top
+    # Head of the shortlist is the single best pick, on both surfaces.
+    assert csv_top[0] == csv_best
+    # The exact-hit (dist-0) cell leads, then the two dist-1/dist-2 cells row-major.
+    assert [(c["threshold"], c["min_silence_ms"]) for c in csv_top] == [
+        (0.3, 800.0), (0.3, 400.0), (0.5, 400.0),
+    ]
+    # The shortlist distances are the set-scored min-over-elements gaps, ascending.
+    assert [c["distance"] for c in payload["top"]] == [0, 1, 2]
+
+
 # ---- cmd_vad_grid: end-to-end ------------------------------------------
 
 

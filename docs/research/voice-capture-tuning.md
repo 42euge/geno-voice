@@ -311,7 +311,17 @@ one-sided and unbounded, so arbitrarily many cells tie at the floor. The fixture
 targets `(5, None)`, ties a count-12 and a count-7 cell at distance 0, and a
 *closed* `(5, 9)` control pushes count 12 back out (distance 3) to pick a different
 cell — so the test catches a JSON path that coerced the open `None` edge to a
-finite bound or collapsed the open band to a scalar at `lo`.
+finite bound or collapsed the open band to a scalar at `lo`. iter-280 closes the
+last documented form: the iter-248 flat **set** — a plain list of elements scored
+by the *min* distance to any one of them. The earlier dict-form fixtures only ever
+used a flat set as a *control* to prove their preference/weight/factor diverged
+from it, so the set itself was never the pinned cross-surface subject. The fixture
+targets `[3, 8]`, lands an exact hit on element `8` (distance 0), and a *scalar*
+control equal to the set's first element `3` picks a different, nearer-to-3 cell —
+so the test catches a JSON path that kept only the first element (collapsing the
+set to a scalar) or coerced the list to a closed band. With this, every
+`grid_cell_distance` target form (scalar, closed band, open band, set, preference,
+weighted, scaled) is cross-surface pinned.
 
 **`--min-silences` — a second sweep axis (iter-238).** The default axis is the
 P(speech) gate (`--thresholds`); passing `--min-silences` instead sweeps the
