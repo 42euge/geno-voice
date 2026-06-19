@@ -21800,3 +21800,94 @@ exactly as in iter-244.
 4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
    --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
    refresh the comparison table.
+
+## iter-246 — `gv vad-grid`/`vad-sweep` `--target LO-HI` tolerance band
+
+**Branch:** `iter-246-target-band` (merged ff to main, commit `c002aae`)
+**Date:** 2026-06-18
+
+**No STEER.md this lap.** The two top-priority next items carried since
+iter-227 (wire `ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()`
+in the desktop app) both need a Mac + mic + browser and can't run headless on
+the loop host. The recording corpus is unchanged since iter-231 (same 6 WAVs),
+so the "ingest new recordings" item had nothing to do. I took the
+headless-doable item from the iter-245 backlog: let `--target` accept a RANGE
+(item #3).
+
+**The gap.** The data-driven pick (iter-241→245) scores each grid cell / swept
+value against a SINGLE desired segment count via `|num_segments - target|`. But
+operators often want a tolerance WINDOW, not a point — "anywhere from 3 to 5
+regions is fine, just not 1 and not 8". With only a scalar target they had to
+eyeball the table to judge whether a count was "close enough".
+
+**What changed (`examples/gv.py`).**
+1. **`target_type`** — a new argparse `type` replacing `nonneg_int_type` on
+   BOTH `--target` args (sweep + grid). A bare count with no `-` parses to an
+   `int` (byte-for-byte the iter-241→245 scalar behaviour); a `LO-HI` form
+   parses to a `(lo, hi)` int tuple. Each edge reuses `nonneg_int_type`'s rules
+   (`0` legal, negatives/fractionals rejected); the band requires `lo <= hi`
+   (an inverted band is rejected as a typo, not treated as a degenerate
+   window).
+2. **`grid_cell_distance`** — now handles a `(lo, hi)` target: `0` for any
+   count INSIDE the inclusive `[lo, hi]` band (every in-band count equally
+   perfect), else the gap to the nearest edge (below `lo` → `lo - count`; above
+   `hi` → `count - hi`). A degenerate `(n, n)` band reduces EXACTLY to the
+   scalar distance to `n`. Scalar targets unchanged.
+3. **`_format_target`** — renders a scalar as its bare count (`"3"`) and a band
+   as `"lo-hi"` (`"3-5"`); `_render_pick_block` uses it for the `best:` /
+   `top N:` lines so they read naturally for either form. The `--json` `target`
+   serialises as a `[lo, hi]` array (a tuple → JSON array, no extra code).
+4. **The band rides the existing machinery untouched.** Because a banded
+   distance is just another lower-is-better key, `--top`, `--tie-break`, the
+   pickers (`pick_best_grid_cell` / `pick_top_grid_cells` / `grid_cell_sort_key`),
+   the shared `_render_pick_block` helper (iter-245), and the `--json` payload
+   all flow through with NO parallel implementation. Only `grid_cell_distance`
+   and the display/parse seams needed touching.
+
+**Scalar output is byte-for-byte unchanged.** Every prior scalar-`--target`
+case (renderer, JSON, cmd-level, integration) passes without edits — a scalar
+still parses to a bare `int` and the distance branch is the original `abs()`.
+
+**Tests (`tests/unit/test_gv_vad.py`, +27).** `target_type` scalar/band
+parsing (incl. whitespace, `4-4` degenerate), inverted-band rejection
+(`5-3`), malformed rejection (`3-`, `-5`, `3-5-7`, `1.5-2`, `a-b`, empty);
+`_format_target` both forms; `grid_cell_distance` band (zero inside, gap to
+nearest edge below/above/just-outside, degenerate band == scalar); renderer
++ JSON best-pick driven with a band (in-band cell wins at `|Δ|=0`, band text
+renders as `3-5` not a tuple repr, JSON `target` is `[3, 5]`); empty-grid band
+message; `cmd_vad_grid` AND `cmd_vad_sweep` end-to-end with a band target. No
+torch import — bare dicts / the existing `_cell_result` stub.
+
+**Docs (`docs/research/voice-capture-tuning.md`).** A `--target LO-HI
+tolerance band` subsection under `gv vad-sweep` (the scoring rule, invocation
+set, the scalar-unchanged guarantee) + a quick-invocation line in the sweep
+block.
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3586 passed** (3559 prior + 27 new), run on the feature branch before
+  ff-merge. Re-confirmed on main after merge: `pytest
+  tests/unit/test_gv_vad.py tests/unit/test_gv_cli.py` → **437 passed**.
+- Integration: `python -m pytest tests/integration/test_gv_vad_cli.py` →
+  **29 skipped** (no corpus symlinked into this worktree this lap; same as
+  prior corpus-gated laps — the change is pure CLI logic fully covered by the
+  unit matrix).
+- Manual smoke: `target_type('3')`→`3`, `target_type('3-5')`→`(3, 5)`,
+  `_format_target((3,5))`→`'3-5'`, `_format_target(3)`→`'3'`.
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] `gv vad-sweep`/`vad-grid` `--target` open-ended band** — extend the
+   iter-246 `LO-HI` form with one-sided bands (`3-` = "at least 3", `-5` = "at
+   most 5"), scoring 0 on the satisfied side and the gap on the other. The
+   parser currently rejects `3-`/`-5` as malformed; an open band would reuse
+   the same `grid_cell_distance` edge logic with `inf` on the open side. Pure,
+   headless.
+4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
+   --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
+   refresh the comparison table.
