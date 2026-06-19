@@ -666,6 +666,14 @@ both `"row_axis"` and `"col_axis"` (so a consumer knows which two dimensions the
 cells vary) and a flat `"grid"` cell list keyed by those names; the `--csv`
 header is `<row_axis>,<col_axis>,num_segments,speech_s` (e.g.
 `threshold,min_silence_ms,…`) so the grid pivots straight into a spreadsheet.
+When `max_speech_s` is the column (or row) axis the seconds cells write the bare
+token `inf` for the no-cap baseline — `str(float('inf'))`, not the JSON
+`Infinity` token and not a blank — once per gate row, so a multi-row grid keeps
+every `inf` baseline parseable; iter-267 unit tests pin that the inf sentinel
+appears in *every* threshold row and that each seconds cell `float()`-round-trips
+losslessly back to its grid value across rows (the column-axis multi-row case the
+iter-259 `min_silence_ms` round-trip never reached), plus a row-axis placement
+proving the sentinel writes `inf` in the first column too.
 Integration tests pin that every cell matches an independent `gv vad --json` run,
 that recovered speech is non-increasing reading down rising thresholds *within
 each column* (the gate monotonicity, now visible inside the grid), and that

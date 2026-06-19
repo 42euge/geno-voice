@@ -3441,6 +3441,85 @@ def test_render_grid_csv_max_speech_col_axis_inf_baseline_writes_inf():
     assert "Infinity" not in text
 
 
+def test_render_grid_csv_max_speech_col_axis_multi_row_round_trips_with_inf():
+    # iter-267: the iter-259 grid-CSV seconds proof above is a single 1×2 grid
+    # (one threshold row). The MULTI-row case — several threshold rows each
+    # crossed with the seconds force-split caps — was never exercised on the
+    # column-axis CSV: the iter-259 round-trip test (test_render_grid_csv_
+    # round_trips_to_grid_cells) sweeps min_silence_ms, NOT the seconds axis,
+    # and the col-axis inf test holds threshold fixed at a single value. So the
+    # row-major emission of an inf baseline ONCE PER ROW, and the lossless
+    # float() round-trip of every seconds cell across rows, had no joint
+    # coverage. A regression that emitted the inf token only on the first row,
+    # or that let a later row's seconds cell drift to "Infinity"/blank/truncated,
+    # would have shipped green while the single-row col-axis test stayed passing.
+    # 2 thresholds × 3 caps (inf, 10, 5), row-major counts 1/2/4 then 1/3/6.
+    caps = [float("inf"), 10.0, 5.0]
+    results = [
+        _Result(name="rec.wav", sample_rate=16000, duration_s=20.0,
+                 segments=[_Seg(0.0, 12.0)]),
+        _Result(name="rec.wav", sample_rate=16000, duration_s=20.0,
+                 segments=[_Seg(0.0, 5.0), _Seg(5.0, 10.0)]),
+        _Result(name="rec.wav", sample_rate=16000, duration_s=20.0,
+                 segments=[_Seg(0.0, 2.5), _Seg(2.5, 5.0), _Seg(5.0, 7.5), _Seg(7.5, 10.0)]),
+        _Result(name="rec.wav", sample_rate=16000, duration_s=20.0,
+                 segments=[_Seg(0.0, 12.0)]),
+        _Result(name="rec.wav", sample_rate=16000, duration_s=20.0,
+                 segments=[_Seg(0.0, 4.0), _Seg(4.0, 8.0), _Seg(8.0, 12.0)]),
+        _Result(name="rec.wav", sample_rate=16000, duration_s=20.0,
+                 segments=[_Seg(float(i) * 2, float(i) * 2 + 1.0) for i in range(6)]),
+    ]
+    text = gv.render_vad_grid_csv(
+        [0.3, 0.5], caps, results, name="rec.wav",
+        row_axis="threshold", col_axis="max_speech_s",
+    )
+    rows = list(csv.reader(io.StringIO(text)))
+    assert rows[0] == ["threshold", "max_speech_s", "num_segments", "speech_s"]
+    # The inf baseline is the FIRST column cell of EVERY threshold row, not just
+    # the first — proves the seconds-axis sentinel survives row-major repetition.
+    assert rows[1][:2] == ["0.3", "inf"]
+    assert rows[4][:2] == ["0.5", "inf"]
+    assert all(math.isinf(float(rows[r][1])) for r in (1, 4))
+    # Every cell parses losslessly back to its grid value, inf included, so a
+    # downstream loadtxt/read_csv consumer recovers BOTH grid axes across rows.
+    cells = gv.vad_segmentation_grid(
+        [0.3, 0.5], caps, results, row_axis="threshold", col_axis="max_speech_s",
+    )
+    assert len(rows) - 1 == len(cells) == 6
+    for csv_row, cell in zip(rows[1:], cells):
+        assert float(csv_row[0]) == cell["threshold"]
+        assert float(csv_row[1]) == cell["max_speech_s"]
+        assert int(csv_row[2]) == cell["num_segments"]
+        assert float(csv_row[3]) == cell["speech_s"]
+    # Guard against the JSON Infinity token leaking into any row of the surface.
+    assert "Infinity" not in text
+
+
+def test_render_grid_csv_max_speech_row_axis_inf_baseline_writes_inf():
+    # iter-267: the seconds force-split cap is a COLUMN axis in cmd_vad_grid, but
+    # render_vad_grid_csv is axis-agnostic (it stringifies whichever value the
+    # row_axis/col_axis name). Pinning the seconds axis on the ROW position proves
+    # the inf sentinel writes "inf" in the FIRST column too (the column the
+    # round-trip consumers key on), not only when it rides the second column.
+    # 2 caps (inf, 5) × 1 hangover column.
+    results = [
+        _Result(name="rec.wav", sample_rate=16000, duration_s=20.0,
+                 segments=[_Seg(0.0, 12.0)]),
+        _Result(name="rec.wav", sample_rate=16000, duration_s=20.0,
+                 segments=[_Seg(0.0, 2.5), _Seg(2.5, 5.0)]),
+    ]
+    text = gv.render_vad_grid_csv(
+        [float("inf"), 5.0], [400.0], results, name="rec.wav",
+        row_axis="max_speech_s", col_axis="min_silence_ms",
+    )
+    rows = list(csv.reader(io.StringIO(text)))
+    assert rows[0] == ["max_speech_s", "min_silence_ms", "num_segments", "speech_s"]
+    assert rows[1][:3] == ["inf", "400.0", "1"]
+    assert math.isinf(float(rows[1][0]))
+    assert rows[2][:3] == ["5.0", "400.0", "2"]
+    assert "Infinity" not in text
+
+
 # ---- --target JSON `best`/`top` on the seconds max_speech_s axis -------
 #
 # iter-257 pinned the HUMAN best: line %g formatting on the seconds axis;
