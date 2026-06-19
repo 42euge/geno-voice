@@ -333,7 +333,17 @@ the three in-band cells order by recovered speech (most first) rather than grid
 position. A row-major control picks the earliest in-band cell instead, so the test
 catches a JSON path that dropped the tie-break (falling back to row-major) or
 coerced the band to a scalar (undoing the multi-cell tie the speech tie-break needs
-to bite).
+to bite). iter-282 carries the speech tie-break onto the next-most-distinct form:
+a flat *set* `[3, 5, 8]`. A set produces multi-cell ties like a band, but through a
+DIFFERENT mechanism — MIN distance over the listed elements (iter-248), so three
+cells score distance 0 as exact hits on DIFFERENT elements rather than sitting
+inside one lo/hi pair. Under `tie_break="speech"` those three in-set cells order by
+recovered speech (most first); a row-major control picks the earliest instead, and a
+scalar control of the set's head element `3` (the only cell that hits it) picks a
+DIFFERENT cell, proving the set's tail elements are load-bearing for the multi-cell
+tie the speech tie-break reorders. With this every documented target form is now
+cross-surface pinned under the default row-major tie-break, and the scalar, closed
+band, and flat set are pinned under `tie_break="speech"`.
 
 **`--min-silences` — a second sweep axis (iter-238).** The default axis is the
 P(speech) gate (`--thresholds`); passing `--min-silences` instead sweeps the

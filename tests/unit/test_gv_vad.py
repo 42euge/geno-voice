@@ -6352,6 +6352,129 @@ def test_render_grid_csv_consumer_rederives_json_band_target_speech_tie_pick():
     assert [c["speech_s"] for c in payload["top"]] == [3.0, 2.5, 2.0]
 
 
+def test_render_grid_csv_consumer_rederives_json_set_target_speech_tie_pick():
+    # iter-282: iter-281 carried the cross-surface --target round-trip onto the
+    # independent tie_break="speech" seam, but pinned it ONLY for a closed BAND
+    # target (three dist-0 ties at the band floor) — and iter-274 had pinned speech
+    # only for a SCALAR (no ties to reorder). Every OTHER form (set, open band,
+    # preference, weighted, scaled) was still pinned ONLY under the default
+    # row-major tie-break. The next-most-distinct gap (named in iter-281 backlog #4)
+    # is a flat SET target under tie_break="speech": a set produces multi-cell ties
+    # like a band, but via a DIFFERENT mechanism — MIN distance over the listed
+    # elements (iter-248), so a count satisfying ANY element scores 0. The band ties
+    # of iter-281 all sit between one lo/hi pair; the set ties here are independent
+    # exact hits on DIFFERENT elements. The target FORM (grid_cell_distance, which
+    # cells tie at 0) and the tie-break (grid_cell_sort_key, how the tied cells
+    # ORDER) are independent seams; pinning the set under row-major (iter-280) and
+    # the band under speech (iter-281) does NOT pin the set under speech.
+    # render_vad_grid_json threads BOTH the set target AND tie_break="speech" into
+    # the pickers; a CSV consumer re-running the SAME pickers with the SAME set and
+    # the SAME tie_break MUST recover the SAME speech-ordered pick. A regression that
+    # dropped the tie_break on the JSON path (falling back to row-major) while the
+    # CSV consumer still passed "speech", OR collapsed the set to its head element
+    # (undoing the multi-cell min-over-elements tie the speech tie-break needs to
+    # bite), would diverge the two surfaces yet ship green — a failure mode neither
+    # iter-280 (set, no speech reordering) nor iter-281 (band, single lo/hi tie
+    # mechanism) can catch. Pin both surfaces to name the SAME speech-broken best
+    # cell and the SAME speech-ordered set top shortlist, with a ROW-MAJOR control
+    # (the tie-break flips the pick) AND a SCALAR control (the set's tail elements
+    # are load-bearing) both proving the test cannot pass by accident.
+    row_values = [0.3, 0.5]
+    col_values = [400.0, 800.0]
+    # 2×2 row-major counts 3/8/5/1, target = flat set [3, 5, 8] (satisfy ANY of 3,
+    # 5, 8). With _cell_result speech is coupled to count (n segments → n*0.5s), so
+    # the cells that tie carry DIFFERENT speech and the two tie-breaks genuinely
+    # DISAGREE. Set distances (min over the three elements):
+    #   - (0.3,400) count 3 → exact hit on 3 → dist 0, speech 1.5
+    #   - (0.3,800) count 8 → exact hit on 8 → dist 0, speech 4.0
+    #   - (0.5,400) count 5 → exact hit on 5 → dist 0, speech 2.5
+    #   - (0.5,800) count 1 → min(2, 4, 7)  → dist 2, speech 0.5
+    # THREE cells tie at dist 0 (counts 3, 8, 5), each an exact hit on a DIFFERENT
+    # set element. ROW-MAJOR would keep (0.3,400) first (earliest, count 3), but
+    # tie_break="speech" prefers the MOST-speech in-set cell, count 8 (0.3,800) at
+    # 4.0s. So the speech best is (0.3,800), NOT the row-major pick — proving the
+    # tie-break flips the result on both surfaces, and that with three set ties on
+    # distinct elements the set form gives the speech tie-break as much to reorder
+    # as a band does, but through min-over-elements rather than a single lo/hi pair.
+    results = [_cell_result(n) for n in (3, 8, 5, 1)]
+    target = [3, 5, 8]
+    csv_text = gv.render_vad_grid_csv(
+        row_values, col_values, results, name="rec.wav",
+        row_axis="threshold", col_axis="min_silence_ms",
+    )
+    payload = json.loads(
+        gv.render_vad_grid_json(
+            row_values, col_values, results, name="rec.wav",
+            row_axis="threshold", col_axis="min_silence_ms",
+            target=target, top=3, tie_break="speech",
+        )
+    )
+    # The JSON twin records BOTH the set target (a list serialises to a JSON array)
+    # and WHICH tie-break produced its pick.
+    assert payload["target"] == [3, 5, 8]
+    assert payload["tie_break"] == "speech"
+    # The CSV body still carries no pick columns or tie_break — it is the bare grid.
+    assert "best" not in csv_text and "distance" not in csv_text
+    assert "tie_break" not in csv_text
+    # A CSV consumer re-parses the flat table back to grid cells...
+    cells = [
+        {
+            "threshold": float(row["threshold"]),
+            "min_silence_ms": float(row["min_silence_ms"]),
+            "num_segments": int(row["num_segments"]),
+            "speech_s": float(row["speech_s"]),
+        }
+        for row in csv.DictReader(io.StringIO(csv_text))
+    ]
+    # ...and re-runs the SAME picker with the SAME set target AND the SAME
+    # tie_break="speech". The CSV-derived best equals the JSON `best` (distance key
+    # stripped), and the re-derived set distance matches the one the JSON embedded
+    # (0 — exact hit on element 8).
+    csv_best = gv.pick_best_grid_cell(cells, target, "speech")
+    json_best = dict(payload["best"])
+    assert json_best.pop("distance") == gv.grid_cell_distance(csv_best, target)
+    assert csv_best == json_best
+    assert (csv_best["threshold"], csv_best["min_silence_ms"]) == (0.3, 800.0)
+    assert csv_best["num_segments"] == 8
+    assert payload["best"]["distance"] == 0
+    # CONTROL 1: the SAME set under the DEFAULT row-major tie-break picks a DIFFERENT
+    # cell (the earliest in-set cell, count 3 (0.3,400)), so this test cannot pass by
+    # the JSON path silently dropping the speech tie-break (falling back to
+    # row-major). The speech tie-break is load-bearing for the count-8 pick.
+    rowmajor_best = gv.pick_best_grid_cell(cells, target)
+    assert rowmajor_best != csv_best
+    assert (rowmajor_best["threshold"], rowmajor_best["min_silence_ms"]) == (0.3, 400.0)
+    assert rowmajor_best["num_segments"] == 3
+    # CONTROL 2: a SCALAR equal to the set's FIRST element, 3, scores [0, 5, 2, 6]
+    # and — even under the SAME speech tie-break — picks the lone dist-0 cell, count
+    # 3 (0.3,400), since no other cell ties it. A DIFFERENT pick from the set best,
+    # proving the set's TAIL elements (5, 8) are load-bearing for the multi-cell tie
+    # the speech tie-break reorders; the set is not silently collapsing to its head.
+    scalar_best = gv.pick_best_grid_cell(cells, 3, "speech")
+    assert scalar_best != csv_best
+    assert (scalar_best["threshold"], scalar_best["min_silence_ms"]) == (0.3, 400.0)
+    assert scalar_best["num_segments"] == 3
+    # The top shortlist agrees cell-for-cell (distance stripped), with the three
+    # in-set (dist-0) cells ordered by recovered speech (MOST first), the dist-2
+    # out-of-set cell never reaching the top 3.
+    csv_top = gv.pick_top_grid_cells(cells, target, 3, "speech")
+    json_top = [dict(c) for c in payload["top"]]
+    for c in json_top:
+        c.pop("distance")
+    assert csv_top == json_top
+    # Head of the shortlist is the single best pick, on both surfaces.
+    assert csv_top[0] == csv_best
+    # All three in-set cells lead, speech-ordered (4.0s, 2.5s, 1.5s) — NOT the
+    # row-major order (which would be count 3, 8, 5 = (0.3,400),(0.3,800),(0.5,400)).
+    assert [(c["threshold"], c["min_silence_ms"]) for c in csv_top] == [
+        (0.3, 800.0), (0.5, 400.0), (0.3, 400.0),
+    ]
+    # All three leading cells scored the set floor (distance 0, each an exact hit on
+    # a DIFFERENT element) — the speech tie-break, not distance, decided their order.
+    assert [c["distance"] for c in payload["top"]] == [0, 0, 0]
+    assert [c["speech_s"] for c in payload["top"]] == [4.0, 2.5, 1.5]
+
+
 # ---- cmd_vad_grid: end-to-end ------------------------------------------
 
 
