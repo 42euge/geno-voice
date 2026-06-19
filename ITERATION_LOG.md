@@ -24969,3 +24969,114 @@ test on first run).
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
    should track a curated subset, decide the policy and re-run
    `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
+
+## iter-277 — grid CSV consumer re-derives the JSON `--target` weighted pick
+
+**Branch:** `iter-277-grid-weighted-target` (merged ff to main, commit `60d9255`)
+**Date:** 2026-06-19
+
+**No STEER.md this lap.** The carried top-priority items (wire
+`ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()` in the desktop
+app) both need a Mac + mic + browser and can't run headless. "Ingest new
+recordings" stays corpus-gated. The COMBINED additive+multiplicative `--target`
+weight is a feature/design item, not a regression gap. iter-276 backlog item #4
+named the next pure increment: the weighted/scaled cross-surface twin, "the most
+distinct remaining gap … build a fixture where the penalty/factor OVERRIDES a
+raw-distance gap (a less-preferred-but-closer cell loses)." I confirmed no
+existing test round-trips a weighted target *cross-surface* (the existing
+`rederives_json_*` tests are the scalar iter-273/274, band iter-275, and
+preference iter-276 twins; the weighted tests at lines 4563+/5069+/5087+ pin a
+single surface in isolation), so the gap is real, and took the weighted form.
+
+**The gap.** iter-273/274/275/276 pinned the cross-surface `--target` pick
+AGREEMENT — a CSV consumer re-parses the bare grid table back to cells and
+re-runs `pick_best_grid_cell` / `pick_top_grid_cells` to recover the
+JSON-embedded `best`/`top` identically — for a SCALAR target under both
+tie-breaks (row-major iter-273, speech iter-274), a closed `(lo, hi)` tolerance
+BAND (iter-275), and a `{"prefer": [...]}` PREFERENCE (iter-276). Those forms
+fall into two camps: scalar/band fold their whole cost into
+`grid_cell_distance`, and the preference carries its precedence at the SORT-KEY
+layer (`grid_cell_distance` treats it as a flat set; only `grid_cell_sort_key`
+inserts `_preference_rank` to break exact-distance ties). A `{"weighted": [...]}`
+target (iter-250) is the first cross-surface form whose preference is folded back
+INTO the distance: each element scores its raw `|Δ|` PLUS its penalty, and the
+set takes the MIN over those penalised distances. So unlike iter-276's preference
+(which only breaks EXACT-distance ties), a weight can OVERRIDE a raw-distance gap
+— a less-preferred-but-closer cell can LOSE to a preferred-but-farther one. That
+is a DIFFERENT failure mode than iter-276: here the agreement lives in the
+distance, not a sort key, so a regression that dropped the penalties on the JSON
+path (collapsing the weighted set to a plain set of its elements) while the CSV
+consumer still passed the weights would diverge the two surfaces yet ship green,
+because iters 273/274/275/276 never exercise a form whose weight overrides a
+distance gap. No production code changed (the wiring was already correct — proved
+by the passing test on first run).
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+1 test, +108 lines).**
+  `test_render_grid_csv_consumer_rederives_json_weighted_target_pick` — a 2×2
+  `threshold × min_silence_ms` grid (row-major counts 6/4/8/1) with
+  `target={"weighted": [(3, 0), (6, 2)]}`, `top=3`. Count 6 lands EXACTLY on the
+  accepted element 6 (raw distance 0) but pays its +2 penalty → 2; count 4 is raw
+  distance 1 from the preferred 3 (penalty 0) → 1, so the penalty flips the best
+  to `(0.3,800)` count 4 — the weight OVERRIDES the raw-distance gap. A flat SET
+  control of the same two elements `[3, 6]` carries no penalties, lets the exact
+  hit (count 6) win, and picks `(0.3,400)` count 6 — a DIFFERENT cell, proving the
+  +2 penalty is load-bearing for the flip. Asserts the JSON records
+  `target == {"weighted": [[3, 0], [6, 2]]}`; the CSV body carries no
+  `best`/`distance`/`weighted` columns; a CSV `DictReader` consumer re-running
+  `pick_best_grid_cell` recovers a `best` identical to the JSON `best` (distance
+  stripped, re-derived penalised distance `1` matching); and
+  `pick_top_grid_cells` recovers a shortlist agreeing cell-for-cell, the penalty-1
+  winner ahead of the two penalty-2 cells (row-major), `top` distances `[1, 2, 2]`.
+- **`docs/research/voice-capture-tuning.md`.** Extended the grid cross-surface
+  paragraph: iter-277 carries the pick agreement to the first form whose
+  preference is folded back INTO the distance rather than living at the sort-key
+  layer — an iter-250 weighted target — with a flat-set control catching a JSON
+  path that dropped the penalties.
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3857 passed** (3856 prior + 1 net new), run on the feature branch before
+  ff-merge AND re-run on main after the merge (both 3857).
+- Focused: `pytest tests/unit/test_gv_vad.py -k "rederives_json_weighted_target_pick or rederives_json_preference_target_pick or rederives_json_band_target_pick"`
+  → **3 passed** (the new weighted twin + the iter-275 band and iter-276
+  preference twins it generalises).
+- Pre-test smoke (Python, on the branch): the 2×2 grid (counts 6/4/8/1) → JSON
+  `best` = `(0.3,800)` count 4 dist 1; a CSV `DictReader` consumer re-running
+  `pick_best_grid_cell(cells, {"weighted": [(3,0),(6,2)]})` recovered the SAME
+  cell, while the SET control `[3, 6]` picked `(0.3,400)` count 6 — confirming the
+  penalty flips the pick and the wiring was already correct before writing the
+  assertion. `top` = `[(0.3,800),(0.3,400),(0.5,800)]`, dists `[1, 2, 2]`.
+- Integration: not re-run this lap (no corpus symlinked into this worktree; same
+  as prior corpus-gated laps — the change is pure CLI render logic fully covered
+  by the unit matrix).
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] COMBINED additive+multiplicative `--target` weight** — iter-250/251
+   give additive (`:penalty`), iter-252 multiplicative (`*factor`); an operator
+   might want both on one element (`5:1*1.5`). Larger design question (operator
+   precedence of `:` vs `*`) — scope before building. Pure, headless if pursued.
+   The only `--target` increment that is a FEATURE, not a regression-test gap.
+4. **[cli] The grid CSV↔JSON cross-surface `--target` pick contract now covers:**
+   scalar under row-major (iter-273) and speech (iter-274) tie-breaks, a closed
+   `(lo, hi)` tolerance band (iter-275), the `{"prefer": …}` PREFERENCE form
+   (iter-276 — precedence at the sort-key layer), and the `{"weighted": …}`
+   ADDITIVELY-penalised form (iter-277 — precedence folded into the distance,
+   overriding a raw-distance gap). The likely-next pure increments still open
+   cross-surface: the `{"scaled": …}` MULTIPLICATIVELY-penalised set (iter-252 —
+   like weighted, folds into the distance but grows the cost with distance, so a
+   far less-preferred cell loses harder; a distinct fixture from iter-277's flat
+   +penalty), the OPEN band `(lo, None)`/`(None, hi)` (iter-247), and the flat SET
+   target (iter-248 — note iter-276/iter-277 CONTROLS already exercise a set pick
+   but do not round-trip it against a JSON set surface). The scaled twin is the
+   most natural next step (closest sibling to iter-277). Confirm no existing test
+   already exercises the chosen form cross-surface before assuming a gap.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
+   should track a curated subset, decide the policy and re-run
+   `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
