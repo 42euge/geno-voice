@@ -21287,3 +21287,99 @@ cross-reading them by eye — exactly the manual cross-product `simulate-mirror
 4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
    --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
    refresh the comparison table.
+
+## iter-241 — `gv vad-grid --target`: a data-driven best-cell pick
+
+**Branch:** `iter-241-vad-grid-best` (merged ff to main, commit `09af699`)
+**Date:** 2026-06-18
+
+**No STEER.md this lap.** The two top-priority next items carried since
+iter-227 (wire `ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()`
+in the desktop app) both need a Mac + mic + browser and can't run headless on
+the loop host. The recording corpus is unchanged since iter-231 (same 6 WAVs),
+so the "ingest new recordings" item had nothing to do. I took the first
+headless-doable item from the iter-240 backlog: `gv vad-grid` best-cell pick
+(item #3) — score each grid cell against a target segment count and surface a
+data-driven "best" pick, the analogue of `simulate-mirror --grid`'s
+`pick_best_mirror_config` / `render_grid` best line.
+
+**The gap.** iter-240 shipped `gv vad-grid`, tabulating the gate × ms-knob
+cartesian product so an operator can read the VAD elbow in two dimensions at
+once. But the bare grid still left the operator to eyeball which cell to pick —
+exactly the manual cross-reading `simulate-mirror --grid`'s best line already
+eliminates for the WPM grid (it scores every cell and names the lowest-score
+`(base_wpm, strength)` pair). VAD had the table but no pick.
+
+**What changed.**
+1. **`nonneg_int_type`** (`examples/gv.py`) — argparse `type` for `--target`
+   (the desired segment count). The integer twin of `nonneg_float_type`: `0`
+   allowed ("expect silence"), negatives and fractional/non-integer values
+   rejected with an `ArgumentTypeError`.
+2. **`grid_cell_distance(cell, target)`** — the pure lower-is-better score
+   `|num_segments - target|`, the VAD analogue of `MirrorGridPoint.score`. Reads
+   only `cell["num_segments"]` (an int), so it never touches torch.
+3. **`pick_best_grid_cell(cells, target)`** — returns the closest cell;
+   earliest row-major tie wins (matching `pick_best_mirror_config` and
+   `_longest_consecutive_run`), `None` for an empty grid. No I/O.
+4. **`render_vad_grid` / `render_vad_grid_json`** gain an optional `target`
+   kwarg. The human table appends a `best:` line naming the picked
+   `(threshold, ms)` pair, its segment count, and the residual `|Δ|`; the JSON
+   payload adds a `"target"` int and a `"best"` cell (the picked grid cell plus
+   a `"distance"` key, or `null` for an empty grid). `target=None` (the default)
+   leaves the iter-240 output byte-for-byte unchanged.
+5. **`render_vad_grid_csv` untouched** — `--target` is a derived scalar, not a
+   per-cell column, so the CSV stays a pure data grid (the same rationale that
+   keeps `name` out of the CSV body).
+6. **`cmd_vad_grid`** reads `args.target` and threads it into the human/json
+   renderers (both the available and the unavailable branches); CSV ignores it.
+7. **Parser:** new `--target` (nonneg int, default `None`) on the `vad-grid`
+   subcommand, beside `--max-speech-s` and the `--json`/`--csv` format group.
+8. **Tests.**
+   - `tests/unit/test_gv_vad.py` (**+~25**): `nonneg_int_type` accept/reject
+     matrix; `--target` parser flag (default-None, int parse, zero allowed,
+     negative + fractional rejection); `grid_cell_distance`;
+     `pick_best_grid_cell` (closest, earliest-tie, empty→None, zero target);
+     both renderers (best line / keys present with target, absent without,
+     empty-grid handling); `cmd_vad_grid` end-to-end (best line emitted, json
+     target+best+distance, csv ignores target, no-target omits best line). NO
+     torch import — driven through the injected segmenter seam.
+   - `tests/integration/test_gv_vad_cli.py` (**+2**): over THE GATE recording
+     the surfaced pick genuinely minimises `|num_segments - target|` over the
+     very grid the run tabulated (no off-by-one, no stale cell); without
+     `--target` the payload keeps the iter-240 shape (no `best`/`target` keys
+     leak). Skips without corpus/package.
+9. **Docs** (`docs/research/voice-capture-tuning.md`) — a `--target` subsection
+   under `gv vad-grid`: invocation, the verified real-corpus example (gate ×
+   hangover, target 3 → 0.70/800 at |Δ|=1), the `|num_segments - N|` scoring
+   rule, the earliest-tie rule, and the per-format behaviour (human best line /
+   JSON keys / CSV ignores).
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3462 passed** (3432 prior + 30 new), run on the feature branch before
+  ff-merge. Re-confirmed on main after merge: `pytest
+  tests/unit/test_gv_vad.py tests/unit/test_gv_cli.py` → **313 passed**.
+- Integration: `python -m pytest tests/integration/test_gv_vad_cli.py` →
+  **33 passed** (31 prior + 2 new; corpus symlinked into the worktree, symlink
+  removed before commit so it is not tracked). silero-vad IS installed on this
+  host, so these ran against the real model.
+- Manual smoke on the branch over `voice-20260618-110355.wav`:
+  `gv vad-grid … --thresholds 0.3,0.5,0.7 --min-silences 400,800 --target 3` →
+  the 6-cell table plus `best: threshold=0.70 min_silence=800 (4 segments,
+  |Δ|=1 from target 3)`; `--target 5 --json` picked the first count-5 cell
+  (0.30/400, distance 0), confirming the earliest-tie rule.
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] `gv vad-grid --target` tie-break / multi-target** — the pick is
+   purely segment-count distance; a richer score could break exact-count ties on
+   speech-seconds (closest total speech), or accept a target *range* / multiple
+   targets. Or surface the top-K cells, not just the single best.
+4. **[recordings] Ingest new recordings every lap** — re-run `replay_silero.py
+   --compare` + `gv vad` when new WAVs land in `fixtures/recordings/`, and
+   refresh the comparison table.
