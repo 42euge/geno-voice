@@ -21894,7 +21894,7 @@ block.
 
 ## iter-247 — `gv vad-grid`/`vad-sweep` `--target` open-ended bands (`3-`, `-5`)
 
-**Branch:** `iter-247-open-band` (merged ff to main, commit `__COMMIT__`)
+**Branch:** `iter-247-open-band` (merged ff to main, commit `6db49a0`)
 **Date:** 2026-06-18
 
 **No STEER.md this lap.** The two top-priority next items carried since
