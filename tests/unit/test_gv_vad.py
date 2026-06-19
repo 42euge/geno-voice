@@ -3253,3 +3253,124 @@ def test_cmd_vad_sweep_target_on_min_silence_axis():
     )
     best = next(ln for ln in lines if "best:" in ln)
     assert "min_silence=800" in best and "3 segments" in best
+
+
+# ---- _render_pick_block: the shared sweep/grid pick block (iter-245) ----
+# iter-245 factored the duplicated best:/top N: block out of render_vad_sweep
+# and render_vad_grid into one helper. These exercise the helper in isolation;
+# the existing render_vad_sweep/render_vad_grid tests above pin that the two
+# callers still emit byte-identical output through it.
+
+def _pick_cells():
+    # Three rows keyed like a sweep row (the helper only reads num_segments /
+    # speech_s, so a bare dict with an axis key is enough).
+    return [
+        {"threshold": 0.3, "num_segments": 5, "speech_s": 12.0},
+        {"threshold": 0.5, "num_segments": 3, "speech_s": 9.0},
+        {"threshold": 0.7, "num_segments": 1, "speech_s": 4.0},
+    ]
+
+
+def _axes(cell):
+    return f"threshold={cell['threshold']:.2f}"
+
+
+def test_render_pick_block_no_target_returns_empty():
+    # target=None → no pick block at all (callers stay byte-for-byte identical).
+    out = gv._render_pick_block(
+        _pick_cells(), None, None, "row-major",
+        format_axes=_axes, empty_noun="sweep",
+    )
+    assert out == []
+
+
+def test_render_pick_block_empty_cells_reports_none_with_noun():
+    # Empty input → a single best: none line carrying the caller's noun.
+    out = gv._render_pick_block(
+        [], 3, None, "row-major", format_axes=_axes, empty_noun="grid",
+    )
+    assert out == ["  best: none (empty grid; target 3 segments)"]
+
+
+def test_render_pick_block_best_line_uses_format_axes_and_distance():
+    # best: line names the closest cell via format_axes and reports |Δ|.
+    out = gv._render_pick_block(
+        _pick_cells(), 3, None, "row-major",
+        format_axes=_axes, empty_noun="sweep",
+    )
+    assert out == [
+        "  best: threshold=0.50 (3 segments, |Δ|=0 from target 3)"
+    ]
+
+
+def test_render_pick_block_top_block_ranked_nearest_first():
+    # top=2 → a ranked shortlist after best:, head == best, |Δ| ascending.
+    out = gv._render_pick_block(
+        _pick_cells(), 3, 2, "row-major",
+        format_axes=_axes, empty_noun="sweep",
+    )
+    assert out[0] == "  best: threshold=0.50 (3 segments, |Δ|=0 from target 3)"
+    assert out[1] == "  top 2 (closest to target 3):"
+    assert out[2] == "    1. threshold=0.50  3 segments  |Δ|=0"
+    # Two cells tie at |Δ|=2 (0.3→5, 0.7→1); row-major keeps 0.3 first.
+    assert out[3] == "    2. threshold=0.30  5 segments  |Δ|=2"
+
+
+def test_render_pick_block_top_ignored_without_target_is_moot():
+    # top is only consulted when target is set; with target=None the whole
+    # block is empty regardless of top.
+    out = gv._render_pick_block(
+        _pick_cells(), None, 5, "row-major",
+        format_axes=_axes, empty_noun="sweep",
+    )
+    assert out == []
+
+
+def test_render_pick_block_speech_tie_break_breaks_on_speech():
+    # Two cells tie at |Δ|=2; speech tie-break ranks the higher-speech one
+    # first (0.3 has 12.0s vs 0.7's 4.0s) — distinct from row-major order.
+    out = gv._render_pick_block(
+        _pick_cells(), 3, 3, "speech",
+        format_axes=_axes, empty_noun="sweep",
+    )
+    # rank 2 (first runner-up) should be the most-speech tied cell.
+    assert out[3] == "    2. threshold=0.30  5 segments  |Δ|=2"
+    assert out[4] == "    3. threshold=0.70  1 segments  |Δ|=2"
+
+
+def test_render_pick_block_top_clamped_to_cell_count():
+    # A shortlist longer than the input simply lists every cell.
+    out = gv._render_pick_block(
+        _pick_cells(), 3, 99, "row-major",
+        format_axes=_axes, empty_noun="sweep",
+    )
+    assert out[1] == "  top 3 (closest to target 3):"
+    assert len([ln for ln in out if ln.lstrip().startswith(tuple("123"))]) == 3
+
+
+def test_render_pick_block_sweep_grid_share_one_implementation():
+    # The drift-prevention guarantee: sweep and grid differ ONLY in the
+    # format_axes callable + empty noun. Feed the SAME cells with a 1-axis and
+    # a 2-axis formatter; everything around the axis section is identical.
+    cells = [{"threshold": 0.5, "min_silence_ms": 800.0,
+              "num_segments": 3, "speech_s": 9.0}]
+    one = gv._render_pick_block(
+        cells, 3, 1, "row-major",
+        format_axes=lambda c: f"threshold={c['threshold']:.2f}",
+        empty_noun="sweep",
+    )
+    two = gv._render_pick_block(
+        cells, 3, 1, "row-major",
+        format_axes=lambda c: (
+            f"threshold={c['threshold']:.2f} "
+            f"min_silence={c['min_silence_ms']:.0f}"
+        ),
+        empty_noun="grid",
+    )
+    # The fixed scaffolding (best:/top labels, segment counts, |Δ|, ranking)
+    # is byte-identical; only the axis section the callable produced differs.
+    assert one[0].replace("threshold=0.50", "AX") == \
+        two[0].replace("threshold=0.50 min_silence=800", "AX")
+    assert one[1] == two[1]
+    assert one[2].replace("threshold=0.50", "AX") == \
+        two[2].replace("threshold=0.50 min_silence=800", "AX")

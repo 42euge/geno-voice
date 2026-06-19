@@ -702,6 +702,49 @@ def _format_sweep_axis_value(axis, value):
     return f"{value:.2f}"
 
 
+def _render_pick_block(cells, target, top, tie_break, *, format_axes, empty_noun):
+    """Render the shared ``best:`` / ``top N:`` pick block for a sweep or grid.
+
+    iter-241→244 grew a data-driven pick block — a ``best:`` line naming the
+    cell whose ``num_segments`` is closest to ``target``, optionally followed by
+    a ``top N (closest to target N):`` shortlist — and bolted an identical copy
+    onto both :func:`render_vad_sweep` (1-D) and :func:`render_vad_grid` (2-D).
+    The two copies differed ONLY in how many axis labels precede the count and
+    the empty-table noun, so they were one format drift away from disagreeing.
+    iter-245 factors that block out here so the two surfaces can never drift.
+
+    ``cells`` is the flat row/cell list (a sweep row or a grid cell — the
+    pickers read only the shared ``num_segments`` / ``speech_s`` keys, so either
+    shape works). ``format_axes(cell)`` is a caller-supplied callable returning
+    the per-cell axis section string (``"threshold=0.70"`` for a sweep,
+    ``"threshold=0.70 min_silence=800"`` for a grid); the helper owns everything
+    around it. ``empty_noun`` names the table for the empty-input message
+    (``"sweep"`` or ``"grid"``). Returns the list of lines to append (empty when
+    ``target is None``), so the caller stays ``lines.extend(...)``. Pure — reads
+    nothing, mutates nothing.
+    """
+    if target is None:
+        return []
+    best = pick_best_grid_cell(cells, target, tie_break)
+    if best is None:
+        return [f"  best: none (empty {empty_noun}; target {target} segments)"]
+    lines = [
+        f"  best: {format_axes(best)} "
+        f"({best['num_segments']} segments, "
+        f"|Δ|={grid_cell_distance(best, target)} from target {target})"
+    ]
+    if top is not None:
+        ranked = pick_top_grid_cells(cells, target, top, tie_break)
+        lines.append(f"  top {len(ranked)} (closest to target {target}):")
+        for rank, cell in enumerate(ranked, start=1):
+            lines.append(
+                f"    {rank}. {format_axes(cell)}  "
+                f"{cell['num_segments']} segments  "
+                f"|Δ|={grid_cell_distance(cell, target)}"
+            )
+    return lines
+
+
 def vad_segmentation_sweep(values, results, *, axis="threshold"):
     """Pair each swept-axis value with its segmentation summary for a table.
 
@@ -784,31 +827,18 @@ def render_vad_sweep(
             f"  {_format_sweep_axis_value(axis, row[axis]):>9}  "
             f"{row['num_segments']:>8}  {row['speech_s']:>5.1f}s"
         )
-    if target is not None:
-        best = pick_best_grid_cell(rows, target, tie_break)
-        if best is None:
-            lines.append(
-                f"  best: none (empty sweep; target {target} segments)"
-            )
-        else:
-            lines.append(
-                f"  best: {label}="
-                f"{_format_sweep_axis_value(axis, best[axis])} "
-                f"({best['num_segments']} segments, "
-                f"|Δ|={grid_cell_distance(best, target)} from target {target})"
-            )
-            if top is not None:
-                ranked = pick_top_grid_cells(rows, target, top, tie_break)
-                lines.append(
-                    f"  top {len(ranked)} (closest to target {target}):"
-                )
-                for rank, row in enumerate(ranked, start=1):
-                    lines.append(
-                        f"    {rank}. {label}="
-                        f"{_format_sweep_axis_value(axis, row[axis])}  "
-                        f"{row['num_segments']} segments  "
-                        f"|Δ|={grid_cell_distance(row, target)}"
-                    )
+    lines.extend(
+        _render_pick_block(
+            rows,
+            target,
+            top,
+            tie_break,
+            format_axes=lambda row: (
+                f"{label}={_format_sweep_axis_value(axis, row[axis])}"
+            ),
+            empty_noun="sweep",
+        )
+    )
     return lines
 
 
@@ -1085,35 +1115,21 @@ def render_vad_grid(
             f"{_format_sweep_axis_value(col_axis, cell[col_axis]):>11}  "
             f"{cell['num_segments']:>8}  {cell['speech_s']:>5.1f}s"
         )
-    if target is not None:
-        best = pick_best_grid_cell(cells, target, tie_break)
-        if best is None:
-            lines.append(
-                f"  best: none (empty grid; target {target} segments)"
-            )
-        else:
-            lines.append(
-                f"  best: {row_label}="
-                f"{_format_sweep_axis_value(row_axis, best[row_axis])} "
+    lines.extend(
+        _render_pick_block(
+            cells,
+            target,
+            top,
+            tie_break,
+            format_axes=lambda cell: (
+                f"{row_label}="
+                f"{_format_sweep_axis_value(row_axis, cell[row_axis])} "
                 f"{col_label}="
-                f"{_format_sweep_axis_value(col_axis, best[col_axis])} "
-                f"({best['num_segments']} segments, "
-                f"|Δ|={grid_cell_distance(best, target)} from target {target})"
-            )
-            if top is not None:
-                ranked = pick_top_grid_cells(cells, target, top, tie_break)
-                lines.append(
-                    f"  top {len(ranked)} (closest to target {target}):"
-                )
-                for rank, cell in enumerate(ranked, start=1):
-                    lines.append(
-                        f"    {rank}. {row_label}="
-                        f"{_format_sweep_axis_value(row_axis, cell[row_axis])} "
-                        f"{col_label}="
-                        f"{_format_sweep_axis_value(col_axis, cell[col_axis])}  "
-                        f"{cell['num_segments']} segments  "
-                        f"|Δ|={grid_cell_distance(cell, target)}"
-                    )
+                f"{_format_sweep_axis_value(col_axis, cell[col_axis])}"
+            ),
+            empty_noun="grid",
+        )
+    )
     return lines
 
 
