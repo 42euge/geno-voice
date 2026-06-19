@@ -23660,3 +23660,115 @@ pre-test smoke run).
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
    should track a curated subset, decide the policy and re-run
    `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
+
+## iter-264 — `gv --target` preference (a>b) regression tests on the seconds `max_speech_s` axis
+
+**Branch:** `iter-264-prefer-seconds` (merged ff to main, commit `5fc3ee7`)
+**Date:** 2026-06-19
+
+**No STEER.md this lap.** The two top-priority next items carried since
+iter-227 (wire `ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()`
+in the desktop app) both need a Mac + mic + browser and can't run headless on
+the loop host. "Ingest new recordings" stays corpus-gated (large untracked
+WAVs, no corpus symlinked into the worktree). The COMBINED
+additive+multiplicative `--target` weight item is again a larger design
+question. So I took iter-263 backlog item #4's next concrete sub-option: pin
+the ranked PREFERENCE `--target a>b` form (iter-249) on the SECONDS
+`max_speech_s` axis (iter-257→263 covered scalar + banded + flat-SET but never
+the preference form on seconds).
+
+**The gap.** iter-249 shipped the ranked PREFERENCE form (`--target 4>2`): a
+`{"prefer": [...]}` dict whose DISTANCE is the MIN over its elements (IDENTICAL
+to the flat set), but whose precedence breaks EXACT distance ties toward the
+earlier-listed (more-preferred) element via `_preference_rank` — inserted as a
+secondary sort key before the row-major/speech tie-break. iter-255/257 added
+the seconds `max_speech_s` force-split-ceiling axis. These seams are
+orthogonal, but had never been exercised TOGETHER on a render surface: every
+seconds-axis target test from iter-257→263 used a SCALAR, BANDED, or flat-SET
+target, and every preference render test swept the threshold axis — so the
+preference tie-break path and the `%g` seconds formatting had no JOINT
+coverage. A regression that broke EITHER the preference rank on the seconds
+axis, a `%g`→`.2f` drift on the preference-chosen cap, or the JSON carrying the
+`{"prefer": [...]}` dict would have shipped green while the threshold-axis
+preference tests stayed passing. This lap closes that hole; no production code
+changed (the wiring was already correct — proved by a pre-test smoke run).
+
+**The discriminating behaviour.** The preference form differs from the flat set
+in exactly one way: it breaks EXACT distance ties toward the more-preferred
+element. So each test picks fixtures where two caps both score `|Δ|=0` and the
+preference must override row order — `--target 4>2` over caps recovering 2 and
+4 segments picks the 4-segment cap even when it is NOT the earliest row, where
+the flat set `4,2` would pick the earlier row. The smoke run confirmed this
+contrast (`4>2` → 10s cap / 4 segs; flat `4,2` → 5s cap / 2 segs).
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+4 tests, +107 lines).**
+  1. `test_render_sweep_prefer_target_on_max_speech_axis_formats_seconds` —
+     caps `inf, 5, 10` (counts 1, 2, 4); preference `4>2` picks the 10s cap
+     (4 segs) over the earlier 5s row (2 segs), both `|Δ|=0`; `best:` names
+     `max_speech=10`, renders `target 4>2` (not a `{"prefer": ...}` dict repr),
+     no `10.00` / `max_speech=10.0` leak.
+  2. `test_render_sweep_prefer_target_best_can_name_inf_max_speech` — caps
+     `inf, 5` (counts 1, 2); preference `1>2` picks the inf baseline (1 seg)
+     over the 5s cap (2 segs); renders `max_speech=inf` / `target 1>2`, no
+     `inf.00`.
+  3. `test_render_grid_prefer_target_on_max_speech_col_axis_formats_seconds` —
+     the 2-D grid COLUMN-axis twin: 1×2 grid over caps `inf, 5` (counts 2, 4);
+     preference `4>2` picks the 5s cap (4 segs) over the earlier inf row
+     (2 segs); held threshold row renders `threshold=0.30`, no `5.00` leak.
+  4. `test_render_grid_json_prefer_target_carries_seconds_max_speech` — the
+     grid JSON machine surface carries the preference as its `{"prefer": [4, 2]}`
+     dict (distinct from a flat-set array) and emits `best.max_speech_s == 5.0`
+     (a finite seconds number), distance 0.
+- **`docs/research/voice-capture-tuning.md`.** A paragraph under the iter-257→263
+  `--target` seconds subsection covering the preference form on `max_speech_s`
+  (the tie-break twist, `4>2` rendering with no dict repr, `%g`-compact chosen
+  cap, `{"prefer": [...]}` JSON carry, across the 1-D sweep and the 2-D grid
+  column axis). Two copy-paste invocations (sweep preference, grid preference
+  `--json`).
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3836 passed** (3832 prior + 4 net new), run on the feature branch before
+  ff-merge AND re-run on main after the merge (both 3836).
+- Focused: `pytest tests/unit/test_gv_vad.py -k "prefer_target_on_max_speech or
+  prefer_target_best_can_name_inf or prefer_target_carries_seconds"` →
+  **4 passed**.
+- Pre-test smoke (Python, on the branch): `render_vad_sweep([inf,5,10], ...,
+  axis="max_speech_s", target={"prefer":[4,2]})` → `best: max_speech=10
+  (4 segments, |Δ|=0 from target 4>2)`; flat set `[4,2]` over the same caps →
+  `max_speech=5 ... 2 segments` (the CONTRAST proving the tie-break); preference
+  `1>9` over caps `inf,5` → `max_speech=inf ... target 1>9`; grid `{"prefer":
+  [4,2]}` over caps `inf,5` (counts 2,4) → `threshold=0.30 max_speech=5
+  (4 segments ...)`, flat `[4,2]` → `max_speech=inf (2 segments ...)`; grid JSON
+  → `target {"prefer": [4, 2]}, best 4 segs, dist 0, max_speech_s 5.0`.
+  Confirmed the wiring was already correct before writing the assertions.
+- Integration: not re-run this lap (no corpus symlinked into this worktree;
+  same as prior corpus-gated laps — the change is pure CLI render logic fully
+  covered by the unit matrix).
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] COMBINED additive+multiplicative `--target` weight** — iter-250/251
+   give additive (`:penalty`), iter-252 multiplicative (`*factor`); an operator
+   might want both on one element (`5:1*1.5`). Larger design question (operator
+   precedence of `:` vs `*`) — scope before building. Pure, headless if pursued.
+4. **[cli] seconds-axis target coverage now spans scalar + banded + SET +
+   preference + tie-break.** iter-257→261 pinned scalar (`best:`, JSON, CSV,
+   `top N:`, `--tie-break`), iter-262 the BANDED `lo-hi`/open-edge form,
+   iter-263 the comma SET form, iter-264 the ranked PREFERENCE `a>b` form. The
+   remaining untested seconds-axis target forms: the `{"weighted": ...}`
+   additive-penalty set (iter-250) and the `{"scaled": ...}` multiplicative
+   set (iter-252) — both fold preference INTO the distance (overriding a gap,
+   not just a tie), so the discriminating fixture differs from iter-264's
+   tie-only override. Confirm neither is already covered on the seconds axis
+   before assuming a gap. Each is a small, pure, headless increment.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
+   should track a curated subset, decide the policy and re-run
+   `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
