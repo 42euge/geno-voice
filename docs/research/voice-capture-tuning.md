@@ -152,6 +152,7 @@ gv vad-sweep recording.wav --thresholds 0.1,0.3,0.5,0.7,0.9 # custom gates
 gv vad-sweep recording.wav --json                           # machine-readable rows
 gv vad-sweep recording.wav --csv                            # flat CSV for plots (iter-237)
 gv vad-sweep recording.wav --target 3                       # data-driven best-value pick (iter-244)
+gv vad-sweep recording.wav --target 3-5                     # tolerance band: 0 distance inside (iter-246)
 ```
 
 The human report is a small table — the WAV name, a `threshold / segments /
@@ -330,6 +331,31 @@ iter-236 shape — no pick keys leak in. Integration tests pin, over the real
 corpus, that the `best` minimises `|num_segments - target|` over the same sweep the
 run tabulated, the `top` head equals `best`, and the absent-target payload keeps
 the iter-236 shape.
+
+#### `--target LO-HI` — a tolerance band (iter-246)
+
+A single `--target N` scores against one exact segment count, but operators
+often want a *window* — "anywhere from 3 to 5 regions is fine, just not 1 and
+not 8". iter-246 lets `--target` take a `LO-HI` range (both for `vad-sweep` and
+`vad-grid`); any count **inside** the inclusive band scores distance `0` (every
+in-band count is equally perfect), and a count outside scores the gap to the
+nearest edge (below `LO` → `LO - count`; above `HI` → `count - HI`).
+
+```bash
+gv vad-sweep recording.wav --thresholds 0.3,0.5,0.7,0.9 --target 3-5          # band, not a point
+gv vad-grid  recording.wav --thresholds 0.3,0.5,0.7 --min-silences 400,800 --target 3-5
+gv vad-sweep recording.wav --thresholds 0.3,0.5,0.7,0.9 --target 3-5 --top 3  # band + shortlist
+```
+
+The band reuses the existing `grid_cell_distance` scoring, so `--top`,
+`--tie-break`, and the `--json` payload all flow through unchanged: a banded
+distance is just another lower-is-better key. The `best:` / `top N:` lines and
+the `--json` `target` render the band as `3-5` (the JSON `target` is a `[3, 5]`
+array); the scalar form (`--target 3`) is byte-for-byte the iter-241→245
+behaviour, since a scalar still parses to a bare `int` and a degenerate band
+`(n, n)` reduces to the scalar distance to `n`. Edges are non-negative whole
+numbers and `LO <= HI` (an inverted band is rejected as a typo). A `--target`
+with no `-` is the scalar form, exactly as before.
 
 ### `gv vad-grid` — a 2-D knob grid (iter-240)
 

@@ -220,6 +220,51 @@ def test_pos_int_rejects_non_integers(raw):
         gv.pos_int_type(raw)
 
 
+# ---- target_type: scalar count OR (lo, hi) tolerance band (iter-246) ---
+
+
+@pytest.mark.parametrize("raw,expected", [("0", 0), ("1", 1), ("5", 5), ("42", 42)])
+def test_target_type_scalar_parses_to_int(raw, expected):
+    value = gv.target_type(raw)
+    assert value == expected
+    assert isinstance(value, int)
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [("3-5", (3, 5)), ("0-2", (0, 2)), ("4-4", (4, 4)), (" 3-5 ", (3, 5))],
+)
+def test_target_type_band_parses_to_tuple(raw, expected):
+    value = gv.target_type(raw)
+    assert value == expected
+    assert isinstance(value, tuple)
+
+
+@pytest.mark.parametrize("raw", ["5-3", "9-0"])
+def test_target_type_rejects_inverted_band(raw):
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.target_type(raw)
+
+
+@pytest.mark.parametrize("raw", ["-1", "3-", "-5", "3-5-7", "", "a-b", "1.5-2"])
+def test_target_type_rejects_malformed(raw):
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.target_type(raw)
+
+
+# ---- _format_target: scalar vs band display ----------------------------
+
+
+def test_format_target_scalar():
+    assert gv._format_target(3) == "3"
+    assert gv._format_target(0) == "0"
+
+
+def test_format_target_band():
+    assert gv._format_target((3, 5)) == "3-5"
+    assert gv._format_target((0, 2)) == "0-2"
+
+
 # ---- max_speech_type: the force-split bound ----------------------------
 
 
@@ -2016,6 +2061,27 @@ def test_grid_cell_distance_is_abs_segment_gap():
     assert gv.grid_cell_distance(cell, 7) == 0
 
 
+def test_grid_cell_distance_band_zero_inside():
+    # iter-246: any count inside the inclusive [3, 5] band scores 0.
+    for n in (3, 4, 5):
+        assert gv.grid_cell_distance({"num_segments": n}, (3, 5)) == 0
+
+
+def test_grid_cell_distance_band_gap_to_nearest_edge():
+    # Below the band → gap to lo; above → gap to hi.
+    assert gv.grid_cell_distance({"num_segments": 1}, (3, 5)) == 2  # 3 - 1
+    assert gv.grid_cell_distance({"num_segments": 8}, (3, 5)) == 3  # 8 - 5
+    assert gv.grid_cell_distance({"num_segments": 2}, (3, 5)) == 1  # just below
+    assert gv.grid_cell_distance({"num_segments": 6}, (3, 5)) == 1  # just above
+
+
+def test_grid_cell_distance_degenerate_band_equals_scalar():
+    # A (n, n) band is exactly the scalar distance to n.
+    for n in (0, 3, 7):
+        cell = {"num_segments": n + 2}
+        assert gv.grid_cell_distance(cell, (n, n)) == gv.grid_cell_distance(cell, n)
+
+
 def test_pick_best_grid_cell_closest_to_target():
     # Counts 4,3,2,1 over the 2×2 grid; target 3 picks the second cell exactly.
     cells = _grid_cells([4, 3, 2, 1])
@@ -2246,6 +2312,27 @@ def test_render_grid_best_line_empty_grid():
     assert lines[-1].lstrip().startswith("best: none")
 
 
+def test_render_grid_band_target_picks_in_band_cell():
+    # iter-246: 1×2 grid counts 4 and 1; band 3-5 puts 4 inside the band (|Δ|=0),
+    # so it wins over the count-1 cell (|Δ|=2 below lo).
+    results = [_cell_result(n) for n in (4, 1)]
+    lines = gv.render_vad_grid(
+        [0.3], [400.0, 800.0], results, name="rec.wav", target=(3, 5),
+    )
+    best_line = lines[-1]
+    assert best_line.lstrip().startswith("best:")
+    assert "4 segments" in best_line
+    assert "|Δ|=0" in best_line
+    # The band renders as "3-5", not a tuple repr.
+    assert "target 3-5" in best_line
+    assert "(3, 5)" not in best_line
+
+
+def test_render_grid_band_empty_grid_renders_band_text():
+    lines = gv.render_vad_grid([], [], [], name="rec.wav", target=(3, 5))
+    assert "target 3-5 segments" in lines[-1]
+
+
 def test_render_grid_json_omits_best_and_target_without_target():
     results = [_cell_result(n) for n in (4, 1)]
     payload = json.loads(
@@ -2266,6 +2353,20 @@ def test_render_grid_json_carries_best_and_target():
     assert payload["best"]["num_segments"] == 1
     assert payload["best"]["distance"] == 1
     assert payload["best"]["min_silence_ms"] == 800.0
+
+
+def test_render_grid_json_carries_band_target():
+    # iter-246: a band target serialises as a [lo, hi] JSON array, and the best
+    # cell's distance is 0 when its count lands inside the band.
+    results = [_cell_result(n) for n in (4, 1)]
+    payload = json.loads(
+        gv.render_vad_grid_json(
+            [0.3], [400.0, 800.0], results, name="rec.wav", target=(3, 5),
+        )
+    )
+    assert payload["target"] == [3, 5]
+    assert payload["best"]["num_segments"] == 4
+    assert payload["best"]["distance"] == 0
 
 
 def test_render_grid_json_best_is_none_for_empty_grid():
@@ -2670,6 +2771,48 @@ def test_cmd_vad_grid_target_in_json_branch():
     assert payload["target"] == 1
     assert payload["best"]["num_segments"] == 1
     assert payload["best"]["distance"] == 0
+
+
+def test_cmd_vad_grid_band_target_picks_in_band_cell():
+    # iter-246: low gate → 4 segments, high gate → 1. Band 3-5 lands the 4-count
+    # cell inside the band (|Δ|=0), so it wins.
+    def seg(wav, params=None):
+        n = 4 if params.threshold < 0.5 else 1
+        return _cell_result(n)
+
+    lines: List[str] = []
+    gv.cmd_vad_grid(
+        _grid_args(
+            thresholds=[0.3, 0.5], min_silences=[400.0, 800.0], target=(3, 5),
+        ),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    text = "\n".join(lines)
+    assert "best:" in text
+    assert "4 segments" in text
+    assert "target 3-5" in text
+
+
+def test_cmd_vad_sweep_band_target_picks_in_band_value():
+    # iter-246, sweep form: low gate → 4 segments, high gate → 1. Band 3-5 makes
+    # the 4-count threshold the best (|Δ|=0 inside the band).
+    def seg(wav, params=None):
+        n = 4 if params.threshold < 0.5 else 1
+        return _cell_result(n)
+
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(thresholds=[0.3, 0.7], target=(3, 5)),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    text = "\n".join(lines)
+    assert "best:" in text
+    assert "4 segments" in text
+    assert "target 3-5" in text
 
 
 def test_cmd_vad_grid_csv_ignores_target():

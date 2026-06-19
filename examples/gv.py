@@ -239,6 +239,57 @@ def nonneg_int_type(raw):
     return value
 
 
+def target_type(raw):
+    """Argparse ``type`` for ``gv vad-grid``/``vad-sweep`` ``--target``.
+
+    iter-246 generalises the scalar segment-count target into an optional
+    tolerance BAND. The single-count form (``--target 3``) still parses to an
+    ``int`` — byte-for-byte the iter-241→245 behaviour, so a scalar target's
+    distance and output are unchanged. The new range form (``--target 3-5``)
+    parses to a ``(lo, hi)`` int tuple meaning "anywhere from 3 to 5 segments is
+    perfect": :func:`grid_cell_distance` scores 0 for any count inside the
+    inclusive band and the gap to the nearest edge otherwise, so an operator who
+    wants "between 3 and 5 regions" no longer has to eyeball the table.
+
+    Each edge is a non-negative whole number (reusing :func:`nonneg_int_type`'s
+    rules — ``0`` is legitimate, negatives/fractionals are rejected), the
+    separator is a single ``-``, and ``lo <= hi`` (an inverted band is a typo,
+    not a degenerate window). A bare count with no ``-`` is the scalar form.
+    Pure and side-effect-free for direct unit testing; raises
+    :class:`argparse.ArgumentTypeError` on any malformed input.
+    """
+    text = raw.strip() if isinstance(raw, str) else raw
+    # A single '-' separates the band edges; no '-' is the scalar form. (Edges
+    # are non-negative, so '-' is never a sign — it is always the separator.)
+    if isinstance(text, str) and "-" in text:
+        parts = text.split("-")
+        if len(parts) != 2 or parts[0] == "" or parts[1] == "":
+            raise argparse.ArgumentTypeError(
+                f"target band must be LO-HI with whole numbers, got {raw!r}"
+            )
+        lo = nonneg_int_type(parts[0])
+        hi = nonneg_int_type(parts[1])
+        if lo > hi:
+            raise argparse.ArgumentTypeError(
+                f"target band LO-HI must have LO <= HI, got {raw!r}"
+            )
+        return (lo, hi)
+    return nonneg_int_type(text)
+
+
+def _format_target(target):
+    """Human-readable rendering of a ``--target`` value (scalar int or band).
+
+    A scalar target renders as its bare count (``3``); an iter-246 ``(lo, hi)``
+    band renders as ``lo-hi`` (``3-5``). Used by :func:`_render_pick_block` so
+    the ``best:`` / ``top N:`` lines read naturally for either form without each
+    call site re-deriving the format. Pure.
+    """
+    if isinstance(target, tuple):
+        return f"{target[0]}-{target[1]}"
+    return str(target)
+
+
 def pos_int_type(raw):
     """Argparse ``type`` for ``gv vad-grid --top``: a shortlist length.
 
@@ -725,17 +776,21 @@ def _render_pick_block(cells, target, top, tie_break, *, format_axes, empty_noun
     """
     if target is None:
         return []
+    # iter-246: a scalar target renders as its bare count ("3"), a (lo, hi) band
+    # as "lo-hi" ("3-5"); _format_target owns the distinction so the lines read
+    # naturally for either form.
+    target_text = _format_target(target)
     best = pick_best_grid_cell(cells, target, tie_break)
     if best is None:
-        return [f"  best: none (empty {empty_noun}; target {target} segments)"]
+        return [f"  best: none (empty {empty_noun}; target {target_text} segments)"]
     lines = [
         f"  best: {format_axes(best)} "
         f"({best['num_segments']} segments, "
-        f"|Δ|={grid_cell_distance(best, target)} from target {target})"
+        f"|Δ|={grid_cell_distance(best, target)} from target {target_text})"
     ]
     if top is not None:
         ranked = pick_top_grid_cells(cells, target, top, tie_break)
-        lines.append(f"  top {len(ranked)} (closest to target {target}):")
+        lines.append(f"  top {len(ranked)} (closest to target {target_text}):")
         for rank, cell in enumerate(ranked, start=1):
             lines.append(
                 f"    {rank}. {format_axes(cell)}  "
@@ -973,15 +1028,36 @@ def vad_segmentation_grid(
 
 
 def grid_cell_distance(cell, target):
-    """``|num_segments - target|`` for one grid cell — lower is better.
+    """Distance from one grid cell's segment count to ``target`` — lower better.
 
     The VAD-grid scoring analogue of :meth:`MirrorGridPoint.score`: where the
     WPM grid folds convergence + lurch into a lower-is-better number, a VAD
     grid cell is scored purely by how far its recovered segment count sits from
-    the operator's ``target`` (e.g. one segment per spoken sentence). Pure —
-    reads only ``cell["num_segments"]``, an int, so it never touches torch.
+    the operator's ``target`` (e.g. one segment per spoken sentence).
+
+    ``target`` is either a scalar count or an iter-246 ``(lo, hi)`` tolerance
+    band:
+
+    - **scalar** — the original ``|num_segments - target|`` (e.g. target 5,
+      count 7 → 2).
+    - **band ``(lo, hi)``** — ``0`` for any count INSIDE the inclusive
+      ``[lo, hi]`` window (every count in the band is equally perfect), else the
+      gap to the nearest edge (count below ``lo`` → ``lo - count``; above ``hi``
+      → ``count - hi``). A degenerate band ``(n, n)`` reduces to the scalar
+      distance to ``n``.
+
+    Pure — reads only ``cell["num_segments"]``, an int, so it never touches
+    torch.
     """
-    return abs(cell["num_segments"] - target)
+    count = cell["num_segments"]
+    if isinstance(target, tuple):
+        lo, hi = target
+        if count < lo:
+            return lo - count
+        if count > hi:
+            return count - hi
+        return 0
+    return abs(count - target)
 
 
 def grid_cell_sort_key(cell, target, tie_break="row-major"):
@@ -2156,12 +2232,14 @@ def build_parser():
     )
     vad_sweep.add_argument(
         "--target",
-        type=nonneg_int_type,
+        type=target_type,
         default=None,
         dest="target",
-        help="Desired segment count — when given, a data-driven 'best:' pick "
-        "names the swept value whose recovered segment count is closest to it "
-        "(the same machinery as vad-grid's --target); omit for just the table",
+        help="Desired segment count (e.g. 3) or tolerance band (e.g. 3-5) — "
+        "when given, a data-driven 'best:' pick names the swept value whose "
+        "recovered segment count is closest to it (a band scores 0 anywhere "
+        "inside it); the same machinery as vad-grid's --target; omit for just "
+        "the table",
     )
     vad_sweep.add_argument(
         "--top",
@@ -2280,12 +2358,13 @@ def build_parser():
     )
     vad_grid.add_argument(
         "--target",
-        type=nonneg_int_type,
+        type=target_type,
         default=None,
         dest="target",
-        help="Desired segment count — when given, a data-driven 'best:' pick "
-        "names the cell whose recovered segment count is closest to it (the "
-        "vad-grid analogue of simulate-mirror --grid's best pick); omit for "
+        help="Desired segment count (e.g. 3) or tolerance band (e.g. 3-5) — "
+        "when given, a data-driven 'best:' pick names the cell whose recovered "
+        "segment count is closest to it (a band scores 0 anywhere inside it); "
+        "the vad-grid analogue of simulate-mirror --grid's best pick; omit for "
         "just the table",
     )
     vad_grid.add_argument(
