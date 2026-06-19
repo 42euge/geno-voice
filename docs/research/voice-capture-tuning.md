@@ -228,7 +228,14 @@ parses from the CSV `DictReader` back to the *exact* `--json` `grid` payload,
 cell for cell in row-major order. (The prior grid round-trip test compared the
 CSV only against the shared `vad_segmentation_grid` data layer on the default
 `threshold × min_silence_ms` axes — it never round-tripped the two machine
-surfaces directly, nor on a non-default axis pair.)
+surfaces directly, nor on a non-default axis pair.) iter-271 extends that grid
+twin to the `inf` no-cap baseline: the never-force-split sentinel takes two
+different textual forms across the surfaces — the CSV writes the bare token
+`inf` while the JSON relies on Python emitting `Infinity` (which `json.loads`
+reads back as `float('inf')`) — so a grid with `max_speech_s` rows `[inf, 5]`
+crossed with `speech_pad_ms` columns now proves both surfaces recover the
+sentinel as `float('inf')` in the *same* cells, with no `Infinity` spelling
+leaking into the CSV body.
 
 **`--min-silences` — a second sweep axis (iter-238).** The default axis is the
 P(speech) gate (`--thresholds`); passing `--min-silences` instead sweeps the
