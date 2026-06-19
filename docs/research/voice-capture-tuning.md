@@ -242,7 +242,16 @@ the inf baseline in the second CSV column of *every* row, and both surfaces
 still recover it as `float('inf')` in the same row-major cells — closing the
 cross-surface gap left by the iter-267 col-axis inf test, which round-tripped
 the CSV only against the shared data layer, never directly against the JSON
-emitter.
+emitter. iter-273 closes the last open cross-surface seam — the `--target`
+**pick**. When a target is set the JSON twin grows a `best` cell (and a `top`
+shortlist), but the CSV stays a pure data grid with no pick columns, so a CSV
+consumer must *re-derive* the operator's pick by parsing the flat table back to
+cells and re-running `pick_best_grid_cell` / `pick_top_grid_cells`. iter-273
+pins that agreement: the CSV-derived best equals the JSON-embedded `best`
+(distance stripped), the re-derived distance matches, and the top shortlist
+agrees cell-for-cell — including the row-major order of two equidistant
+runners-up — so the pick is identical no matter which surface a tuning script
+reads.
 
 **`--min-silences` — a second sweep axis (iter-238).** The default axis is the
 P(speech) gate (`--thresholds`); passing `--min-silences` instead sweeps the

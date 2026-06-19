@@ -24572,3 +24572,98 @@ smoke run).
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
    should track a curated subset, decide the policy and re-run
    `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
+
+## iter-273 — grid CSV consumer re-derives the JSON `--target` best/top pick
+
+**Branch:** `iter-273-grid-pick-roundtrip` (merged ff to main, commit `4a530bc`)
+**Date:** 2026-06-19
+
+**No STEER.md this lap.** The carried top-priority items (wire
+`ContinuousListener` → `/vad/silero/stream`; adopt `prewarm()` in the desktop
+app) both need a Mac + mic + browser and can't run headless. "Ingest new
+recordings" stays corpus-gated. The COMBINED additive+multiplicative `--target`
+weight is a feature/design item, not a regression gap. iter-272 backlog item #4
+offered two candidates: (a) a grid where `inf` rides BOTH axes of the SAME cell
+simultaneously, or (b) the `--target`/`top`-pick cross-surface check. Option (a)
+is infeasible — `max_speech_s` is the only inf-carrying axis, so it cannot
+occupy both `row_axis` and `col_axis` at once. So I took option (b): pin the
+cross-surface agreement of the `--target` pick between the JSON and CSV grid
+surfaces.
+
+**The gap.** iters 270/271/272 closed the cross-surface round-trip of the bare
+`grid` PAYLOAD (finite cells, then `inf` on the row axis, then `inf` on the
+column axis) — proving `render_vad_grid_csv`'s body and `render_vad_grid_json`'s
+`grid` describe the SAME cells. But when `--target` is set the JSON twin grows
+pick keys the CSV does NOT carry: `render_vad_grid_json` emits an explicit
+`best` cell (and, with `top`, a ranked shortlist), while `render_vad_grid_csv`
+stays a pure data grid with NO pick columns (pinned in isolation by
+`test_cmd_vad_grid_csv_ignores_target`). So a CSV consumer who wants the
+operator's pick must RE-DERIVE it: parse the flat table back to grid cells and
+re-run `pick_best_grid_cell` / `pick_top_grid_cells`. That cross-surface pick
+AGREEMENT — the JSON-embedded `best`/`top` equals what a CSV reader recomputes
+from the same numbers — was never pinned. The JSON pick was tested only in
+ISOLATION (`test_render_grid_json_*target*`), the CSV only for the bare grid; a
+regression that changed the JSON pick's tie-break, distance, or row-major cell
+ordering on ONE surface but not the picker the CSV consumer reuses would have
+shipped green. No production code changed (the wiring was already correct —
+proved by a pre-test smoke run).
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+1 test, +72 lines).**
+  `test_render_grid_csv_consumer_rederives_json_best_pick` — a 2×2
+  `threshold × min_silence_ms` grid (row-major counts 5/3/2/4) with `target=3`,
+  `top=3`. Asserts the CSV body carries no `best`/`distance` columns; a CSV
+  `DictReader` consumer re-parses the flat table to grid cells and re-runs
+  `pick_best_grid_cell` to recover a `best` IDENTICAL to the JSON-embedded
+  `best` (once its augmented `distance` key is dropped), with the re-derived
+  `grid_cell_distance` matching the JSON's embedded distance; and re-runs
+  `pick_top_grid_cells` to recover a `top` shortlist that agrees cell-for-cell
+  with the JSON `top`, INCLUDING the row-major ordering of the two equidistant
+  (dist-1) runners-up `(0.5,400)` before `(0.5,800)`. Head of the shortlist is
+  the single best pick on both surfaces.
+- **`docs/research/voice-capture-tuning.md`.** Extended the grid cross-surface
+  paragraph: iter-273 closes the last open seam — the `--target` pick — proving
+  a CSV consumer re-derives the JSON-embedded `best`/`top` identically (distance
+  and tie order included).
+
+**Verification (exact):**
+- GATE: `cd ~/code-purp/geno-voice && python -m pytest tests/unit/` →
+  **3853 passed** (3852 prior + 1 net new), run on the feature branch before
+  ff-merge AND re-run on main after the merge (both 3853).
+- Focused: `pytest tests/unit/test_gv_vad.py -k "rederives_json_best_pick or round_trips_to_json_twin"`
+  → **7 passed** (the new pick-agreement test + the 6 prior grid/sweep twins).
+- Pre-test smoke (Python, on the branch): a 2×2 `threshold × min_silence_ms`
+  grid (counts 5/3/2/4) → CSV writes `0.3,400.0,5,2.5` / `0.3,800.0,3,1.5` /
+  `0.5,400.0,2,1.0` / `0.5,800.0,4,2.0`; JSON `best` = `(0.3,800)` dist 0; a CSV
+  `DictReader` consumer re-running `pick_best_grid_cell(cells, 3)` recovered the
+  SAME cell (`match True`, distances `0 == 0`). Confirmed the wiring was already
+  correct before writing the assertion.
+- Integration: not re-run this lap (no corpus symlinked into this worktree; same
+  as prior corpus-gated laps — the change is pure CLI render logic fully covered
+  by the unit matrix).
+- `node --test` (in `client/`): unchanged — no client JS change this lap.
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] COMBINED additive+multiplicative `--target` weight** — iter-250/251
+   give additive (`:penalty`), iter-252 multiplicative (`*factor`); an operator
+   might want both on one element (`5:1*1.5`). Larger design question (operator
+   precedence of `:` vs `*`) — scope before building. Pure, headless if pursued.
+   The only `--target` increment that is a FEATURE, not a regression-test gap.
+4. **[cli] The grid CSV↔JSON cross-surface contract is now fully closed:** the
+   bare `grid` payload (finite + ROW-axis inf + COL-axis inf, iters 270–272) AND
+   the `--target` pick (`best`/`top`, distance, row-major tie order, iter-273).
+   The `tie_break="speech"` variant of the cross-surface pick is the likely-next
+   pure increment — iter-273 pinned the default `row-major` tie; the JSON twin
+   also accepts `tie_break="speech"` (breaks distance ties on recovered speech),
+   and a CSV consumer re-running `pick_best_grid_cell(..., tie_break="speech")`
+   should recover the SAME speech-broken pick. Confirm no existing test already
+   exercises a speech tie-break cross-surface before assuming a gap.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
+   should track a curated subset, decide the policy and re-run
+   `replay_silero.py --compare` + `gv vad` to refresh the comparison table.

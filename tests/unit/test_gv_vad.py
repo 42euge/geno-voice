@@ -5481,6 +5481,78 @@ def test_render_grid_csv_round_trips_to_json_twin_with_inf_on_col_axis():
     assert parsed == grid
 
 
+def test_render_grid_csv_consumer_rederives_json_best_pick():
+    # iter-273: iters 270/271/272 closed the cross-surface round-trip of the
+    # bare `grid` PAYLOAD (finite, then inf on the row axis, then inf on the col
+    # axis) — proving the CSV body and the JSON `grid` describe the SAME cells.
+    # But when a --target is set, the JSON twin grows pick keys the CSV does NOT
+    # carry: render_vad_grid_json emits an explicit `best` cell (and `top`
+    # shortlist), while render_vad_grid_csv stays a pure data grid with NO pick
+    # columns (test_cmd_vad_grid_csv_ignores_target pins that). So a CSV
+    # consumer who wants the operator's pick must RE-DERIVE it: parse the flat
+    # table back to grid cells and re-run pick_best_grid_cell / pick_top_grid_cells.
+    # That cross-surface pick AGREEMENT — the JSON-embedded `best`/`top` equals
+    # what a CSV reader recomputes from the same numbers — was never pinned.
+    # The JSON pick was tested only in ISOLATION (test_render_grid_json_*target*),
+    # the CSV only for the bare grid; a regression that changed the JSON pick's
+    # tie-break, distance, or row-major cell ordering on ONE surface but not the
+    # picker the CSV consumer reuses would have shipped green. Pin both surfaces
+    # to name the SAME best cell and the SAME top shortlist, including a distance
+    # tie broken row-major (cells at equal |Δ| keep grid order on BOTH paths).
+    row_values = [0.3, 0.5]
+    col_values = [400.0, 800.0]
+    # 2×2 row-major counts 5/3/2/4. target=3 → cell (0.3,800) is an exact hit
+    # (dist 0). For the top-3 shortlist with target 3 the distances are
+    # 2,0,1,1 row-major; ranked nearest-first the head is (0.3,800) dist 0, then
+    # the two dist-1 cells (0.5,400) and (0.5,800) — a tie broken row-major, so
+    # (0.5,400) precedes (0.5,800). Pins the tie ordering across both surfaces.
+    results = [_cell_result(n) for n in (5, 3, 2, 4)]
+    target = 3
+    csv_text = gv.render_vad_grid_csv(
+        row_values, col_values, results, name="rec.wav",
+        row_axis="threshold", col_axis="min_silence_ms",
+    )
+    payload = json.loads(
+        gv.render_vad_grid_json(
+            row_values, col_values, results, name="rec.wav",
+            row_axis="threshold", col_axis="min_silence_ms",
+            target=target, top=3,
+        )
+    )
+    # The CSV body carries no pick columns — it is the bare grid.
+    assert "best" not in csv_text and "distance" not in csv_text
+    # A CSV consumer re-parses the flat table back to grid cells...
+    cells = [
+        {
+            "threshold": float(row["threshold"]),
+            "min_silence_ms": float(row["min_silence_ms"]),
+            "num_segments": int(row["num_segments"]),
+            "speech_s": float(row["speech_s"]),
+        }
+        for row in csv.DictReader(io.StringIO(csv_text))
+    ]
+    # ...and re-runs the SAME picker the JSON surface used. The CSV-derived best
+    # equals the JSON `best` once its augmented `distance` key is dropped, and
+    # the re-derived distance matches the one the JSON embedded.
+    csv_best = gv.pick_best_grid_cell(cells, target)
+    json_best = dict(payload["best"])
+    assert json_best.pop("distance") == gv.grid_cell_distance(csv_best, target)
+    assert csv_best == json_best
+    # The top shortlist agrees cell-for-cell (distance stripped), including the
+    # row-major tie order on the two equidistant runners-up.
+    csv_top = gv.pick_top_grid_cells(cells, target, 3)
+    json_top = [dict(c) for c in payload["top"]]
+    for c in json_top:
+        c.pop("distance")
+    assert csv_top == json_top
+    # Head of the shortlist is the single best pick, on both surfaces.
+    assert csv_top[0] == csv_best
+    # The tie between the two dist-1 cells resolved row-major (0.5,400 first).
+    assert [(c["threshold"], c["min_silence_ms"]) for c in csv_top] == [
+        (0.3, 800.0), (0.5, 400.0), (0.5, 800.0),
+    ]
+
+
 # ---- cmd_vad_grid: end-to-end ------------------------------------------
 
 
