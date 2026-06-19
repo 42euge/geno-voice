@@ -157,6 +157,7 @@ gv vad-sweep recording.wav --target 3-                      # open band: at leas
 gv vad-sweep recording.wav --target -5                      # open band: at most 5 regions (iter-247)
 gv vad-sweep recording.wav --target 3,5,7                   # set: 3 OR 5 OR 7 regions (iter-248)
 gv vad-sweep recording.wav --target 3>5>7                   # preference: prefer 3, accept 5, then 7 (iter-249)
+gv vad-sweep recording.wav --target 3,5:2                   # weighted: prefer 3, accept 5 but 2 worse (iter-250)
 ```
 
 The human report is a small table — the WAV name, a `threshold / segments /
@@ -439,6 +440,39 @@ preference (`3>3`) collapses to the bare element so scalar/band output stays
 byte-for-byte unchanged. An empty element (`3>`, `>5`) is rejected as a typo, and
 mixing `,` (set) with `>` (preference) in one target is rejected — they are
 different composition operators.
+
+#### `--target A,B:W` — a weighted set (iter-250)
+
+A `>` preference breaks only an **exact** distance tie toward the earlier count.
+But an operator may want the preferred count to win even when it is slightly
+**farther** — "I'll take 3 segments at distance 1 over 8 at distance 0, because 8
+is over-segmenting". iter-250 lets a comma-set element carry a `:penalty` weight:
+`--target 3,8:2` means "prefer 3, accept 8 **but treat it as 2 segments worse**
+than it actually is". The penalty is **added** to that element's distance, so the
+weight folds preference INTO the distance — unlike a `>` preference, it can
+**override a raw-distance gap**, not just break a tie. An element with no `:`
+carries penalty `0` (the iter-248 set element, unweighted); each element is itself
+a scalar or band, so they compose (`3,5-7:2`).
+
+```bash
+gv vad-sweep recording.wav --thresholds 0.3,0.5,0.7,0.9 --target 3,8:2   # prefer 3, accept 8 but 2 worse
+gv vad-grid  recording.wav --thresholds 0.3,0.5,0.7 --min-silences 400,800 --target 3,5-7:2  # weighted band
+```
+
+The distance is the **min** over each element's `(raw distance + penalty)`, so a
+count routes through whichever element is cheapest — a count near an unweighted
+neighbour never pays a distant element's penalty. The `best:` / `top N:` lines
+render the set comma-joined with each non-zero penalty appended (`3,8:2`), the
+`|Δ|` shown being the **penalised** distance, and the `--json` `target`
+serialises as a `{"weighted": [[element, penalty], ...]}` object (a band element
+nests as its own `[lo, hi]` array — `3,5-7:2` → `{"weighted": [[3, 0], [[5, 7],
+2]]}`). A weighted set is deduped on the element preserving first-seen order (the
+first penalty wins), and one that collapses to a single element drops the
+now-useless penalty and reduces to the bare element (a lone penalty is a constant
+offset that cannot change any pick). A `:` weight **requires** a `,` set (it is
+meaningless on a single element) and cannot be combined with `>` (preference) —
+both express preference, so stacking them is rejected as ambiguous. Each penalty
+is a non-negative whole number.
 
 ### `gv vad-grid` — a 2-D knob grid (iter-240)
 

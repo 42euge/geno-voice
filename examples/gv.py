@@ -281,6 +281,21 @@ def target_type(raw):
     ``,`` and ``>`` in one target is rejected — they are different composition
     operators (a flat OR vs a ranked OR) and stacking them is ambiguous.
 
+    iter-250 adds the ``:penalty`` WEIGHTED-SET form on a comma set:
+    ``--target 3,5:2`` means "prefer 3, accept 5 but treat it as 2 segments
+    WORSE than it is". Where iter-249's preference breaks only EXACT distance
+    ties, the weight folds preference INTO the distance — the penalty is ADDED to
+    that element's distance — so a more-preferred count can win even at a
+    slightly LARGER raw distance (e.g. count 3 at distance 1 beats count 5 at
+    distance 0 once 5 carries a +2 penalty). It parses to a ``{"weighted":
+    [(element, penalty), ...]}`` dict (each element a scalar or band, so
+    ``3,5-7:2`` composes), deduped on the element preserving first-seen order,
+    and a weighted set that collapses to one element reduces to the bare element
+    (a lone penalty is a constant offset that cannot change a pick). A ``:``
+    weight requires a ``,`` set (it is meaningless on a single element) and
+    cannot be combined with ``>`` (preference) — both express preference, so
+    stacking them is ambiguous. Each penalty is a non-negative whole number.
+
     Each present band edge is a non-negative whole number (reusing
     :func:`nonneg_int_type`'s rules — ``0`` is legitimate, negatives/fractionals
     are rejected), the band separator is a single ``-``, and for a CLOSED band
@@ -292,25 +307,48 @@ def target_type(raw):
     :class:`argparse.ArgumentTypeError` on any malformed input.
     """
     text = raw.strip() if isinstance(raw, str) else raw
+    has_set = isinstance(text, str) and "," in text
+    has_pref = isinstance(text, str) and ">" in text
+    has_weight = isinstance(text, str) and ":" in text
     # iter-249: ',' (a flat set) and '>' (a ranked preference) are different
     # composition operators; stacking them in one target is ambiguous, so reject.
-    if isinstance(text, str) and "," in text and ">" in text:
+    if has_set and has_pref:
         raise argparse.ArgumentTypeError(
             f"target cannot mix ',' (set) and '>' (preference), got {raw!r}"
+        )
+    # iter-250: a ':penalty' weight (a WEIGHTED set) folds preference INTO the
+    # distance, where the '>' preference only breaks exact ties — they are
+    # different intent expressions, so stacking them is ambiguous. And a weight
+    # is meaningless on a single element (a constant offset that cannot change
+    # the pick), so it requires the comma-set context.
+    if has_weight and has_pref:
+        raise argparse.ArgumentTypeError(
+            f"target cannot mix ':' (weight) and '>' (preference), got {raw!r}"
+        )
+    if has_weight and not has_set:
+        raise argparse.ArgumentTypeError(
+            f"target ':' weight requires a ',' set (e.g. 3,5:2), got {raw!r}"
         )
     # iter-249: '>' separates a PREFERENCE order — prefer the earlier-listed
     # count, accept the later ones; the precedence breaks distance ties (see
     # grid_cell_sort_key). Parses to a {"prefer": [...]} dict so it is distinct
     # from the flat-set list. A single-element preference collapses to the bare
     # element.
-    if isinstance(text, str) and ">" in text:
+    if has_pref:
         elements = _parse_target_collection(text, raw, ">", "preference")
         return elements[0] if len(elements) == 1 else {"prefer": elements}
+    # iter-250: a comma-set whose elements carry a ':penalty' is a WEIGHTED set —
+    # the penalty is ADDED to that element's distance, so a more-preferred count
+    # can win even at a slightly larger raw distance (unlike the iter-249
+    # preference, which only breaks exact ties). Parses to a {"weighted": [...]}
+    # dict distinct from both the flat-set list and the prefer dict.
+    if has_set and has_weight:
+        return _parse_weighted_set(text, raw)
     # iter-248: a comma separates a SET of acceptable targets, each element
     # itself a scalar or a band. The set scores as the MIN distance to any
     # element (see grid_cell_distance), so '3,5' accepts 3 OR 5 but nothing
     # between. A single-element set collapses to that bare element.
-    if isinstance(text, str) and "," in text:
+    if has_set:
         elements = _parse_target_collection(text, raw, ",", "set")
         return elements[0] if len(elements) == 1 else elements
     return _parse_single_target(text)
@@ -340,6 +378,51 @@ def _parse_target_collection(text, raw, sep, kind):
         if element not in elements:  # dedupe, preserve first-seen order
             elements.append(element)
     return elements
+
+
+def _parse_weighted_set(text, raw):
+    """Parse a comma-set whose elements may carry a ``:penalty`` weight (iter-250).
+
+    The WEIGHTED set generalises the iter-248 flat set: an element written
+    ``count:penalty`` (e.g. ``5:2``) adds ``penalty`` to that element's distance
+    in :func:`grid_cell_distance`, so a less-penalised (more-preferred) count can
+    win even at a slightly LARGER raw distance — the gap iter-249's preference
+    left, where the precedence breaks only EXACT distance ties. An element with
+    no ``:`` carries penalty ``0`` (the iter-248 element, unweighted). The base of
+    each element is parsed by :func:`_parse_single_target`, so a band may be
+    weighted too (``3,5-7:2`` = "prefer 3, accept the 5-7 band but 2 worse").
+
+    Returns a ``{"weighted": [(element, penalty), ...]}`` dict (distinct from the
+    flat-set ``list`` and the prefer ``dict``), deduped on the element preserving
+    first-seen order (so ``3:1,3:2`` keeps the first penalty). A weighted set that
+    collapses to a single element reduces to the BARE element — a lone penalty is
+    a constant offset that cannot change any pick, so it is dropped to keep
+    scalar/band output byte-for-byte unchanged. The penalty is a non-negative
+    whole number (reusing :func:`nonneg_int_type`'s rules; ``0`` is legitimate but
+    redundant). Pure; raises :class:`argparse.ArgumentTypeError` on an empty or
+    malformed element/penalty.
+    """
+    parts = [p.strip() for p in text.split(",")]
+    if any(p == "" for p in parts):
+        raise argparse.ArgumentTypeError(
+            f"target weighted set must be ','-separated targets, got {raw!r}"
+        )
+    weighted = []
+    seen = []
+    for part in parts:
+        if ":" in part:
+            base_text, _, penalty_text = part.partition(":")
+            element = _parse_single_target(base_text.strip())
+            penalty = nonneg_int_type(penalty_text.strip())
+        else:
+            element = _parse_single_target(part)
+            penalty = 0
+        if element not in seen:  # dedupe on element, first-seen penalty wins
+            seen.append(element)
+            weighted.append((element, penalty))
+    if len(weighted) == 1:
+        return weighted[0][0]
+    return {"weighted": weighted}
 
 
 def _parse_single_target(text):
@@ -381,10 +464,21 @@ def _format_target(target):
     form renders each element comma-joined so it reads back as typed:
     ``[3, 5, 7]`` → ``3,5,7``, ``[3, (5, 7)]`` → ``3,5-7``. iter-249's
     preference form (a ``{"prefer": [...]}`` dict) renders ``>``-joined so it too
-    reads back as typed: ``{"prefer": [3, 5, 7]}`` → ``3>5>7``. Used by
+    reads back as typed: ``{"prefer": [3, 5, 7]}`` → ``3>5>7``. iter-250's
+    weighted-set form (a ``{"weighted": [(element, penalty), ...]}`` dict)
+    renders comma-joined with each non-zero penalty appended as ``:penalty``:
+    ``{"weighted": [(3, 0), (5, 2)]}`` → ``3,5:2``. Used by
     :func:`_render_pick_block` so the ``best:`` / ``top N:`` lines read naturally
     for any form without each call site re-deriving the format. Pure.
     """
+    if isinstance(target, dict) and "weighted" in target:
+        # iter-250: a weighted set renders comma-joined, each element appending
+        # ':penalty' only when non-zero so an unweighted element reads as a plain
+        # count and the whole thing reads back exactly as typed.
+        return ",".join(
+            _format_target(element) + (f":{penalty}" if penalty else "")
+            for element, penalty in target["weighted"]
+        )
     if isinstance(target, dict):
         return ">".join(_format_target(element) for element in target["prefer"])
     if isinstance(target, list):
@@ -1166,11 +1260,24 @@ def grid_cell_distance(cell, target):
       tie-breaking (:func:`grid_cell_sort_key`), never the distance, so two
       counts that both satisfy the preference are equidistant here and the
       preference order decides between them at the sort-key layer.
+    - **weighted set (iter-250)** — a ``{"weighted": [(element, penalty), ...]}``
+      dict: the MIN over each element's distance PLUS its penalty, so a
+      lower-penalty (more-preferred) count can score below a higher-penalty one
+      even at a larger raw distance. Unlike the preference, the weight enters the
+      distance itself, so it can override a distance gap (not just break a tie).
 
     Pure — reads only ``cell["num_segments"]``, an int, so it never touches
     torch.
     """
     count = cell["num_segments"]
+    if isinstance(target, dict) and "weighted" in target:
+        # iter-250: each element's distance is its raw distance PLUS its penalty,
+        # and the set scores as the MIN over those penalised distances — so a
+        # cheaper (lower-penalty) element can win even at a larger raw distance.
+        return min(
+            grid_cell_distance(cell, element) + penalty
+            for element, penalty in target["weighted"]
+        )
     if isinstance(target, dict):
         return min(grid_cell_distance(cell, element) for element in target["prefer"])
     if isinstance(target, list):
@@ -1209,13 +1316,21 @@ def grid_cell_sort_key(cell, target, tie_break="row-major"):
     tie on preference rank. For a non-preference target the key is byte-for-byte
     the iter-243 shape (no preference key inserted).
 
+    iter-250: a ``{"weighted": ...}`` set inserts NO secondary key — its
+    preference is already baked into :func:`grid_cell_distance` (the penalty), so
+    cells at equal PENALISED distance are a genuine tie that the ``tie_break``
+    decides. Only the ``{"prefer": ...}`` dict gets the preference rank key.
+
     Pure — reads only ``cell["num_segments"]`` and, for ``"speech"`` ties,
     ``cell["speech_s"]``. Never touches torch.
     """
     distance = grid_cell_distance(cell, target)
     keys = [distance]
-    if isinstance(target, dict):
+    if isinstance(target, dict) and "prefer" in target:
         keys.append(_preference_rank(cell, target["prefer"]))
+    # iter-250: a {"weighted": ...} set needs NO secondary key — its preference is
+    # already baked into the distance (the penalty), so equal penalised distance
+    # is a genuine tie that the tie_break (row-major/speech) decides.
     if tie_break == "speech":
         keys.append(-cell["speech_s"])
     return tuple(keys)
@@ -2391,12 +2506,14 @@ def build_parser():
         dest="target",
         help="Desired segment count (e.g. 3), closed band (e.g. 3-5), "
         "open band (3- = at least 3, -5 = at most 5), set (3,5,7 = 3 OR 5 "
-        "OR 7), or preference (3>5>7 = prefer 3, accept 5, then 7) — when given, "
+        "OR 7), preference (3>5>7 = prefer 3, accept 5, then 7), or weighted set "
+        "(3,5:2 = prefer 3, accept 5 but 2 segments worse) — when given, "
         "a data-driven 'best:' pick names the swept value whose recovered "
         "segment count is closest to it (a band/set/preference scores 0 anywhere "
         "it is satisfied; a preference breaks ties toward the earlier-listed "
-        "count); the same machinery as vad-grid's --target; omit for just the "
-        "table",
+        "count; a weight adds to a count's distance so a preferred count can win "
+        "at a larger distance); the same machinery as vad-grid's --target; omit "
+        "for just the table",
     )
     vad_sweep.add_argument(
         "--top",
@@ -2520,12 +2637,14 @@ def build_parser():
         dest="target",
         help="Desired segment count (e.g. 3), closed band (e.g. 3-5), "
         "open band (3- = at least 3, -5 = at most 5), set (3,5,7 = 3 OR 5 "
-        "OR 7), or preference (3>5>7 = prefer 3, accept 5, then 7) — when given, "
+        "OR 7), preference (3>5>7 = prefer 3, accept 5, then 7), or weighted set "
+        "(3,5:2 = prefer 3, accept 5 but 2 segments worse) — when given, "
         "a data-driven 'best:' pick names the cell whose recovered segment count "
         "is closest to it (a band/set/preference scores 0 anywhere it is "
-        "satisfied; a preference breaks ties toward the earlier-listed count); "
-        "the vad-grid analogue of simulate-mirror --grid's best pick; omit for "
-        "just the table",
+        "satisfied; a preference breaks ties toward the earlier-listed count; a "
+        "weight adds to a count's distance so a preferred count can win at a "
+        "larger distance); the vad-grid analogue of simulate-mirror --grid's "
+        "best pick; omit for just the table",
     )
     vad_grid.add_argument(
         "--top",

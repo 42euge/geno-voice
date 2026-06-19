@@ -414,6 +414,82 @@ def test_format_target_preference():
     assert gv._format_target({"prefer": [3, (5, None), (None, 7)]}) == "3>5->-7"
 
 
+# ---- target_type: ':penalty' WEIGHTED-SET form (iter-250) --------------
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("3,5:2", {"weighted": [(3, 0), (5, 2)]}),
+        ("3:1,5:2", {"weighted": [(3, 1), (5, 2)]}),
+        (" 3 , 5 : 2 ", {"weighted": [(3, 0), (5, 2)]}),  # whitespace trimmed
+        ("3,5-7:2", {"weighted": [(3, 0), ((5, 7), 2)]}),  # an element may be a band
+        ("3,5-:2", {"weighted": [(3, 0), ((5, None), 2)]}),  # ...or an open band
+        ("3:0,5:2", {"weighted": [(3, 0), (5, 2)]}),  # an explicit 0 penalty is fine
+    ],
+)
+def test_target_type_weighted_parses_to_weighted_dict(raw, expected):
+    # iter-250: a ':penalty' on a comma-set element parses to a {"weighted":
+    # [(element, penalty), ...]} dict, an element with no ':' carrying penalty 0.
+    value = gv.target_type(raw)
+    assert value == expected
+    assert isinstance(value, dict)
+    assert "weighted" in value
+
+
+def test_target_type_weighted_dedupes_on_element_first_penalty_wins():
+    # iter-250: a repeated element collapses, the first-seen penalty kept.
+    assert gv.target_type("3:1,3:2,5:4") == {"weighted": [(3, 1), (5, 4)]}
+
+
+def test_target_type_single_element_weighted_collapses_to_bare_element():
+    # iter-250: a weighted set collapsing to one element drops the (now useless)
+    # penalty and reduces to the bare element, keeping scalar output unchanged.
+    value = gv.target_type("3:2,3:5")
+    assert value == 3
+    assert isinstance(value, int)
+
+
+@pytest.mark.parametrize("raw", ["3:2,", ",5:2", "3:2,,5", "3:2, ,5"])
+def test_target_type_rejects_empty_weighted_element(raw):
+    # iter-250: an empty element (trailing/leading/doubled ',') is a typo.
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.target_type(raw)
+
+
+@pytest.mark.parametrize("raw", ["3,5:a", "3,5:-1", "3,a:2", "3,5-3:2"])
+def test_target_type_rejects_malformed_weighted_element(raw):
+    # iter-250: a non-int/negative penalty, a bad base, or an inverted band element
+    # fails the whole target.
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.target_type(raw)
+
+
+def test_target_type_rejects_weight_without_set():
+    # iter-250: a ':' weight is meaningless on a single element (a constant offset
+    # that cannot change a pick), so it requires the ',' set context.
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.target_type("3:2")
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.target_type("3-5:2")  # a lone band with a weight is still single
+
+
+@pytest.mark.parametrize("raw", ["3,5:2>7", "3>5:2", "3:2,5>7"])
+def test_target_type_rejects_mixing_weight_and_preference(raw):
+    # iter-250: ':' (weight) and '>' (preference) both express preference; stacking
+    # them in one target is ambiguous.
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.target_type(raw)
+
+
+def test_format_target_weighted():
+    # iter-250: a weighted set renders comma-joined, each non-zero penalty appended
+    # as ':penalty', so it reads back exactly as typed (a zero penalty stays bare).
+    assert gv._format_target({"weighted": [(3, 0), (5, 2)]}) == "3,5:2"
+    assert gv._format_target({"weighted": [(3, 1), (5, 2)]}) == "3:1,5:2"
+    assert gv._format_target({"weighted": [(3, 0), ((5, 7), 2)]}) == "3,5-7:2"
+
+
 # ---- max_speech_type: the force-split bound ----------------------------
 
 
@@ -2456,6 +2532,49 @@ def test_pick_top_grid_cells_preference_orders_runners_up():
     assert [c["num_segments"] for c in top] == [3, 5, 7]
 
 
+# ---- weighted set: penalty folds preference into distance (iter-250) ---
+
+
+def test_grid_cell_distance_weighted_adds_penalty_min_over_elements():
+    # iter-250: each element's distance is its raw distance PLUS its penalty; the
+    # set scores as the MIN over those penalised distances.
+    target = {"weighted": [(3, 0), (5, 2)]}
+    assert gv.grid_cell_distance({"num_segments": 3}, target) == 0  # 0+0 vs 2+2
+    assert gv.grid_cell_distance({"num_segments": 5}, target) == 2  # 2+0 vs 0+2
+    assert gv.grid_cell_distance({"num_segments": 4}, target) == 1  # 1+0 vs 1+2
+
+
+def test_grid_cell_distance_weighted_lets_preferred_win_at_larger_raw_distance():
+    # iter-250: THE point of the form. Preferred 3 (penalty 0), accepted 5
+    # (penalty 2). Count 5 lands EXACTLY on the accepted element (raw distance 0)
+    # but pays its +2 → 2. Count 4 is raw distance 1 from the preferred 3 → 1, so
+    # it BEATS the exact-accepted count 5. The penalty overrides a raw-distance
+    # gap — unlike iter-249's preference, which only breaks exact distance ties.
+    target = {"weighted": [(3, 0), (5, 2)]}
+    assert gv.grid_cell_distance({"num_segments": 5}, target) == 2
+    assert gv.grid_cell_distance({"num_segments": 4}, target) == 1
+
+
+def test_grid_cell_sort_key_weighted_inserts_no_secondary_key():
+    # iter-250: the weighted set's preference is already baked into the distance,
+    # so the sort key carries NO secondary preference-rank component — equal
+    # penalised distance is a genuine tie left to the tie_break.
+    target = {"weighted": [(3, 0), (5, 2)]}
+    assert gv.grid_cell_sort_key({"num_segments": 3, "speech_s": 1.0}, target) == (0,)
+    assert gv.grid_cell_sort_key(
+        {"num_segments": 5, "speech_s": 1.0}, target, "speech"
+    ) == (2, -1.0)
+
+
+def test_pick_best_grid_cell_weighted_overrides_distance_gap():
+    # iter-250: count 5 lands EXACTLY on accepted element 5 (raw dist 0, penalised
+    # 2); count 4 is raw dist 1 from preferred 3 (penalised 1). The penalty flips
+    # the pick to count 4 — beating the raw-distance gap (unlike iter-249).
+    cells = _seg_speech_cells([(5, 9.0), (4, 1.0)])
+    best = gv.pick_best_grid_cell(cells, {"weighted": [(3, 0), (5, 2)]})
+    assert best["num_segments"] == 4
+
+
 def test_pick_best_grid_cell_speech_tie_break_prefers_most_speech():
     # Both cells are |Δ|=1 from target 3; speech tie-break picks the 5.0s cell
     # even though the 2.0s cell is earlier in row-major order.
@@ -2752,6 +2871,40 @@ def test_render_grid_json_carries_preference_target():
     assert payload["target"] == {"prefer": [3, [5, 7]]}
     assert payload["best"]["num_segments"] == 5
     assert payload["best"]["distance"] == 0
+
+
+def test_render_grid_weighted_target_overrides_distance_gap():
+    # iter-250: preferred 3 (penalty 0), accepted 6 (penalty 2). Count 6 lands
+    # exactly on the accepted element (penalised 2); count 4 is raw dist 1 from the
+    # preferred 3 (penalised 1), so the +2 penalty flips the pick to the 4-count
+    # cell. The weighted set renders as "3,6:2" with no dict repr; |Δ| is penalised.
+    results = [_cell_result(n) for n in (6, 4)]
+    lines = gv.render_vad_grid(
+        [0.3], [400.0, 800.0], results, name="rec.wav",
+        target={"weighted": [(3, 0), (6, 2)]},
+    )
+    best_line = lines[-1]
+    assert best_line.lstrip().startswith("best:")
+    assert "4 segments" in best_line
+    assert "|Δ|=1" in best_line
+    assert "target 3,6:2" in best_line
+    assert "weighted" not in best_line
+
+
+def test_render_grid_json_carries_weighted_target():
+    # iter-250: a weighted target serialises as {"weighted": [...]} — each element
+    # a [element, penalty] pair (a band element nests as its own [lo, hi] array).
+    results = [_cell_result(n) for n in (4, 5)]
+    payload = json.loads(
+        gv.render_vad_grid_json(
+            [0.3], [400.0, 800.0], results, name="rec.wav",
+            target={"weighted": [(3, 0), ((5, 7), 2)]},
+        )
+    )
+    assert payload["target"] == {"weighted": [[3, 0], [[5, 7], 2]]}
+    # count 4 → min(|4-3|+0, dist-to-band+2) = min(1, 0+2) = 1; count 5 → min(2, 2).
+    assert payload["best"]["num_segments"] == 4
+    assert payload["best"]["distance"] == 1
 
 
 def test_render_grid_json_best_is_none_for_empty_grid():
@@ -3333,6 +3486,54 @@ def test_cmd_vad_sweep_preference_target_breaks_tie_toward_preferred():
     assert "3 segments" in text
     assert "target 3>7" in text
     assert "prefer" not in text
+
+
+def test_cmd_vad_grid_weighted_target_overrides_distance_gap():
+    # iter-250, grid form: preferred 3 (penalty 0), accepted 8 (penalty 3). Low
+    # gate → 8 segments (lands on the accepted element, penalised 3); high gate → 4
+    # (raw dist 1 from preferred 3, penalised 1). The +3 penalty flips the pick to
+    # the 4-count cell even though 8 matches an accepted count exactly.
+    def seg(wav, params=None):
+        n = 8 if params.threshold < 0.5 else 4
+        return _cell_result(n)
+
+    lines: List[str] = []
+    gv.cmd_vad_grid(
+        _grid_args(
+            thresholds=[0.3, 0.5], min_silences=[400.0],
+            target={"weighted": [(3, 0), (8, 3)]},
+        ),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    text = "\n".join(lines)
+    assert "best:" in text
+    assert "4 segments" in text
+    assert "target 3,8:3" in text
+    assert "weighted" not in text
+
+
+def test_cmd_vad_sweep_weighted_target_overrides_distance_gap():
+    # iter-250, sweep form: preferred 3 (penalty 0), accepted 8 (penalty 3). Low
+    # gate → 8 segments (penalised 3); high gate → 5 (raw dist 2 from preferred 3,
+    # penalised 2). The +3 penalty flips the pick to the 5-count value (2 < 3).
+    def seg(wav, params=None):
+        n = 8 if params.threshold < 0.5 else 5
+        return _cell_result(n)
+
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(thresholds=[0.3, 0.7], target={"weighted": [(3, 0), (8, 3)]}),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    text = "\n".join(lines)
+    assert "best:" in text
+    assert "5 segments" in text
+    assert "target 3,8:3" in text
+    assert "weighted" not in text
 
 
 def test_cmd_vad_grid_csv_ignores_target():
