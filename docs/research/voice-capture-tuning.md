@@ -2063,3 +2063,10 @@ corpus.
 - "Known speech would trigger" = the recording's metadata `peak_rms`
   clears the gate **and** the state machine committed ≥1 onset on replay.
   Recordings without metadata fall back to the onset count alone.
+- **Drift sentinel (iter-321).** `tests/unit/test_voice_capture_tuning_doc.py`
+  extracts every `gv` command shown in the fenced code blocks above and parses
+  it through the real `examples/gv.py` `build_parser`. A renamed or removed
+  documented flag stops parsing and turns the test red, so the examples here
+  cannot silently rot. (The non-`gv` `python fixtures/replay_*.py` lines are
+  skipped.) This backports the same guard the TTS-pacing mirror doc gained in
+  iter-320 (`tests/unit/test_tts_pacing_mirror_doc.py`).
