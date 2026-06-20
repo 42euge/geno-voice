@@ -28938,3 +28938,94 @@ and `--json` outputs are untouched.
    shows ~29 leftover per-iter worktrees (iter-001…iter-028, iter-232).
    A future lap could `git worktree prune` / remove the merged ones to
    keep the worktree list legible.
+
+## iter-315 — gv simulate-mirror --csv (machine-readable twin for both modes)
+
+- **Date:** 2026-06-20
+- **Branch:** iter-315-simulate-mirror-csv (ff-merged to main, worktree removed)
+- **Commit:** 5518aa5
+
+**Why.** The WPM-mirror simulator (`gv simulate-mirror`, iter-218) was
+the last analysis surface with *no* machine-readable output at all: the
+four VAD-analysis surfaces (`gv vad` / `vad-diff` / `vad-sweep` /
+`vad-grid`) each carry the full human / `--json` / `--csv` trio after
+iter-237/251/313/314, but the WPM-mirror simulator had only its human
+report — nothing pipeable into a spreadsheet or plotting script. iter-314's
+own next-item flagged exactly this gap and named the grid mode as having
+the clearest row shape (it shares `render_grid` with the WPM sweep). This
+lap adds `--csv` covering BOTH of the command's modes so the simulator's
+output can drive analysis tooling without an eyeball-the-prose step.
+
+**What it is.** Two pure renderers, one per mode, each matching its mode's
+natural CSV unit:
+- **`render_grid_csv(points, best)`** — the flat twin of `render_grid`.
+  One row per scored cell in the engine's sweep order:
+  `base_wpm,strength,final_speed,final_gap,max_step,moves,score,is_best`.
+  The data-driven pick is folded into the table as an `is_best` boolean
+  column (filterable) rather than split into a prose footer — a CSV is a
+  pure data grid, so the verdict belongs in a column, not trailing
+  English. `best=None` (no scorable cell) leaves every `is_best` at 0.
+  Unscorable cells carry empty `final_gap`/`score` fields (matching the
+  human table's `n/a`) so a reader distinguishes "0.0 gap" from "no gap
+  to compute". Floats rounded to 3 places, matching the human report.
+- **`render_trajectory_csv(traj, *, wpms=None)`** — the trajectory-mode
+  twin. A single fold over the arc, so the natural unit is one row per
+  *turn*: `turn,user_wpm,speed` (the machine-readable expansion of the
+  human report's `per-turn speeds:` line — a speed-vs-turn plot, one
+  point per row). `turn` is 1-based. When `wpms` length matches the
+  speeds, each row carries its driving `user_wpm`; otherwise that field
+  is left empty (the speeds still emit — the speed column is load-
+  bearing). Arc-level scalars (final gap / max step / moves) are
+  intentionally NOT duplicated into every row — they are derivable and
+  would bloat a per-turn grid. Empty arc → header alone.
+
+**What changed.**
+- **`examples/gv.py`** — added `render_grid_csv` and
+  `render_trajectory_csv` (both pure, stdlib `csv` writer, RFC-4180
+  quoting, trailing `\r\n` stripped). `cmd_simulate_mirror` now reads
+  `getattr(args, "csv", False)` and branches in both the `--grid` and
+  trajectory paths. Added a `--csv` `store_true` flag to the
+  `simulate-mirror` parser (no mutual-exclusion group needed — the
+  command has no `--json`). Updated the handler docstring with the
+  iter-315 note.
+- **`tests/unit/test_gv_simulate_mirror.py` (+16 tests)** — parser
+  (`csv` defaults False, `--csv` sets it); `render_grid_csv` (header +
+  one row per cell with no prose footer, exactly-one `is_best` on the
+  picked pair, all-zero `is_best` with empty gap/score when no cell is
+  scorable, no trailing newline, 3-place rounding); `render_trajectory_csv`
+  (one row per turn with paired `user_wpm`, empty-arc header-only,
+  unpaired/no-wpms leaves `user_wpm` blank while speeds still emit, no
+  trailing newline); handler (both modes' `--csv` output equals the
+  renderer, parseable per-turn rows, default-log-is-print).
+
+No existing behavior changed — the CSV path is purely additive; the human
+reports from `render_grid` / `render_trajectory` are untouched.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4113 passed**
+(4097 prior + 16 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_gv_simulate_mirror.py` → **53 passed**.
+- Integration: not re-run this lap (the change is a pure renderer +
+  parser/handler wiring over the stdlib `wpm_mirror` engine loaded by
+  file path — no torch import, no audio I/O, same as prior CLI laps).
+
+**Next planned items:**
+1. **[cli] Format parity — `calibrate-base-wpm` is now the lone analysis
+   surface with no machine-readable twin.** A `--csv` (or `--json`) for the
+   per-sample calibration table (`words,audio_seconds,speed,implied_base_wpm`
+   per sample + the median/spread/drift summary) would complete the family.
+   Scope the row shape: a calibration is a set of samples folded to one
+   verdict, so the natural CSV is one row per `CalibrationSample` plus a
+   summary — decide whether the summary is a trailing comment or a separate
+   `--verdict`-style block before building. NOTE: `simulate-mirror` now has
+   `--csv` but NOT `--json`; a future lap could add `--json` to both
+   `simulate-mirror` and `calibrate-base-wpm` to fully match the VAD trio,
+   if a programmatic (nested) consumer is wanted beyond the flat CSV.
+2. **[chat-metrics] Continuous-clone + two-sided-band sentinel families —
+   both declared complete (iter-311/312, iter-306).** A NEW per-turn
+   metric not yet emitted would be needed to extend either; none obvious.
+3. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+4. **[housekeeping] Stale worktrees accumulating** — `git worktree list`
+   shows leftover per-iter worktrees. A future lap could `git worktree
+   prune` / remove the merged ones to keep the list legible.
