@@ -27426,3 +27426,113 @@ order: the two rank-0 rows by threshold, then the rank-1 row last).
 6. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows ~30
    leftover per-iter worktrees (iter-001…iter-232) that were never pruned. A future
    lap could `git worktree prune` / remove the merged ones to keep the list readable.
+
+## iter-301 — 1-D sweep CSV consumer re-derives JSON --target weighted pick (row-major default)
+
+- **Date:** 2026-06-20
+- **Branch:** iter-301-sweep-rowmajor-weighted (ff-merged to main)
+- **Commit:** 613285f
+
+**Why.** iter-297 opened the sweep ROW-MAJOR dict-form cross-surface matrix with
+the flat SET (the sweep twin of iter-280's grid set-under-row-major test),
+iter-298 added the CLOSED BAND (twin of iter-275), iter-299 the OPEN band (twin
+of iter-273), and iter-300 the `{"prefer": …}` PREFERENCE (twin of iter-276).
+iter-300 backlog #1 named the next gap directly: the remaining dict forms still
+lack a sweep ROW-MAJOR cross-surface re-derive — only the speech matrix
+(iter-290–296) and the scalar/band SCALAR round-trips ever pinned them. The
+`{"weighted": …}` ADDITIVE-WEIGHTED set is next. The speech version (iter-294)
+forces `tie_break="speech"`, so it never exercises the DEFAULT branch of
+`render_vad_sweep_json` (the branch taken when no `tie_break=` kwarg is supplied —
+the normal CLI path). This lap pins the weighted set under the DEFAULT row-major
+tie-break, the sweep twin of iter-277's grid weighted-under-row-major test.
+
+**The gap this closes.** The weighted set is DISTINCT among the row-major sweep
+twins: its precedence lives in the DISTANCE itself, not the sort key.
+`grid_cell_distance` ADDS each element's penalty to its raw distance and takes the
+MIN over those PENALISED distances (iter-250), so the penalty can OVERRIDE a
+raw-distance gap — an exact hit on a high-penalty element scores WORSE than a
+one-off miss on a zero-penalty one — and `grid_cell_sort_key` inserts NO secondary
+key for a weighted set. So under the DEFAULT row-major tie-break the key is the
+SAME single-level `(distance,)` shape as the band/set/open-band twins
+(iter-298/297/299) — but the distance feeding it is the PENALISED one, NOT the raw
+set distance. iter-300 (preference) is the opposite split: precedence ONLY in the
+sort key with the distance left as the raw set MIN. A regression confined to the
+DEFAULT row-major path — one that flattened the `{"weighted": …}` dict to a plain
+set on the sweep JSON path (dropping the penalty so the high-penalty element
+reverts to a free exact hit and the row-major floor moves) while a CSV consumer
+still passed the weights, OR that swapped the row-major fallback for a
+speech-ordered one on the JSON path only — would diverge the two surfaces yet ship
+green, because the iter-294 weighted test forces `"speech"` and the
+scalar/band/set/open-band/preference row-major round-trips never fold a penalty
+INTO the distance.
+
+**The mechanism.** A 4-value threshold sweep (0.3/0.5/0.7/0.9) with counts
+4/6/8/1, target = weighted set `{"weighted": [(5, 0), (8, 3)]}`. `_sweep_results`
+couples speech to count + index, so the in-floor rows carry DIFFERENT speech and
+the row-major / speech tie-breaks genuinely disagree. Penalised distances (MIN
+over `|Δ to element| + penalty`): 0.30 count 4 → min(1,7)=1, speech 2.0; 0.50
+count 6 → min(1,5)=1, speech 3.6; 0.70 count 8 → min(3,3)=3, speech 5.6; 0.90
+count 1 → min(4,10)=4, speech 0.8. The +3 penalty on element 8 lifts its EXACT hit
+(raw 0) to 3, so it leaves the floor. TWO rows tie at the penalised floor distance
+1 (counts 4 and 6, one off the zero-penalty element 5). The DEFAULT row-major
+tie-break keeps the EARLIEST tied row — count 4 (0.30) — despite count 6 (0.50)
+recovering more speech. So the row-major best is the 0.30 row count 4, and the
+top-3 is `[4, 6, 8]` (the two floor rows in sweep order, then the penalised count-8
+row).
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+1 test).**
+  `test_render_sweep_csv_consumer_rederives_json_weighted_target_rowmajor_pick`:
+  asserts `payload["target"] == {"weighted": [[5, 0], [8, 3]]}` and
+  `payload["tie_break"] == "row-major"` with NO `tie_break` kwarg passed
+  (exercising the DEFAULT branch); the CSV body carries no
+  `best`/`distance`/`tie_break`/`weighted`; a CSV consumer re-parses the bare table
+  back to sweep rows and re-runs the SAME pickers with the SAME weighted target and
+  the DEFAULT tie-break, recovering the JSON-embedded `best` (count 4) and the full
+  top-3 (counts `[4, 6, 8]`). TWO controls prove it cannot pass by accident:
+  `tie_break="speech"` flips the pick to count 6 (the most-speech floor row),
+  proving the default branch is load-bearing; a flat SET `[5, 8]` makes count 8 a
+  free exact hit (0.70) so the pick flips, proving the +3 penalty is load-bearing.
+  The top assertions pin all three rows as penalised-distance-then-row-major
+  (count 4 → 6 → 8, thresholds 0.30 → 0.50 → 0.70 — NOT speech order [6, 4, 8], and
+  NOT the bare-set order [8, 4, 6]). No production code changed (the sweep wiring
+  was already correct — proved by the green focused run on the unmodified path).
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **3903 passed**
+(3902 prior + 1 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_gv_vad.py -k weighted_target_rowmajor` → **1 passed**.
+- Integration: not re-run this lap (no corpus symlinked into this worktree; same as
+  prior corpus-gated laps — the change is a pure CLI cross-surface contract test, no
+  new production code).
+
+**Next planned items:**
+1. **[cli] Sweep ROW-MAJOR cross-surface matrix — continue.** iter-297 opened it
+   (flat SET); iter-298 the CLOSED BAND; iter-299 the OPEN band; iter-300 the
+   `{"prefer": …}` PREFERENCE; this lap the `{"weighted": …}` set. The remaining
+   forms still lack a sweep ROW-MAJOR cross-surface re-derive: `{"scaled": …}`
+   (MULTIPLICATIVE, grid twin iter-278) and `{"affine": …}` (grid twin iter-279).
+   Each is a near-mechanical clone of this lap's test with the matching `target` and
+   NO `tie_break` kwarg — the fixture must make the row-major earliest-tie rule
+   genuinely DIFFER from speech (a `tie_break="speech"` control flips the pick) AND
+   keep the FACTOR (scaled) / FACTOR+OFFSET (affine) load-bearing in the distance (a
+   flat-set control of the bare elements changes the pick), so a default-branch
+   regression cannot ship green. After scaled+affine, the sweep row-major matrix is
+   complete (it mirrors the grid iter-273–280 set).
+2. **[cli] `simulate-mirror` grid pick round-trips** remain unpinned cross-surface
+   for ALL dict forms (the VAD matrices covered VAD grid + sweep only).
+3. **[cli] A next FEATURE would be a different axis entirely** — the `--target`
+   composition space (scalar → band → set → preference → additive → multiplicative →
+   affine) is feature-complete. Candidates: a per-element ASYMMETRIC band tolerance,
+   or a "soft floor/ceiling" scoring beyond an open edge with a gentle slope rather
+   than a hard 0. Scope before building.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or the
+   pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it stays
+   operator-only / non-headless.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop should
+   track a curated subset, decide the policy and re-run `replay_silero.py --compare` +
+   `gv vad` to refresh the comparison table.
+6. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows ~30
+   leftover per-iter worktrees that were never pruned. A future lap could
+   `git worktree prune` / remove the merged ones to keep the list readable.
