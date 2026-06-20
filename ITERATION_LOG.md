@@ -26530,3 +26530,96 @@ So the speech best is the 0.50 row, NOT the row-major pick.
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
    should track a curated subset, decide the policy and re-run
    `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
+
+## iter-292 — 1-D sweep CSV consumer re-derives JSON --target open band pick (speech tie)
+
+- **Date:** 2026-06-19
+- **Branch:** iter-292-sweep-open-band-cross-surface (ff-merged to main)
+- **Commit:** 525c30b
+
+**Why.** iter-289 pinned the 1-D SWEEP CSV↔JSON pick re-derive under
+`tie_break="speech"` for a SCALAR target, iter-290 added the first DICT form (a
+CLOSED BAND), and iter-291 added the flat SET. iter-291 backlog #1 named the next
+gap directly: the sweep still lacks the speech-tie cross-surface re-derive for the
+OTHER dict forms the GRID earned at iter-283–286/288 (open band, preference,
+weighted, scaled, affine). This lap closes the NEXT one — an OPEN band target
+`(lo, None)` "at least lo" (iter-247) under `tie_break="speech"`, the sweep twin
+of iter-283's grid open-band-under-speech test.
+
+**The gap this closes.** An open band produces multi-row ties like a closed band,
+but via a DIFFERENT mechanism: the UNBOUNDED side simply SKIPS its bound check, so
+the in-band region is open above and ARBITRARILY many rows can tie at the floor —
+not capped by an upper edge the way a closed band's ties are. The closed-band ties
+of iter-290 all sit between a finite lo and a finite hi; the open-band ties here
+extend without an upper bound. The target FORM (`grid_cell_distance`, which rows
+tie at 0) and the tie-break (`grid_cell_sort_key`, how tied rows order) are
+independent seams, so pinning the closed band under speech on the sweep (iter-290)
+does NOT pin the open band under speech. `render_vad_sweep_json` threads BOTH the
+open band target AND `tie_break="speech"` into the pickers, embedding `best`/`top`/
+`target`/`tie_break`; `render_vad_sweep_csv` emits ONLY the bare `<axis>,
+num_segments,speech_s` table. A regression that dropped the tie_break on the sweep
+JSON path (silently falling back to row-major) while a CSV consumer still passed
+`"speech"`, OR coerced the open `None` edge to a finite bound (collapsing the
+unbounded side and dropping the row that only ties because the upper bound is
+absent), would diverge the two surfaces yet ship green — a failure mode neither
+iter-289 (scalar, no ties) nor iter-290 (closed band, bounded ties) can catch, and
+the open-band-under-speech tests live ONLY on the GRID (iter-283), never the sweep.
+
+**The mechanism.** A 4-value threshold sweep (0.3/0.5/0.7/0.9) with counts
+5/9/7/2, target = open band `(5, None)` ("at least 5"). `_sweep_results` couples
+speech to count + index, so the in-band rows carry DIFFERENT speech and the two
+tie-breaks genuinely disagree. Open-band distances (count >= 5 → 0, else 5 -
+count): 0.30 count 5 → dist 0 (speech 2.5), 0.50 count 9 → dist 0 (speech 5.4),
+0.70 count 7 → dist 0 (speech 4.9), 0.90 count 2 → dist 3 (speech 1.6). THREE rows
+tie at the open-band floor. Row-major keeps the 0.30 row (count 5, earliest);
+`tie_break="speech"` prefers the most-speech in-band row, count 9 (0.50) at 5.4s.
+So the speech best is the 0.50 row, NOT the row-major pick — and the UNBOUNDED
+upper side keeps count 9 in the tie a closed band would have excluded.
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+1 test).**
+  `test_render_sweep_csv_consumer_rederives_json_open_band_target_speech_tie_pick`:
+  asserts `payload["target"] == [5, None]` (the tuple's `None` edge serialises to
+  JSON null) and `payload["tie_break"] == "speech"`; the CSV body carries no
+  `best`/`distance`/`tie_break`; a CSV consumer re-parses the bare table back to
+  sweep rows and re-runs the SAME pickers with the SAME open band AND `"speech"`,
+  recovering the JSON-embedded `best` (count 9) and the full speech-ordered top-3
+  (counts `[9, 7, 5]` — all three in-band rows lead, most speech first, the dist-3
+  count-2 row cut by top=3). TWO controls prove it cannot pass by accident:
+  ROW-MAJOR flips to count 5, and a CLOSED band `(5, 8)` pushes count 9 out (above
+  hi=8 → dist 1), flipping the speech pick to count 7 (proving the unbounded upper
+  side is load-bearing, not interchangeable with a finite edge). No production code
+  changed (the sweep wiring was already correct — proved by a pre-test smoke run on
+  the unmodified path).
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **3894 passed**
+(3893 prior + 1 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_gv_vad.py -k sweep_csv_consumer_rederives_json_open_band` → **1 passed**.
+- Integration: not re-run this lap (no corpus symlinked into this worktree; same
+  as prior corpus-gated laps — the change is a pure CLI cross-surface contract
+  test, no new production code).
+
+**Next planned items:**
+1. **[cli] Sweep cross-surface speech-tie matrix — remaining dict forms.** This lap
+   pinned the sweep CSV↔JSON pick re-derive for the OPEN BAND target under
+   `tie_break="speech"` (the grid earned this at iter-283). The sweep still lacks
+   the cross-surface re-derive for the OTHER dict forms the grid pinned at
+   iter-284–286/288 (preference, weighted, scaled, affine). Each is a near-
+   mechanical clone of this lap's test with a different `target` value — pick one
+   per lap. Confirm the sweep JSON path threads each form before assuming the gap.
+2. **[cli] `simulate-mirror` grid pick round-trips** remain unpinned cross-surface
+   for ALL dict forms (the speech matrix only covered VAD grid + sweep
+   scalar/band/set/open-band).
+3. **[cli] A next FEATURE would be a different axis entirely** — the `--target`
+   composition space (scalar → band → set → preference → additive →
+   multiplicative → affine) is feature-complete. Candidates: a per-element
+   ASYMMETRIC band tolerance, or a "soft floor/ceiling" scoring beyond an open
+   edge with a gentle slope rather than a hard 0. Scope before building.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or the
+   pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it stays
+   operator-only / non-headless.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
+   should track a curated subset, decide the policy and re-run
+   `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
