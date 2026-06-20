@@ -43,8 +43,15 @@ from examples import gv  # noqa: E402
 DOC = ROOT / "docs" / "research" / "voice-capture-tuning.md"
 MKDOCS = ROOT / "mkdocs.yml"
 
-# The four CLI subcommands this doc documents.
-VAD_SUBCOMMANDS = ("vad", "vad-gaps", "vad-diff", "vad-sweep", "vad-grid")
+# The CLI subcommands this doc documents.
+VAD_SUBCOMMANDS = (
+    "vad",
+    "vad-gaps",
+    "vad-gap-sweep",
+    "vad-diff",
+    "vad-sweep",
+    "vad-grid",
+)
 
 
 def _read_doc() -> str:

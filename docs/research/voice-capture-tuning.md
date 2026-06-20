@@ -140,6 +140,43 @@ alone. Same degrade-to-install-hint contract as `gv vad` when `silero-vad` is
 absent. `tests/unit/test_gv_vad_gaps.py` covers the core, the three renderers,
 and the handler without torch.
 
+### `gv vad-gap-sweep` — how the shortest pause moves (iter-330)
+
+`gv vad-gaps` reports the silence-gap distribution at **one** knob setting; `gv
+vad-gap-sweep` is its sweep — the gap-side analogue of `gv vad-sweep`. Where
+`vad-sweep` tabulates segment-count / speech-seconds across a swept knob,
+`vad-gap-sweep` tabulates the **min/mean/max gap** so an operator can watch the
+shortest-pause floor *move* as the knob tightens. That floor is the actionable
+number: the value that lifts the min gap clear of a target end-of-turn hangover
+(`--min-silence-ms` / the live `chat.vad.silence_duration`) is the one that buys
+merge headroom — a stricter `--threshold` (or a longer `--min-silence-ms`) gates
+out marginal speech, so adjacent regions merge and the shortest surviving pause
+lengthens.
+
+```
+gv vad-gap-sweep recording.wav                                  # 0.3,0.5,0.7,0.9 (defaults)
+gv vad-gap-sweep recording.wav --thresholds 0.1,0.3,0.5,0.7,0.9 # custom gates
+gv vad-gap-sweep recording.wav --min-silences 200,400,800,1600  # sweep the hangover instead
+gv vad-gap-sweep recording.wav --min-speeches 50,100,200,400    # sweep the min-speech floor
+gv vad-gap-sweep recording.wav --speech-pads 0,20,40,60         # sweep the region padding
+gv vad-gap-sweep recording.wav --max-speeches 5,10,20,inf       # sweep the force-split ceiling (seconds)
+gv vad-gap-sweep recording.wav --json                           # machine-readable rows
+gv vad-gap-sweep recording.wav --csv                            # flat CSV for plots
+```
+
+It shares the same five-axis sweep machinery as `gv vad-sweep` (the gate is the
+default axis; the four ms/seconds knobs are mutually exclusive, the gate then
+held at the scalar `--threshold`) and the full human / `--json` / `--csv` trio.
+Unlike `vad-sweep` there is **no** `--target` pick block — the pick machinery
+scores on segment count, which the gap surface does not headline (its signal is
+the gap distribution, not a segment-count target). A swept value whose
+segmentation has fewer than 2 segments has no inter-segment pause: the human
+table prints `-` in the gap columns, the JSON sets the aggregates to `null`, and
+the CSV emits empty cells (each distinct from a `0.000` gap). Same
+degrade-to-install-hint contract as `gv vad` when `silero-vad` is absent. The
+pure core `vad_gap_sweep` and the three renderers are covered without torch in
+`tests/unit/test_gv_vad_gap_sweep.py`.
+
 ### `gv vad-diff` — compare two thresholds (iter-235)
 
 The first consumer of the `gv vad --json` surface. Tuning the P(speech) gate
