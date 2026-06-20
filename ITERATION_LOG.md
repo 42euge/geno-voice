@@ -27773,3 +27773,119 @@ sweep order, then count 2 — its min affine distance 3 ties count 8's 3 but cou
 6. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows ~30
    leftover per-iter worktrees that were never pruned. A future lap could
    `git worktree prune` / remove the merged ones to keep the list readable.
+
+## iter-304 — grid CSV consumer re-derives JSON `--target` affine pick (row-major default)
+
+- **Date:** 2026-06-20
+- **Branch:** iter-304-grid-rowmajor-affine (ff-merged to main)
+- **Commit:** bef896c
+
+**Why.** The grid cross-surface ROW-MAJOR `--target` matrix had pinned every
+form EXCEPT the `{"affine": …}` set under the DEFAULT row-major tie-break:
+scalar (iter-273), closed band (iter-275), `{"prefer": …}` (iter-276),
+`{"weighted": …}` (iter-277), `{"scaled": …}` (iter-278), open band (iter-279),
+flat set (iter-280). The affine set (iter-287) had a grid SPEECH-tie
+cross-surface twin (iter-288) and a row-major SWEEP twin (iter-303), but its
+DEFAULT-branch round-trip on the GRID was never pinned — only the speech variant
+forces `tie_break`, so `render_vad_grid_json`'s DEFAULT row-major path under an
+affine set was unexercised cross-surface. This lap closes it — the grid twin of
+iter-303's sweep affine-under-row-major test and the row-major counterpart of
+iter-288 — COMPLETING the cross-surface ROW-MAJOR matrix over EVERY `--target`
+dict form on the grid (scalar → band → preference → weighted → scaled → open band
+→ set → affine), mirroring the sweep row-major matrix (iter-297–303) in full.
+
+**The gap this closes.** The affine set GENERALISES iter-277's weighted and
+iter-278's scaled twins: each element's distance is its raw distance SCALED by
+its factor THEN OFFSET by its penalty (`distance*factor + penalty`), the set
+scoring the MIN over those affine distances. Like both parents its precedence
+lives in the DISTANCE itself — `grid_cell_sort_key` inserts NO secondary key for
+an affine set — so under the DEFAULT row-major tie-break the key is the SAME
+single-level `(distance,)` shape as the band/set/weighted/scaled twins. What no
+prior ROW-MAJOR grid twin exercises is BOTH weight operators biting AT ONCE on
+the same fixture: the penalty taxes even an EXACT HIT (`0*factor + penalty ==
+penalty`, the weighted behaviour) AND the factor amplifies a non-zero gap (the
+scaled behaviour). A regression confined to the DEFAULT row-major path — one that
+flattened the `{"affine": …}` dict to a plain set on the grid JSON path (dropping
+BOTH weights so the floor moves) while a CSV consumer still passed them, that
+dropped EITHER weight alone, OR that quietly swapped the row-major fallback for a
+speech-ordered one on the JSON path only — would diverge the two surfaces yet
+ship green, because no other row-major grid twin folds BOTH a `*factor` AND a
+`+penalty` INTO the distance.
+
+**The mechanism.** A 2×2 `threshold × min_silence_ms` grid (row-major counts
+4/9/2/8), target = affine set `{"affine": [(5, 1, 0), (9, 3, 1)]}`. With
+`_cell_result` speech coupled to count (n segments → n*0.5s), the in-floor cells
+carry DIFFERENT speech so the row-major / speech tie-breaks genuinely disagree.
+Affine distances (MIN over `|Δ to element| * factor + penalty`): (0.3,400)
+count 4 → min(1,16)=1, speech 2.0; (0.3,800) count 9 → min(4,1)=1, speech 4.5;
+(0.5,400) count 2 → min(3,22)=3, speech 1.0; (0.5,800) count 8 → min(3,4)=3,
+speech 4.0. The floor PAIR shows BOTH weight operators biting AT ONCE in OPPOSITE
+directions: count 4 is an UNTAXED near-miss on the 0-penalty element 5 (raw 1 →
+`1*1+0` = 1), while count 9 is an EXACT HIT on element 9 (raw 0) that the +1
+penalty taxes UP to 1 (`0*3+1` = 1) — an exact hit and a near-miss leveled to the
+SAME floor only because the penalty lifts the hit. TWO cells tie at the affine
+floor distance 1 (counts 4 and 9). The DEFAULT row-major tie-break keeps the
+EARLIEST tied cell — (0.3,400) count 4 — despite count 9 recovering more speech.
+So the row-major best is count 4, and the top-3 is `[4, 9, 2]` (the two floor
+cells in row-major order, then count 2 — its affine distance 3 ties count 8's 3
+but count 2 is the earlier cell).
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+1 test).**
+  `test_render_grid_csv_consumer_rederives_json_affine_target_rowmajor_pick`:
+  asserts `payload["target"] == {"affine": [[5, 1, 0], [9, 3, 1]]}` and
+  `payload["tie_break"] == "row-major"` with NO `tie_break` kwarg passed
+  (exercising the DEFAULT branch); the CSV body carries no
+  `best`/`distance`/`tie_break`/`affine`; a CSV consumer re-parses the bare table
+  back to grid cells and re-runs the SAME pickers with the SAME affine target and
+  the DEFAULT tie-break, recovering the JSON-embedded `best` (count 4) and the
+  full top-3 (counts `[4, 9, 2]`). FOUR controls prove it cannot pass by accident:
+  `tie_break="speech"` flips the pick to count 9 (most-speech floor cell), proving
+  the default branch is load-bearing; a flat SET `[5, 9]` makes count 9 a free
+  exact hit that wins outright, proving the weights are jointly load-bearing; a
+  scaled-only `{"scaled": [(5,1),(9,3)]}` makes count 9 free and leads the
+  shortlist `[9, 4, 2]`, proving the +1 penalty is independently load-bearing; a
+  weighted-only `{"weighted": [(5,0),(9,1)]}` lets count 8 recover the tail
+  `[4, 9, 8]`, proving the *3 factor is independently load-bearing. Controls 3 and
+  4 together pin that BOTH affine weights matter at once under row-major — the
+  property no weighted-only (iter-277) or scaled-only (iter-278) grid twin can
+  establish. No production code changed (the grid wiring was already correct —
+  proved by the green focused run on the unmodified path).
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **3906 passed**
+(3905 prior + 1 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_gv_vad.py -k affine_target_rowmajor` →
+  **2 passed** (this grid test + the iter-303 sweep twin).
+- Integration: not re-run this lap (no corpus symlinked into this worktree; same
+  as prior corpus-gated laps — the change is a pure CLI cross-surface contract
+  test, no new production code).
+
+**Next planned items:**
+1. **[cli] Grid + sweep cross-surface `--target` matrices — BOTH COMPLETE.** The
+   grid now has a ROW-MAJOR cross-surface re-derive for every dict form (scalar,
+   band, preference, weighted, scaled, open band, set, affine — this lap) AND a
+   SPEECH-tie variant for every form (iter-281–288). The sweep matrices are
+   likewise complete (row-major iter-297–303, speech iter-289–296). No
+   `--target`-form cross-surface gap remains on EITHER the grid or the sweep.
+2. **[cli] `simulate-mirror --grid` has NO `--target`/`--json` pick surface** —
+   its grid pick uses `MirrorGridPoint.score()` (convergence + lurch), not a
+   distance-to-target, and emits only the human `render_grid` text. So the
+   iter-273–304 cross-surface pattern does NOT transfer as-is; pinning it would
+   first require BUILDING a `--json` surface + `--target` pick for the WPM grid (a
+   feature, not a test-only gap). Scope that before cloning the fixtures.
+3. **[cli] A next FEATURE would be a different axis entirely** — the `--target`
+   composition space (scalar → band → set → preference → additive → multiplicative
+   → affine) is feature-complete on BOTH the VAD grid and sweep. Candidates: a
+   per-element ASYMMETRIC band tolerance, or a "soft floor/ceiling" scoring beyond
+   an open edge with a gentle slope rather than a hard 0. Scope before building.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
+   should track a curated subset, decide the policy and re-run
+   `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
+6. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   leftover per-iter worktrees that were never pruned. A future lap could
+   `git worktree prune` / remove the merged ones to keep the list readable.
