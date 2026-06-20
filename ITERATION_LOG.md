@@ -29029,3 +29029,89 @@ reports from `render_grid` / `render_trajectory` are untouched.
 4. **[housekeeping] Stale worktrees accumulating** — `git worktree list`
    shows leftover per-iter worktrees. A future lap could `git worktree
    prune` / remove the merged ones to keep the list legible.
+
+## iter-316 — gv calibrate-base-wpm --csv (per-sample machine-readable twin)
+
+- **Date:** 2026-06-20
+- **Branch:** iter-316-calibrate-csv (ff-merged to main, worktree removed)
+- **Commit:** 54a5589
+
+**Why.** `gv calibrate-base-wpm` (iter-221) was the lone analysis surface
+with no machine-readable output: the four VAD-analysis surfaces (`gv vad` /
+`vad-diff` / `vad-sweep` / `vad-grid`) each carry the full human / `--json`
+/ `--csv` trio after iter-237/251/313/314, and `simulate-mirror` gained
+`--csv` in iter-315 — leaving calibration with only its human report.
+iter-315's own next-item flagged exactly this gap and named the per-sample
+row as the natural CSV unit. This lap adds `--csv` so the calibration's
+per-render measurements pipe into a spreadsheet or plotting script without
+an eyeball-the-prose step.
+
+**What it is.** One pure renderer, `render_calibration_csv(samples, calib)`.
+A calibration is a SET of per-render samples folded to ONE verdict, so the
+CSV's natural unit is **one row per sample**:
+`sample,words,audio_seconds,speed,bot_wpm,implied_base_wpm`. `sample` is
+1-based. `bot_wpm` is each render's measured rate; `implied_base_wpm`
+normalizes it back to the `speed=1.0` calibration point (the per-sample
+values the median is taken over) — the consumer sees both the raw
+measurement and the comparable normalized rate, exactly the shape an
+implied-base-wpm-per-sample scatter wants.
+
+The aggregate verdict (median `implied_base_wpm`, range, spread, nominal,
+drift) describes the whole SET, not a per-sample fact, so duplicating it
+into every row would bloat the grid (the same reasoning
+`render_trajectory_csv` uses to keep arc-level scalars out of its per-turn
+rows). Instead it trails as `#` comment lines — self-describing metadata a
+plotting/spreadsheet tool skips by default (pandas `read_csv(comment="#")`),
+matching the `#`-comment precedent `render_vad_sweep_csv` uses for its own
+non-tabular metadata. `calib=None` (no samples) yields the header alone,
+mirroring `render_trajectory_csv`'s empty-arc contract. Floats round to 3
+places.
+
+**What changed.**
+- **`examples/gv.py`** — added `render_calibration_csv` (pure, stdlib `csv`
+  writer, RFC-4180 quoting, trailing terminator stripped).
+  `cmd_calibrate_base_wpm` now branches on `getattr(args, "csv", False)`:
+  in CSV mode it emits the renderer's output and returns, suppressing BOTH
+  the human report and `--verdict` — the adopt/keep DECISION is human prose,
+  not a data row, so a consumer scripts the re-seed off the drift column.
+  Added a `--csv` `store_true` flag (no mutual-exclusion group — the command
+  has no `--json`, matching `simulate-mirror`). Updated the handler docstring
+  and the top-of-file usage line.
+- **`tests/unit/test_gv_calibrate_base_wpm.py` (+14 tests)** — parser (`csv`
+  defaults False, `--csv` sets it); `render_calibration_csv` (header + one
+  row per sample, values match engine, summary `#` comments, None-calib
+  header-only with no comments, no trailing newline, nominal threads to
+  drift); handler (CSV equals renderer, suppresses human report, suppresses
+  verdict even when flagged, rows parseable, default-log-is-print, dispatch
+  routes through `main`).
+
+No existing behavior changed — the CSV path is purely additive; the human
+report and `--verdict` surface are untouched.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4127 passed**
+(4113 prior + 14 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_gv_calibrate_base_wpm.py` → **57 passed**.
+- Integration: not re-run this lap (pure renderer + parser/handler wiring
+  over the stdlib `wpm_mirror` engine loaded by file path — no torch import,
+  no audio I/O, same as prior CLI laps).
+
+**Next planned items:**
+1. **[cli] Format-trio parity — `--csv` now covers EVERY analysis surface
+   (vad / vad-diff / vad-sweep / vad-grid / simulate-mirror /
+   calibrate-base-wpm).** The remaining asymmetry is `--json`: the VAD trio
+   carries it, but the two WPM surfaces (`simulate-mirror`,
+   `calibrate-base-wpm`) have only human + `--csv`, not `--json`. A future
+   lap could add `--json` to both for a nested/programmatic consumer beyond
+   the flat CSV — e.g. `simulate-mirror --json` (trajectory or grid object)
+   and `calibrate-base-wpm --json` (samples + verdict nested). Scope whether
+   a nested consumer is actually wanted before building; the CSV may suffice
+   for spreadsheet/plot use.
+2. **[chat-metrics] Continuous-clone + two-sided-band sentinel families —
+   both declared complete (iter-311/312, iter-306).** A NEW per-turn metric
+   not yet emitted would be needed to extend either; none obvious.
+3. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+4. **[housekeeping] Stale worktrees accumulating** — `git worktree list`
+   shows leftover per-iter worktrees. A future lap could `git worktree
+   prune` / remove the merged ones to keep the list legible.
