@@ -1101,6 +1101,104 @@ def render_grid(points, best):
     return lines
 
 
+def render_grid_csv(points, best):
+    """Render a ``simulate-mirror --grid`` sweep as CSV text (no trailing newline).
+
+    The spreadsheet/plot-friendly twin of :func:`render_grid`, the first
+    machine-readable surface on the ``simulate-mirror`` command — the iter-314
+    next-item that closes the human / ``--csv`` gap on the WPM-mirror simulator,
+    matching the trio the VAD-analysis surfaces already carry (``gv vad`` /
+    ``vad-diff`` / ``vad-sweep`` / ``vad-grid``). Where :func:`render_grid`
+    prints a padded human table plus a prose "best" footer, this emits a flat
+    ``base_wpm,strength,final_speed,final_gap,max_step,moves,score,is_best``
+    table — one row per scored cell, in the engine's sweep order — that pipes
+    straight into a spreadsheet or plotting script (pandas ``read_csv``,
+    matplotlib's ``loadtxt``) without a JSON-parsing step.
+
+    The data-driven pick is folded into the table as an ``is_best`` boolean
+    column (``1`` for the cell :func:`pick_best_mirror_config` chose, ``0``
+    otherwise) rather than split into a separate prose footer — a CSV is a pure
+    data grid, so the verdict belongs in a column the consumer can filter on,
+    not in trailing English. ``best`` of ``None`` (no scorable cell) simply
+    leaves every ``is_best`` at ``0``. Unscorable cells (no measurable turn)
+    carry an empty ``final_gap``/``score`` field (matching the human table's
+    ``n/a``) so a reader distinguishes "0.0 gap" from "no gap to compute".
+    ``final_speed`` / ``final_gap`` / ``max_step`` are rounded to 3 places and
+    ``score`` to 3 places, matching the human report's precision. Pure: returns
+    a single string built with the stdlib :mod:`csv` writer (RFC-4180 quoting,
+    ``\\r\\n`` row terminators) with the trailing terminator stripped.
+    """
+    # Identify the picked cell by value identity on its tunables so the flag
+    # tracks pick_best_mirror_config's verdict without re-implementing scoring.
+    best_key = None if best is None else (best.base_wpm, best.strength)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(
+        [
+            "base_wpm",
+            "strength",
+            "final_speed",
+            "final_gap",
+            "max_step",
+            "moves",
+            "score",
+            "is_best",
+        ]
+    )
+    for p in points:
+        score = p.score()
+        is_best = 1 if best_key is not None and (p.base_wpm, p.strength) == best_key else 0
+        writer.writerow(
+            [
+                p.base_wpm,
+                p.strength,
+                round(p.final_speed, 3),
+                "" if p.final_gap is None else round(p.final_gap, 3),
+                round(p.max_step, 3),
+                p.moves,
+                "" if score is None else round(score, 3),
+                is_best,
+            ]
+        )
+    return buf.getvalue().rstrip("\r\n")
+
+
+def render_trajectory_csv(traj, *, wpms=None):
+    """Render a ``simulate-mirror`` single-config trajectory as CSV text.
+
+    The spreadsheet/plot-friendly twin of :func:`render_trajectory`, the
+    trajectory-mode counterpart to :func:`render_grid_csv`. Where the grid CSV
+    emits one row per *swept cell*, a single trajectory is one fold over the arc,
+    so its natural CSV unit is one row per *turn*:
+    ``turn,user_wpm,speed``. That is the machine-readable expansion of the human
+    report's ``per-turn speeds:`` line — precisely the shape a plotter wants
+    (speed-vs-turn curve, one point per row) and a spreadsheet wants (one turn
+    per line). ``turn`` is 1-based, matching how an operator counts the arc.
+
+    ``wpms`` (the per-turn input arc) is paired alongside each output speed when
+    supplied so the consumer can plot the user's pace and the bot's response on
+    the same axis; when its length matches ``traj.speeds`` each row carries its
+    driving ``user_wpm``, otherwise the ``user_wpm`` field is left empty (the
+    speeds still emit). The scalar convergence diagnostics the human report
+    summarises (final gap, max step, moves) are intentionally NOT duplicated
+    into every row — they are arc-level, derivable from the speed column, and
+    would only bloat a per-turn grid; a consumer that wants them reads the
+    ``--json`` surface or the human report. An empty arc (mirroring disabled /
+    no turns) yields the header alone. Speeds and WPMs are rounded to 3 places,
+    matching :func:`render_trajectory`. Pure: returns a single string built with
+    the stdlib :mod:`csv` writer (RFC-4180 quoting), trailing terminator
+    stripped.
+    """
+    paired = wpms is not None and len(wpms) == len(traj.speeds)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["turn", "user_wpm", "speed"])
+    for i, speed in enumerate(traj.speeds, start=1):
+        user_wpm = round(float(wpms[i - 1]), 3) if paired else ""
+        writer.writerow([i, user_wpm, round(speed, 3)])
+    return buf.getvalue().rstrip("\r\n")
+
+
 def render_vad_segments(result, *, threshold=None):
     """Render a Silero ``SileroResult`` (iter-231) as plain-text report lines.
 
@@ -2104,12 +2202,20 @@ def cmd_simulate_mirror(args, *, log=print):
     The engine (``session/wpm_mirror.py``) is loaded lazily by file path so the
     parser stays audio-free and importable on any platform. ``log`` is
     injectable for tests.
+
+    iter-315 adds ``--csv``, the first machine-readable surface on this command:
+    in ``--grid`` mode it emits the flat per-cell sweep table
+    (:func:`render_grid_csv`) and in trajectory mode the per-turn speed curve
+    (:func:`render_trajectory_csv`), bringing the human / ``--csv`` pairing the
+    VAD-analysis surfaces already carry to the WPM-mirror simulator.
     """
     wm = _load_wpm_mirror()
     WpmMirrorConfig = wm.WpmMirrorConfig
     simulate_speed_trajectory = wm.simulate_speed_trajectory
     sweep_mirror_grid = wm.sweep_mirror_grid
     pick_best_mirror_config = wm.pick_best_mirror_config
+
+    as_csv = getattr(args, "csv", False)
 
     if args.grid:
         points = sweep_mirror_grid(
@@ -2119,8 +2225,11 @@ def cmd_simulate_mirror(args, *, log=print):
             initial_speed=args.initial_speed,
         )
         best = pick_best_mirror_config(points)
-        for line in render_grid(points, best):
-            log(line)
+        if as_csv:
+            log(render_grid_csv(points, best))
+        else:
+            for line in render_grid(points, best):
+                log(line)
         return
 
     config = WpmMirrorConfig(
@@ -2133,8 +2242,11 @@ def cmd_simulate_mirror(args, *, log=print):
         initial_speed=args.initial_speed,
         config=config,
     )
-    for line in render_trajectory(traj, wpms=args.wpms):
-        log(line)
+    if as_csv:
+        log(render_trajectory_csv(traj, wpms=args.wpms))
+    else:
+        for line in render_trajectory(traj, wpms=args.wpms):
+            log(line)
 
 
 def cmd_calibrate_base_wpm(args, *, log=print):
@@ -2750,6 +2862,12 @@ def build_parser():
         type=positive_floats_type,
         default=[0.3, 0.5, 0.7],
         help="Grid strength axis (comma-separated; default: 0.3,0.5,0.7)",
+    )
+    sim.add_argument(
+        "--csv",
+        action="store_true",
+        help="Emit a flat CSV table instead of the human report — per-cell in "
+        "--grid mode, per-turn (speed curve) in trajectory mode",
     )
 
     calib = sub.add_parser(

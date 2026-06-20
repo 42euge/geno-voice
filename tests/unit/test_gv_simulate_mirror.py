@@ -287,3 +287,203 @@ def test_handler_dispatch_routes(capsys):
     rc = gv.main(["simulate-mirror", "--wpms", "120,200,120"])
     assert rc == 0
     assert "trajectory" in capsys.readouterr().out.lower()
+
+
+# ---- iter-315: --csv parser wiring -------------------------------------
+
+
+def test_simulate_mirror_csv_defaults_false():
+    args = gv.build_parser().parse_args(["simulate-mirror", "--wpms", "120,200"])
+    assert args.csv is False
+
+
+def test_simulate_mirror_csv_flag_sets_true():
+    args = gv.build_parser().parse_args(
+        ["simulate-mirror", "--wpms", "120,200", "--csv"]
+    )
+    assert args.csv is True
+
+
+# ---- iter-315: render_grid_csv -----------------------------------------
+
+
+import csv as _csv  # noqa: E402
+import io as _io  # noqa: E402
+
+
+def _parse_csv(text):
+    """Parse a CSV string (the renderers strip the trailing terminator)."""
+    return list(_csv.reader(_io.StringIO(text)))
+
+
+def test_render_grid_csv_header_and_one_row_per_cell():
+    wm = gv._load_wpm_mirror()
+    points = wm.sweep_mirror_grid(
+        [120, 200, 120], [165.0, 180.0], [0.5], initial_speed=1.0
+    )
+    best = wm.pick_best_mirror_config(points)
+    rows = _parse_csv(gv.render_grid_csv(points, best))
+    assert rows[0] == [
+        "base_wpm",
+        "strength",
+        "final_speed",
+        "final_gap",
+        "max_step",
+        "moves",
+        "score",
+        "is_best",
+    ]
+    # One row per cell, no prose footer (contrast render_grid's +3 lines).
+    assert len(rows) == len(points) + 1
+
+
+def test_render_grid_csv_marks_exactly_the_best_cell():
+    wm = gv._load_wpm_mirror()
+    points = wm.sweep_mirror_grid(
+        [120, 200, 120], [165.0, 180.0], [0.4, 0.6], initial_speed=1.0
+    )
+    best = wm.pick_best_mirror_config(points)
+    rows = _parse_csv(gv.render_grid_csv(points, best))
+    body = rows[1:]
+    best_flags = [r[-1] for r in body]
+    # Exactly one cell flagged, and it is the picked (base_wpm, strength) pair.
+    assert best_flags.count("1") == 1
+    flagged = body[best_flags.index("1")]
+    assert float(flagged[0]) == best.base_wpm
+    assert float(flagged[1]) == best.strength
+
+
+def test_render_grid_csv_no_scorable_cell_leaves_is_best_zero():
+    wm = gv._load_wpm_mirror()
+    # An all-non-measurable arc produces no scorable cell → best is None.
+    points = wm.sweep_mirror_grid([0, -1], [165.0, 180.0], [0.5])
+    best = wm.pick_best_mirror_config(points)
+    assert best is None
+    rows = _parse_csv(gv.render_grid_csv(points, best))
+    body = rows[1:]
+    # Every is_best is 0, and unscorable cells carry empty gap/score fields.
+    assert all(r[-1] == "0" for r in body)
+    for r in body:
+        assert r[3] == ""  # final_gap
+        assert r[6] == ""  # score
+
+
+def test_render_grid_csv_no_trailing_newline():
+    wm = gv._load_wpm_mirror()
+    points = wm.sweep_mirror_grid([120, 200], [165.0], [0.5])
+    best = wm.pick_best_mirror_config(points)
+    out = gv.render_grid_csv(points, best)
+    assert not out.endswith("\n")
+    assert not out.endswith("\r")
+
+
+def test_render_grid_csv_rounds_to_three_places():
+    wm = gv._load_wpm_mirror()
+    points = wm.sweep_mirror_grid([120, 200, 140], [165.0], [0.5])
+    best = wm.pick_best_mirror_config(points)
+    rows = _parse_csv(gv.render_grid_csv(points, best))
+    # Numeric fields with decimals carry at most 3 fractional digits.
+    for r in rows[1:]:
+        for field in (r[2], r[4]):  # final_speed, max_step
+            if "." in field:
+                assert len(field.split(".")[1]) <= 3
+
+
+# ---- iter-315: render_trajectory_csv -----------------------------------
+
+
+def test_render_trajectory_csv_one_row_per_turn_with_wpm():
+    wm = gv._load_wpm_mirror()
+    cfg = wm.WpmMirrorConfig(enabled=True, base_wpm=165.0, strength=0.5)
+    wpms = [120.0, 200.0, 120.0]
+    traj = wm.simulate_speed_trajectory(wpms, initial_speed=1.0, config=cfg)
+    rows = _parse_csv(gv.render_trajectory_csv(traj, wpms=wpms))
+    assert rows[0] == ["turn", "user_wpm", "speed"]
+    assert len(rows) == len(traj.speeds) + 1
+    # 1-based turn index, paired user_wpm, and the engine's speed per row.
+    for i, (row, speed) in enumerate(zip(rows[1:], traj.speeds), start=1):
+        assert int(row[0]) == i
+        assert float(row[1]) == wpms[i - 1]
+        assert float(row[2]) == round(speed, 3)
+
+
+def test_render_trajectory_csv_empty_arc_header_only():
+    traj = _traj(speeds=[], initial_speed=1.0, final_speed=1.0)
+    rows = _parse_csv(gv.render_trajectory_csv(traj, wpms=[]))
+    assert rows == [["turn", "user_wpm", "speed"]]
+
+
+def test_render_trajectory_csv_unpaired_wpms_leaves_user_wpm_empty():
+    # When wpms length mismatches the speed count, user_wpm is left blank but the
+    # speeds still emit (the speed column is the load-bearing one).
+    traj = _traj(speeds=[0.9, 0.85], initial_speed=1.0, final_speed=0.85)
+    rows = _parse_csv(gv.render_trajectory_csv(traj, wpms=[120.0]))
+    body = rows[1:]
+    assert [r[1] for r in body] == ["", ""]
+    assert [float(r[2]) for r in body] == [0.9, 0.85]
+
+
+def test_render_trajectory_csv_no_wpms_arg_leaves_user_wpm_empty():
+    traj = _traj(speeds=[0.95], initial_speed=1.0, final_speed=0.95)
+    rows = _parse_csv(gv.render_trajectory_csv(traj))
+    assert rows[1][1] == ""
+    assert float(rows[1][2]) == 0.95
+
+
+def test_render_trajectory_csv_no_trailing_newline():
+    traj = _traj(speeds=[0.9], initial_speed=1.0, final_speed=0.9)
+    out = gv.render_trajectory_csv(traj, wpms=[120.0])
+    assert not out.endswith("\n")
+    assert not out.endswith("\r")
+
+
+# ---- iter-315: handler --csv routing -----------------------------------
+
+
+def test_handler_trajectory_csv_matches_renderer():
+    wm = gv._load_wpm_mirror()
+    cfg = wm.WpmMirrorConfig(enabled=True, base_wpm=165.0, strength=0.5)
+    wpms = [120.0, 200.0, 120.0]
+    traj = wm.simulate_speed_trajectory(wpms, initial_speed=1.0, config=cfg)
+    expected = gv.render_trajectory_csv(traj, wpms=wpms)
+    lines = _run(["simulate-mirror", "--wpms", "120,200,120", "--csv"])
+    # The handler logs the CSV as one block (one log() call).
+    assert lines == [expected]
+
+
+def test_handler_grid_csv_matches_renderer():
+    wm = gv._load_wpm_mirror()
+    points = wm.sweep_mirror_grid(
+        [120, 140, 200, 140, 120], [165.0, 180.0], [0.5], initial_speed=1.0
+    )
+    best = wm.pick_best_mirror_config(points)
+    expected = gv.render_grid_csv(points, best)
+    lines = _run(
+        [
+            "simulate-mirror",
+            "--wpms", "120,140,200,140,120",
+            "--grid",
+            "--base-wpms", "165,180",
+            "--strengths", "0.5",
+            "--csv",
+        ]
+    )
+    assert lines == [expected]
+
+
+def test_handler_csv_trajectory_is_parseable_per_turn():
+    lines = _run(["simulate-mirror", "--wpms", "120,200,120", "--csv"])
+    rows = _parse_csv("\n".join(lines))
+    assert rows[0] == ["turn", "user_wpm", "speed"]
+    # Three input WPMs → three turn rows.
+    assert len(rows) == 4
+    assert [r[1] for r in rows[1:]] == ["120.0", "200.0", "120.0"]
+
+
+def test_handler_csv_default_log_is_print(capsys):
+    args = gv.build_parser().parse_args(
+        ["simulate-mirror", "--wpms", "120,200", "--csv"]
+    )
+    gv.cmd_simulate_mirror(args)
+    out = capsys.readouterr().out
+    assert out.startswith("turn,user_wpm,speed")
