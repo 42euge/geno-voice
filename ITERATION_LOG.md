@@ -29793,3 +29793,103 @@ byte-for-byte unchanged. Purely additive.
    shows leftover per-iter worktrees. A future lap could `git worktree
    prune` / remove the merged ones to keep the list legible. NOTE: this
    lap correctly removed its own worktree.
+
+## iter-325 — pre-empted-words consistency sentinel (count-valued twin of iter-120 barge-phase)
+
+- **Date:** 2026-06-20
+- **Branch:** iter-325-preempted-words-sentinel (ff-merged to main, worktree removed)
+- **Commit:** 41077b6
+
+**Why.** iter-324's next-item flagged `preempted_words` (iter-080 — words the
+LLM generated but the user never heard because a barge cut the stream
+mid-content) as the remaining un-sentineled per-turn metric. It is *collected
+and cumulatively reported* (the "Pre-empted total" line, iter-080) but had no
+consistency-line guard. The cumulative figure smears the timing away: it can't
+distinguish a session that lost a few words across many scattered barges from
+one that lost a big chunk on every recent barge **in a row**. The latter is the
+actionable pattern — the bot is systematically over-talking and the user keeps
+cutting it off — and only a *consecutive-run* scan over the barge turns
+surfaces it. iter-324's note correctly anticipated the shape: "preempted_words
+is event-conditional (only non-zero on a mid-speech barge), so a 'sustained
+run' story is weaker — scope whether a run of high-preemption turns is
+actionable (it would point at the user habitually interrupting, or the bot
+over-talking)." Scoped: it is, and the cause split (verbose bot vs habitual
+interrupter) maps cleanly to the two buckets.
+
+**What it is.**
+- **`examples/_chat_metrics.py`** — two new helpers following the GENO.md
+  session-summary diversity-check template, wired into `print_session_summary`
+  right after the iter-324 first-synth-overlap call site:
+  - `_preempted_words_bucket(words)` — buckets a per-turn count into `heavy`
+    (> 10 words — the per-turn YELLOW threshold; iter-080 colors > 10 yellow as
+    "> ~5s of spoken content lost, the bot was being too verbose") / `minor`
+    (1-10 words, a mid-sentence clip); `""` when 0 (no barge, OR a barge whose
+    cut landed cleanly between sentences — no words lost, a good outcome). The
+    **FIRST** diversity-check instance applied to a barge-CONDITIONAL **COUNT**
+    metric. 0 is the fine state and is filtered like iter-114's filler-count
+    (the **zero** filter, NOT the empty-string filter the continuous bucketers
+    use). **NOT inverted** (contrast iter-142/143/225/324): more pre-empted
+    words is strictly worse, so the fine state is the LOW end and the
+    problematic end is HIGH — same direction as iter-114.
+  - `_emit_preempted_words_consistency_line(emit, list, threshold=4)` — drops 0,
+    fires when **4+** consecutive barge turns land in `minor`/`heavy`. The
+    **FIFTEENTH** instance of the diversity-check pattern and the **SECOND**
+    barge-CONDITIONAL one (after iter-120 barge-phase). Shares iter-120's
+    threshold of **4** rather than the continuous-metric default of 5: pre-emption
+    events are barge-conditional and already rare + semantically loaded, so a
+    shorter run is enough signal. Per-value suggestions localize the cause per
+    iter-080's field comment (pair with iter-047 phase / iter-069 interruption
+    rate): `heavy` → verbose bot, shorten replies (system prompt / fewer
+    sentences); `minor` → habitual mid-sentence interrupter. The two flagged
+    buckets never merge in the run scan.
+- **The distinction from iter-120 (why it is NOT redundant):** iter-120 counts
+  barge PHASES (categorical — *when* the user barged: `llm_stream` before speech
+  vs `playback` during it); this counts pre-empted WORDS (quantitative — *how
+  much* generated speech was lost when they did). Both are run scans over the
+  same barge events, answering different questions. A test pins this: the
+  iter-325 line names `preempted_words` and never says `llm_stream`/`playback`.
+- **`tests/unit/test_emit_preempted_words_consistency_line.py`** (new, +22
+  tests): bucket boundaries incl. the 10/11 yellow edge and negative-clamp;
+  direction (0 fine, high bad — not inverted); empty / all-zero suppression;
+  threshold (default 4, custom 3/10); zero-interleaving doesn't break a run
+  while a `minor`↔`heavy` phase change does; a small scatter of heavy barges
+  stays below threshold; longest-of-multiple; output formatting + iter-080
+  attribution; the verbosity-fix actionability guard; the "barge turns" unit
+  wording; and the distinctness guard vs iter-120.
+
+The off-by-default path is preserved: a session whose barges never lose words
+(or has no barges) sees no new line — the summary is byte-for-byte unchanged.
+Purely additive. Note: during test authoring an initial "scattered barges
+don't fire" assertion was wrong (zeros are filtered, so scattered heavy barges
+*do* collapse into a consecutive run — by design, identical to every prior
+instance); the test was corrected to assert the real "small scatter stays
+below threshold" semantics, which is the genuine guard.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4279 passed**
+(4257 prior + 22 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_emit_preempted_words_consistency_line.py` →
+  **22 passed** (re-run on main post-merge).
+- Integration: not re-run this lap (a pure list-scanning + string-formatting
+  helper — no torch import, no audio I/O).
+
+**Next planned items:**
+1. **[chat-metrics] All per-turn metrics with a meaningful "sustained run is
+   actionable" story are now sentineled.** With `preempted_words` covered, the
+   diversity-check family spans the latency/rate metrics (stt/tts rtf, llm tps,
+   eot, synth-dispatch, ttfs, token-gap, ttc, queue-depth, wpm pair,
+   split-coverage, fta, llm-ft, speaker-open, mic-stale, first-synth-overlap)
+   AND both barge-conditional metrics (barge-phase iter-120, preempted-words
+   iter-325). Remaining per-turn fields are either booleans (barge_in_regret,
+   false_endpoint — a count/rate aggregate fits better than a run scan) or
+   already-aggregated session-level signals. A NEW per-turn metric not yet
+   emitted would be needed to extend the family further; none obvious. A future
+   chat-metrics lap should scope whether a boolean-rate sentinel (e.g. a run of
+   regret barges) is a distinct enough shape to warrant a sixteenth instance,
+   or whether the family is complete.
+2. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+3. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~30 leftover per-iter worktrees. A future lap could `git worktree prune` /
+   remove the merged ones to keep the list legible. NOTE: this lap correctly
+   removed its own worktree.
