@@ -27889,3 +27889,99 @@ but count 2 is the earlier cell).
 6. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    leftover per-iter worktrees that were never pruned. A future lap could
    `git worktree prune` / remove the merged ones to keep the list readable.
+
+## iter-305 — TTC consistency sentinel (sustained out-of-window user response gaps)
+
+- **Date:** 2026-06-20
+- **Branch:** iter-305-ttc-consistency (ff-merged to main)
+- **Commit:** ddf0a70
+
+**Why.** After ~30 laps of cross-surface `--target` test re-derives (the
+grid + sweep cross-surface matrices are both COMPLETE per iter-304), the
+`--target` composition space is feature-complete and the next genuine
+increment is a different axis. The session-summary diversity-check
+pattern (GENO.md) is the other long-running, well-precedented feature
+family, and a per-turn metric with a clear sweet spot and a per-turn
+display flag — but NO session-level sustained-run sentinel — was still
+uncovered: iter-082's `time_to_comprehension` (TTC). It already has a
+per-turn yellow flag (<500ms / >5000ms) and a session median + scattered
+rushed/slow outlier COUNTS, but a count of spread-out outliers reads
+nothing like a SUSTAINED run. Five rushed turns spread across a 40-turn
+session is noise; five rushed turns BACK TO BACK means the bot is
+reliably telling the user things they already know (or being barged) for
+a whole stretch of the conversation — the actionable conversational-
+quality signal the bell-curve target (1-3s) exists to protect. This lap
+adds that sentinel: the SEVENTEENTH instance of the diversity-check
+pattern, the FOURTEENTH on a continuous metric, and the SECOND
+two-sided-band sentinel after iter-210 (bot-wpm).
+
+**What it is.** A two-sided-band sentinel like iter-210's `bot_wpm`: the
+fine state is the MIDDLE band (`natural`, 0.5-5.0s, aligned with
+iter-082's 500ms/5000ms per-turn yellow flags), and BOTH extremes are
+flagged but carry OPPOSITE diagnoses:
+- `rushed` (0 < ttc < 0.5s) — the user answered before they could have
+  absorbed the reply; the bot may be over-explaining what they already
+  know (or it was barged).
+- `pensive` (> 5.0s) — the user took a long beat; the bot's replies may
+  be unclear or the task too broad.
+
+Because the two ends are distinct *signals* about the exchange (not two
+turns of ONE tunable like bot_wpm's kokoro `speed` knob), the per-value
+suggestion branch is informational. The run scan keeps the two flagged
+buckets distinct — a rushed run and a pensive run never merge — so 3
+rushed + 3 pensive yields a longest run of 3, below threshold, even
+though 6 turns total were "outside the band".
+
+**What changed.**
+- **`examples/_chat_metrics.py`** — added `_ttc_bucket`
+  (rushed/natural/pensive, returns `""` for non-positive TTC) and
+  `_emit_ttc_consistency_line` (threshold 5, filters `""` + `natural`
+  before the run scan, per-value suggestions + defensive `else`,
+  `iter-082 time_to_comprehension` attribution). Wired the call into
+  `print_session_summary` right after the iter-226 worker-idle-gap line,
+  reusing the iter-116 `_longest_consecutive_run` primitive unchanged.
+- **`tests/unit/test_emit_ttc_consistency_line.py` (+22 tests)** — the
+  full pattern matrix: bucket boundaries incl. float edges
+  (0.4999→rushed, 0.5→natural, 5.0→natural, 5.0001→pensive),
+  empty/all-zero suppression, natural-run never fires, at/above/below
+  threshold per value, natural-interleaving doesn't break a run, the
+  two-sided-band invariant (rushed+pensive don't merge; a pensive turn
+  breaks a rushed run), longest-of-two wins, custom threshold (3 catches,
+  10 suppresses), output formatting (4-space indent) + iter-082
+  attribution, 1000-element scaling.
+
+No production behavior changed for existing metrics — the new line is
+purely additive.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **3928 passed**
+(3906 prior + 22 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_emit_ttc_consistency_line.py` → **22 passed**.
+- Integration: not re-run this lap (no corpus symlinked into this worktree; same
+  as prior corpus-gated laps — the change is a pure session-summary helper with
+  unit-level coverage, no audio I/O).
+
+**Next planned items:**
+1. **[chat-metrics] Two-sided-band sentinel family continues.** TTC is
+   the SECOND two-sided-band sentinel (after iter-210 bot-wpm). Remaining
+   per-turn metrics with a clear MIDDLE sweet spot and no sustained-run
+   sentinel: `user_wpm` (iter-064, symmetric to bot_wpm but no "correct"
+   rate — likely NOT a good fit, humans vary widely), `mean_token_reveal_lag`
+   (iter-071, positive = subtitles late / negative = spoils the bot — a
+   genuine two-sided band), `first_token_to_audio` (iter-083, one-sided).
+   `mean_token_reveal_lag` is the strongest next two-sided candidate.
+2. **[chat-metrics] One-sided continuous metrics still uncovered:**
+   `speaker_open_seconds` (iter-061, yellow >50ms), `llm_cancel_to_close`
+   (iter-060, >500ms), `mic_stale_frames` (iter-037, echo signal),
+   `max_queue_depth` (iter-062, worker backed up — the inverse of the
+   iter-226 worker-idle-gap sentinel). Each is a clean clone of the
+   iter-140/141/208/209 monotonic template.
+3. **[cli] Grid + sweep cross-surface `--target` matrices — BOTH COMPLETE**
+   (iter-273–304). No `--target`-form cross-surface gap remains. A next CLI
+   feature would be a different axis (e.g. asymmetric band tolerance, or a
+   soft floor/ceiling beyond an open edge) — scope before building.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list`
+   shows ~30 leftover per-iter worktrees. A future lap could
+   `git worktree prune` / remove merged ones.
