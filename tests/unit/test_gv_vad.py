@@ -2215,6 +2215,139 @@ def test_render_sweep_csv_consumer_rederives_json_open_band_target_speech_tie_pi
     assert [c["speech_s"] for c in payload["top"]] == [5.4, 4.9, 2.5]
 
 
+def test_render_sweep_csv_consumer_rederives_json_preference_target_speech_tie_pick():
+    # iter-293: iter-289 pinned the 1-D sweep CSV↔JSON pick re-derive under
+    # tie_break="speech" for a SCALAR target, iter-290 added the first DICT form (a
+    # CLOSED BAND), iter-291 added the flat SET, and iter-292 the OPEN band. The
+    # sweep still lacks the speech-tie cross-surface re-derive for the forms the GRID
+    # earned at iter-284–286/288 (preference, weighted, scaled, affine). This lap
+    # closes the NEXT one — a {"prefer": [...]} PREFERENCE target (iter-249) under
+    # tie_break="speech" (the sweep twin of iter-284's grid preference-under-speech
+    # test).
+    #
+    # The preference is the FIRST sweep cross-surface form whose precedence lives at
+    # the SORT-KEY layer, not the distance: grid_cell_distance treats a preference
+    # IDENTICALLY to a flat set (the MIN over its elements — iter-249), and
+    # grid_cell_sort_key inserts _preference_rank as a SECONDARY key, so under
+    # tie_break="speech" the key is THREE-level (distance, preference_rank,
+    # -speech_s) — speech is only the TERTIARY tie-break, biting solely among rows
+    # that ALSO tie on preference rank. That is a DISTINCT mechanism from every prior
+    # sweep speech twin: the band/set/open-band ties of iter-290/291/292 all reorder
+    # purely on speech (a TWO-level (distance, -speech_s) key, no rank layer between
+    # distance and speech), whereas here the preference rank OUTRANKS speech, so a
+    # less-speech row nearer a MORE-preferred element must beat a more-speech row
+    # nearer a less-preferred one, and speech only decides rows tied on BOTH distance
+    # and rank. The target FORM (grid_cell_distance — which rows tie at the floor)
+    # and the tie-break (grid_cell_sort_key — how the tied rows ORDER) are
+    # independent seams; pinning the set/open-band under speech on the sweep
+    # (iter-291/292) does NOT pin the preference under speech.
+    # render_vad_sweep_json threads BOTH the preference target AND tie_break="speech"
+    # into the pickers, embedding best/top/target/tie_break; render_vad_sweep_csv
+    # emits only the bare <axis>,num_segments,speech_s table. A regression that
+    # dropped the tie_break on the sweep JSON path (falling back to row-major) while
+    # a CSV consumer still passed "speech", OR flattened the {"prefer": ...} dict to
+    # a plain set on the JSON path (dropping the preference rank key so speech jumps
+    # from tertiary to secondary), would diverge the two surfaces yet ship green — a
+    # failure mode neither iter-289 (scalar, no ties) nor iter-290/291/292
+    # (band/set/open-band, two-level key, speech secondary) can catch, and the
+    # preference-under-speech tests live ONLY on the GRID (iter-284), never the sweep.
+    #
+    # Fixture: a 4-value threshold sweep with counts 4/6/8/1, target = preference 5>9
+    # ({"prefer": [5, 9]}). _sweep_results couples speech to count + index, so the
+    # in-preference rows carry DIFFERENT speech and the tie-breaks genuinely DISAGREE.
+    # Preference distance is the MIN over its elements, IDENTICAL to a set:
+    #   - 0.30 count 4 → min(|4-5|,|4-9|)=1, rank 0 (nearer 5), speech 2.0
+    #   - 0.50 count 6 → min(|6-5|,|6-9|)=1, rank 0 (nearer 5), speech 3.6
+    #   - 0.70 count 8 → min(|8-5|,|8-9|)=1, rank 1 (nearer 9), speech 5.6
+    #   - 0.90 count 1 → min(|1-5|,|1-9|)=4, rank 0,           speech 0.8
+    # THREE rows tie at distance 1 (counts 4, 6, 8). The preference rank SPLITS them:
+    # counts 4 and 6 (rank 0, nearer the MORE-preferred 5) outrank count 8 (rank 1,
+    # nearer the less-preferred 9) REGARDLESS of speech — even though count 8 has the
+    # MOST speech (5.6s) of any tied row. Among the two rank-0 rows, tie_break=
+    # "speech" then prefers the MOST-speech one, count 6 (0.50) at 3.6s over count 4
+    # (0.30) at 2.0s. So the preference+speech best is the 0.50 row count 6 — the
+    # THREE-level key (distance 1, rank 0, speech 3.6) selecting it, with speech only
+    # the tertiary decider among the rank-0 pair.
+    thresholds = [0.3, 0.5, 0.7, 0.9]
+    results = _sweep_results([4, 6, 8, 1])
+    target = {"prefer": [5, 9]}
+    csv_text = gv.render_vad_sweep_csv(thresholds, results, name="rec.wav")
+    payload = json.loads(
+        gv.render_vad_sweep_json(
+            thresholds, results, name="rec.wav",
+            target=target, top=3, tie_break="speech",
+        )
+    )
+    # The JSON twin records BOTH the preference target (a {"prefer": [...]} object,
+    # preserving the listed order) and WHICH tie-break produced its pick.
+    assert payload["target"] == {"prefer": [5, 9]}
+    assert payload["tie_break"] == "speech"
+    # The CSV body still carries no pick columns, tie_break, or preference — it is
+    # the bare sweep.
+    assert "best" not in csv_text and "distance" not in csv_text
+    assert "tie_break" not in csv_text and "prefer" not in csv_text
+    # A CSV consumer re-parses the flat table back to sweep rows...
+    rows = [
+        {
+            "threshold": float(row["threshold"]),
+            "num_segments": int(row["num_segments"]),
+            "speech_s": float(row["speech_s"]),
+        }
+        for row in csv.DictReader(io.StringIO(csv_text))
+    ]
+    # ...and re-runs the SAME picker with the SAME preference target AND the SAME
+    # tie_break="speech". The CSV-derived best equals the JSON `best` (distance key
+    # stripped), and the re-derived preference distance matches the one the JSON
+    # embedded (1 — one off the nearest preference element 5).
+    csv_best = gv.pick_best_grid_cell(rows, target, "speech")
+    json_best = dict(payload["best"])
+    assert json_best.pop("distance") == gv.grid_cell_distance(csv_best, target)
+    assert csv_best == json_best
+    assert csv_best["threshold"] == 0.5 and csv_best["num_segments"] == 6
+    assert payload["best"]["distance"] == 1
+    # CONTROL 1: the SAME preference under the DEFAULT row-major tie-break picks a
+    # DIFFERENT row (the earliest rank-0 row, count 4 at 0.30), so this test cannot
+    # pass by the JSON path silently dropping the speech tie-break (falling back to
+    # row-major). The speech tie-break is load-bearing for the count-6 pick — it
+    # decides between the two rank-0 rows the preference rank alone leaves tied.
+    rowmajor_best = gv.pick_best_grid_cell(rows, target)
+    assert rowmajor_best != csv_best
+    assert rowmajor_best["threshold"] == 0.3 and rowmajor_best["num_segments"] == 4
+    # CONTROL 2: a flat SET of the SAME two elements [5, 9] carries NO precedence —
+    # grid_cell_sort_key inserts no preference rank — so under the SAME speech
+    # tie-break the key drops to TWO-level (distance, -speech_s) and ALL three dist-1
+    # rows reorder purely on speech, electing the MOST-speech one OVERALL, count 8
+    # (0.70) at 5.6s. A DIFFERENT pick from the preference best, proving the
+    # preference rank is load-bearing: flattening {"prefer": [5,9]} to [5,9] on
+    # either surface would change the pick (rank 0 no longer protects count 6 from
+    # the higher-speech count 8 that sits at rank 1).
+    set_best = gv.pick_best_grid_cell(rows, [5, 9], "speech")
+    assert set_best != csv_best
+    assert set_best["threshold"] == 0.7 and set_best["num_segments"] == 8
+    # The top shortlist agrees row-for-row (distance stripped). Ordering is by the
+    # THREE-level key: the two rank-0 rows lead (speech-ordered among themselves,
+    # count 6 at 3.6s before count 4 at 2.0s), THEN the rank-1 row (count 8), DESPITE
+    # count 8 having the most speech — the preference rank outranks speech. The
+    # dist-4 out-of-preference row never reaches the top 3.
+    csv_top = gv.pick_top_grid_cells(rows, target, 3, "speech")
+    json_top = [dict(c) for c in payload["top"]]
+    for c in json_top:
+        c.pop("distance")
+    assert csv_top == json_top
+    # Head of the shortlist is the single best pick, on both surfaces.
+    assert csv_top[0] == csv_best
+    # The two rank-0 rows lead (speech-ordered: count 6 then count 4), THEN the
+    # rank-1 count-8 row — NOT the pure-speech order [count 8, count 6, count 4] the
+    # set control would give. The preference rank reorders ahead of speech.
+    assert [r["num_segments"] for r in csv_top] == [6, 4, 8]
+    # All three leading rows scored the preference floor (distance 1 — each one off
+    # its nearest element); the preference rank then speech, NOT distance, decided
+    # their order. The most-speech row (count 8, 5.6s) sorts LAST of the three,
+    # proving speech is subordinate to the rank.
+    assert [c["distance"] for c in payload["top"]] == [1, 1, 1]
+    assert [c["speech_s"] for c in payload["top"]] == [3.6, 2.0, 5.6]
+
+
 # ---- cmd_vad_sweep --csv: the handler ----------------------------------
 
 
