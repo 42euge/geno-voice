@@ -7,7 +7,7 @@ Usage:
     gv talk               # talk mode — STT → NLP → canned response → TTS
     gv chat               # chat mode — STT → LLM (litellm) → TTS
     gv simulate-mirror …  # offline WPM-mirror trajectory / grid-sweep simulator
-    gv calibrate-base-wpm … # offline base_wpm calibration (--verdict for an adopt/keep call)
+    gv calibrate-base-wpm … # offline base_wpm calibration (--verdict for an adopt/keep call; --csv for per-sample data)
     gv vad recording.wav  # offline Silero VAD — segment a WAV into speech regions
     gv vad recording.wav --json # machine-readable segmentation (SileroResult.to_dict shape)
     gv vad-diff recording.wav --threshold-a 0.5 --threshold-b 0.7  # compare two P(speech) gates
@@ -1042,6 +1042,73 @@ def render_calibration_verdict(verdict):
         f"|drift|>={verdict.drift_min:.1f}, samples>={verdict.min_samples}",
     ]
     return lines
+
+
+def render_calibration_csv(samples, calib):
+    """Render a ``calibrate-base-wpm`` calibration as CSV text (no trailing newline).
+
+    The spreadsheet/plot-friendly twin of :func:`render_calibration`, the
+    iter-316 next-item that closes the last machine-readable gap among the gv
+    analysis surfaces — every VAD surface (``gv vad`` / ``vad-diff`` /
+    ``vad-sweep`` / ``vad-grid``) carries the full human / ``--json`` / ``--csv``
+    trio, and ``simulate-mirror`` gained ``--csv`` in iter-315, leaving
+    ``calibrate-base-wpm`` as the lone surface with only a human report.
+
+    A calibration is a SET of per-render samples folded to ONE verdict, so the
+    natural CSV unit is **one row per sample** — the shape a plotter wants (an
+    implied-base-wpm-per-sample scatter to eyeball the spread) and a spreadsheet
+    wants (one render per line):
+    ``sample,words,audio_seconds,speed,bot_wpm,implied_base_wpm``. ``sample`` is
+    1-based, matching how an operator numbers their renders. ``bot_wpm`` is each
+    render's measured rate and ``implied_base_wpm`` normalizes it back to the
+    ``speed=1.0`` calibration point (the per-sample values the median is taken
+    over), so the consumer sees both the raw measurement and the comparable
+    normalized rate.
+
+    The aggregate verdict (median ``implied_base_wpm``, range, spread, nominal,
+    drift) is a single record describing the whole SET, not a per-sample fact, so
+    duplicating it into every row would bloat the grid (the same reasoning
+    :func:`render_trajectory_csv` uses to keep arc-level scalars out of its
+    per-turn rows). Instead it trails as ``#`` comment lines — self-describing
+    metadata a plotting/spreadsheet tool skips by default (pandas
+    ``read_csv(comment="#")``), matching the ``#``-comment precedent
+    :func:`render_vad_sweep_csv` uses for its own non-tabular metadata — so the
+    per-sample rows stay a pure, parseable data grid while the calibration's
+    bottom line remains visible in the same file. ``calib`` of ``None`` (no
+    samples ⇒ nothing to calibrate) yields the header alone, mirroring
+    :func:`render_trajectory_csv`'s empty-arc contract. Floats are rounded to 3
+    places, matching :func:`render_grid_csv` / :func:`render_trajectory_csv`.
+    Pure: returns a single string built with the stdlib :mod:`csv` writer
+    (RFC-4180 quoting, ``\\r\\n`` row terminators) with the trailing terminator
+    stripped.
+    """
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(
+        ["sample", "words", "audio_seconds", "speed", "bot_wpm", "implied_base_wpm"]
+    )
+    for i, s in enumerate(samples, start=1):
+        writer.writerow(
+            [
+                i,
+                s.words,
+                round(float(s.audio_seconds), 3),
+                round(float(s.speed), 3),
+                round(s.bot_wpm, 3),
+                round(s.implied_base_wpm, 3),
+            ]
+        )
+    body = buf.getvalue().rstrip("\r\n")
+    if calib is None:
+        return body
+    summary = [
+        f"# implied_base_wpm (median): {round(calib.implied_base_wpm, 3)}",
+        f"# range: {round(calib.min_base_wpm, 3)} - {round(calib.max_base_wpm, 3)}",
+        f"# spread: {round(calib.spread, 3)}",
+        f"# nominal: {round(calib.default_base_wpm, 3)}",
+        f"# drift: {round(calib.drift, 3)}",
+    ]
+    return body + "\n" + "\n".join(summary)
 
 
 def render_trajectory(traj, *, wpms=None):
@@ -2261,6 +2328,15 @@ def cmd_calibrate_base_wpm(args, *, log=print):
 
     The engine is loaded lazily by file path so the parser stays audio-free and
     importable on any platform. ``log`` is injectable for tests.
+
+    iter-316 adds ``--csv``, the machine-readable twin closing the last
+    human-only analysis surface: it emits the per-sample
+    ``sample,words,audio_seconds,speed,bot_wpm,implied_base_wpm`` grid with the
+    aggregate calibration trailing as ``#`` comment lines
+    (:func:`render_calibration_csv`). ``--csv`` is the whole output in that mode
+    — the ``--verdict`` adopt/keep DECISION is human prose, not a data row, so it
+    is suppressed under ``--csv`` (a consumer scripts the re-seed call off the
+    drift column itself).
     """
     wm = _load_wpm_mirror()
     CalibrationSample = wm.CalibrationSample
@@ -2271,6 +2347,9 @@ def cmd_calibrate_base_wpm(args, *, log=print):
         for (words, audio_seconds, speed) in args.samples
     ]
     calib = calibrate_base_wpm(samples, default_base_wpm=args.nominal)
+    if getattr(args, "csv", False):
+        log(render_calibration_csv(samples, calib))
+        return
     for line in render_calibration(calib):
         log(line)
     if args.verdict:
@@ -2919,6 +2998,13 @@ def build_parser():
         dest="min_samples",
         help="Verdict gate: min sample count for a robust median "
         f"(default: {calib_min_samples_default})",
+    )
+    calib.add_argument(
+        "--csv",
+        action="store_true",
+        help="Emit per-sample CSV (sample,words,audio_seconds,speed,bot_wpm,"
+        "implied_base_wpm) with the aggregate calibration trailing as # comment "
+        "lines, for spreadsheets/plots (suppresses the human report and --verdict)",
     )
 
     # gv vad — offline Silero segmentation of a WAV file. Defaults mirror

@@ -325,3 +325,165 @@ def test_handler_verdict_dispatch_routes(capsys):
     )
     assert rc == 0
     assert "calibration verdict" in capsys.readouterr().out
+
+
+# ---- iter-316: --csv surface (parser, renderer, handler) ---------------
+
+import csv as _csv  # noqa: E402
+import io as _io  # noqa: E402
+
+
+def test_csv_flag_defaults_off():
+    args = gv.build_parser().parse_args(["calibrate-base-wpm", "--samples", "50:18.2"])
+    assert args.csv is False
+
+
+def test_csv_flag_sets_true():
+    args = gv.build_parser().parse_args(
+        ["calibrate-base-wpm", "--samples", "50:18.2", "--csv"]
+    )
+    assert args.csv is True
+
+
+def _samples(specs):
+    """Build CalibrationSample objects from (words, seconds[, speed]) tuples."""
+    wm = gv._load_wpm_mirror()
+    out = []
+    for spec in specs:
+        if len(spec) == 2:
+            words, secs = spec
+            out.append(wm.CalibrationSample(words=words, audio_seconds=secs))
+        else:
+            words, secs, speed = spec
+            out.append(
+                wm.CalibrationSample(words=words, audio_seconds=secs, speed=speed)
+            )
+    return out
+
+
+def _rows(text):
+    """Parse the non-comment CSV body into a list of dict rows."""
+    data = "\n".join(
+        line for line in text.splitlines() if not line.startswith("#")
+    )
+    return list(_csv.DictReader(_io.StringIO(data)))
+
+
+def _comments(text):
+    return [line for line in text.splitlines() if line.startswith("#")]
+
+
+def test_render_calibration_csv_header_and_one_row_per_sample():
+    wm = gv._load_wpm_mirror()
+    samples = _samples([(50, 18.2), (50, 9.1, 2.0)])
+    calib = wm.calibrate_base_wpm(samples)
+    text = gv.render_calibration_csv(samples, calib)
+    rows = _rows(text)
+    assert len(rows) == 2
+    assert list(rows[0].keys()) == [
+        "sample", "words", "audio_seconds", "speed", "bot_wpm", "implied_base_wpm"
+    ]
+    assert [r["sample"] for r in rows] == ["1", "2"]
+
+
+def test_render_calibration_csv_values_match_engine():
+    wm = gv._load_wpm_mirror()
+    samples = _samples([(50, 18.2), (50, 9.1, 2.0)])
+    calib = wm.calibrate_base_wpm(samples)
+    rows = _rows(gv.render_calibration_csv(samples, calib))
+    for row, s in zip(rows, samples):
+        assert float(row["words"]) == s.words
+        assert float(row["audio_seconds"]) == round(s.audio_seconds, 3)
+        assert float(row["speed"]) == round(s.speed, 3)
+        assert float(row["bot_wpm"]) == round(s.bot_wpm, 3)
+        assert float(row["implied_base_wpm"]) == round(s.implied_base_wpm, 3)
+
+
+def test_render_calibration_csv_summary_comments():
+    wm = gv._load_wpm_mirror()
+    samples = _samples([(50, 18.2), (50, 9.1, 2.0)])
+    calib = wm.calibrate_base_wpm(samples)
+    text = gv.render_calibration_csv(samples, calib)
+    comments = "\n".join(_comments(text))
+    assert f"# implied_base_wpm (median): {round(calib.implied_base_wpm, 3)}" in comments
+    assert "# range:" in comments
+    assert f"# spread: {round(calib.spread, 3)}" in comments
+    assert f"# nominal: {round(calib.default_base_wpm, 3)}" in comments
+    assert f"# drift: {round(calib.drift, 3)}" in comments
+
+
+def test_render_calibration_csv_none_calib_header_only():
+    # No samples ⇒ None calib ⇒ header alone, no summary comments.
+    text = gv.render_calibration_csv([], None)
+    assert text == "sample,words,audio_seconds,speed,bot_wpm,implied_base_wpm"
+    assert _comments(text) == []
+
+
+def test_render_calibration_csv_no_trailing_newline():
+    wm = gv._load_wpm_mirror()
+    samples = _samples([(50, 18.2)])
+    calib = wm.calibrate_base_wpm(samples)
+    text = gv.render_calibration_csv(samples, calib)
+    assert not text.endswith("\n")
+    assert not text.endswith("\r")
+
+
+def test_render_calibration_csv_nominal_threads_to_drift():
+    wm = gv._load_wpm_mirror()
+    samples = _samples([(50, 18.2)])
+    calib = wm.calibrate_base_wpm(samples, default_base_wpm=100.0)
+    text = gv.render_calibration_csv(samples, calib)
+    assert "# nominal: 100.0" in text
+    assert f"# drift: {round(calib.drift, 3)}" in text
+
+
+def test_handler_csv_matches_renderer():
+    wm = gv._load_wpm_mirror()
+    samples = _samples([(50, 18.2), (50, 9.1, 2.0)])
+    calib = wm.calibrate_base_wpm(samples, default_base_wpm=165.0)
+    expected = [gv.render_calibration_csv(samples, calib)]
+    lines = _run(["calibrate-base-wpm", "--samples", "50:18.2", "50:9.1:2.0", "--csv"])
+    assert lines == expected
+
+
+def test_handler_csv_suppresses_human_report():
+    lines = _run(["calibrate-base-wpm", "--samples", "50:18.2", "--csv"])
+    text = "\n".join(lines)
+    assert "calibration from rendered samples" not in text
+    # The CSV header is present instead.
+    assert "sample,words,audio_seconds,speed,bot_wpm,implied_base_wpm" in text
+
+
+def test_handler_csv_suppresses_verdict():
+    # Even with --verdict, --csv wins and no prose decision is emitted.
+    lines = _run(
+        ["calibrate-base-wpm", "--samples", "50:14.0", "50:14.0", "50:14.0",
+         "--verdict", "--csv"]
+    )
+    text = "\n".join(lines)
+    assert "calibration verdict" not in text
+    assert "decision:" not in text
+
+
+def test_handler_csv_rows_are_parseable():
+    lines = _run(["calibrate-base-wpm", "--samples", "50:18.2", "50:9.1:2.0", "--csv"])
+    rows = _rows("\n".join(lines))
+    assert len(rows) == 2
+    assert [r["sample"] for r in rows] == ["1", "2"]
+
+
+def test_handler_csv_default_log_is_print(capsys):
+    args = gv.build_parser().parse_args(
+        ["calibrate-base-wpm", "--samples", "50:18.2", "--csv"]
+    )
+    gv.cmd_calibrate_base_wpm(args)
+    out = capsys.readouterr().out
+    assert "sample,words,audio_seconds,speed,bot_wpm,implied_base_wpm" in out
+
+
+def test_handler_csv_dispatch_routes(capsys):
+    rc = gv.main(["calibrate-base-wpm", "--samples", "50:18.2", "--csv"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "sample,words,audio_seconds,speed,bot_wpm,implied_base_wpm" in out
+    assert "# implied_base_wpm (median):" in out
