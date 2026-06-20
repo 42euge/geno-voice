@@ -30459,3 +30459,87 @@ tests or production code). Run in the feature worktree before ff-merge.
 4. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-332 — gv vad-gap-grid — the 2-D analogue of vad-gap-sweep
+
+- **Date:** 2026-06-20
+- **Branch:** iter-332-vad-gap-grid (ff-merged to main, worktree removed)
+- **Commit:** 074c6d1
+
+**Why.** iter-331's next-item #1: "vad-gap-grid — the 2-D analogue.
+`vad-grid` is to `vad-sweep` what a future `vad-gap-grid` would be to
+`vad-gap-sweep`: tabulate the min-gap floor across gate × hangover at once.
+With both the 1-D sweep surface (iter-330) and its integration test (iter-331)
+landed, the 2-D grid is the natural next surface — it answers the headroom
+question across two knobs simultaneously instead of one at a time."
+
+**What it is.** `gv vad-gap-grid`, the gap-side twin of `gv vad-grid` and the
+2-D analogue of iter-330's `gv vad-gap-sweep`. Where `vad-grid` tabulates
+segment-count / speech-seconds per cell of a gate × column-knob grid,
+`vad-gap-grid` tabulates the inter-segment silence-gap distribution (segment
+count, gap count, min/mean/max gap) per cell — so an operator can read where
+the shortest-pause floor buys merge headroom in TWO dimensions at once instead
+of running N separate 1-D `vad-gap-sweep`s. The headline column is `min_gap_s`:
+the shortest real pause is the floor above which raising the end-of-turn
+hangover (`--min-silence-ms` / the live `chat.vad.silence_duration`) starts
+merging two genuine turns into one.
+
+Surface (`examples/gv.py`):
+- **`vad_gap_grid(row_values, col_values, results, *, row_axis, col_axis)`** —
+  pure core, the gap-side twin of `vad_segmentation_grid`: row-major
+  flattening, per-cell `vad_silence_gaps`, `None` aggregates for a <2-segment
+  cell, ValueError on a row×col length mismatch. No I/O, no torch import.
+- **`render_vad_gap_grid` / `_json` / `_csv`** — the human / `--json` / `--csv`
+  trio, mirroring `render_vad_grid_*` minus the `--target`/`best` pick (the gap
+  surface headlines the distribution, not a segment-count target). A <2-segment
+  cell prints `-` (human), `null` (json), empty (csv) — never a fake 0.000.
+- **`cmd_vad_gap_grid`** — same injected segmenter/availability/log contract as
+  `cmd_vad_grid`; rows are always the gate, the column axis is `--min-silences`
+  (default) / `--min-speeches` / `--speech-pads` / `--max-speeches` (mutually
+  exclusive), the non-column knob held at its scalar. Lazy torch import,
+  install-hint degrade path.
+- **Parser:** `vad-gap-grid` subcommand with the gate row axis, the four-way
+  column mutex, the held scalars, and the `--json`/`--csv` mutex. Registered in
+  `DEFAULT_HANDLERS`; added to the usage docstring.
+
+Tests:
+- **`tests/unit/test_gv_vad_gap_grid.py`** (new, +37): parser
+  registration/defaults/mutexes/no-target; pure-core row-major order, axis
+  keys, aggregate equality with `vad_silence_gaps`, length-mismatch; all three
+  renderers (header/rows, <2-segment dashes/null/empty cells, axis labels, no
+  target keys, unavailable); the handler across human/json/csv, each column
+  axis, held-scalar fixity, row-major segmentation order, the three unavailable
+  paths, and result-name-not-raw-path.
+- **`tests/unit/test_gv_cli.py`**: the exact-handler-map assertion gains the
+  `vad-gap-grid` entry.
+- **`tests/unit/test_voice_capture_tuning_doc.py`**: `VAD_SUBCOMMANDS` gains
+  `vad-gap-grid`, so its four doc sentinels (names-all-subcommands /
+  appears-in-examples / routes-to-known / all-parse) now COVER the new surface;
+  `docs/research/voice-capture-tuning.md` gains a `gv vad-gap-grid` section with
+  seven runnable examples.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4412 passed**
+(4375 prior + 37 net new), run in the feature worktree before ff-merge AND
+re-run on main post-merge (4412 passed, ~55s).
+- Integration: not re-run this lap (pure parsing + list-scanning + string
+  formatting; no torch import, no audio I/O — the handler is exercised with an
+  injected stub segmenter, mirroring the iter-330 vad-gap-sweep unit lap).
+
+**Next planned items:**
+1. **[gv CLI] An integration test for `gv vad-gap-grid` over the real corpus.**
+   This lap shipped the surface with full UNIT coverage but drives only an
+   injected stub segmenter. The analogue of `test_gv_vad_gap_sweep_cli.py`
+   (iter-331): run `gv vad-gap-grid` with the real Silero engine over the
+   `fixtures/` recordings and pin the anchoring property — each grid cell's gap
+   aggregates must equal an independent `gv vad-gaps --json` at that cell's
+   exact (threshold, column-knob) pair, plus the row-major flattening order and
+   the per-cell aggregate consistency (min ≤ mean ≤ max).
+2. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+3. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+4. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
