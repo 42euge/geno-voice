@@ -2776,6 +2776,113 @@ def test_render_sweep_csv_consumer_rederives_json_affine_target_speech_tie_pick(
     assert [c["speech_s"] for c in payload["top"]] == [3.6, 2.0, 5.6]
 
 
+def test_render_sweep_csv_consumer_rederives_json_set_target_rowmajor_pick():
+    # iter-297: iter-289–296 pinned the 1-D sweep CSV↔JSON pick re-derive under
+    # tie_break="speech" for EVERY --target form (scalar → band → set → open band →
+    # preference → weighted → scaled → affine) — the speech matrix is complete. But
+    # that whole matrix fixes tie_break="speech"; the DEFAULT row-major tie-break was
+    # only ever pinned cross-surface on the sweep for the SCALAR (iter-244-era round
+    # trips) and CLOSED BAND cases, never for the DICT/list forms. The GRID earned
+    # the row-major cross-surface re-derive for every form at iter-273–280 (scalar,
+    # band, prefer, weighted, scaled, open band, flat set), but the SWEEP never did:
+    # its dict-form cross-surface tests all pass tie_break="speech". So a regression
+    # confined to the DEFAULT row-major path — e.g. one that flattened a flat-SET
+    # target to its head element on the sweep JSON path while a CSV consumer still
+    # passed the full set, OR that quietly swapped the row-major earliest-tie rule for
+    # a speech-ordered one on the JSON path only — would diverge the two surfaces yet
+    # ship green, because every existing sweep dict-form test forces "speech" and so
+    # never exercises the default branch. This lap opens the sweep row-major dict-form
+    # matrix with its first member, the flat SET (the sweep twin of iter-280's grid
+    # set-under-row-major test), mirroring the iter-291 speech-set fixture but pinning
+    # the DEFAULT tie-break instead.
+    #
+    # Fixture: a 4-value threshold sweep with counts 3/5/9/1, target = flat set
+    # [9, 3] (satisfy EITHER 9 or 3). _sweep_results couples speech to count + index,
+    # so the in-set rows carry DIFFERENT speech and the row-major / speech tie-breaks
+    # genuinely DISAGREE. Set distances (min over the two elements, |count-9| vs
+    # |count-3|):
+    #   - 0.30 count 3 → min(6, 0) = 0 (exact hit on element 3), speech 1.5
+    #   - 0.50 count 5 → min(4, 2) = 2,                          speech 3.0
+    #   - 0.70 count 9 → min(0, 6) = 0 (exact hit on element 9), speech 6.3
+    #   - 0.90 count 1 → min(8, 2) = 2,                          speech 0.8
+    # TWO rows tie at the set floor dist 0 (counts 3 and 9, each an exact hit on a
+    # DIFFERENT set element). The DEFAULT row-major tie-break keeps the EARLIEST of
+    # the tied pair — count 3 (0.30) — even though count 9 (0.70) recovered far more
+    # speech. So the row-major best is the 0.30 row count 3.
+    thresholds = [0.3, 0.5, 0.7, 0.9]
+    results = _sweep_results([3, 5, 9, 1])
+    target = [9, 3]
+    csv_text = gv.render_vad_sweep_csv(thresholds, results, name="rec.wav")
+    payload = json.loads(
+        # No tie_break kwarg — exercise the DEFAULT row-major path explicitly.
+        gv.render_vad_sweep_json(
+            thresholds, results, name="rec.wav", target=target, top=3,
+        )
+    )
+    # The JSON twin records the set target (a list serialises to a JSON array) and
+    # the DEFAULT tie-break it actually used.
+    assert payload["target"] == [9, 3]
+    assert payload["tie_break"] == "row-major"
+    # The CSV body still carries no pick columns or tie_break — it is the bare sweep.
+    assert "best" not in csv_text and "distance" not in csv_text
+    assert "tie_break" not in csv_text
+    # A CSV consumer re-parses the flat table back to sweep rows...
+    rows = [
+        {
+            "threshold": float(row["threshold"]),
+            "num_segments": int(row["num_segments"]),
+            "speech_s": float(row["speech_s"]),
+        }
+        for row in csv.DictReader(io.StringIO(csv_text))
+    ]
+    # ...and re-runs the SAME picker with the SAME set target and the DEFAULT
+    # (row-major) tie-break. The CSV-derived best equals the JSON `best` (distance key
+    # stripped), and the re-derived set distance matches the one the JSON embedded
+    # (0 — exact hit on element 3, the earliest in-set row).
+    csv_best = gv.pick_best_grid_cell(rows, target)
+    json_best = dict(payload["best"])
+    assert json_best.pop("distance") == gv.grid_cell_distance(csv_best, target)
+    assert csv_best == json_best
+    assert csv_best["threshold"] == 0.3 and csv_best["num_segments"] == 3
+    assert payload["best"]["distance"] == 0
+    # CONTROL 1: the SAME set under tie_break="speech" picks the OTHER dist-0 row,
+    # count 9 (0.70) at 6.3s — the most-speech in-set row. So the default pick is
+    # genuinely row-major-specific, not a value both tie-breaks happen to share; the
+    # default branch is load-bearing for the count-3 pick.
+    speech_best = gv.pick_best_grid_cell(rows, target, "speech")
+    assert speech_best != csv_best
+    assert speech_best["threshold"] == 0.7 and speech_best["num_segments"] == 9
+    # CONTROL 2: a SCALAR equal to the set's FIRST element, 9, scores the lone dist-0
+    # row for that scalar (count 9 at 0.70) — a DIFFERENT pick from the set best even
+    # under the SAME row-major tie-break, since collapsing the set to its head drops
+    # element 3's exact hit (the earliest tied row the set best lands on). Proves the
+    # set's TAIL element (3) is load-bearing: the set is not silently collapsing to
+    # its head on either surface.
+    scalar_best = gv.pick_best_grid_cell(rows, 9)
+    assert scalar_best != csv_best
+    assert scalar_best["threshold"] == 0.7 and scalar_best["num_segments"] == 9
+    # The top shortlist agrees row-for-row (distance stripped), with the two in-set
+    # (dist-0) rows in ROW-MAJOR order (count 3 before count 9 despite count 9's
+    # greater speech), then the nearer dist-2 row.
+    csv_top = gv.pick_top_grid_cells(rows, target, 3)
+    json_top = [dict(c) for c in payload["top"]]
+    for c in json_top:
+        c.pop("distance")
+    assert csv_top == json_top
+    # Head of the shortlist is the single best pick, on both surfaces.
+    assert csv_top[0] == csv_best
+    # The two dist-0 rows lead in row-major (count 3 then 9) — NOT speech order
+    # (which would be 9 then 3) — then the dist-2 count-5 row (5 sits 2 off element 3
+    # vs 4 off element 9, so its set distance 2 beats count 1's also-2 by row order).
+    assert [r["num_segments"] for r in csv_top] == [3, 9, 5]
+    # The two leading rows scored the set floor (distance 0, each an exact hit on a
+    # DIFFERENT element); row position, not distance or speech, decided their order.
+    assert [c["distance"] for c in payload["top"]] == [0, 0, 2]
+    # And the leading pair is NOT speech-ordered — the count-3 row (1.5s) precedes the
+    # count-9 row (6.3s), the inverse of what tie_break="speech" would produce.
+    assert [c["speech_s"] for c in payload["top"]][:2] == [1.5, 6.3]
+
+
 # ---- cmd_vad_sweep --csv: the handler ----------------------------------
 
 
