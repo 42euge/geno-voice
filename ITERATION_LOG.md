@@ -29308,3 +29308,97 @@ purely additive and defaults to the value `score()` already used.
    ~30 leftover per-iter worktrees (iter-001…028, 232, plus this lap's now
    removed). A future lap could `git worktree prune` / remove the merged ones to
    keep the list legible. NOTE: this lap correctly removed its own worktree.
+
+## iter-319 — gv simulate-mirror --min-speed/--max-speed/--min-delta (band overrides)
+
+- **Date:** 2026-06-20
+- **Branch:** iter-319-band-overrides (ff-merged to main, worktree removed)
+- **Commit:** cb9029f
+
+**Why.** iter-318 exposed `--lurch-weight`, the first *scoring* knob on the grid
+sweep, and its own next-item named the remaining non-axis tunables —
+`min_speed` / `max_speed` (the intelligibility band) and `min_delta` (the
+per-turn change deadband) — as the last sweep knobs without a matching override
+pair. Until now `sweep_mirror_grid`'s template band and the trajectory config's
+band were hard-coded to the seed defaults (0.8 / 1.3 / 0.05) for every cell and
+every run, so an operator could not ask "which `(base_wpm, strength)` pair wins
+if I run a *wider* intelligibility window for a faster voice?" without editing
+the engine. This lap exposes those three tunables as CLI flags.
+
+**What it is.** Three flags that thread into BOTH simulator modes:
+
+- **`--min-speed` / `--max-speed`** — positive floats via a new
+  `positive_float_type` validator (the positive-scalar twin of
+  `nonneg_float_type`: parses to float, rejects zero / negative / NaN /
+  non-number at the parser with the usual `SystemExit(2)`). Defaults sourced
+  from the engine's `DEFAULT_MIN_SPEED` / `DEFAULT_MAX_SPEED` in `build_parser`
+  with the documented-constant fallback (`_MIRROR_DEFAULT_MIN_SPEED = 0.8`,
+  `_MIRROR_DEFAULT_MAX_SPEED = 1.3`) the other mirror defaults use, so the CLI
+  default tracks the live config.
+- **`--min-delta`** — nonneg float, reusing `nonneg_float_type` (a `0`
+  legitimately disables the deadband). Default sourced from
+  `DEFAULT_MIN_DELTA` (`_MIRROR_DEFAULT_MIN_DELTA = 0.05` fallback).
+
+In **`--grid`** mode the band becomes the `template` `WpmMirrorConfig` every
+cell clones — `sweep_mirror_grid` already accepted a `template=` whose
+`min_speed`/`max_speed`/`min_delta` it copies onto each cell's config, so the
+handler now builds one from the flags and passes it. In **trajectory** mode the
+band lands directly on the single config. The cross-edge ordering
+(`max_speed >= min_speed`) spans two args so the parser can't catch it; the
+`WpmMirrorConfig.__post_init__` `ValueError` is caught in the handler and
+reported as a clean `error:` line rather than a traceback, in both modes.
+
+Omitting the flags reproduces the pre-iter-319 seed-band behaviour exactly
+(pinned by tests in both modes). The iter-318 `--lurch-weight` scoring knob and
+the iter-315/317 human / `--json` / `--csv` trio are untouched — the band
+overrides are purely additive.
+
+**What changed.**
+- **`examples/gv.py`** — added `positive_float_type`; added
+  `_MIRROR_DEFAULT_MIN_SPEED`/`_MAX_SPEED`/`_MIN_DELTA` module constants and
+  sourced `min_speed_default`/`max_speed_default`/`min_delta_default` from the
+  engine in `build_parser` (fallback path included); added the three
+  `--min-speed`/`--max-speed`/`--min-delta` arguments to the `simulate-mirror`
+  parser (before the `--lurch-weight` arg). `cmd_simulate_mirror` now reads the
+  three values via `getattr(..., engine default)`, builds a band `template`
+  config in grid mode (passed to `sweep_mirror_grid(..., template=...)`) and a
+  full single config in trajectory mode, catching the `max<min` `ValueError`
+  for a clean `error:` line. Updated the handler docstring with the iter-319
+  note.
+- **`tests/unit/test_gv_simulate_mirror.py` (+12 net new)** —
+  `positive_float_type` (parses positive; rejects zero/negative/NaN/non-number);
+  band defaults sourced from the engine; overrides parse; `--min-speed 0` exits
+  2; a wider band lets the trajectory `final_speed` reach further than the
+  default clamp on a band-pushing arc `[60,60,400,400]`; handler trajectory +
+  grid output match a direct engine fold with the same band/template; default
+  band reproduces the seed-template sweep; bad `max<min` pair reports a clean
+  `error:` line naming `max_speed` (trajectory + grid); band is inert when the
+  arc stays inside the window.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4178 passed**
+(4166 prior + 12 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_gv_simulate_mirror.py` → **90 passed**
+  (78 prior + 12 new).
+- Integration: not re-run this lap (pure validator + parser/handler wiring over
+  the stdlib `wpm_mirror` engine loaded by file path — no torch import, no
+  audio I/O, same as prior CLI laps).
+
+**Next planned items:**
+1. **[cli] All `simulate-mirror` tunables now have a CLI surface** — both grid
+   axes (`--base-wpms`/`--strengths`), the single-config seeds
+   (`--base-wpm`/`--strength`), the score knob (`--lurch-weight`, iter-318), and
+   now the band/deadband (`--min-speed`/`--max-speed`/`--min-delta`, this lap).
+   A future CLI lap would need a NEW surface or a fundamentally NEW knob — e.g.
+   a `--min-speed`/`--max-speed` sweep AXIS (vary the band as a third grid
+   dimension), or a calibrate `--json`-consuming downstream command. Scope
+   whether a 3-axis grid is worth the table-shape complexity before building.
+2. **[chat-metrics] Continuous-clone + two-sided-band sentinel families — both
+   declared complete (iter-311/312, iter-306).** A NEW per-turn metric not yet
+   emitted would be needed to extend either; none obvious.
+3. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+4. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~30 leftover per-iter worktrees (iter-001…028, 232, plus iter-317's
+   leftover). A future lap could `git worktree prune` / remove the merged ones
+   to keep the list legible. NOTE: this lap correctly removed its own worktree.
