@@ -43,6 +43,7 @@ nav:
   - Research:
       - Organic / full-duplex turn-taking: research/organic-turn-taking.md
       - Voice-capture tuning: research/voice-capture-tuning.md
+      - TTS-pacing WPM mirror: research/tts-pacing-mirror.md
       - Performance metrics taxonomy: perf-metrics-taxonomy.md
 
 extra_css:
