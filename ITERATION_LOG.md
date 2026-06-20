@@ -27654,3 +27654,122 @@ row).
 6. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows ~30
    leftover per-iter worktrees that were never pruned. A future lap could
    `git worktree prune` / remove the merged ones to keep the list readable.
+
+## iter-303 — 1-D sweep CSV consumer re-derives JSON --target affine pick (row-major default)
+
+- **Date:** 2026-06-20
+- **Branch:** iter-303-sweep-rowmajor-affine (ff-merged to main)
+- **Commit:** 22930ba
+
+**Why.** iter-297 opened the sweep ROW-MAJOR dict-form cross-surface matrix with
+the flat SET (the sweep twin of iter-280's grid set-under-row-major test),
+iter-298 added the CLOSED BAND (twin of iter-275), iter-299 the OPEN band (twin
+of iter-273), iter-300 the `{"prefer": …}` PREFERENCE (twin of iter-276),
+iter-301 the `{"weighted": …}` ADDITIVE-WEIGHTED set (twin of iter-277), and
+iter-302 the `{"scaled": …}` MULTIPLICATIVE set (twin of iter-278). iter-302
+backlog #1 named the LAST gap directly: the only remaining row-major dict form
+unpinned cross-surface on the sweep was the `{"affine": …}` set (iter-287, grid
+row-major twin iter-279, sweep speech twin iter-296). This lap closes it — the
+sweep twin of iter-279's grid affine-under-row-major test — COMPLETING the
+cross-surface ROW-MAJOR matrix over every `--target` dict form (scalar → band →
+set → open band → preference → weighted → scaled → affine), mirroring the grid
+iter-273–280 set in full.
+
+**The gap this closes.** The affine set GENERALISES iter-301's weighted and
+iter-302's scaled twins: each element's distance is its raw distance SCALED by
+its factor THEN OFFSET by its penalty (`distance*factor + penalty`), the set
+scoring the MIN over those affine distances (iter-287). Like both predecessors
+its precedence lives in the DISTANCE itself — `grid_cell_sort_key` inserts NO
+secondary key for an affine set — so under the DEFAULT row-major tie-break the
+key is the SAME single-level `(distance,)` shape as the band/set/open-band/
+weighted/scaled twins (iter-298/297/299/301/302). What no prior ROW-MAJOR sweep
+twin exercises is BOTH weight operators biting AT ONCE on the same fixture: the
+penalty taxes even an EXACT HIT (`0*factor + penalty == penalty`, the iter-301
+weighted behaviour) AND the factor amplifies a non-zero gap (the iter-302 scaled
+behaviour). The speech version (iter-296) forces `tie_break="speech"`, so it
+never exercises the DEFAULT branch of `render_vad_sweep_json` under an affine
+set; the affine-under-row-major test lived ONLY on the grid (iter-279). A
+regression confined to the DEFAULT row-major path — one that flattened the
+`{"affine": …}` dict to a plain set on the sweep JSON path (dropping BOTH
+weights so the row-major floor moves) while a CSV consumer still passed them,
+that dropped EITHER weight alone, OR that quietly swapped the row-major fallback
+for a speech-ordered one on the JSON path only — would diverge the two surfaces
+yet ship green, because no other row-major sweep twin folds BOTH a `*factor` AND
+a `+penalty` INTO the distance.
+
+**The mechanism.** A 4-value threshold sweep (0.3/0.5/0.7/0.9) with counts
+4/9/2/8, target = affine set `{"affine": [(5, 1, 0), (9, 3, 1)]}`.
+`_sweep_results` couples speech to count + index, so the in-floor rows carry
+DIFFERENT speech and the row-major / speech tie-breaks genuinely disagree. Affine
+distances (MIN over `|Δ to element| * factor + penalty`): 0.30 count 4 →
+min(1,16)=1, speech 2.0; 0.50 count 9 → min(4,1)=1, speech 5.4; 0.70 count 2 →
+min(3,22)=3, speech 1.4; 0.90 count 8 → min(3,4)=3, speech 6.4. The floor PAIR
+shows BOTH weight operators biting AT ONCE in OPPOSITE directions: count 4 is an
+UNTAXED near-miss on the 0-penalty element 5 (raw 1 → `1*1+0` = 1), while count 9
+is an EXACT HIT on element 9 (raw 0) that the +1 penalty taxes UP to 1
+(`0*3+1` = 1) — an exact hit and a near-miss leveled to the SAME floor only
+because the penalty lifts the hit. TWO rows tie at the affine floor distance 1
+(counts 4 and 9). The DEFAULT row-major tie-break keeps the EARLIEST tied row —
+count 4 (0.30) — despite count 9 (0.50) recovering more speech. So the row-major
+best is the 0.30 row count 4, and the top-3 is `[4, 9, 2]` (the two floor rows in
+sweep order, then count 2 — its min affine distance 3 ties count 8's 3 but count
+2 is the earlier row).
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+1 test).**
+  `test_render_sweep_csv_consumer_rederives_json_affine_target_rowmajor_pick`:
+  asserts `payload["target"] == {"affine": [[5, 1, 0], [9, 3, 1]]}` and
+  `payload["tie_break"] == "row-major"` with NO `tie_break` kwarg passed
+  (exercising the DEFAULT branch); the CSV body carries no
+  `best`/`distance`/`tie_break`/`affine`; a CSV consumer re-parses the bare table
+  back to sweep rows and re-runs the SAME pickers with the SAME affine target and
+  the DEFAULT tie-break, recovering the JSON-embedded `best` (count 4) and the
+  full top-3 (counts `[4, 9, 2]`). FOUR controls prove it cannot pass by accident:
+  `tie_break="speech"` flips the pick to count 9 (most-speech floor row), proving
+  the default branch is load-bearing; a flat SET `[5, 9]` makes count 9 a free
+  exact hit that wins outright, proving the weights are load-bearing; a
+  scaled-only `{"scaled": [(5,1),(9,3)]}` makes count 9 free and leads the
+  shortlist `[9, 4, 2]`, proving the +1 penalty is independently load-bearing; a
+  weighted-only `{"weighted": [(5,0),(9,1)]}` lets count 8 recover the tail
+  `[4, 9, 8]`, proving the *3 factor is independently load-bearing. Controls 3 and
+  4 together pin that BOTH affine weights matter at once under row-major — the
+  property no weighted-only (iter-301) or scaled-only (iter-302) sweep twin can
+  establish. No production code changed (the sweep wiring was already correct —
+  proved by the green focused run on the unmodified path).
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **3905 passed**
+(3904 prior + 1 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_gv_vad.py -k affine_target_rowmajor` → **1 passed**.
+- Integration: not re-run this lap (no corpus symlinked into this worktree; same as
+  prior corpus-gated laps — the change is a pure CLI cross-surface contract test, no
+  new production code).
+
+**Next planned items:**
+1. **[cli] Sweep ROW-MAJOR cross-surface matrix — COMPLETE.** All eight `--target`
+   forms now have a sweep ROW-MAJOR cross-surface re-derive: flat SET (iter-297),
+   closed band (iter-298), open band (iter-299), preference (iter-300), weighted
+   (iter-301), scaled (iter-302), affine (this lap), plus the scalar from the
+   earlier round trips. The sweep row-major matrix mirrors the grid iter-273–280
+   set in full, and the sweep speech matrix (iter-289–296) is also complete. No
+   `--target`-form cross-surface sweep gap remains.
+2. **[cli] `simulate-mirror` grid pick round-trips** remain unpinned cross-surface
+   for ALL dict forms (the VAD matrices covered VAD grid + sweep only). This is the
+   next-largest untouched cross-surface area — a parallel matrix on a different
+   command. Scope: confirm `simulate-mirror` emits the same CSV/JSON pick surfaces,
+   then clone the iter-273–303 fixtures against it.
+3. **[cli] A next FEATURE would be a different axis entirely** — the `--target`
+   composition space (scalar → band → set → preference → additive → multiplicative →
+   affine) is feature-complete. Candidates: a per-element ASYMMETRIC band tolerance,
+   or a "soft floor/ceiling" scoring beyond an open edge with a gentle slope rather
+   than a hard 0. Scope before building.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or the
+   pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it stays
+   operator-only / non-headless.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop should
+   track a curated subset, decide the policy and re-run `replay_silero.py --compare` +
+   `gv vad` to refresh the comparison table.
+6. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows ~30
+   leftover per-iter worktrees that were never pruned. A future lap could
+   `git worktree prune` / remove the merged ones to keep the list readable.
