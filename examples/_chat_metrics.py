@@ -3677,6 +3677,156 @@ def _emit_ttc_consistency_line(
     )
 
 
+def _token_reveal_lag_bucket(seconds: float) -> str:
+    """iter-306: bucket a per-turn ``mean_token_reveal_lag`` (iter-071's
+    token-reveal lag — the mean wall-clock offset between the moment a
+    token is printed on screen and the audio second its ``start`` field
+    claims) into a coarse category. Used by
+    ``_emit_token_reveal_lag_consistency_line`` to detect runs where the
+    on-screen text was persistently out of sync with the spoken audio.
+    Metric 2.17 in the perf-metrics taxonomy.
+
+    EIGHTEENTH instance of the diversity-check pattern, and the
+    FIFTEENTH applied to a continuous metric. It is the THIRD with a
+    TWO-SIDED (band) sweet spot — after iter-210's ``bot_wpm`` and
+    iter-305's ``time_to_comprehension`` — but the FIRST whose band
+    straddles ZERO on a legitimately SIGNED metric. The two earlier band
+    sentinels both live on a positive-only domain (WPM and a cross-turn
+    gap are both ≥0, the sweet spot a positive middle); here the metric
+    is signed and the sweet spot is a band AROUND zero, so the two
+    flagged extremes are OPPOSITE SIGNS, not merely opposite ends of a
+    positive range. That also forces the ``0.0`` sentinel handling to
+    differ from every prior bucketer: ``0.0`` here means "not captured"
+    (the play_fn didn't supply lag stats) — a real measured lag of
+    exactly 0.0 is indistinguishable and treated as uncaptured, matching
+    the ``!= 0`` collection filter the session summary already uses for
+    this metric (see ``token_lag_means``). So ``0.0`` returns ``""`` not
+    because the value is non-positive but because it is the
+    "uninstrumented" marker.
+
+    Buckets (boundaries aligned with the existing per-turn display, which
+    colors |mean| > 100ms yellow — see ``TurnMetrics.print``'s
+    token-reveal row):
+
+        ``synced``   — |lag| ≤ 100ms: the text and audio track closely
+            enough that the desync is imperceptible; the desired state.
+        ``lagging``  — lag > +100ms: the printed text falls BEHIND the
+            audio — subtitles arrive late, the UX feels broken. The
+            token-reveal scheduling needs to print sooner / the playback
+            ``start`` offsets are running ahead.
+        ``spoiling`` — lag < -100ms: the printed text LEADS the audio —
+            the on-screen words spoil what the bot is about to say. The
+            reveal is firing too early relative to playback.
+
+    Returns ``""`` when ``seconds`` is exactly 0 (the metric wasn't
+    captured this turn) — empty-string filter applies in the consumer,
+    mirroring iter-114/115/120/126/128/140/141/142/143/208/209/210/211/
+    212/224/225/226/305.
+    """
+    if seconds == 0:
+        return ""
+    if seconds > 0.1:
+        return "lagging"
+    if seconds < -0.1:
+        return "spoiling"
+    return "synced"
+
+
+def _emit_token_reveal_lag_consistency_line(
+    emit, lag_list: list[float], threshold: int = 5,
+) -> None:
+    """iter-306: detect consecutive runs of turns where the on-screen
+    token text sat persistently out of sync with the spoken audio
+    (iter-071 ``mean_token_reveal_lag``). EIGHTEENTH instance of the
+    diversity-check pattern after iter-114 (filler), iter-115/126
+    (naturalness), iter-120 (barge-phase), iter-128 (sentence-length),
+    iter-140 (stt-rtf), iter-141 (tts-rtf), iter-142 (llm-tps), iter-143
+    (streaming-overlap), iter-208 (synth-dispatch), iter-209
+    (eot-overhead), iter-210 (bot-wpm), iter-211 (max-token-gap),
+    iter-212 (ttfs), iter-224 (stt-preview-divergence), iter-225
+    (sentence-split-coverage), iter-226 (worker-idle-gap), iter-305
+    (ttc). FIFTEENTH instance applied to a CONTINUOUS metric — buckets it
+    via ``_token_reveal_lag_bucket`` before running the scan.
+
+    THIRD instance with a TWO-SIDED (band) sweet spot — after iter-210
+    (bot-wpm) and iter-305 (ttc) — and the FIRST whose band straddles
+    ZERO on a signed metric. The fine state is the MIDDLE band
+    (``synced``, |lag| ≤ 100ms), and BOTH extremes are flagged but they
+    are NOT interchangeable: ``lagging`` (text falls behind audio —
+    subtitles late) and ``spoiling`` (text leads audio — spoils the
+    bot's next words) are OPPOSITE-SIGN desyncs needing OPPOSITE
+    corrections to the reveal scheduling. The per-value suggestion branch
+    is therefore load-bearing, and the run scan keeps the two flagged
+    buckets distinct — a lagging run and a spoiling run never merge.
+
+    The session summary already reports the token-lag MEDIAN + worst
+    peak (iter-071's "Token lag" line), but a median collapses sign and
+    a single worst peak reads nothing like a SUSTAINED run: a session
+    whose lag swings +200ms then -200ms turn to turn has a near-zero
+    median yet is badly desynced, and even a steady +150ms median doesn't
+    convey that it persisted for a whole stretch. Five lagging turns BACK
+    TO BACK means the subtitles are reliably late for a span of the
+    conversation — the actionable signal the |mean| > 100ms per-turn flag
+    exists to protect. Distinct from the iter-071 median: that answers
+    "what's the typical desync"; this answers "did one direction of
+    desync persist".
+
+    Filter rule: drop the ``"synced"`` bucket (the sweet spot) and ``""``
+    (uncaptured — the play_fn supplied no lag stats, encoded as an exact
+    0.0, matching the session summary's own ``!= 0`` collection filter)
+    before the scan. Only ``lagging`` and ``spoiling`` warrant warning.
+    Like iter-210/305 and UNLIKE the one-sided continuous sentinels, the
+    fine bucket is the MIDDLE band, not an extreme.
+
+    Threshold = 5: same as iter-115/128/140/141/142/143/208/209/210/211/
+    212/224/225/226/305. Token-reveal lag jitters turn to turn with
+    sentence length and synth timing; a single desynced turn is normal, a
+    sustained run is the real signal that the reveal scheduling is
+    mis-tuned.
+
+    Output:
+
+        Token sync drift:  5 consecutive 'lagging' turns — the printed
+                           text falls behind the audio (subtitles late);
+                           the token reveal needs to fire sooner
+                           (iter-071 mean_token_reveal_lag)
+    """
+    # Bucketize, then drop the "uninteresting" buckets (empty, synced).
+    interesting = {"lagging", "spoiling"}
+    filtered = [
+        b for b in (
+            _token_reveal_lag_bucket(g) for g in lag_list
+        )
+        if b in interesting
+    ]
+    if not filtered:
+        return
+
+    longest_run, longest_bucket = _longest_consecutive_run(filtered)
+    if longest_run < threshold:
+        return
+
+    if longest_bucket == "lagging":
+        suggestion = (
+            "the printed text falls behind the audio (subtitles late); "
+            "the token reveal needs to fire sooner"
+        )
+    elif longest_bucket == "spoiling":
+        suggestion = (
+            "the printed text leads the audio (spoils the bot's next "
+            "words); the token reveal needs to fire later"
+        )
+    else:
+        # Defensive: future buckets that pass the filter rule.
+        suggestion = "the on-screen text is out of sync with the audio"
+
+    emit(
+        f"    Token sync drift:  {longest_run} consecutive "
+        f"{longest_bucket!r} turns — {suggestion} "
+        f"(iter-071 mean_token_reveal_lag)"
+    )
+
+
 def _emit_bargeable_line(emit, bargeable_values: list[float]) -> None:
     """iter-104: extracted from print_session_summary's iter-074
     bargeable line. Reports the WORST bargeable fraction across
@@ -4505,6 +4655,25 @@ def print_session_summary(
     _emit_ttc_consistency_line(
         _emit,
         [m.time_to_comprehension for m in metrics_list],
+    )
+    # iter-306: token-reveal-lag consistency check. Only fires when 5+
+    # consecutive turns the on-screen text sat persistently out of sync
+    # with the spoken audio (lagging > +100ms / spoiling < -100ms).
+    # iter-071 added the per-turn token-reveal lag + a session median and
+    # worst peak, but a median collapses sign (a +200/-200 swing reads
+    # near-zero yet is badly desynced) and a peak reads nothing like a
+    # SUSTAINED run: five lagging turns back to back means subtitles are
+    # reliably late for a stretch, while a single bad turn is noise.
+    # THIRD two-sided-band sentinel after iter-210 (bot-wpm) and iter-305
+    # (ttc), and the FIRST whose band straddles ZERO on a signed metric —
+    # the fine state is the MIDDLE band (|lag| ≤ 100ms) and the two
+    # flagged ends (lagging / spoiling) are OPPOSITE-SIGN desyncs needing
+    # OPPOSITE reveal-scheduling corrections, so the per-value suggestion
+    # is load-bearing. Reuses the iter-071 ``!= 0`` collection filter
+    # (uncaptured turns encode as an exact 0.0).
+    _emit_token_reveal_lag_consistency_line(
+        _emit,
+        [m.mean_token_reveal_lag for m in metrics_list],
     )
     # iter-090: barge block extracted to _emit_barge_block helper.
     # ~76 lines of co-emitted lines (count, interruption rate,
