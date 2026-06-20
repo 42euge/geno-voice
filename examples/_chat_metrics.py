@@ -2877,6 +2877,130 @@ def _emit_bot_wpm_consistency_line(
     )
 
 
+def _user_wpm_bucket(wpm: float) -> str:
+    """iter-323: bucket a per-turn ``user_wpm`` (iter-064 user speaking
+    rate in words-per-minute, ``transcript word count / speech_duration``)
+    into a coarse category. Used by ``_emit_user_wpm_consistency_line`` to
+    detect runs where the USER's measured speech rate sat at an extreme —
+    a signal that the iter-215 WPM mirror's ``base_wpm`` target (default
+    165 WPM) is mistuned for this speaker. Metric 1.14 in the perf-metrics
+    taxonomy.
+
+    SECOND instance with a TWO-SIDED (band) sweet spot, the symmetric twin
+    of iter-210's ``_bot_wpm_bucket``. Where iter-210 watches the bot's
+    SYNTHESIZED rate (and the fix is the kokoro ``speed`` knob), this
+    watches the USER's MEASURED rate (which we can't change — instead the
+    fix is recalibrating the mirror's ``base_wpm`` toward this speaker, so
+    the bot mirrors a target that actually matches them). The two
+    problematic ends call for OPPOSITE recalibrations: a sustained fast
+    user wants ``base_wpm`` raised, a sustained slow user wants it lowered.
+
+    Boundaries mirror iter-210's bot bucketer (the per-turn display colors
+    130-200 WPM green; UX research puts conversational speech ~150-180
+    WPM, and a human's comfortable range straddles that band):
+
+        ``natural`` — 130-200 WPM inclusive: typical conversational pace;
+            the WPM-mirror default ``base_wpm`` (165) sits dead-center.
+        ``fast``    — > 200 WPM: the user consistently out-paces the
+            default target — raise the mirror ``base_wpm`` toward them.
+        ``slow``    — 0 < wpm < 130: the user consistently under-paces the
+            default target — lower the mirror ``base_wpm`` toward them.
+
+    Returns ``""`` when ``wpm`` is non-positive (speech_duration was 0 or
+    the transcript was empty this turn) — empty-string filter applies in
+    the consumer, mirroring iter-114/.../210. NOTE the bucket *names*
+    differ from iter-210's (``fast``/``slow`` vs ``rushed``/``sluggish``):
+    a user speaking fast isn't a defect to fix the way a rushed bot is —
+    it's a property of the speaker the mirror should adapt TO.
+    """
+    if wpm <= 0:
+        return ""
+    if wpm < 130.0:
+        return "slow"
+    if wpm <= 200.0:
+        return "natural"
+    return "fast"
+
+
+def _emit_user_wpm_consistency_line(
+    emit, user_wpm_list: list[float], threshold: int = 5,
+) -> None:
+    """iter-323: detect consecutive runs of turns where the USER's
+    measured speaking rate sat outside the conversational sweet spot.
+    Symmetric twin of iter-210's ``_emit_bot_wpm_consistency_line`` —
+    the SECOND instance of the diversity-check pattern with a TWO-SIDED
+    (band) sweet spot, and the NINTH applied to a CONTINUOUS metric
+    (after iter-128 sentence-length, iter-140 stt-rtf, iter-141 tts-rtf,
+    iter-142 llm-tps, iter-143 streaming-overlap, iter-208 synth-dispatch,
+    iter-209 eot-overhead, iter-210 bot-wpm) — buckets it via
+    ``_user_wpm_bucket`` before running the scan.
+
+    Distinct from iter-210 in WHAT the warning means and HOW you act on
+    it. iter-210 watches the bot's SYNTHESIZED rate, which we control
+    directly (the fix is the kokoro ``speed`` knob). This watches the
+    USER's MEASURED rate, which we can't change — so the actionable fix
+    is the WPM mirror (iter-213/214/215): a sustained fast or slow user
+    means the mirror's ``base_wpm`` target (default 165 WPM) is mistuned
+    for this speaker, and ``gv calibrate-base-wpm`` (iter-222) should be
+    re-run to back a matching target out of their real cadence. The two
+    flagged ends need OPPOSITE recalibrations (fast → raise base_wpm;
+    slow → lower base_wpm), so the per-value suggestion branch carries
+    real signal, and the run scan keeps the two flagged buckets distinct
+    — a fast run and a slow run never merge.
+
+    Filter rule: drop the ``"natural"`` bucket (the sweet spot) and ``""``
+    (no measurable speech that turn) before the scan. Only ``fast`` and
+    ``slow`` warrant warning.
+
+    Threshold = 5: same as iter-115/128/140/141/142/143/208/209/210.
+    Human speech rate varies turn to turn with content (slow in a
+    considered answer, fast in an excited aside), so a single fast or
+    slow turn is normal; a sustained run is the actionable signal that
+    the mirror target is set for the wrong speaker.
+
+    Output:
+
+        User speech rate: 5 consecutive 'fast' turns — the user
+                          out-paces the mirror's default target; raise
+                          base_wpm (gv calibrate-base-wpm) (iter-064
+                          user_wpm)
+    """
+    # Bucketize, then drop the "uninteresting" buckets (empty, natural).
+    interesting = {"fast", "slow"}
+    filtered = [
+        b for b in (
+            _user_wpm_bucket(w) for w in user_wpm_list
+        )
+        if b in interesting
+    ]
+    if not filtered:
+        return
+
+    longest_run, longest_bucket = _longest_consecutive_run(filtered)
+    if longest_run < threshold:
+        return
+
+    if longest_bucket == "fast":
+        suggestion = (
+            "the user out-paces the mirror's default target; raise "
+            "base_wpm (gv calibrate-base-wpm)"
+        )
+    elif longest_bucket == "slow":
+        suggestion = (
+            "the user under-paces the mirror's default target; lower "
+            "base_wpm (gv calibrate-base-wpm)"
+        )
+    else:
+        # Defensive: future buckets that pass the filter rule.
+        suggestion = "recalibrate the mirror base_wpm toward this speaker"
+
+    emit(
+        f"    User speech rate: {longest_run} consecutive "
+        f"{longest_bucket!r} turns — {suggestion} "
+        f"(iter-064 user_wpm)"
+    )
+
+
 def _max_token_gap_bucket(seconds: float) -> str:
     """iter-211: bucket a per-turn ``max_token_gap`` (iter-085's
     maximum inter-token gap during the LLM stream, excluding the
@@ -5493,6 +5617,21 @@ def print_session_summary(
     _emit_bot_wpm_consistency_line(
         _emit,
         [m.bot_wpm for m in metrics_list],
+    )
+    # iter-323: user-speech-rate consistency check. Symmetric twin of the
+    # iter-210 bot-WPM sentinel and the SECOND two-sided-band sentinel.
+    # Only fires when 5+ consecutive turns measured the USER speaking
+    # outside the conversational band (fast > 200 WPM / slow < 130 WPM).
+    # Unlike the bot rate (which we control via the kokoro `speed` knob),
+    # the user's rate is fixed — so the actionable fix is the WPM mirror
+    # (iter-213/214/215): a sustained run means the mirror's `base_wpm`
+    # target (default 165) is set for the wrong speaker, and
+    # `gv calibrate-base-wpm` (iter-222) should re-derive it. The median
+    # user-WPM line (iter-094) can read healthy while a sustained
+    # fast/slow run hides inside it.
+    _emit_user_wpm_consistency_line(
+        _emit,
+        [m.user_wpm for m in metrics_list],
     )
     # iter-211: max-token-gap consistency check. Only fires when 5+
     # consecutive turns suffered a noticeable worst-case mid-stream LLM
