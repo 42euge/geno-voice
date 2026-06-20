@@ -30543,3 +30543,86 @@ re-run on main post-merge (4412 passed, ~55s).
 4. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-333 — gv vad-gap-grid end-to-end integration test over the real corpus
+
+- **Date:** 2026-06-20
+- **Branch:** iter-333-vad-gap-grid-integration (ff-merged to main, worktree removed)
+- **Commit:** 9d6fb25
+
+**Why.** iter-332's next-item #1: "An integration test for `gv vad-gap-grid`
+over the real corpus. This lap shipped the surface with full UNIT coverage but
+drives only an injected stub segmenter. The analogue of
+`test_gv_vad_gap_sweep_cli.py` (iter-331): run `gv vad-gap-grid` with the real
+Silero engine over the `fixtures/` recordings and pin the anchoring property —
+each grid cell's gap aggregates must equal an independent `gv vad-gaps --json`
+at that cell's exact (threshold, column-knob) pair, plus the row-major
+flattening order and the per-cell aggregate consistency (min ≤ mean ≤ max)."
+iter-332 shipped the `vad-gap-grid` surface (unit-tested with a stub
+segmenter); this lap closes the loop by pinning it against the REAL engine +
+corpus, the grid-side companion to iter-331's `test_gv_vad_gap_sweep_cli.py`.
+
+**What it is.** `tests/integration/test_gv_vad_gap_grid_cli.py` (new, +13
+tests), the grid-side twin of `test_gv_vad_gap_sweep_cli.py`. Where that module
+pins the 1-D `gv vad-gap-sweep` surface against real Silero, this one pins the
+2-D `gv vad-gap-grid` — the surface that tabulates the inter-segment silence-gap
+distribution across the cartesian product of TWO knobs (the P(speech) gate × a
+column knob) at once. Same skip contract (no recordings OR no `silero-vad` →
+skip), same `examples.gv` + `cmd_*` driving shape, same 31s continuous
+recording (`voice-20260618-110355.wav`) as THE GATE.
+
+Properties pinned:
+- **Baseline cell (THE GATE):** the (0.5 gate, 800ms hangover) cell yields ≥2
+  segments and ≥1 measurable gap (energy-VAD cannot split this clip; Silero
+  must).
+- **Anchoring (gate × hangover):** every grid cell's gap aggregates
+  (num_segments / num_gaps / min/mean/max/total) equal an independent
+  `gv vad-gaps --json` segmented at that cell's exact (threshold, hangover)
+  pair — across the full cartesian product, proving the grid differences the
+  same per-cell segmentation a standalone `gv vad-gaps` produces.
+- **Anchoring (non-default column axis):** sweeping `--min-speeches` as the
+  column axis anchors the same way with the hangover held at the scalar
+  `--min-silence-ms`, covering a non-default axis end to end + the held-scalar
+  contract.
+- **Row-major flattening order:** the JSON `grid` list emits row 0's whole row
+  of columns first, then row 1's — the threshold non-decreasing, the hangover
+  cycling within each row block — matching `vad_segmentation_grid`'s order.
+- **Per-cell aggregate consistency:** min ≤ mean ≤ max and total ≈ mean × count
+  hold within every cell that has a gap (null aggregates for a <2-segment cell).
+- **Per-row hangover monotonicity:** within each gate row, a rising
+  `--min-silences` column axis never grows the gap count — the grid-row echo of
+  the iter-331 sweep monotonicity, held for every gate row at once (the grid
+  cannot exercise this with one row; the sweep test only had one axis).
+- **CSV↔JSON agreement:** `--csv` describes the same per-cell rows as `--json`
+  (same axis values, segment/gap counts, min gap, row-major order).
+- **Corpus grid (parametrized):** every recording emits a well-formed human
+  table (title + `min_gap` header) and a 16-cell (4 thresholds × 4 hangovers)
+  JSON payload whose each cell's gap count is one fewer than its segment count
+  (or 0 with null aggregates for a single-region cell).
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4412 passed**
+(unchanged from iter-332 — this lap adds only an integration test, no unit
+tests or production code). Run in the feature worktree before ff-merge.
+- Integration: the new module was verified **13/13 passed** against the REAL
+  Silero engine + recording corpus in the worktree (by temporarily symlinking
+  the host recordings in, then removing the symlink before commit), in ~131s.
+
+**Next planned items:**
+1. **[gv CLI] The vad-gap-grid/-gap-sweep family now has full unit + integration
+   coverage.** Both 1-D (iter-330 surface, iter-331 integration) and 2-D
+   (iter-332 surface, this lap integration) silence-gap surfaces are pinned end
+   to end. A natural next surface: a `gv vad-gap-diff` — the gap-side analogue
+   of `gv vad-diff` (iter-234), quantifying how the inter-segment gap
+   distribution shifts between two (threshold) settings (min/mean/max gap deltas
+   + which short pauses a longer hangover merges away). Lower-effort alternative:
+   a human-table golden-output assertion for `gv vad-gap-grid` (the integration
+   tests assert structure + a `min_gap` substring, not the full rendered table).
+2. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+3. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+4. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
