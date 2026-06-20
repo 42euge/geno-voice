@@ -44,7 +44,7 @@ DOC = ROOT / "docs" / "research" / "voice-capture-tuning.md"
 MKDOCS = ROOT / "mkdocs.yml"
 
 # The four CLI subcommands this doc documents.
-VAD_SUBCOMMANDS = ("vad", "vad-diff", "vad-sweep", "vad-grid")
+VAD_SUBCOMMANDS = ("vad", "vad-gaps", "vad-diff", "vad-sweep", "vad-grid")
 
 
 def _read_doc() -> str:
