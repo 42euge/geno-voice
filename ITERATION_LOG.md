@@ -27985,3 +27985,116 @@ purely additive.
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list`
    shows ~30 leftover per-iter worktrees. A future lap could
    `git worktree prune` / remove merged ones.
+
+## iter-306 — token-reveal-lag consistency sentinel (sustained text/audio desync)
+
+- **Date:** 2026-06-20
+- **Branch:** iter-306-token-lag-consistency (ff-merged to main)
+- **Commit:** 2c9bee8
+
+**Why.** The `--target` composition space is feature-complete on BOTH
+the VAD grid and sweep (iter-273–304), so the next genuine increment is
+the other long-running feature family: the session-summary
+diversity-check pattern (GENO.md). iter-071's `mean_token_reveal_lag`
+already has a per-turn yellow flag (|mean| > 100ms) and a session MEDIAN
++ worst peak, but a median COLLAPSES SIGN (a +200ms-then-(-200ms) swing
+reads near-zero yet is badly desynced) and a single worst peak reads
+nothing like a SUSTAINED run. Five lagging turns BACK TO BACK means the
+subtitles are reliably late for a whole stretch of the conversation —
+the actionable conversational-quality signal the per-turn flag exists to
+protect; five scattered across a session is noise. Distinct from the
+iter-071 median: that answers "what's the typical desync"; this answers
+"did one DIRECTION of desync persist".
+
+**What's novel.** This is the EIGHTEENTH instance of the diversity-check
+pattern, the FIFTEENTH on a continuous metric, and the THIRD
+two-sided-band sentinel after iter-210 (bot-wpm) and iter-305 (ttc) —
+but the FIRST whose band straddles ZERO on a legitimately SIGNED metric.
+iter-210 (WPM) and iter-305 (a cross-turn gap) both live on positive-only
+domains with the sweet spot a POSITIVE middle; here the metric is signed
+and the band is centered on zero, so the two flagged extremes are
+OPPOSITE SIGNS, not merely opposite ends of a positive range:
+- `lagging` (lag > +100ms) — the printed text falls BEHIND the audio;
+  subtitles arrive late, the UX feels broken. The reveal needs to fire
+  SOONER.
+- `spoiling` (lag < -100ms) — the printed text LEADS the audio; the
+  on-screen words spoil what the bot is about to say. The reveal needs
+  to fire LATER.
+
+Because the two ends need OPPOSITE reveal-scheduling corrections, the
+per-value suggestion branch is load-bearing. The signed band also forces
+a DIFFERENT `0.0` handling from every prior bucketer: `0.0` here is the
+"uncaptured" marker (the play_fn supplied no lag stats), NOT a
+non-positive sentinel — a real measured lag of exactly 0.0 is
+indistinguishable and treated as uninstrumented, matching the `!= 0`
+collection filter the session summary already uses for this metric
+(`token_lag_means`). So `0.0` returns `""` and is dropped rather than
+counted as a perfectly-synced turn.
+
+**What it is.** A two-sided-band sentinel:
+- `synced`   — |lag| ≤ 100ms: text and audio track closely enough that
+  the desync is imperceptible; the desired state (the band straddles
+  zero, so small lag of EITHER sign is fine).
+- `lagging`  — lag > +100ms: subtitles late.
+- `spoiling` — lag < -100ms: subtitles spoil the bot.
+
+The run scan keeps the two flagged buckets distinct — a lagging run and a
+spoiling run never merge — so 3 lagging + 3 spoiling yields a longest run
+of 3, below threshold, even though 6 turns total were "outside the band".
+
+**What changed.**
+- **`examples/_chat_metrics.py`** — added `_token_reveal_lag_bucket`
+  (synced/lagging/spoiling, returns `""` for the uncaptured exact-0.0
+  marker) and `_emit_token_reveal_lag_consistency_line` (threshold 5,
+  filters `""` + `synced` before the run scan, per-value suggestions +
+  defensive `else`, `iter-071 mean_token_reveal_lag` attribution). Wired
+  the call into `print_session_summary` right after the iter-305 TTC
+  line, reusing the iter-116 `_longest_consecutive_run` primitive
+  unchanged.
+- **`tests/unit/test_emit_token_reveal_lag_consistency_line.py` (+22
+  tests)** — the full pattern matrix: bucket boundaries incl. SIGNED
+  float edges (±0.0999→synced, ±0.1→synced, +0.1001→lagging,
+  -0.1001→spoiling) and the band straddling zero, the
+  0.0-is-uncaptured semantics through the consumer (an uncaptured 0.0
+  between spoiling turns doesn't break the run), empty/all-zero
+  suppression, synced-run never fires, at/above/below threshold per
+  value, synced interleaving doesn't break a run, the two-sided-band
+  invariant (lagging+spoiling don't merge; a spoiling turn breaks a
+  lagging run), longest-of-two wins, custom threshold (3 catches, 10
+  suppresses), output formatting (4-space indent) + iter-071
+  attribution, 1000-element scaling.
+
+No production behavior changed for existing metrics — the new line is
+purely additive.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **3950 passed**
+(3928 prior + 22 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_emit_token_reveal_lag_consistency_line.py`
+  → **22 passed**.
+- Integration: not re-run this lap (no corpus symlinked into this worktree;
+  same as prior corpus-gated laps — the change is a pure session-summary
+  helper with unit-level coverage, no audio I/O).
+
+**Next planned items:**
+1. **[chat-metrics] Two-sided-band sentinel family — strongest candidates
+   now exhausted.** TTC (iter-305) and token-reveal-lag (this lap) were the
+   two genuine MIDDLE-sweet-spot metrics flagged in the iter-305 plan.
+   `user_wpm` (iter-064) has no "correct" rate (humans vary widely) so it
+   is likely NOT a good band fit. The band family may be complete; the
+   remaining sentinel work is one-sided.
+2. **[chat-metrics] One-sided continuous metrics still uncovered:**
+   `speaker_open_seconds` (iter-061, yellow >50ms), `llm_cancel_to_close`
+   (iter-060, >500ms), `mic_stale_frames` (iter-037, echo signal),
+   `max_queue_depth` (iter-062, worker backed up — the inverse of the
+   iter-226 worker-idle-gap sentinel). Each is a clean clone of the
+   iter-140/141/208/209 monotonic template.
+3. **[cli] Grid + sweep cross-surface `--target` matrices — BOTH COMPLETE**
+   (iter-273–304). A next CLI feature would be a different axis (e.g.
+   asymmetric band tolerance, or a soft floor/ceiling beyond an open edge)
+   — scope before building.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list`
+   shows leftover per-iter worktrees. A future lap could
+   `git worktree prune` / remove merged ones.
