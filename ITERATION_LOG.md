@@ -28769,3 +28769,78 @@ purely additive.
    shows ~29 leftover per-iter worktrees (iter-001…iter-028, iter-232).
    A future lap could `git worktree prune` / remove the merged ones to
    keep the worktree list legible.
+
+## iter-313 — gv vad-diff --csv (spreadsheet/plot twin completing the format trio)
+
+- **Date:** 2026-06-20
+- **Branch:** iter-313-vad-diff-csv (ff-merged to main, worktree removed)
+- **Commit:** cb623e2
+
+**Why.** `gv vad-sweep` (iter-237) and `gv vad-grid` (iter-251) each
+carry the full human / `--json` / `--csv` format trio, but `gv vad-diff`
+— the simplest of the three VAD-analysis surfaces — only had human +
+`--json`. An operator tuning the P(speech) gate against the recording
+corpus could already pipe a spreadsheet/plot-friendly table out of
+`vad-sweep --csv`, but not out of the common two-threshold A/B
+comparison that `vad-diff` exists to serve. This lap closes that gap so
+the three surfaces are consistent and a CSV consumer never has to switch
+modes or add a JSON-parsing step for the A/B case.
+
+**What it is.** A diff IS the two-point degenerate of a threshold sweep,
+so `render_vad_diff_csv` deliberately emits the SAME flat
+`threshold,num_segments,speech_s` schema as `render_vad_sweep_csv` —
+one row for threshold A, one for threshold B. The consequence (and the
+design intent): a `vad-diff --csv` and a two-value `vad-sweep --csv`
+over the same pair produce **byte-identical tables**, so a consumer can
+`pandas.concat` diffs and sweeps without reconciling columns. The signed
+deltas the human/JSON twins surface are trivially b-minus-a derivable
+from the two rows, so they are intentionally left OUT rather than
+duplicated into an awkward wide row. A `None` result (segmenter
+unavailable) yields the shared `# silero VAD unavailable: ...` comment
+line, matching `render_vad_sweep_csv`, so a degraded run is
+self-describing rather than silently empty.
+
+**What changed.**
+- **`examples/gv.py`** — new pure `render_vad_diff_csv` (stdlib `csv`
+  writer, RFC-4180 quoting, trailing `\r\n` stripped). Wired `--csv`
+  into `cmd_vad_diff` (both the unavailable and available branches,
+  `elif as_csv:` after the existing `--json` branch). Added the `--csv`
+  flag to the `vad-diff` parser inside a NEW mutually-exclusive group
+  with `--json`, mirroring the `vad_sweep_fmt` group exactly.
+- **`tests/unit/test_gv_vad.py` (+10 tests)** — render-level: unavailable
+  (both-None and one-None → comment), header + two rows, no trailing
+  newline, and the **byte-identical-to-two-value-sweep** invariant;
+  handler-level: unavailable-csv branch, csv-branch segmentation
+  (A first then B, correct counts); parser-level: `csv` defaults False,
+  `--csv` sets the flag, `--json --csv` raises `SystemExit` (mutual
+  exclusion). Extended `_diff_args` with `csv=False`.
+
+No existing behavior changed — the CSV path is purely additive; the
+human and `--json` outputs are untouched.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4086 passed**
+(4076 prior + 10 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_gv_vad.py` → **674 passed**.
+- Integration: not re-run this lap (no corpus symlinked into this
+  worktree; same as prior corpus-gated laps — the change is a pure
+  renderer + parser/handler wiring with unit-level coverage, no torch
+  import and no audio I/O).
+
+**Next planned items:**
+1. **[cli] Format-trio parity — NOW COMPLETE across vad-diff / vad-sweep
+   / vad-grid.** All three VAD-analysis surfaces carry human / `--json` /
+   `--csv`. A next CLI increment would be a different axis: e.g. a
+   `--csv` for the `simulate-mirror`/`calibrate-base-wpm` surfaces if
+   they lack one, OR a derived-view feature on vad-diff (it has no
+   `--target`/`--top` pick block — but a 2-point diff has nothing to
+   rank, so that is likely NOT a good fit).
+2. **[chat-metrics] Continuous-clone + two-sided-band sentinel families —
+   both declared complete (iter-311/312, iter-306).** A NEW per-turn
+   metric not yet emitted would be needed to extend either; none obvious.
+3. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+4. **[housekeeping] Stale worktrees accumulating** — `git worktree list`
+   shows ~29 leftover per-iter worktrees (iter-001…iter-028, iter-232).
+   A future lap could `git worktree prune` / remove the merged ones to
+   keep the worktree list legible.
