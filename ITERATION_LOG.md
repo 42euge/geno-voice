@@ -29553,3 +29553,83 @@ No code or CLI changed — a new test + one doc bullet only.
    ~30 leftover per-iter worktrees. A future lap could `git worktree prune` /
    remove the merged ones to keep the list legible. NOTE: this lap correctly
    removed its own worktree.
+
+## iter-322 — existence-check drift sentinel for organic-turn-taking research doc
+
+- **Date:** 2026-06-20
+- **Branch:** iter-322-organic-doc-sentinel (ff-merged to main, worktree removed)
+- **Commit:** 62e19ce
+
+**Why.** iter-320 and iter-321 each gave a CLI-bearing research doc a
+command-parse **drift sentinel** — `tts-pacing-mirror.md` and
+`voice-capture-tuning.md` now extract their `gv` examples and parse each through
+the real `build_parser`, so a renamed/removed flag turns red instead of rotting
+silently. iter-321's next-item flagged the third and largest research doc,
+`docs/research/organic-turn-taking.md` (~1860 lines), as the open question: it
+is design/narrative (SOTA landscape, pipeline map, prioritized backlog, per-lap
+findings log) and shows essentially **no** runnable `gv` examples, so a
+command-parse guard would be vacuous there. The right guard is the *lighter
+existence-check* shape iter-321 explicitly anticipated ("its drift risk is
+structural — named modules/functions — and warrants a lighter existence-check
+sentinel instead").
+
+**What it is.**
+- **`tests/unit/test_organic_turn_taking_doc.py`** (new, +8 tests) — the
+  structural drift sentinel. Across ~30 organic laps (iters 148→180) the
+  findings log accreted dense references to the modules, test files, and
+  entrypoints each lap shipped (`session/backchannel.py`,
+  `examples/_chat_loop.py`, `tests/unit/test_utterance_buffer.py`, …). Those
+  references rot silently when a file is renamed: the doc still reads fine, but
+  a reader clicking through hits a dead path. The test **extracts every
+  path-qualified `dir/.../file.py` reference** (the unambiguous repo-path form,
+  as opposed to a bare basename in prose — keyed on a `(?:dir/)+file.py` regex)
+  and asserts each one still exists relative to the repo root. **47** references
+  resolve today.
+  - `test_all_documented_py_paths_exist` — the core sentinel: every documented
+    `dir/file.py` exists. A renamed/removed module turns this red.
+  - `test_referenced_session_modules_are_real` /
+    `test_referenced_test_files_are_real` — focused subsets pinning the
+    `session/*.py` organic-stack spine and the cited guarding test files, so
+    those keep firing even if the broad check were ever loosened.
+  - `test_doc_has_py_path_references` (>= 30 floor) — keeps the extraction
+    regex from silently matching nothing and making the existence checks
+    vacuously pass.
+  - structural anchors: `## Organic-voice backlog` + `## Findings log` headings
+    present, mkdocs nav entry present, both half-duplex entrypoints
+    (`examples/mic_talk.py`, `pipecat_server.py`) named.
+- **`docs/research/organic-turn-taking.md`** — a blockquote note in the
+  living-document header names the sentinel test (so an operator editing the
+  findings log knows the guard exists) and cross-references the iter-320/321
+  command-parse sentinels it complements. Distinguishes *structural* drift
+  (this doc) from *syntactic* drift (the CLI docs).
+
+Verified it catches drift: renaming a documented `session/backchannel.py`
+reference turned 2 of 8 red; restoring returned all 8 green. No code or CLI
+changed — a new test + one doc note only; every existing surface is untouched.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4209 passed**
+(4201 prior + 8 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_organic_turn_taking_doc.py` → **8 passed**
+  (re-run on main post-merge).
+- Integration: not re-run this lap (a pure regex/filesystem test over the doc —
+  no torch import, no audio I/O).
+
+**Next planned items:**
+1. **[docs] All three research docs now carry a drift sentinel** — the two
+   CLI-bearing docs (`tts-pacing-mirror.md`, `voice-capture-tuning.md`) a
+   command-parse guard, and the design/narrative doc (`organic-turn-taking.md`)
+   a path-existence guard. The docs surface is now well-guarded; a future docs
+   lap would need a NEW doc or a fundamentally new drift class (e.g. checking
+   that named *functions/classes* — not just files — still exist, via an AST
+   import probe) to extend this. Scope whether function-level checks are worth
+   the import-cost/brittleness before building.
+2. **[chat-metrics] Continuous-clone + two-sided-band sentinel families — both
+   declared complete (iter-311/312, iter-306).** A NEW per-turn metric not yet
+   emitted would be needed to extend either; none obvious.
+3. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+4. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~30 leftover per-iter worktrees. A future lap could `git worktree prune` /
+   remove the merged ones to keep the list legible. NOTE: this lap correctly
+   removed its own worktree.
