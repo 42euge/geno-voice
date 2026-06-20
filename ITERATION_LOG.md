@@ -30273,3 +30273,111 @@ tests or production code). Run in the feature worktree before ff-merge.
 4. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-330 — gv vad-gap-sweep: how the silence gaps move as a knob sweeps
+
+- **Date:** 2026-06-20
+- **Branch:** iter-330-vad-gaps-sweep (ff-merged to main, worktree removed)
+- **Commit:** cb2ea04
+
+**Why.** iter-329's next-item #1 — the still-open half of iter-328's next-item
+— asked for the sweep/grid companion to `gv vad-gaps`: "the min-gap floor is
+itself a function of the segmenter knobs (a stricter `--threshold` or a longer
+`--min-silence-ms` changes which pauses survive), so a `gv vad-gaps --sweep`
+over those knobs — tabulating how the SHORTEST gap moves as the gate tightens —
+would let an operator find the knob setting that maximises the merge headroom."
+iter-328 shipped the single-setting `gv vad-gaps` surface and iter-329 pinned it
+against the real corpus; this lap ships the sweep. (Shipped as its own
+subcommand `vad-gap-sweep` rather than a `--sweep` flag on `vad-gaps`, matching
+the family convention that the sweep is always its own subcommand — `vad-sweep`
+is separate from `vad`, never a `vad --sweep` flag.)
+
+**What it is.** `gv vad-gap-sweep recording.wav` — the gap-side analogue of `gv
+vad-sweep`. Where `vad-sweep` tabulates segment-count / speech-seconds across a
+swept knob, `vad-gap-sweep` tabulates the inter-segment SILENCE-gap distribution
+(min/mean/max gap, gap count, total silence) so an operator can watch the
+shortest-pause floor MOVE as the knob tightens. That floor is the actionable
+number: the value that lifts the min gap clear of a target end-of-turn hangover
+(`--min-silence-ms` / the live `chat.vad.silence_duration`, iter-020) is the one
+that buys merge headroom — a stricter `--threshold`/longer `--min-silence-ms`
+gates out marginal speech, so adjacent regions merge and the shortest surviving
+pause lengthens.
+
+Follows the proven `gv vad*` family shape so it can never drift from the
+conventions:
+- **`examples/gv.py`** — one pure core + three renderers + one handler, wired
+  into `DEFAULT_HANDLERS` and `build_parser`:
+  - `vad_gap_sweep(values, results, *, axis)` — the pure core, the gap-side
+    twin of `vad_segmentation_sweep`. For each swept value it runs the iter-328
+    `vad_silence_gaps` over that value's segmentation and records `num_gaps` +
+    the min/mean/max/total aggregates (`None` for a <2-segment row, exactly as
+    `vad_silence_gaps` returns them — distinct from a `0.0` gap). The row's
+    swept-axis key IS `axis`. Reads only the `SileroResult` shape, so it is
+    testable with lightweight stand-ins — no torch import. Raises `ValueError`
+    on a values/results length mismatch.
+  - `render_vad_gap_sweep` / `_json` / `_csv` — the full human / `--json` /
+    `--csv` trio. The human table prints `-` in the gap columns for a
+    <2-segment row, JSON sets the aggregates to `null`, the CSV emits empty
+    cells — each the medium-appropriate spelling of "no pause", never a fake
+    `0.000`. All three degrade to the shared install hint / `{"available":
+    false}` / `# ...` comment when `silero-vad` is absent.
+  - `cmd_vad_gap_sweep` — handler with the same injected
+    `segmenter`/`availability`/`log` seams as `cmd_vad_sweep`, so it is tested
+    without torch. Reuses the iter-256 five-axis sweep mutex (`--thresholds`
+    default / `--min-silences` / `--min-speeches` / `--speech-pads` /
+    `--max-speeches`, the gate held at scalar `--threshold`). DELIBERATELY no
+    `--target`/`--top`/`--tie-break` pick block: the pick machinery scores on
+    segment count, which the gap surface does not headline (its signal is the
+    gap distribution, not a segment-count target).
+- **Docs:** the module-docstring usage block and `docs/research/
+  voice-capture-tuning.md` gain a `gv vad-gap-sweep` section (placed right after
+  the `gv vad-gaps` section).
+- **`tests/unit/test_gv_vad_gap_sweep.py`** (new, +34 tests): parser
+  registration / defaults-mirror-vad / axis-mutex / json-csv-mutex /
+  no-target-args; the pure core (basic two-value sweep, axis key follows arg,
+  aggregates match an independent `vad_silence_gaps`, shortest-pause min,
+  length-mismatch raises, empty); the three renderers (human header/rows +
+  single-segment dashes + axis label + unavailable; JSON shape + single-segment
+  nulls + axis name + unavailable; CSV rows + single-segment empty cells + axis
+  header + unavailable); the handler (human/json/csv paths, the `--min-silences`
+  & `--max-speeches` axis switches, threshold-axis holds-other-knobs-fixed, all
+  three unavailable paths, result-name-not-raw-path).
+- **`tests/unit/test_gv_cli.py`** + **`tests/unit/test_voice_capture_tuning_doc.py`**:
+  the exact-handler-map assertion gains the new `vad-gap-sweep` entry, and the
+  doc-consistency `VAD_SUBCOMMANDS` allowlist gains `vad-gap-sweep` so its four
+  sentinels (names-all-subcommands / appears-in-examples / routes-to-known /
+  all-parse) now COVER the new surface.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4375 passed**
+(4341 prior + 34 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_gv_vad_gap_sweep.py` → **34 passed**;
+  `pytest tests/unit/test_voice_capture_tuning_doc.py tests/unit/test_gv_cli.py`
+  → all green.
+- Integration: not re-run this lap (pure parsing + list-scanning + string
+  formatting; no torch import, no audio I/O — the handler is exercised with an
+  injected stub segmenter).
+
+**Next planned items:**
+1. **[gv CLI] An integration test for `gv vad-gap-sweep` over the real corpus.**
+   This lap shipped the surface with full UNIT coverage but drives only an
+   injected stub segmenter. The analogue of `test_gv_vad_gaps_cli.py`
+   (iter-329): run `gv vad-gap-sweep` with the real Silero engine over the
+   `fixtures/` recordings and pin the anchoring property — each swept row's
+   gap aggregates must equal an independent `gv vad-gaps --json` at the same
+   knobs, AND the segment-count monotonicity twin (a stricter gate never grows
+   the gap count). Also worth pinning: the min-gap-grows-as-the-gate-tightens
+   intuition the human-report prose claims, on real recordings.
+2. **[gv CLI] vad-gap-grid — the 2-D analogue.** `vad-grid` is to `vad-sweep`
+   what a future `vad-gap-grid` would be to `vad-gap-sweep`: tabulate the
+   min-gap floor across gate × hangover at once. Lower priority than the
+   integration test (the 1-D sweep already answers the headroom question for
+   one knob at a time).
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
