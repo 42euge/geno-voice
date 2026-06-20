@@ -3969,6 +3969,151 @@ def _emit_queue_depth_consistency_line(
     )
 
 
+def _cancel_close_bucket(seconds: float) -> str:
+    """iter-308: bucket a per-turn ``llm_cancel_to_close`` (iter-060's
+    barge-teardown latency — the gap from the barge trigger firing to
+    the LLM HTTP stream actually closing) into a coarse category. Used
+    by ``_emit_cancel_close_consistency_line`` to detect runs where
+    tearing down the LLM stream on barge-in was repeatedly slow. Metric
+    1.6 in the perf-metrics taxonomy.
+
+    This matters because barge-in only feels instantaneous if the OLD
+    stream dies promptly. If cancel-to-close is sustained-slow, the
+    bot's previous reply keeps generating server-side (burning tokens
+    and, on some backends, blocking the next request) well after the
+    user has interrupted — the interruption "lands" but the pipeline is
+    still cleaning up behind it. iter-060's own guidance is that >500ms
+    means "the HTTP socket is hanging," so the boundaries hang off that.
+
+    A continuous-metric instance like
+    iter-128/140/141/142/143/208/209/224/225/226/307 — buckets a float
+    duration into a coarse category before the run scan. Like
+    iter-140/141/208/209/224/226/307 — and UNLIKE the inverted
+    iter-142/143/225 — ``llm_cancel_to_close`` is "smaller is better":
+    the fine state is a LOW value (the socket closed promptly), so the
+    boundaries are NOT inverted; the problematic end is a LARGE latency.
+
+    Buckets (boundaries aligned with iter-060's per-turn display, which
+    skips ≤0, dims ≤500ms, and colors >500ms yellow — the
+    operator-visible "the HTTP socket is hanging" threshold):
+
+        ``prompt``   — ≤ 0.50s: the stream closed promptly after the
+            barge trigger; teardown is not in the way. The desired
+            state.
+        ``slow``     — 0.50-1.0s: teardown is noticeably laggy; the old
+            reply kept generating for up to a second past the
+            interruption.
+        ``hung``     — > 1.0s: the socket is effectively hanging; the
+            old stream runs on for over a second after the user barged
+            in, wasting tokens and delaying cleanup.
+
+    Returns ``""`` when ``seconds`` is non-positive (a turn with no
+    measured barge teardown — the common no-barge turn, where
+    ``llm_cancel_to_close`` stays at its 0.0 default) — empty-string
+    filter applies in the consumer, mirroring
+    iter-114/115/120/126/128/140/141/142/143/208/209/224/225/226/307.
+    This matches the ``> 0`` collection filter the session summary
+    already uses for ``cancel_close_lats`` (iter-060), so a turn that
+    never barged is never counted as a "prompt" teardown.
+    """
+    if seconds <= 0:
+        return ""
+    if seconds <= 0.50:
+        return "prompt"
+    if seconds <= 1.0:
+        return "slow"
+    return "hung"
+
+
+def _emit_cancel_close_consistency_line(
+    emit, cancel_close_list: list[float], threshold: int = 4,
+) -> None:
+    """iter-308: detect consecutive runs of barge turns where tearing
+    down the LLM HTTP stream after the barge trigger was repeatedly slow
+    (iter-060 ``llm_cancel_to_close``). TWENTIETH instance of the
+    diversity-check pattern after iter-114 (filler), iter-115/126
+    (naturalness), iter-120 (barge-phase), iter-128 (sentence-length),
+    iter-140 (stt-rtf), iter-141 (tts-rtf), iter-142 (llm-tps), iter-143
+    (streaming-overlap), iter-208 (synth-dispatch), iter-209
+    (eot-overhead), iter-210 (bot-wpm), iter-211 (max-token-gap),
+    iter-212 (ttfs), iter-224 (stt-preview-divergence), iter-225
+    (sentence-split-coverage), iter-226 (worker-idle-gap), iter-305
+    (ttc), iter-306 (token-reveal-lag), iter-307 (synth-backlog).
+    SEVENTEENTH instance applied to a CONTINUOUS metric — buckets the
+    per-turn ``llm_cancel_to_close`` via ``_cancel_close_bucket`` before
+    running the scan.
+
+    iter-060 added the per-turn cancel-to-close figure (dim ≤500ms,
+    yellow >500ms) and the session summary prints the MEDIAN across
+    barge turns, but a median washes out a sustained-slow stretch behind
+    a few prompt teardowns. A SUSTAINED run in the slow/hung bucket is
+    the actionable signal that barge-in teardown is reliably laggy — the
+    old reply keeps generating server-side past every interruption,
+    burning tokens and (on some backends) blocking the next request.
+    Barge-in only *feels* instantaneous if the old stream dies promptly;
+    this is the sentinel for when it doesn't.
+
+    Filter rule: drop the ``"prompt"`` bucket before the scan (the fine
+    state — the socket closed promptly) and ``""`` (non-barge turns with
+    no measured teardown). Only ``slow`` and ``hung`` warrant warning.
+    Like iter-140/141/208/209/224/226/307 and UNLIKE iter-142/143/225,
+    the fine bucket is a LOW value because teardown latency is
+    smaller-is-better — the boundaries are NOT inverted.
+
+    Threshold = 4 (NOT the usual 5): cancel-to-close is only measured on
+    BARGE turns, which are rarer than ordinary turns, so a run of 4
+    consecutive slow teardowns is already a strong signal that something
+    is structurally wrong with stream cancellation (vs natural
+    per-turn jitter). This mirrors iter-120's barge-phase threshold of 4
+    for the same reason — barge-gated events are semantically loaded and
+    rarer, so they earn a lower bar than the threshold-5 general signals.
+
+    Output:
+
+        LLM cancel teardown: 4 consecutive 'hung' barge turns — the LLM
+                          stream hangs >1s after each interruption,
+                          wasting tokens and delaying cleanup; check the
+                          backend's stream-cancel path
+                          (iter-060 llm_cancel_to_close)
+    """
+    # Bucketize, then drop the "uninteresting" buckets (empty, prompt).
+    interesting = {"slow", "hung"}
+    filtered = [
+        b for b in (
+            _cancel_close_bucket(s) for s in cancel_close_list
+        )
+        if b in interesting
+    ]
+    if not filtered:
+        return
+
+    longest_run, longest_bucket = _longest_consecutive_run(filtered)
+    if longest_run < threshold:
+        return
+
+    if longest_bucket == "hung":
+        suggestion = (
+            "the LLM stream hangs >1s after each interruption, wasting "
+            "tokens and delaying cleanup; check the backend's "
+            "stream-cancel path"
+        )
+    elif longest_bucket == "slow":
+        suggestion = (
+            "tearing down the LLM stream after each barge takes up to a "
+            "second; the old reply keeps generating past the "
+            "interruption — check the backend's stream-cancel path"
+        )
+    else:
+        # Defensive: future buckets that pass the filter rule.
+        suggestion = "investigate the recurring slow LLM stream teardown"
+
+    emit(
+        f"    LLM cancel teardown: {longest_run} consecutive "
+        f"{longest_bucket!r} barge turns — {suggestion} "
+        f"(iter-060 llm_cancel_to_close)"
+    )
+
+
 def _emit_bargeable_line(emit, bargeable_values: list[float]) -> None:
     """iter-104: extracted from print_session_summary's iter-074
     bargeable line. Reports the WORST bargeable fraction across
@@ -4832,6 +4977,21 @@ def print_session_summary(
     _emit_queue_depth_consistency_line(
         _emit,
         [m.max_queue_depth for m in metrics_list],
+    )
+    # iter-308: barge-teardown consistency check. Only fires when 4+
+    # consecutive BARGE turns the LLM HTTP stream was slow to close after
+    # the barge trigger (slow 0.5-1.0s / hung >1.0s — iter-060's
+    # ">500ms = socket hanging" boundary). iter-060 added the per-turn
+    # cancel-to-close figure and the summary prints the MEDIAN across
+    # barge turns, but a median washes out a sustained-slow stretch
+    # behind a few prompt teardowns. A sustained run is the actionable
+    # signal that the old reply keeps generating server-side past every
+    # interruption — barge-in only feels instantaneous if the old stream
+    # dies promptly. Threshold 4 (not 5): cancel-to-close is barge-gated
+    # and so rarer per session, like the iter-120 barge-phase sentinel.
+    _emit_cancel_close_consistency_line(
+        _emit,
+        [m.llm_cancel_to_close for m in metrics_list],
     )
     # iter-090: barge block extracted to _emit_barge_block helper.
     # ~76 lines of co-emitted lines (count, interruption rate,
