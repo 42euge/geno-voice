@@ -8,6 +8,16 @@
 > Bootstrapped iter-148 (2026-06-16). See the [backlog](#organic-voice-backlog)
 > at the bottom; the top items are mirrored into `ITERATION_LOG.md` "next
 > directions" so subsequent laps continue this track by default.
+>
+> **Drift sentinel (iter-322).** Because this is a design/narrative doc (no
+> runnable `gv` examples, unlike the command-parse sentinels guarding
+> `tts-pacing-mirror.md` (iter-320) and `voice-capture-tuning.md` (iter-321)),
+> its drift risk is *structural*: the findings log cites the module and test
+> file each lap shipped, and those references rot silently when a file is
+> renamed. `tests/unit/test_organic_turn_taking_doc.py` extracts every
+> path-qualified `dir/.../file.py` reference here and asserts each still exists,
+> so a renamed/removed module turns the suite red instead of leaving a dead
+> citation.
 
 ## Why this track
 
