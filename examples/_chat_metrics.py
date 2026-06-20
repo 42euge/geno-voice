@@ -3827,6 +3827,148 @@ def _emit_token_reveal_lag_consistency_line(
     )
 
 
+def _queue_depth_bucket(depth: int) -> str:
+    """iter-307: bucket a per-turn ``max_queue_depth`` (iter-062's peak
+    SentenceWorker queue depth observed during the turn — the number of
+    synth jobs waiting behind the one in flight) into a coarse category.
+    Used by ``_emit_queue_depth_consistency_line`` to detect runs of
+    turns where the synth pipeline repeatedly backed up because the LLM
+    produced sentences faster than synth could drain them. Metric 2.7 in
+    the perf-metrics taxonomy.
+
+    A continuous-metric instance like
+    iter-128/140/141/142/143/208/224/225/226 — though the source is an
+    INTEGER count, the bucketer treats it the same way (coarse category
+    before the run scan). Like iter-140/141/208/224/226 — and UNLIKE
+    iter-142/143/225 — ``max_queue_depth`` is "smaller is better": the
+    fine state is a LOW value (1 = each sentence drained before the next
+    arrived), so the boundaries are NOT inverted; the problematic end is
+    a LARGE backlog.
+
+    This is the EXACT INVERSE of iter-226's ``worker_idle_gap_total``
+    sentinel: that watches the worker STARVE (LLM too slow, synth sits
+    idle); this watches the worker get SWAMPED (LLM too fast, synth
+    falls behind). A turn shows one or the other, never both — they are
+    the two failure modes the iter-008 streaming-overlap design sits
+    between.
+
+    Buckets (boundaries aligned with iter-062's per-turn display, which
+    skips depth ≤ 1, dims depth 2, and colors depth ≥ 3 yellow — the
+    operator-visible "synth is the bottleneck" threshold):
+
+        ``smooth``   — depth ≤ 1: each sentence drained before the next
+            arrived; producer/consumer kept pace. The desired state.
+        ``backlog``  — depth == 2: one sentence waited behind the one in
+            flight — a mild, transient backlog the bot catches up on.
+        ``swamped``  — depth ≥ 3: synth fell behind by three or more
+            sentences; mid-turn latency accumulates visibly and
+            streaming overlap can no longer mask it. Synth is the
+            bottleneck.
+
+    Returns ``""`` when ``depth`` is non-positive (the metric wasn't
+    captured — a turn with no synth jobs, e.g. an empty or error reply)
+    — empty-string filter applies in the consumer, mirroring
+    iter-114/115/120/126/128/140/141/142/143/208/224/225/226. A captured
+    healthy turn reports depth 1, which buckets to ``smooth`` and is
+    filtered as the fine state; only depth 0 (uncaptured) returns ``""``.
+    """
+    if depth <= 0:
+        return ""
+    if depth <= 1:
+        return "smooth"
+    if depth == 2:
+        return "backlog"
+    return "swamped"
+
+
+def _emit_queue_depth_consistency_line(
+    emit, depth_list: list[int], threshold: int = 5,
+) -> None:
+    """iter-307: detect consecutive runs of turns where the
+    SentenceWorker queue repeatedly backed up because the LLM produced
+    sentences faster than synth could drain them (iter-062
+    ``max_queue_depth``). NINETEENTH instance of the diversity-check
+    pattern after iter-114 (filler), iter-115/126 (naturalness),
+    iter-120 (barge-phase), iter-128 (sentence-length), iter-140
+    (stt-rtf), iter-141 (tts-rtf), iter-142 (llm-tps), iter-143
+    (streaming-overlap), iter-208 (synth-dispatch), iter-209
+    (eot-overhead), iter-210 (bot-wpm), iter-211 (max-token-gap),
+    iter-212 (ttfs), iter-224 (stt-preview-divergence), iter-225
+    (sentence-split-coverage), iter-226 (worker-idle-gap), iter-305
+    (ttc), iter-306 (token-reveal-lag). SIXTEENTH instance applied to a
+    CONTINUOUS metric — buckets the per-turn ``max_queue_depth`` via
+    ``_queue_depth_bucket`` before running the scan.
+
+    This is the EXACT INVERSE of iter-226's worker-idle-gap sentinel.
+    iter-062 added the per-turn peak queue depth (dim at 2, yellow at
+    ≥3), but it's otherwise silent at the session level: each turn
+    colors its own inline figure, but a *sustained* high-depth run — the
+    LLM systematically outrunning synth, e.g. a fast model paired with a
+    slow TTS voice, or long multi-sentence replies — never surfaces in
+    the summary. A sustained run is the actionable signal that synth is
+    the pipeline bottleneck turn after turn, so mid-turn latency keeps
+    accumulating and the bot lags ever further behind its own text. The
+    iter-226 sentinel catches the OPPOSITE starvation (synth idle waiting
+    on the LLM); together they bracket both ways the iter-008
+    streaming-overlap balance can fail.
+
+    Filter rule: drop the ``"smooth"`` bucket before the scan (the fine
+    state — producer/consumer kept pace) and ``""`` (uncaptured turns —
+    depth 0). Only ``backlog`` and ``swamped`` warrant warning. Like
+    iter-140/141/208/224/226 and UNLIKE iter-142/143/225, the fine
+    bucket is a LOW value because queue depth is smaller-is-better — the
+    boundaries are NOT inverted.
+
+    Threshold = 5: same as iter-115/128/140/141/142/143/208/209/210/211/
+    212/224/225/226/305/306. Queue depth spikes turn to turn with how
+    many sentences a reply happens to contain; a single deep turn is
+    normal, a sustained run is the real signal that synth can't keep up.
+
+    Output:
+
+        Synth backlog:    5 consecutive 'swamped' turns — synth fell
+                          behind by three or more sentences; mid-turn
+                          latency accumulates, synth is the bottleneck
+                          (check TTS speed / voice)
+                          (iter-062 max_queue_depth)
+    """
+    # Bucketize, then drop the "uninteresting" buckets (empty, smooth).
+    interesting = {"backlog", "swamped"}
+    filtered = [
+        b for b in (
+            _queue_depth_bucket(d) for d in depth_list
+        )
+        if b in interesting
+    ]
+    if not filtered:
+        return
+
+    longest_run, longest_bucket = _longest_consecutive_run(filtered)
+    if longest_run < threshold:
+        return
+
+    if longest_bucket == "swamped":
+        suggestion = (
+            "synth fell behind by three or more sentences; mid-turn "
+            "latency accumulates, synth is the bottleneck "
+            "(check TTS speed / voice)"
+        )
+    elif longest_bucket == "backlog":
+        suggestion = (
+            "synth kept one sentence backed up turn after turn; the LLM "
+            "is mildly outrunning synth"
+        )
+    else:
+        # Defensive: future buckets that pass the filter rule.
+        suggestion = "investigate the recurring SentenceWorker backlog"
+
+    emit(
+        f"    Synth backlog:    {longest_run} consecutive "
+        f"{longest_bucket!r} turns — {suggestion} "
+        f"(iter-062 max_queue_depth)"
+    )
+
+
 def _emit_bargeable_line(emit, bargeable_values: list[float]) -> None:
     """iter-104: extracted from print_session_summary's iter-074
     bargeable line. Reports the WORST bargeable fraction across
@@ -4674,6 +4816,22 @@ def print_session_summary(
     _emit_token_reveal_lag_consistency_line(
         _emit,
         [m.mean_token_reveal_lag for m in metrics_list],
+    )
+    # iter-307: synth-backlog consistency check. Only fires when 5+
+    # consecutive turns the SentenceWorker queue backed up because the
+    # LLM produced sentences faster than synth could drain them
+    # (backlog == depth 2 / swamped >= depth 3). iter-062 added the
+    # per-turn peak queue depth (dim at 2, yellow at >=3), but a
+    # SUSTAINED high-depth run — the LLM systematically outrunning synth,
+    # e.g. a fast model with a slow TTS voice — never surfaces in the
+    # summary, yet synth is the pipeline bottleneck turn after turn and
+    # the bot lags ever further behind its own text. EXACT INVERSE of the
+    # iter-226 worker-idle-gap sentinel (synth starved waiting on the LLM
+    # vs synth swamped by the LLM); together they bracket both ways the
+    # iter-008 streaming-overlap balance can fail.
+    _emit_queue_depth_consistency_line(
+        _emit,
+        [m.max_queue_depth for m in metrics_list],
     )
     # iter-090: barge block extracted to _emit_barge_block helper.
     # ~76 lines of co-emitted lines (count, interruption rate,
