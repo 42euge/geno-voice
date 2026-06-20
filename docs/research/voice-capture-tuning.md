@@ -1244,6 +1244,40 @@ gv vad-sweep recording.wav --max-speeches 10,inf --target 3,8*2            # fac
 gv vad-grid  recording.wav --thresholds 0.3 --max-speeches 5,inf --target 3,8*2 --json
 ```
 
+### `gv vad-gap-grid` — the shortest pause across two knobs (iter-332)
+
+`gv vad-gap-sweep` watches the shortest-pause floor move across **one** knob;
+`gv vad-gap-grid` is its 2-D analogue — the gap-side twin of `gv vad-grid`. Where
+`vad-grid` tabulates segment-count / speech-seconds per cell of a gate × column
+grid, `vad-gap-grid` tabulates the **min/mean/max gap** per cell, so an operator
+can read where the shortest pause buys merge headroom in two dimensions at once
+instead of running N separate 1-D `vad-gap-sweep`s. The headline is the same
+actionable number as the sweep: the cell that lifts the min gap clear of a
+target end-of-turn hangover (`--min-silence-ms` / the live
+`chat.vad.silence_duration`) is the one that buys headroom against merging two
+genuine turns.
+
+```
+gv vad-gap-grid recording.wav                                       # gate × hangover (defaults)
+gv vad-gap-grid recording.wav --thresholds 0.3,0.5,0.7 --min-silences 400,800
+gv vad-gap-grid recording.wav --thresholds 0.5,0.7 --min-speeches 50,200,400  # gate × floor
+gv vad-gap-grid recording.wav --thresholds 0.5,0.7 --speech-pads 0,20,40,80   # gate × padding
+gv vad-gap-grid recording.wav --thresholds 0.5,0.7 --max-speeches 5,10,20,inf # gate × ceiling (seconds)
+gv vad-gap-grid recording.wav --json                                # machine-readable cells
+gv vad-gap-grid recording.wav --csv                                 # flat CSV for plots/pivots
+```
+
+It mirrors `gv vad-grid`'s axis layout exactly: rows are always the P(speech)
+gate (`--thresholds`); the column axis is the trailing-silence hangover
+(`--min-silences`, the default), the minimum-speech floor (`--min-speeches`), the
+region padding (`--speech-pads`), or the force-split ceiling (`--max-speeches`,
+in **seconds**) — mutually exclusive, the non-column knob held at its scalar. Like
+`vad-gap-sweep` (and unlike `vad-grid`) there is **no** `--target` pick block —
+the gap surface's signal is the distribution, not a segment-count target. A cell
+whose segmentation has fewer than 2 segments has no pause to summarise, so the
+human table prints `-` in its gap columns, the `--json` cell carries `null`
+aggregates, and the `--csv` row leaves those cells empty (never a fake `0.000`).
+
 ### Silero vs energy-VAD segment counts (the headless proof)
 
 Measured over the seed corpus with `min_silence_ms=800` (the pipecat
