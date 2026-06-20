@@ -27536,3 +27536,121 @@ row).
 6. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows ~30
    leftover per-iter worktrees that were never pruned. A future lap could
    `git worktree prune` / remove the merged ones to keep the list readable.
+
+## iter-302 — 1-D sweep CSV consumer re-derives JSON --target scaled pick (row-major default)
+
+- **Date:** 2026-06-20
+- **Branch:** iter-302-sweep-rowmajor-scaled (ff-merged to main)
+- **Commit:** 9d43055
+
+**Why.** iter-297 opened the sweep ROW-MAJOR dict-form cross-surface matrix with
+the flat SET (the sweep twin of iter-280's grid set-under-row-major test),
+iter-298 added the CLOSED BAND (twin of iter-275), iter-299 the OPEN band (twin
+of iter-273), iter-300 the `{"prefer": …}` PREFERENCE (twin of iter-276), and
+iter-301 the `{"weighted": …}` ADDITIVE-WEIGHTED set (twin of iter-277). iter-301
+backlog #1 named the next gap directly: the remaining dict forms still lack a
+sweep ROW-MAJOR cross-surface re-derive — only the speech matrix (iter-290–296)
+and the scalar/band SCALAR round-trips ever pinned them. The `{"scaled": …}`
+MULTIPLICATIVE set is next. The speech version (iter-295) forces
+`tie_break="speech"`, so it never exercises the DEFAULT branch of
+`render_vad_sweep_json` (the branch taken when no `tie_break=` kwarg is supplied —
+the normal CLI path). This lap pins the scaled set under the DEFAULT row-major
+tie-break, the sweep twin of iter-278's grid scaled-under-row-major test.
+
+**The gap this closes.** The scaled set is the MULTIPLICATIVE twin of iter-301's
+weighted set: like the weighted set its precedence lives in the DISTANCE itself,
+not the sort key. `grid_cell_distance` MULTIPLIES each element's raw distance by
+its factor and takes the MIN over those SCALED distances (iter-252), and
+`grid_cell_sort_key` inserts NO secondary key for a scaled set. So under the
+DEFAULT row-major tie-break the key is the SAME single-level `(distance,)` shape
+as the band/set/open-band/weighted twins (iter-298/297/299/301) — but the distance
+feeding it is the SCALED one, NOT the raw set distance. The COMPOSITION differs
+from iter-301 in a way no prior row-major sweep twin exercises: where the weighted
+set's `+penalty` taxes even an EXACT HIT (lifting a free `0` above a near-miss),
+the scaled set's `*factor` leaves an exact hit FREE (`0*factor == 0`) and only
+AMPLIFIES an existing NON-zero gap. So the fixture geometry inverts iter-301: there
+an exact hit was demoted below a near-miss floor; here the factor must demote a
+NEAR-MISS on a high-factor element below the near-miss floor on a low-factor one. A
+regression confined to the DEFAULT row-major path — one that flattened the
+`{"scaled": …}` dict to a plain set on the sweep JSON path (dropping the factor so
+the high-factor element's near-miss reverts to the same raw distance as the
+low-factor one and the row-major floor moves) while a CSV consumer still passed the
+factors, OR that quietly swapped the row-major fallback for a speech-ordered one on
+the JSON path only — would diverge the two surfaces yet ship green, because the
+iter-295 scaled test forces `"speech"` and the
+scalar/band/set/open-band/preference/weighted row-major round-trips never fold a
+`*factor` INTO the distance for the row-major floor to be MOVED by.
+
+**The mechanism.** A 4-value threshold sweep (0.3/0.5/0.7/0.9) with counts
+9/4/6/1, target = scaled set `{"scaled": [(5, 1), (8, 3)]}`. `_sweep_results`
+couples speech to count + index, so the in-floor rows carry DIFFERENT speech and
+the row-major / speech tie-breaks genuinely disagree. Scaled distances (MIN over
+`|Δ to element| * factor`): 0.30 count 9 → min(4,3)=3, speech 4.5; 0.50 count 4 →
+min(1,12)=1, speech 2.4; 0.70 count 6 → min(1,6)=1, speech 4.2; 0.90 count 1 →
+min(4,21)=4, speech 0.8. The `*3` factor on element 8 lifts count 9's one-off
+near-miss (raw 1) to 3, so it leaves the floor — the OPPOSITE direction from
+iter-301's penalty, which taxed an exact hit. TWO rows tie at the scaled floor
+distance 1 (counts 4 and 6, one off the `*1` element 5). The DEFAULT row-major
+tie-break keeps the EARLIEST tied row — count 4 (0.50) — despite count 6 (0.70)
+recovering more speech. So the row-major best is the 0.50 row count 4, and the
+top-3 is `[4, 6, 9]` (the two floor rows in sweep order, then the scaled count-9
+row).
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+1 test).**
+  `test_render_sweep_csv_consumer_rederives_json_scaled_target_rowmajor_pick`:
+  asserts `payload["target"] == {"scaled": [[5, 1], [8, 3]]}` and
+  `payload["tie_break"] == "row-major"` with NO `tie_break` kwarg passed
+  (exercising the DEFAULT branch); the CSV body carries no
+  `best`/`distance`/`tie_break`/`scaled`; a CSV consumer re-parses the bare table
+  back to sweep rows and re-runs the SAME pickers with the SAME scaled target and
+  the DEFAULT tie-break, recovering the JSON-embedded `best` (count 4) and the full
+  top-3 (counts `[4, 6, 9]`). TWO controls prove it cannot pass by accident:
+  `tie_break="speech"` flips the pick to count 6 (the most-speech floor row),
+  proving the default branch is load-bearing; a flat SET `[5, 8]` drops the factor
+  so count 9's near-miss joins the floor and — being earliest — wins the row-major
+  pick (and leads the bare-set top-3 `[9, 4, 6]`), proving the `*3` factor is
+  load-bearing. The top assertions pin all three rows as scaled-distance-then-
+  row-major (count 4 → 6 → 9, thresholds 0.50 → 0.70 → 0.30 — NOT speech order, and
+  NOT the bare-set row-major order `[9, 4, 6]`). No production code changed (the
+  sweep wiring was already correct — proved by the green focused run on the
+  unmodified path).
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **3904 passed**
+(3903 prior + 1 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_gv_vad.py -k scaled_target_rowmajor` → **1 passed**.
+- Integration: not re-run this lap (no corpus symlinked into this worktree; same as
+  prior corpus-gated laps — the change is a pure CLI cross-surface contract test, no
+  new production code).
+
+**Next planned items:**
+1. **[cli] Sweep ROW-MAJOR cross-surface matrix — close it.** iter-297 opened it
+   (flat SET); iter-298 the CLOSED BAND; iter-299 the OPEN band; iter-300 the
+   `{"prefer": …}` PREFERENCE; iter-301 the `{"weighted": …}` set; this lap the
+   `{"scaled": …}` set. The LAST form is `{"affine": …}` (grid twin iter-279,
+   sweep speech twin iter-296). A near-mechanical clone of this lap's test with the
+   matching `target` and NO `tie_break` kwarg — the fixture must make the row-major
+   earliest-tie rule genuinely DIFFER from speech (a `tie_break="speech"` control
+   flips the pick) AND keep BOTH the factor AND the offset load-bearing in the
+   distance (a flat-set control of the bare elements changes the pick, AND the affine
+   must differ from a pure-scaled and a pure-weighted control), so a default-branch
+   regression cannot ship green. After affine, the sweep row-major matrix mirrors
+   the grid iter-273–280 set in full.
+2. **[cli] `simulate-mirror` grid pick round-trips** remain unpinned cross-surface
+   for ALL dict forms (the VAD matrices covered VAD grid + sweep only).
+3. **[cli] A next FEATURE would be a different axis entirely** — the `--target`
+   composition space (scalar → band → set → preference → additive → multiplicative →
+   affine) is feature-complete. Candidates: a per-element ASYMMETRIC band tolerance,
+   or a "soft floor/ceiling" scoring beyond an open edge with a gentle slope rather
+   than a hard 0. Scope before building.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or the
+   pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it stays
+   operator-only / non-headless.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop should
+   track a curated subset, decide the policy and re-run `replay_silero.py --compare` +
+   `gv vad` to refresh the comparison table.
+6. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows ~30
+   leftover per-iter worktrees that were never pruned. A future lap could
+   `git worktree prune` / remove the merged ones to keep the list readable.
