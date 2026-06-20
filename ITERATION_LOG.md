@@ -28098,3 +28098,103 @@ purely additive.
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list`
    shows leftover per-iter worktrees. A future lap could
    `git worktree prune` / remove merged ones.
+
+## iter-307 — synth-backlog consistency sentinel (sustained queue depth)
+
+- **Date:** 2026-06-20
+- **Branch:** iter-307-queue-depth-consistency (ff-merged to main)
+- **Commit:** a2f1088
+
+**Why.** The `--target` composition space is feature-complete on BOTH
+the VAD grid and sweep (iter-273–304), so the next genuine increment
+stays in the other long-running feature family: the session-summary
+diversity-check pattern (GENO.md). The iter-306 plan named the
+strongest two-sided-band candidates exhausted and pointed at the
+remaining ONE-SIDED continuous metrics as clean clones of the
+iter-140/141/208/209/226 monotonic template. Of those, `max_queue_depth`
+(iter-062) was the most motivated: it is the EXACT INVERSE of iter-226's
+worker-idle-gap sentinel — that watches the SentenceWorker STARVE (LLM
+too slow, synth sits idle); this watches it get SWAMPED (LLM too fast,
+synth falls behind). Together they bracket both ways the iter-008
+streaming-overlap balance can fail. iter-062 already colors a turn's
+inline queue-depth figure (dim at 2, yellow at ≥3), but a SUSTAINED
+high-depth run — the LLM systematically outrunning synth, e.g. a fast
+model paired with a slow TTS voice or long multi-sentence replies — never
+surfaces in the summary, yet synth is the pipeline bottleneck turn after
+turn and the bot lags ever further behind its own text.
+
+**What's novel.** NINETEENTH instance of the diversity-check pattern and
+the SIXTEENTH on a continuous metric. The source is an INTEGER count (a
+peak queue depth) rather than a float duration/ratio — but the bucketer
+treats it the same way (coarse category before the run scan), so it is a
+clean monotonic clone of the iter-226 template with no structural change.
+Like iter-140/141/208/224/226 — and UNLIKE iter-142/143/225 — the metric
+is smaller-is-better (depth 1 = healthy), so the boundaries are NOT
+inverted; the problematic end is a LARGE backlog. Distinct value from the
+iter-226 sentinel: a turn shows starvation OR backlog, never both, so the
+two sentinels surface independent failure modes.
+
+**What it is.** A one-sided monotonic sentinel:
+- `smooth`  — depth ≤ 1: each sentence drained before the next arrived;
+  producer/consumer kept pace. The desired state (and iter-062's
+  skip-when-≤1 case). Filtered before the scan.
+- `backlog` — depth == 2: one sentence waited behind the one in flight —
+  a mild, transient backlog (iter-062's dim case).
+- `swamped` — depth ≥ 3: synth fell behind by three or more sentences;
+  mid-turn latency accumulates and streaming overlap can no longer mask
+  it (iter-062's yellow case).
+
+Depth 0 (the metric wasn't captured — a turn with no synth jobs) returns
+`""` and is filtered, matching iter-114/115/.../226. A captured healthy
+turn reports depth 1 → `smooth` → also filtered, so only depths ≥ 2 reach
+the run scan.
+
+**What changed.**
+- **`examples/_chat_metrics.py`** — added `_queue_depth_bucket`
+  (smooth/backlog/swamped, `""` for depth ≤ 0) and
+  `_emit_queue_depth_consistency_line` (threshold 5, filters `""` +
+  `smooth` before the run scan, per-value suggestions + defensive `else`,
+  `iter-062 max_queue_depth` attribution). Wired the call into
+  `print_session_summary` right after the iter-306 token-reveal-lag line,
+  reusing the iter-116 `_longest_consecutive_run` primitive unchanged.
+- **`tests/unit/test_emit_queue_depth_consistency_line.py` (+21 tests)** —
+  the full pattern matrix: bucket boundaries (0/negative uncaptured, 1
+  smooth, 2 backlog, ≥3 swamped), empty/all-zero suppression, smooth-run
+  never fires, at/above/below threshold per value, smooth AND
+  uncaptured-0 interleaving don't break a run, swamped breaks a backlog
+  run, longest-of-two wins, custom threshold (3 catches, 10 suppresses),
+  output formatting (4-space indent) + iter-062 attribution, 1000-element
+  scaling.
+
+No production behavior changed for existing metrics — the new line is
+purely additive.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **3971 passed**
+(3950 prior + 21 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_emit_queue_depth_consistency_line.py`
+  → **21 passed**.
+- Integration: not re-run this lap (no corpus symlinked into this worktree;
+  same as prior corpus-gated laps — the change is a pure session-summary
+  helper with unit-level coverage, no audio I/O).
+
+**Next planned items:**
+1. **[chat-metrics] One-sided continuous metrics still uncovered:**
+   `speaker_open_seconds` (iter-061, yellow >50ms — worker exited before
+   opening the speaker), `llm_cancel_to_close` (iter-060, >500ms — barge
+   teardown latency), `mic_stale_frames` (iter-037, echo signal). Each is
+   a clean clone of the iter-140/141/208/209/226/307 monotonic template.
+   `max_queue_depth` (this lap, the iter-226 inverse) is now done.
+2. **[chat-metrics] Two-sided-band sentinel family — strongest candidates
+   exhausted** (iter-210 bot-wpm, iter-305 ttc, iter-306 token-reveal-lag).
+   `user_wpm` (iter-064) has no "correct" rate so it is likely NOT a good
+   band fit. The band family is probably complete.
+3. **[cli] Grid + sweep cross-surface `--target` matrices — BOTH COMPLETE**
+   (iter-273–304). A next CLI feature would be a different axis (e.g.
+   asymmetric band tolerance, or a soft floor/ceiling beyond an open edge)
+   — scope before building.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list`
+   shows ~30 leftover per-iter worktrees. A future lap could
+   `git worktree prune` / remove merged ones.
