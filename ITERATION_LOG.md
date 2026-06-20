@@ -26084,3 +26084,103 @@ the test passing on first run).
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
    should track a curated subset, decide the policy and re-run
    `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
+
+## iter-287 — combined additive+multiplicative --target affine weight
+
+- **Date:** 2026-06-19
+- **Branch:** iter-287-affine-target (ff-merged to main)
+- **Commit:** 5435f3f
+
+**Why.** The last six laps (iter-281–286) were near-identical cross-surface
+tie-break test TWINS, and iter-286 explicitly declared the dict-form speech
+tie-break matrix COMPLETE (scalar, closed band, flat set, open band, preference,
+weighted set, scaled set all cross-surface pinned). The backlog's item #3 was the
+ONLY remaining `--target` increment that is a genuine FEATURE rather than a
+regression-test gap: a COMBINED additive+multiplicative weight. iter-250/251 give
+the additive `:penalty` and iter-252 the multiplicative `*factor`, but until now a
+set was scored by ONE or the OTHER — `target_type` actively rejected mixing them
+("cannot mix ':' and '*'"). An operator who thinks "accept 5, but drift past it
+costs 1.5× AND it starts 2 worse" had no expression for that. This lap builds the
+AFFINE form so the two weights compose.
+
+**The mechanism.** When BOTH a `*` and a `:` appear somewhere in a comma-set, the
+target parses to a new `{"affine": [(element, factor, penalty), ...]}` dict scoring
+`grid_cell_distance * factor + penalty` per element (the factor SCALES the
+distance, the penalty then OFFSETS the scaled result), the set scoring the MIN over
+those affine distances. It GENERALISES both parents: factor 1 reduces it to the
+iter-250 weighted set, penalty 0 to the iter-252 scaled set — same numbers either
+way (a test asserts this equivalence over a range of counts). The form activates
+ONLY on the mix, so a set with only `:` stays the weighted dict and only `*` the
+scaled dict, byte-for-byte unchanged — every prior weighted/scaled
+parse/render/distance/JSON result preserved. Per element both weights are OPTIONAL
+and ORDER-FREE (`5*1.5:2` == `5:2*1.5`, parsed by a new `_parse_affine_part` that
+finds each operator independently), defaulting to factor 1 / penalty 0; the base
+composes with scalars and bands (`3,5-7*1.5:2`). Like its parents the affine set
+inserts NO secondary sort key (preference is baked into the distance, so equal
+affine distance is a genuine tie the `tie_break` decides), requires a `,` set,
+cannot stack with `>` (preference), and rejects a repeated `*`/`:` on one element.
+
+**What changed.**
+- **`examples/gv.py` (production).**
+  - `target_type`: removed the `has_scale and has_weight` rejection; added a
+    dispatch branch routing a set carrying BOTH operators to `_parse_affine_set`
+    BEFORE the pure-weighted and pure-scaled branches (so the mix wins, the
+    single-operator forms fall through unchanged). Extended the docstring.
+  - New `_parse_affine_part(part, raw)`: parses one `count[*factor][:penalty]`
+    element, order-free, rejecting a repeated operator; new `_parse_affine_set`:
+    splits/validates/dedupes (first weights win) the comma-set, collapsing a
+    single-element set to the bare element (both weights useless on a lone element).
+  - `_format_target`: affine branch renders `*factor` (non-neutral) THEN `:penalty`
+    (non-zero) — the canonical order that re-parses.
+  - `grid_cell_distance`: affine branch (`raw*factor + penalty`, min over elements);
+    docstring bullet added. `grid_cell_sort_key` docstring notes affine inserts no
+    secondary key.
+  - Both vad-sweep and vad-grid `--target` help strings mention the affine form
+    (and the vad-grid help, which had omitted the scaled form, now lists it too).
+- **`tests/unit/test_gv_vad.py` (+23 net new).** Converted the obsolete
+  `test_target_type_rejects_mixing_factor_and_penalty` into
+  `test_target_type_affine_co_occurring_weights_parse_to_affine_dict` (the three
+  raws — `:` then `*`, `*` then `:`, weights split across elements — now parse to
+  affine dicts). Added 16 affine tests: parse (band base, optional per-element
+  weights, fractional stays float, dedupe first-weights-win, single-element
+  collapse), rejection (preference mix, malformed element, repeated operator),
+  format (read-back + round-trip through `target_type`), distance
+  (scale-then-offset + GENERALISES weighted/scaled), sort-key (no secondary), pick
+  (overrides distance gap), JSON serialisation, render line; plus 2 end-to-end
+  `cmd_vad_grid` / `cmd_vad_sweep` tests driving the raw string `3,8*1.5:1` through
+  `target_type`.
+- **`docs/research/voice-capture-tuning.md`.** New "affine set" subsection under
+  the scaled-set section, a quick-start example line, and corrected the now-stale
+  iter-252 claim that `*` cannot combine with `:`.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **3889 passed**
+(3866 prior + 23 net new), run on the feature branch before ff-merge.
+- Focused: `pytest tests/unit/test_gv_vad.py -k affine` → **26 passed**.
+- Integration: not re-run this lap (no corpus symlinked into this worktree; same
+  as prior corpus-gated laps — the change is pure CLI parse/score/render logic
+  fully covered by the unit matrix).
+
+**Next planned items:**
+1. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or
+   the pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it
+   stays operator-only / non-headless.
+2. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog)
+   and TIME click-to-capture before/after on real hardware.
+3. **[cli] AFFINE form cross-surface contracts.** The new affine set should get the
+   same coverage its parents earned: a grid CSV↔JSON cross-surface pick re-derive
+   (cf. iter-285 weighted, iter-286 scaled) under row-major AND under
+   `tie_break="speech"`. Also the 1-D `vad-sweep` cross-surface forms and the
+   `simulate-mirror` grid round-trips remain unpinned for ALL dict forms (the
+   speech matrix only covered grid). Confirm no existing test already exercises the
+   chosen form cross-surface before assuming a gap.
+4. **[cli] `--target` form space may now be feature-complete.** scalar, closed
+   band, open band, flat set, preference, weighted (additive), scaled
+   (multiplicative), and affine (both) cover the natural composition space. A next
+   FEATURE would be a different axis entirely — e.g. a per-element ASYMMETRIC band
+   tolerance, or a "soft floor/ceiling" that scores beyond an open edge with a
+   gentle slope rather than a hard 0. Scope before building.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
+   should track a curated subset, decide the policy and re-run
+   `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
