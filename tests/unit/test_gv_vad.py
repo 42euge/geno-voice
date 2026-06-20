@@ -2487,6 +2487,145 @@ def test_render_sweep_csv_consumer_rederives_json_weighted_target_speech_tie_pic
     assert [c["speech_s"] for c in payload["top"]] == [3.6, 2.0, 5.6]
 
 
+def test_render_sweep_csv_consumer_rederives_json_scaled_target_speech_tie_pick():
+    # iter-295: iter-289 pinned the 1-D sweep CSV↔JSON pick re-derive under
+    # tie_break="speech" for a SCALAR target; iter-290 added the CLOSED BAND, iter-291
+    # the flat SET, iter-292 the OPEN band, iter-293 the {"prefer": [...]} PREFERENCE,
+    # and iter-294 the {"weighted": [...]} ADDITIVE-WEIGHTED set. iter-294 backlog #1
+    # named the next gap directly: the sweep still lacks the speech-tie cross-surface
+    # re-derive for the {"scaled": [...]} MULTIPLICATIVE set (iter-252, grid iter-286)
+    # and the {"affine": [...]} set. This lap closes the SCALED one — the sweep twin of
+    # iter-286's grid scaled-under-speech test.
+    #
+    # The scaled set is the multiplicative twin of iter-294's weighted set: like the
+    # weighted set its precedence lives in the DISTANCE itself (grid_cell_sort_key
+    # inserts NO secondary key for a scaled set — the precedence is baked into the
+    # distance), so the key is the SAME TWO-level (distance, -speech_s) shape as the
+    # band/set/open-band/weighted twins. But the COMPOSITION differs in a way no prior
+    # sweep twin exercises: grid_cell_distance MULTIPLIES each element's raw distance by
+    # its factor (distance*factor) and takes the MIN over those SCALED distances
+    # (iter-252), so — UNLIKE the additive weighted set — an exact hit stays FREE
+    # (0*factor == 0) and the factor only bites a NON-zero distance. The weighted set's
+    # +penalty lifted even an exact hit; the scaled set's *factor cannot. That inverts
+    # the fixture geometry: where iter-294 demoted an EXACT HIT below a near-miss, the
+    # scaled set must demote a near-miss on a high-factor element below a near-miss on a
+    # low-factor one — the factor amplifies an existing gap rather than taxing a hit.
+    # render_vad_sweep_json threads BOTH the scaled target AND tie_break="speech" into
+    # the pickers, embedding best/top/target/tie_break; render_vad_sweep_csv emits only
+    # the bare <axis>,num_segments,speech_s table. A regression that dropped the
+    # tie_break on the sweep JSON path (falling back to row-major) while a CSV consumer
+    # still passed "speech", OR flattened the {"scaled": ...} dict to a plain set on the
+    # JSON path (dropping the factor so the high-factor element's near-miss reverts to
+    # the same raw distance as the low-factor one), would diverge the two surfaces yet
+    # ship green — a failure mode neither iter-289 (scalar), iter-290/291/292
+    # (band/set/open-band, raw distance), iter-293 (preference, sort-key precedence),
+    # nor iter-294 (weighted, additive distance) can catch, and the scaled-under-speech
+    # tests live ONLY on the GRID (iter-286), never the sweep.
+    #
+    # Fixture: a 4-value threshold sweep with counts 4/6/8/10, target = scaled set
+    # 5(*1), 9(*3) ({"scaled": [(5, 1), (9, 3)]}). _sweep_results couples speech to
+    # count + index, so the rows carry DIFFERENT speech and the tie-breaks genuinely
+    # DISAGREE. Each element's distance is its raw distance TIMES its factor, the set
+    # scoring the MIN over those scaled distances:
+    #   - 0.30 count 4  → min(|4-5|*1, |4-9|*3)=min(1,15)=1,  speech 2.0
+    #   - 0.50 count 6  → min(|6-5|*1, |6-9|*3)=min(1,9)=1,   speech 3.6
+    #   - 0.70 count 8  → min(|8-5|*1, |8-9|*3)=min(3,3)=3,   speech 5.6
+    #   - 0.90 count 10 → min(|10-5|*1, |10-9|*3)=min(5,3)=3, speech 8.0
+    # The *3 factor on element 9 is load-bearing AND its sign of effect is the OPPOSITE
+    # of iter-294's penalty: counts 8 and 10 are each ONE off element 9 (raw distance 1)
+    # but the *3 factor lifts that to 3, so neither ties at the floor. TWO rows tie at
+    # the scaled floor distance 1 (counts 4 and 6, each one off the *1 element 5). The
+    # two-level key (distance, -speech_s) then prefers the MOST-speech of the tied pair,
+    # count 6 (0.50) at 3.6s over count 4 (0.30) at 2.0s. So the scaled+speech best is
+    # the 0.50 row count 6.
+    thresholds = [0.3, 0.5, 0.7, 0.9]
+    results = _sweep_results([4, 6, 8, 10])
+    target = {"scaled": [(5, 1), (9, 3)]}
+    csv_text = gv.render_vad_sweep_csv(thresholds, results, name="rec.wav")
+    payload = json.loads(
+        gv.render_vad_sweep_json(
+            thresholds, results, name="rec.wav",
+            target=target, top=3, tie_break="speech",
+        )
+    )
+    # The JSON twin records BOTH the scaled target (a {"scaled": [...]} object — JSON
+    # renders the (element, factor) tuples as 2-element lists) and WHICH tie-break
+    # produced its pick.
+    assert payload["target"] == {"scaled": [[5, 1], [9, 3]]}
+    assert payload["tie_break"] == "speech"
+    # The CSV body still carries no pick columns, tie_break, or scaling — it is the bare
+    # sweep.
+    assert "best" not in csv_text and "distance" not in csv_text
+    assert "tie_break" not in csv_text and "scaled" not in csv_text
+    # A CSV consumer re-parses the flat table back to sweep rows...
+    rows = [
+        {
+            "threshold": float(row["threshold"]),
+            "num_segments": int(row["num_segments"]),
+            "speech_s": float(row["speech_s"]),
+        }
+        for row in csv.DictReader(io.StringIO(csv_text))
+    ]
+    # ...and re-runs the SAME picker with the SAME scaled target AND the SAME
+    # tie_break="speech". The CSV-derived best equals the JSON `best` (distance key
+    # stripped), and the re-derived scaled distance matches the one the JSON embedded
+    # (1 — one off the *1 element 5).
+    csv_best = gv.pick_best_grid_cell(rows, target, "speech")
+    json_best = dict(payload["best"])
+    assert json_best.pop("distance") == gv.grid_cell_distance(csv_best, target)
+    assert csv_best == json_best
+    assert csv_best["threshold"] == 0.5 and csv_best["num_segments"] == 6
+    assert payload["best"]["distance"] == 1
+    # CONTROL 1: the SAME scaled target under the DEFAULT row-major tie-break picks a
+    # DIFFERENT row (the earliest floor row, count 4 at 0.30), so this test cannot pass
+    # by the JSON path silently dropping the speech tie-break (falling back to
+    # row-major). The speech tie-break is load-bearing for the count-6 pick — it decides
+    # between the two floor rows the scaled distance leaves tied.
+    rowmajor_best = gv.pick_best_grid_cell(rows, target)
+    assert rowmajor_best != csv_best
+    assert rowmajor_best["threshold"] == 0.3 and rowmajor_best["num_segments"] == 4
+    # CONTROL 2: a flat SET of the SAME two elements [5, 9] carries NO factor —
+    # grid_cell_distance scores the RAW set MIN — so ALL FOUR rows collapse to distance
+    # 1 (count 4/6 one off element 5; count 8/10 one off element 9). With every row tied
+    # at the floor, the speech tie-break alone decides, and the MOST-speech count 10
+    # (0.90 at 8.0s) wins OUTRIGHT. A DIFFERENT pick from the scaled best, proving the
+    # *3 factor is load-bearing: flattening {"scaled": [(5,1),(9,3)]} to [5,9] on either
+    # surface would change the pick (the factor is what lifts count 8/10's near-misses
+    # to distance 3, demoting them below the count-4/6 floor that the flat set leaves
+    # tied with them).
+    set_best = gv.pick_best_grid_cell(rows, [5, 9], "speech")
+    assert set_best != csv_best
+    assert set_best["threshold"] == 0.9 and set_best["num_segments"] == 10
+    # The top shortlist agrees row-for-row (distance stripped). Ordering is by the
+    # two-level (scaled distance, -speech) key: the two floor rows lead (speech-ordered,
+    # count 6 at 3.6s before count 4 at 2.0s), THEN count 10 — DESPITE count 10 having
+    # the most speech overall — because its scaled distance (3) sorts it behind the
+    # floor pair. Count 8 (also distance 3, less speech than count 10) never reaches the
+    # top 3.
+    csv_top = gv.pick_top_grid_cells(rows, target, 3, "speech")
+    json_top = [dict(c) for c in payload["top"]]
+    for c in json_top:
+        c.pop("distance")
+    assert csv_top == json_top
+    # Head of the shortlist is the single best pick, on both surfaces.
+    assert csv_top[0] == csv_best
+    # Order [6, 4, 10] — NOT the pure-speech order [10, 8, 6] the flat-set control would
+    # give (count 10 leads there as the most-speech row of the all-tied floor). The *3
+    # factor pushes count 8/10's distance to 3, so the floor pair (counts 6, 4) outranks
+    # them despite count 10's higher speech: the scaling reorders ahead of speech BY
+    # MOVING THE DISTANCE (the same seam as iter-294's weighted set), but via a
+    # MULTIPLY that leaves exact hits free rather than an ADD that taxes them.
+    assert [r["num_segments"] for r in csv_top] == [6, 4, 10]
+    set_top = gv.pick_top_grid_cells(rows, [5, 9], 3, "speech")
+    assert [r["num_segments"] for r in set_top] == [10, 8, 6]
+    # The two leading rows scored the scaled floor (distance 1 — each one off the *1
+    # element 5); count 10 trails at distance 3 (its one-off near-miss on element 9
+    # tripled by the *3 factor). The scaled distance, then speech among the floor pair,
+    # NOT the raw distance, decided the order.
+    assert [c["distance"] for c in payload["top"]] == [1, 1, 3]
+    assert [c["speech_s"] for c in payload["top"]] == [3.6, 2.0, 8.0]
+
+
 # ---- cmd_vad_sweep --csv: the handler ----------------------------------
 
 
