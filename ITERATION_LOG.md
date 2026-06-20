@@ -27318,3 +27318,111 @@ side keeps count 9 — above any finite hi a closed band would cap at — in the
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop should
    track a curated subset, decide the policy and re-run `replay_silero.py --compare` +
    `gv vad` to refresh the comparison table.
+
+## iter-300 — 1-D sweep CSV consumer re-derives JSON --target preference pick (row-major default)
+
+- **Date:** 2026-06-19
+- **Branch:** iter-300-sweep-rowmajor-prefer (ff-merged to main)
+- **Commit:** b8f8577
+
+**Why.** iter-297 opened the sweep ROW-MAJOR dict-form cross-surface matrix with
+the flat SET (the sweep twin of iter-280's grid set-under-row-major test),
+iter-298 added the CLOSED BAND (twin of iter-275), and iter-299 the OPEN band
+(twin of iter-273). iter-299 backlog #1 named the next gap directly: the remaining
+dict forms still lack a sweep ROW-MAJOR cross-surface re-derive — only the speech
+matrix (iter-290–296) and the scalar/band SCALAR round-trips ever pinned them. The
+`{"prefer": [...]}` PREFERENCE is next. The speech version (iter-293) forces
+`tie_break="speech"`, so it never exercises the DEFAULT branch of
+`render_vad_sweep_json` (the branch taken when no `tie_break=` kwarg is supplied —
+the normal CLI path). This lap pins the preference under the DEFAULT row-major
+tie-break, the sweep twin of iter-276's grid preference-under-row-major test.
+
+**The gap this closes.** The preference is UNIQUE among these forms: its precedence
+lives at the SORT-KEY layer, not the distance. `grid_cell_distance` treats a
+`{"prefer": [...]}` IDENTICALLY to a flat set (the MIN over its elements — iter-249),
+and `grid_cell_sort_key` inserts `_preference_rank` as a SECONDARY key BEFORE the
+tie-break key (iter-249). So under the DEFAULT row-major tie-break the key is
+TWO-level `(distance, preference_rank)` — NOT the single-level `(distance,)` key of
+the band/set/open-band row-major twins (iter-298/297/299), and NOT the three-level
+`(distance, rank, -speech)` key of the iter-293 preference-under-speech twin. A
+regression confined to the DEFAULT row-major path — one that flattened the
+`{"prefer": [...]}` dict to a plain set on the sweep JSON path (dropping
+`_preference_rank` so the row-major tie falls back to pure row position) while a CSV
+consumer still passed the preference, OR that quietly swapped the row-major fallback
+for a speech-ordered one on the JSON path only — would diverge the two surfaces yet
+ship green, because the iter-293 preference test forces `"speech"` (never exercising
+the row-major fallback under a preference) and the scalar/band/set/open-band
+row-major round-trips never insert a preference rank key for the earliest-tie rule
+to be OVERRIDDEN by.
+
+**The mechanism.** A 4-value threshold sweep (0.3/0.5/0.7/0.9) with counts 8/4/6/1,
+target = preference 5>9 (`{"prefer": [5, 9]}`). `_sweep_results` couples speech to
+count + index, so the in-preference rows carry DIFFERENT speech and row position vs
+preference rank genuinely disagree. Preference distance is the MIN over its elements
+(IDENTICAL to a set): 0.30 count 8 → dist 1, rank 1 (nearer 9), speech 4.0; 0.50
+count 4 → dist 1, rank 0 (nearer 5), speech 2.4; 0.70 count 6 → dist 1, rank 0
+(nearer 5), speech 4.2; 0.90 count 1 → dist 4, rank 0, speech 0.8. THREE rows tie at
+distance 1 (counts 8, 4, 6). The DEFAULT row-major tie-break alone would keep the
+EARLIEST (count 8, 0.30) — but the preference rank OUTRANKS row position, so the two
+rank-0 rows (counts 4 and 6, nearer the more-preferred 5) beat the rank-1 count-8 row
+DESPITE it being earliest AND higher-speech (4.0s). Among the two rank-0 rows,
+row-major then keeps the EARLIER one, count 4 (0.50). So the preference+row-major
+best is the 0.50 row count 4, and the top-3 is `[4, 6, 8]` (rank-then-row-major
+order: the two rank-0 rows by threshold, then the rank-1 row last).
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+1 test).**
+  `test_render_sweep_csv_consumer_rederives_json_preference_target_rowmajor_pick`:
+  asserts `payload["target"] == {"prefer": [5, 9]}` and
+  `payload["tie_break"] == "row-major"` with NO `tie_break` kwarg passed (exercising
+  the DEFAULT branch); the CSV body carries no `best`/`distance`/`tie_break`/`prefer`;
+  a CSV consumer re-parses the bare table back to sweep rows and re-runs the SAME
+  pickers with the SAME preference and the DEFAULT tie-break, recovering the
+  JSON-embedded `best` (count 4) and the full top-3 (counts `[4, 6, 8]`). TWO controls
+  prove it cannot pass by accident: `tie_break="speech"` flips the pick to count 6
+  (the most-speech rank-0 row), proving the default branch is load-bearing WITHIN
+  rank 0 (both tie-breaks still honour the rank — neither picks the rank-1 count-8 row);
+  a flat SET `[5, 9]` drops the rank key so the key falls to single-level `(distance,)`
+  and pure row position elects count 8 (earliest), proving the preference rank is
+  load-bearing. The top assertions pin the leading pair as rank-0 in row-major order
+  (count 4 → 6, thresholds 0.50 → 0.70), THEN the rank-1 count-8 row LAST (threshold
+  0.30) — the count-8 row that would LEAD under a bare set, demoted by its worse rank.
+  No production code changed (the sweep wiring was already correct — proved by the
+  green focused run on the unmodified path).
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **3902 passed**
+(3901 prior + 1 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_gv_vad.py -k preference_target_rowmajor` → **1 passed**.
+- Integration: not re-run this lap (no corpus symlinked into this worktree; same as
+  prior corpus-gated laps — the change is a pure CLI cross-surface contract test, no
+  new production code).
+
+**Next planned items:**
+1. **[cli] Sweep ROW-MAJOR cross-surface matrix — continue.** iter-297 opened it
+   (flat SET); iter-298 added the CLOSED BAND; iter-299 the OPEN band; this lap added
+   the `{"prefer": …}` PREFERENCE. The remaining forms still lack a sweep ROW-MAJOR
+   cross-surface re-derive: `{"weighted": …}`, `{"scaled": …}`, `{"affine": …}` (grid
+   twins iter-277–279). Each is a near-mechanical clone of this lap's test with the
+   matching `target` and NO `tie_break` kwarg — the fixture must make the row-major
+   earliest-tie rule genuinely DIFFER from speech (a `tie_break="speech"` control flips
+   the pick) AND, for the weighted/scaled/affine forms, keep the PENALTY/FACTOR
+   load-bearing in the distance (a flat-set control of the bare elements changes the
+   pick), so a default-branch regression cannot ship green.
+2. **[cli] `simulate-mirror` grid pick round-trips** remain unpinned cross-surface
+   for ALL dict forms (the VAD matrices covered VAD grid + sweep only).
+3. **[cli] A next FEATURE would be a different axis entirely** — the `--target`
+   composition space (scalar → band → set → preference → additive → multiplicative →
+   affine) is feature-complete. Candidates: a per-element ASYMMETRIC band tolerance,
+   or a "soft floor/ceiling" scoring beyond an open edge with a gentle slope rather
+   than a hard 0. Scope before building.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or the
+   pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it stays
+   operator-only / non-headless.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop should
+   track a curated subset, decide the policy and re-run `replay_silero.py --compare` +
+   `gv vad` to refresh the comparison table.
+6. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows ~30
+   leftover per-iter worktrees (iter-001…iter-232) that were never pruned. A future
+   lap could `git worktree prune` / remove the merged ones to keep the list readable.
