@@ -29989,3 +29989,112 @@ additive.
    ~30 leftover per-iter worktrees. A future lap could `git worktree prune` /
    remove the merged ones to keep the list legible. NOTE: this lap correctly
    removed its own worktree.
+
+## iter-327 — false-endpoint consistency sentinel (symmetric twin of iter-326 regret-barge)
+
+- **Date:** 2026-06-20
+- **Branch:** iter-327-false-endpoint-sentinel (ff-merged to main, worktree removed)
+- **Commit:** 80197fb
+
+**Why.** iter-326's next-item scoped this exactly: "scope whether a run of
+consecutive false_endpoints is distinct enough from the existing
+`false_endpoints` count/rate aggregate to warrant a SEVENTEENTH instance —
+note the regret/false_endpoint pair are near-mirror EOU-misfire signals
+(regret = fired too early; false_endpoint = could-fire-but-continuer), so a
+false_endpoint run sentinel would be the natural symmetric twin of iter-326."
+It is. `false_endpoint` (iter-154 — the EOU decision declared the user done
+and the agent started responding, but the user actually had more to say, so
+the endpoint model / silence VAD fired too early and the user resumed) was the
+remaining un-sentineled per-turn metric with a meaningful "sustained run is
+actionable" story. iter-154 already reports a cumulative "False endpoints: N/M
+turns (P%)" line in the organic block, but that ratio smears the timing away —
+it cannot distinguish a few mis-endpoints scattered across a long session from
+a streak of them on every recent turn **in a row**. The latter is the
+actionable pattern: the endpoint heuristic is *systematically* too eager for
+this speaker, turn after turn, and the fix iter-154's rate line already names
+(raise `chat.vad.silence_duration`, iter-020) applies. Only a consecutive-run
+scan surfaces it.
+
+**What it is.**
+- **`examples/_chat_metrics.py`** — one new helper following the GENO.md
+  session-summary diversity-check template, wired into `print_session_summary`
+  right after the iter-326 regret-barge call site:
+  - `_emit_false_endpoint_consistency_line(emit, endpoint_flags, threshold=5)`
+    — the **SEVENTEENTH** instance of the diversity-check pattern and the
+    **SECOND** applied to a **BOOLEAN** per-turn metric (after iter-326).
+- **The symmetric twin of iter-326.** Both watch the SAME failure (the EOU
+  detector pre-empting the user, fixable by raising
+  `chat.vad.silence_duration`) from the two halves of iter-154's pre-emption
+  literature:
+  - iter-056 `barge_in_regret` is the **latency**-based signal — the bot
+    already started talking and the user barged within 200ms (the floor was
+    wrongly handed over; it FIRED too early). iter-326 scans that:
+    barge-conditional, threshold **4**.
+  - iter-154 `false_endpoint` is the **decision**-based signal — the EOU model
+    decided the turn was over but the user resumed / a continuer arrived (it
+    DECIDED too early). iter-327 scans that: every-turn, threshold **5**.
+  Just as iter-323 user-WPM twinned iter-210 bot-WPM.
+- **Threshold choice differs from iter-326 deliberately.** `false_endpoint` is
+  NOT barge-conditional — it is populated for EVERY organic-path turn (most
+  `False`, a clean endpoint), so it is a general "natural variation is normal"
+  per-turn signal where the continuous-metric default of **5** fits (matching
+  iter-115/128/140-143/etc.), NOT the barge-conditional **4** of
+  iter-120/325/326. A test pins this: a 4-run stays silent here but would fire
+  under iter-326's threshold.
+- **No bucketer.** Like iter-326, `false_endpoint` is already categorical with
+  exactly ONE interesting value (`True` → `"false_ep"` marker), so the run scan
+  finds runs of one kind and no per-value branching is needed. `False` (a clean
+  endpoint, OR the half-duplex path which leaves the flag at its `False`
+  default) is the fine state and is filtered before the scan — the iter-114
+  zero-filter shape, here a boolean-False filter. A correctly endpointed turn
+  is the good outcome and is filtered so it neither fires nor breaks a run.
+  NOT inverted.
+- **Distinctness (why it is NOT redundant):** a false endpoint can occur with
+  NO barge at all (the user simply resumed after the gap), so the two scans run
+  over different turn sets — iter-326 over barge turns, iter-327 over every
+  turn. A test pins that the line names `false_endpoint` and never says
+  `barge_in_regret` / `llm_stream` / `playback`.
+
+The off-by-default path is preserved: a session whose turns are all cleanly
+endpointed (or the half-duplex path) sees no new line — the summary is
+byte-for-byte unchanged. Purely additive.
+
+- **`tests/unit/test_emit_false_endpoint_consistency_line.py`** (new, +17
+  tests): empty / all-False suppression; at/above threshold (default 5, custom
+  3/10); False-interleaving doesn't break a run; small scatter stays below
+  threshold; merged-run length across a False gap; output formatting + iter-154
+  attribution; the `silence_duration` actionability guard; the "false
+  endpoints" unit wording; the single-interesting-value boolean guard;
+  distinctness vs iter-326 incl. the different default threshold (4 silent / 5
+  fires); large-input scaling.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4312 passed**
+(4295 prior + 17 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_emit_false_endpoint_consistency_line.py` →
+  **17 passed**.
+- Integration: not re-run this lap (a pure list-scanning + string-formatting
+  helper — no torch import, no audio I/O).
+
+**Next planned items:**
+1. **[chat-metrics] The diversity-check family now spans every per-turn metric
+   shape AND both EOU-misfire boolean signals.** With `false_endpoint` covered,
+   the seventeen instances span the continuous latency/rate metrics, the
+   categorical filler/naturalness/sentence-length/barge-phase signals, the
+   count-valued preempted-words (iter-325), and both boolean EOU-misfire
+   signals (regret-barge iter-326, false-endpoint iter-327). The remaining
+   un-sentineled per-turn booleans are `merge_capped` (iter-163 — the
+   max_merge_depth backstop force-emitted a still-mid-thought turn; it is
+   already paired with `false_endpoint=True` per the field comment, so a
+   `merge_capped` run sentinel would heavily overlap iter-327 and the value of
+   a separate scan is questionable) and there is no other obvious per-turn
+   field. A future chat-metrics lap should scope whether `merge_capped` is
+   distinct enough from `false_endpoint` to warrant an EIGHTEENTH instance, or
+   declare the family complete and pivot to a non-metrics source (STT/TTS/VAD
+   quality, streaming/barge-in, gv CLI, docs).
+2. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+3. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~30 leftover per-iter worktrees. A future lap could `git worktree prune` /
+   remove the merged ones to keep the list legible. NOTE: this lap correctly
+   removed its own worktree.
