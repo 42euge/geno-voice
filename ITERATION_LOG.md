@@ -29115,3 +29115,105 @@ report and `--verdict` surface are untouched.
 4. **[housekeeping] Stale worktrees accumulating** — `git worktree list`
    shows leftover per-iter worktrees. A future lap could `git worktree
    prune` / remove the merged ones to keep the list legible.
+
+## iter-317 — gv simulate-mirror / calibrate-base-wpm --json (complete the format trio)
+
+- **Date:** 2026-06-20
+- **Branch:** iter-317-wpm-json (ff-merged to main, worktree removed)
+- **Commit:** c7a2119
+
+**Why.** After iter-316, `--csv` covered every gv analysis surface, but the two
+WPM surfaces (`gv simulate-mirror`, `gv calibrate-base-wpm`) carried only a
+human report + `--csv` — they lacked the `--json` the four VAD-analysis
+surfaces (`gv vad` / `vad-diff` / `vad-sweep` / `vad-grid`) all have. That was
+the last format asymmetry in the CLI, and iter-316's own next-item named it.
+This lap adds `--json` to both, so EVERY gv analysis surface now carries the
+full human / `--json` / `--csv` trio.
+
+**What it is.** Three pure JSON renderers, each the nested/programmatic twin of
+its surface's existing human + CSV renderers. Where `--csv` flattens to a pure
+data grid (and pushes non-tabular scalars into trailing `#`-comments, as
+calibrate does), `--json` nests everything in one object:
+
+- **`render_grid_json(points, best)`** — `{mode:"grid", cells:[…], best}`. Each
+  cell is the full diagnostic record (`base_wpm`, `strength`, `final_speed`,
+  `final_gap`, `max_step`, `moves`, `score`). `final_gap`/`score` are JSON
+  `null` for an unscorable cell — distinguishing "no value" from `0.0`, the
+  same distinction the CSV's empty field and the human table's `n/a` make.
+  `best` is `pick_best_mirror_config`'s pick as the same cell shape, or `null`.
+  Contrast the CSV, which folds the pick into an `is_best` column; the JSON
+  surfaces it as a structured record.
+- **`render_trajectory_json(traj, *, wpms=None)`** —
+  `{mode:"trajectory", initial_speed, final_speed, ideal_final_speed,
+  final_gap, max_step, moves, turns:[…]}`. Unlike the per-turn CSV (which
+  intentionally DROPS the arc-level scalars as derivable from the speed
+  column), the JSON carries BOTH the per-turn `turns` list AND the convergence
+  diagnostics at top level — a nested consumer gets the whole record in one
+  parse. Each turn is `{turn:1-based, user_wpm:float|null, speed:float}`;
+  `user_wpm` pairs the input arc when its length matches `traj.speeds`, else
+  `null` (same pairing rule as the CSV). Empty arc → empty `turns` list with
+  scalars still present.
+- **`render_calibration_json(samples, calib)`** — `{samples:[…], calibration}`.
+  Where the CSV splits the per-sample rows from the aggregate `#`-comment
+  block (to keep a spreadsheet's rows pure), the JSON nests both: a `samples`
+  list (one object per render) plus a `calibration` object (median / range /
+  spread / nominal / drift). `calibration` is `null` for no samples (mirrors
+  `calibrate_base_wpm`'s empty contract). Like the CSV, the JSON OMITS the
+  adopt/keep verdict — that DECISION is the `--verdict` human surface, not a
+  data record; a consumer scripts the re-seed off the `drift` field.
+
+All three are pure (return a single `json.dumps(..., indent=2)` string built
+from the objects' attributes — no I/O, no audio, no `to_dict()` call, so tests
+drive them without importing the engine's audio path), round floats to 3
+places, and mirror the existing `render_vad_json` shape.
+
+**What changed.**
+- **`examples/gv.py`** — added `render_grid_json`, `render_trajectory_json`,
+  `render_calibration_json`. `cmd_simulate_mirror` now reads
+  `getattr(args, "json", False)` and branches `--json` before `--csv` before
+  the human path in BOTH grid and trajectory modes. `cmd_calibrate_base_wpm`
+  branches `--json` before `--csv` (both before the human report + `--verdict`).
+  Both parsers now group `--json`/`--csv` in an `add_mutually_exclusive_group()`
+  (matching the iter-313/314 VAD parser shape). Updated both handler docstrings
+  and the top-of-file usage line for calibrate.
+- **`tests/unit/test_gv_simulate_mirror.py` (+15 tests)** — parser (`json`
+  defaults False, `--json` sets it, `--json --csv` exits 2); `render_grid_json`
+  (cells+best shape, value-matches-engine, unscorable→null gap/score+null best,
+  3-place rounding); `render_trajectory_json` (turns+top-level scalars,
+  empty-arc keeps scalars, unpaired/no-wpms → null user_wpm); handler (output
+  equals renderer in both modes, parseable, default-log-is-print).
+- **`tests/unit/test_gv_calibrate_base_wpm.py` (+14 tests)** — parser
+  (defaults/flag/mutual-exclusion); `render_calibration_json` (samples+
+  calibration shape, value-matches-engine, none-calib→null, nominal→drift,
+  verdict-omission); handler (output equals renderer, suppresses human report,
+  suppresses verdict even when flagged, parseable, default-log-is-print,
+  dispatch through `main`).
+
+No existing behavior changed — the JSON path is purely additive; the human
+reports and `--csv` surfaces are untouched.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4156 passed**
+(4127 prior + 29 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_gv_simulate_mirror.py
+  tests/unit/test_gv_calibrate_base_wpm.py` → **139 passed**.
+- Integration: not re-run this lap (pure renderers + parser/handler wiring over
+  the stdlib `wpm_mirror` engine loaded by file path — no torch import, no
+  audio I/O, same as prior CLI laps).
+
+**Next planned items:**
+1. **[cli] Format-trio parity — NOW COMPLETE across ALL gv analysis surfaces.**
+   Every analysis surface (vad / vad-diff / vad-sweep / vad-grid /
+   simulate-mirror / calibrate-base-wpm) carries the full human / `--json` /
+   `--csv` trio. No remaining format asymmetry. A future CLI lap would need a
+   NEW surface or a NEW knob to extend — e.g. a `simulate-mirror` lurch-weight
+   override on `score()` exposed as a `--lurch-weight` flag, or a calibrate
+   `--json`-consuming downstream command. Scope before building.
+2. **[chat-metrics] Continuous-clone + two-sided-band sentinel families — both
+   declared complete (iter-311/312, iter-306).** A NEW per-turn metric not yet
+   emitted would be needed to extend either; none obvious.
+3. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+4. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   leftover per-iter worktrees. A future lap could `git worktree prune` /
+   remove the merged ones to keep the list legible.
