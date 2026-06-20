@@ -3348,6 +3348,95 @@ def _emit_regret_barge_consistency_line(
     )
 
 
+def _emit_false_endpoint_consistency_line(
+    emit, endpoint_flags: list[bool], threshold: int = 5,
+) -> None:
+    """iter-327: detect consecutive runs of *false endpoints* (iter-154
+    ``false_endpoint`` — the EOU decision declared the user done and the
+    agent started responding, but the user actually had more to say, so the
+    endpoint model / silence VAD fired too early and the user resumed).
+    Metric 3.22 in the perf-metrics taxonomy ("Novel/speculative").
+
+    SEVENTEENTH instance of the diversity-check pattern and the symmetric
+    twin of iter-326's ``_emit_regret_barge_consistency_line``: both watch
+    the SAME failure (the EOU detector pre-empting the user, fixable by
+    raising ``chat.vad.silence_duration``), from the two halves of the
+    pre-emption literature iter-154 names —
+
+      - iter-056 ``barge_in_regret`` is the *latency*-based signal: the bot
+        already started talking and the user barged within 200ms, so the
+        floor was wrongly handed over (it FIRED too early). iter-326 scans
+        that.
+      - iter-154 ``false_endpoint`` is the *decision*-based signal: the EOU
+        model COULD have fired but the user resumed / a continuer arrived,
+        so the agent declared the turn over prematurely. This scans that.
+
+    The two are near-mirrors (regret = fired-too-early at the audio layer;
+    false_endpoint = decided-too-early at the turn layer), so this is the
+    natural symmetric companion to iter-326 — just as iter-323's user-WPM
+    twinned iter-210's bot-WPM. It is the SECOND BOOLEAN instance (after
+    iter-326). NOT inverted: a false endpoint is strictly worse than its
+    absence.
+
+    Threshold choice differs from iter-326. ``false_endpoint`` is NOT
+    barge-conditional — it is populated on the organic path for EVERY turn
+    (most are ``False`` — a clean endpoint), so it is a general per-turn
+    signal where "natural variation is normal" and the continuous-metric
+    default of 5 fits (matching iter-115/128/140-143/etc.), NOT the
+    barge-conditional 4 of iter-120/325/326. A 5-turn run of mis-endpointed
+    turns is the actionable streak: the endpoint heuristic is too eager for
+    this speaker, turn after turn.
+
+    Why a boolean needs no bucketer: like iter-326, ``false_endpoint`` is
+    already categorical with exactly ONE interesting value (``True`` — the
+    mis-endpoint), so the run scan finds runs of one kind and no per-value
+    branching is needed. ``True`` maps to the marker ``"false_ep"`` and
+    everything else (a clean endpoint, OR the half-duplex path which leaves
+    the flag at its ``False`` default) filters out before the scan — the
+    iter-114 zero-filter shape, here a boolean-False filter. A correctly
+    endpointed turn is the good outcome and is filtered so it neither fires
+    nor breaks a run.
+
+    What the cumulative figure misses: iter-154 already reports a session
+    "False endpoints: N/M turns (P%)" line in the organic block, but that
+    ratio smears the timing away — it can't distinguish a few mis-endpoints
+    scattered across a long session from a streak of them on every recent
+    turn in a row. The latter is the actionable pattern, and it points
+    straight at the same fix iter-154's rate line names — raise
+    ``chat.vad.silence_duration`` (iter-020) so the recorder waits longer
+    before declaring the user done (iter-001 end-of-turn).
+
+    Distinct from iter-326 (why it is NOT redundant): a false endpoint can
+    occur with NO barge at all (the user simply resumed after the gap), so
+    the two scans run over different turn sets — iter-326 over barge turns,
+    this over every turn. A test pins that the line names ``false_endpoint``
+    and never says ``barge_in_regret`` / ``llm_stream`` / ``playback``.
+
+    Output:
+
+        False-EP run:   5 consecutive false endpoints — the end-of-turn
+                        decision is firing too early; raise
+                        chat.vad.silence_duration (iter-154 false_endpoint)
+    """
+    # True → "false_ep" marker; False (clean endpoint, or the half-duplex
+    # default) is the fine state and is filtered before the scan, mirroring
+    # iter-114's zero-filter / iter-326's False-filter. Single interesting
+    # value → no per-value branching.
+    fired = ["false_ep" for flag in endpoint_flags if flag]
+    if not fired:
+        return
+
+    longest_run, _ = _longest_consecutive_run(fired)
+    if longest_run < threshold:
+        return
+
+    emit(
+        f"    False-EP run:   {longest_run} consecutive false endpoints "
+        f"— the end-of-turn decision is firing too early; raise "
+        f"chat.vad.silence_duration (iter-154 false_endpoint)"
+    )
+
+
 def _max_token_gap_bucket(seconds: float) -> str:
     """iter-211: bucket a per-turn ``max_token_gap`` (iter-085's
     maximum inter-token gap during the LLM stream, excluding the
@@ -6027,6 +6116,27 @@ def print_session_summary(
     _emit_regret_barge_consistency_line(
         _emit,
         [m.barge_in_regret for m in metrics_list],
+    )
+    # iter-327: false-endpoint consistency check. Only fires when 5+
+    # consecutive turns were false endpoints (iter-154 false_endpoint — the
+    # EOU decision declared the user done but they actually had more to say,
+    # so the endpoint model / silence VAD fired too early and the user
+    # resumed). iter-154 already reports a cumulative "False endpoints: N/M
+    # turns (P%)" line in the organic block, but that ratio smears the
+    # timing away — it can't tell a few scattered mis-endpoints from a
+    # streak of them on every recent turn in a row. The latter is the
+    # actionable pattern: the endpoint heuristic is too eager for this
+    # speaker, and the fix iter-154 names (raise chat.vad.silence_duration)
+    # applies. SECOND boolean-valued instance and the symmetric twin of the
+    # iter-326 regret-barge scan: regret = the EOU FIRED too early at the
+    # audio layer (barge-conditional, threshold 4); false_endpoint = the EOU
+    # DECIDED too early at the turn layer (every turn, threshold 5). They
+    # watch the same failure from the two halves of iter-154's pre-emption
+    # literature, so a false endpoint can occur with no barge at all — the
+    # two scans run over different turn sets, hence not redundant.
+    _emit_false_endpoint_consistency_line(
+        _emit,
+        [m.false_endpoint for m in metrics_list],
     )
     # iter-211: max-token-gap consistency check. Only fires when 5+
     # consecutive turns suffered a noticeable worst-case mid-stream LLM
