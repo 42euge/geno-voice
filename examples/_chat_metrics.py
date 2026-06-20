@@ -4418,6 +4418,176 @@ def _emit_mic_stale_consistency_line(
     )
 
 
+def _fta_bucket(seconds: float) -> str:
+    """iter-311: bucket a per-turn ``first_token_to_audio`` (iter-083's
+    FT-A — the gap from the LLM's first token landing at the splitter to
+    the worker playing its first audio chunk: ``worker.first_audio_at -
+    first_token_at``) into a coarse category. Used by
+    ``_emit_fta_consistency_line`` to detect runs where the post-LLM half
+    of TTFS consistently dominated time-to-first-sound. Metric 3.18 in
+    the perf-metrics taxonomy.
+
+    This matters because iter-083 decomposes TTFS into two halves:
+    ``llm_first_token`` (LLM-side — how long until the model produced
+    its first token) and FT-A (post-LLM-side — sentence-split + TTS +
+    queue dispatch before the first audio chunk plays). The session
+    summary already prints the median of each side-by-side so the
+    operator can see which half dominates at a glance, but a healthy
+    median hides a sustained-slow stretch: a few snappy turns early pull
+    the median down while the back half of the session crawls. A
+    SUSTAINED run in the slow/very_slow bucket is the actionable signal
+    that sentence-split + TTS is the persistent bottleneck — the bot has
+    tokens but can't speak yet, eating into the sub-500ms TTFS budget
+    the whole pipeline (VISION: "latency is the feature") optimizes for.
+    Distinct from iter-208's synth-dispatch sentinel (the TTFS residual
+    NOT explained by ``stt_time + llm_first_sentence``): FT-A is anchored
+    on the LLM's FIRST TOKEN rather than the first complete sentence, so
+    it also includes the sentence-split wait (first token → first
+    complete sentence) that synth-dispatch excludes.
+
+    A continuous-metric instance like
+    iter-128/140/141/142/143/208/209/224/225/226/307/308/309/310 —
+    buckets a float duration into a coarse category before the run scan.
+    Like iter-140/141/208/209/224/226/307/308/309/310 — and UNLIKE the
+    inverted iter-142/143/225 — ``first_token_to_audio`` is "smaller is
+    better": the fine state is a LOW value (the bot starts speaking
+    almost as soon as it has tokens), so the boundaries are NOT inverted;
+    the problematic end is a LARGE latency.
+
+    Buckets (chosen against VISION's sub-500ms TTFS target, where FT-A —
+    one of the two TTFS halves — should be a small slice of the budget;
+    aligned with iter-208's synth-dispatch boundaries since FT-A is the
+    same final-leg latency anchored one step earlier):
+
+        ``snappy``   — < 0.15s: the bot starts speaking almost as soon as
+            the LLM emits its first token; sentence-split + TTS is a thin
+            slice of TTFS. The desired state.
+        ``slow``     — 0.15-0.35s: the post-LLM leg is eating a
+            noticeable chunk of the opening latency; a lighter
+            voice/engine or smaller first-chunk dispatch would help.
+        ``very_slow``— > 0.35s: sentence-split + TTS alone blows most of
+            the sub-500ms budget; the bot has tokens but stays silent so
+            long the opening feels laggy regardless of how fast the LLM
+            produced its first token.
+
+    Returns ``""`` when ``seconds`` is non-positive (a turn where either
+    timestamp was missing — the turn errored before the LLM produced a
+    token or before any audio played, where ``first_token_to_audio``
+    stays at its 0.0 default) — empty-string filter applies in the
+    consumer, mirroring iter-114/115/120/126/128/140/141/142/143/208/209/
+    224/225/226/307/308/309/310. This matches the ``> 0`` collection
+    filter the session summary already uses for ``fta_values`` (iter-083),
+    so a turn that never measured FT-A is never counted as a "snappy"
+    leg.
+    """
+    if seconds <= 0:
+        return ""
+    if seconds < 0.15:
+        return "snappy"
+    if seconds <= 0.35:
+        return "slow"
+    return "very_slow"
+
+
+def _emit_fta_consistency_line(
+    emit, fta_list: list[float], threshold: int = 5,
+) -> None:
+    """iter-311: detect consecutive runs of turns where the post-LLM
+    half of TTFS (iter-083 ``first_token_to_audio`` — FT-A) consistently
+    dominated the opening latency. TWENTY-THIRD instance of the
+    diversity-check pattern after iter-114 (filler), iter-115/126
+    (naturalness), iter-120 (barge-phase), iter-128 (sentence-length),
+    iter-140 (stt-rtf), iter-141 (tts-rtf), iter-142 (llm-tps), iter-143
+    (streaming-overlap), iter-208 (synth-dispatch), iter-209
+    (eot-overhead), iter-210 (bot-wpm), iter-211 (max-token-gap),
+    iter-212 (ttfs), iter-224 (stt-preview-divergence), iter-225
+    (sentence-split-coverage), iter-226 (worker-idle-gap), iter-305
+    (ttc), iter-306 (token-reveal-lag), iter-307 (synth-backlog),
+    iter-308 (cancel-close), iter-309 (speaker-open), iter-310
+    (mic-stale). TWENTIETH instance applied to a CONTINUOUS metric —
+    buckets the per-turn ``first_token_to_audio`` via ``_fta_bucket``
+    before running the scan.
+
+    iter-083 added the per-turn FT-A figure (the dim ``+Nms → audio``
+    annotation next to the LLM-first-token line) and the session summary
+    prints the MEDIAN FT-A beside the median LLM-first-token, so the
+    operator can see at a glance which half of TTFS dominates
+    (LLM-bound vs synth/dispatch-bound). But the median washes out a
+    sustained-slow stretch: a few snappy turns early pull it down while
+    the back half of the session crawls. A SUSTAINED run in the
+    slow/very_slow bucket is the actionable signal that sentence-split +
+    TTS is the persistent post-LLM bottleneck — the bot has tokens but
+    can't speak yet, eroding the sub-500ms TTFS budget the whole
+    pipeline is built around. Complementary to the iter-212 TTFS
+    sentinel (the whole speech-stop → speaker latency) and the iter-208
+    synth-dispatch sentinel (the TTFS residual after the first complete
+    sentence): this watches specifically the first-token → first-audio
+    leg, which uniquely includes the sentence-split wait.
+
+    Filter rule: drop the ``"snappy"`` bucket before the scan (the fine
+    state — the bot speaks promptly after its first token) and ``""``
+    (turns with no measured FT-A: errored before the LLM produced a
+    token or before any audio played). Only ``slow`` and ``very_slow``
+    warrant warning. Like iter-140/141/208/209/224/226/307/308/309/310
+    and UNLIKE iter-142/143/225, the fine bucket is a LOW value because
+    FT-A is smaller-is-better — the boundaries are NOT inverted.
+
+    Threshold = 5 (the general-signal default, same as
+    iter-115/128/140/141/142/143/208/209/210/211/212/224/225/226/305/306/
+    307/309): FT-A is measured on essentially every turn that produces
+    audio, a high-frequency signal where natural per-turn variation is
+    normal (model warmup, GC, first-sentence length jitter) — it earns
+    the higher bar of the threshold-5 family rather than the threshold-4
+    barge/event-gated sentinels (iter-120/308/310).
+
+    Output:
+
+        FT-A:             5 consecutive 'slow' turns — sentence-split +
+                          TTS is eating a noticeable chunk of the opening
+                          latency; the bot has tokens but can't speak yet
+                          — try a lighter voice/engine or smaller
+                          first-chunk dispatch (iter-083
+                          first_token_to_audio)
+    """
+    # Bucketize, then drop the "uninteresting" buckets (empty, snappy).
+    interesting = {"slow", "very_slow"}
+    filtered = [
+        b for b in (_fta_bucket(s) for s in fta_list)
+        if b in interesting
+    ]
+    if not filtered:
+        return
+
+    longest_run, longest_bucket = _longest_consecutive_run(filtered)
+    if longest_run < threshold:
+        return
+
+    if longest_bucket == "very_slow":
+        suggestion = (
+            "sentence-split + TTS alone blows most of the sub-500ms "
+            "budget (>350ms); the bot has tokens but stays silent so "
+            "long the opening feels laggy — try a lighter voice/engine "
+            "or smaller first-chunk dispatch"
+        )
+    elif longest_bucket == "slow":
+        suggestion = (
+            "sentence-split + TTS is eating a noticeable chunk of the "
+            "opening latency; the bot has tokens but can't speak yet — "
+            "try a lighter voice/engine or smaller first-chunk dispatch"
+        )
+    else:
+        # Defensive: future buckets that pass the filter rule.
+        suggestion = (
+            "investigate the recurring slow first-token-to-audio leg"
+        )
+
+    emit(
+        f"    FT-A: {longest_run} consecutive "
+        f"{longest_bucket!r} turns — {suggestion} "
+        f"(iter-083 first_token_to_audio)"
+    )
+
+
 def _emit_bargeable_line(emit, bargeable_values: list[float]) -> None:
     """iter-104: extracted from print_session_summary's iter-074
     bargeable line. Reports the WORST bargeable fraction across
@@ -5332,6 +5502,26 @@ def print_session_summary(
     _emit_mic_stale_consistency_line(
         _emit,
         [m.mic_stale_frames for m in metrics_list],
+    )
+    # iter-311: FT-A consistency check. Only fires when 5+ consecutive
+    # turns had a slow post-LLM half of TTFS (slow 0.15-0.35s /
+    # very_slow >0.35s — aligned with iter-208's synth-dispatch
+    # boundaries, since FT-A is the same final-leg latency anchored on
+    # the LLM's first TOKEN rather than its first complete sentence, so
+    # it also covers the sentence-split wait). iter-083 added the
+    # per-turn FT-A figure and the summary prints the MEDIAN FT-A beside
+    # the median LLM-first-token so the operator can see which half of
+    # TTFS dominates, but the median washes out a sustained-slow stretch
+    # — a few snappy turns early pull it down while the back half crawls.
+    # A sustained run is the actionable signal that sentence-split + TTS
+    # is the persistent post-LLM bottleneck: the bot has tokens but can't
+    # speak yet, eroding the sub-500ms TTFS budget. Threshold 5 (the
+    # general default, not iter-120/308/310's event-gated 4): FT-A is
+    # measured on essentially every audio-producing turn, a
+    # high-frequency signal.
+    _emit_fta_consistency_line(
+        _emit,
+        [m.first_token_to_audio for m in metrics_list],
     )
     # iter-090: barge block extracted to _emit_barge_block helper.
     # ~76 lines of co-emitted lines (count, interruption rate,
