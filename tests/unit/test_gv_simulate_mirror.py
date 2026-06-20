@@ -673,3 +673,171 @@ def test_handler_json_default_log_is_print(capsys):
     out = capsys.readouterr().out
     payload = _json.loads(out)
     assert payload["mode"] == "trajectory"
+
+
+# ---- iter-318: --lurch-weight scoring knob -----------------------------
+
+# An arc + grid where the best pick differs between low and high lurch_weight:
+# at weight 0.0 the lowest-|gap| cell (165, 0.7) wins; at weight 2.0 the
+# smoothest cell (180, 0.3) wins. Used to prove the knob threads through the
+# picker and renderers, not just the parser.
+_LURCH_ARC = [120, 140, 200, 230, 200, 140, 120]
+_LURCH_BASES = [150.0, 165.0, 180.0]
+_LURCH_STRENGTHS = [0.3, 0.5, 0.7]
+
+
+def test_simulate_mirror_lurch_weight_defaults_to_engine():
+    args = gv.build_parser().parse_args(["simulate-mirror", "--wpms", "120,200"])
+    # Sourced from the engine's DEFAULT_LURCH_WEIGHT so the CLI default matches
+    # the score()'s own default.
+    wm = gv._load_wpm_mirror()
+    assert args.lurch_weight == wm.DEFAULT_LURCH_WEIGHT
+
+
+def test_simulate_mirror_lurch_weight_override_parses():
+    args = gv.build_parser().parse_args(
+        ["simulate-mirror", "--wpms", "120,200", "--lurch-weight", "2.0"]
+    )
+    assert args.lurch_weight == 2.0
+
+
+def test_lurch_weight_changes_pick_in_handler():
+    # The whole point: a higher lurch_weight should make the smoother cell win.
+    wpms = ",".join(str(int(w)) for w in _LURCH_ARC)
+    base_csv = ",".join(str(b) for b in _LURCH_BASES)
+    str_csv = ",".join(str(s) for s in _LURCH_STRENGTHS)
+
+    def best_at(weight):
+        lines = _run(
+            [
+                "simulate-mirror",
+                "--wpms", wpms,
+                "--grid",
+                "--base-wpms", base_csv,
+                "--strengths", str_csv,
+                "--lurch-weight", str(weight),
+            ]
+        )
+        return [ln for ln in lines if "best: base_wpm=" in ln][0]
+
+    low = best_at(0.0)
+    high = best_at(2.0)
+    assert "base_wpm=165.0 strength=0.70" in low
+    assert "base_wpm=180.0 strength=0.30" in high
+
+
+def test_render_grid_score_column_tracks_lurch_weight():
+    wm = gv._load_wpm_mirror()
+    points = wm.sweep_mirror_grid(
+        _LURCH_ARC, _LURCH_BASES, _LURCH_STRENGTHS, initial_speed=1.0
+    )
+    # The displayed score must equal the score at the supplied weight, not the
+    # engine default — so the table matches the pick it was made on.
+    best = wm.pick_best_mirror_config(points, 2.0)
+    lines = gv.render_grid(points, best, lurch_weight=2.0)
+    text = "\n".join(lines)
+    assert f"(score {best.score(2.0):.3f})" in text
+    # First row's score reflects weight 2.0, not the 0.5 default.
+    first = points[0]
+    assert f"{first.score(2.0):.3f}" in text
+
+
+def test_render_grid_none_lurch_weight_matches_default():
+    # render_grid(..., lurch_weight=None) is identical to the pre-iter-318 call
+    # so existing callers are unaffected.
+    wm = gv._load_wpm_mirror()
+    points = wm.sweep_mirror_grid(
+        _LURCH_ARC, _LURCH_BASES, _LURCH_STRENGTHS, initial_speed=1.0
+    )
+    best = wm.pick_best_mirror_config(points)
+    assert gv.render_grid(points, best, lurch_weight=None) == gv.render_grid(
+        points, best
+    )
+
+
+def test_render_grid_csv_score_tracks_lurch_weight():
+    wm = gv._load_wpm_mirror()
+    points = wm.sweep_mirror_grid(
+        _LURCH_ARC, _LURCH_BASES, _LURCH_STRENGTHS, initial_speed=1.0
+    )
+    best = wm.pick_best_mirror_config(points, 2.0)
+    rows = _parse_csv(gv.render_grid_csv(points, best, lurch_weight=2.0))
+    header, *data = rows
+    score_i = header.index("score")
+    best_i = header.index("is_best")
+    # Every cell's score column is computed at weight 2.0.
+    for row, p in zip(data, points):
+        assert row[score_i] == str(round(p.score(2.0), 3))
+    # The single is_best=1 row is the weight-2.0 pick (180, 0.3).
+    flagged = [r for r in data if r[best_i] == "1"]
+    assert len(flagged) == 1
+    bw_i, st_i = header.index("base_wpm"), header.index("strength")
+    assert flagged[0][bw_i] == "180.0"
+    assert flagged[0][st_i] == "0.3"
+
+
+def test_render_grid_json_score_tracks_lurch_weight():
+    wm = gv._load_wpm_mirror()
+    points = wm.sweep_mirror_grid(
+        _LURCH_ARC, _LURCH_BASES, _LURCH_STRENGTHS, initial_speed=1.0
+    )
+    best = wm.pick_best_mirror_config(points, 2.0)
+    payload = _json.loads(gv.render_grid_json(points, best, lurch_weight=2.0))
+    for cell, p in zip(payload["cells"], points):
+        assert cell["score"] == round(p.score(2.0), 3)
+    assert payload["best"]["base_wpm"] == 180.0
+    assert payload["best"]["strength"] == 0.3
+    assert payload["best"]["score"] == round(best.score(2.0), 3)
+
+
+def test_handler_grid_csv_matches_renderer_with_lurch_weight():
+    wm = gv._load_wpm_mirror()
+    points = wm.sweep_mirror_grid(
+        _LURCH_ARC, _LURCH_BASES, _LURCH_STRENGTHS, initial_speed=1.0
+    )
+    best = wm.pick_best_mirror_config(points, 2.0)
+    expected = gv.render_grid_csv(points, best, lurch_weight=2.0)
+    wpms = ",".join(str(int(w)) for w in _LURCH_ARC)
+    lines = _run(
+        [
+            "simulate-mirror",
+            "--wpms", wpms,
+            "--grid",
+            "--base-wpms", ",".join(str(b) for b in _LURCH_BASES),
+            "--strengths", ",".join(str(s) for s in _LURCH_STRENGTHS),
+            "--lurch-weight", "2.0",
+            "--csv",
+        ]
+    )
+    assert lines == [expected]
+
+
+def test_handler_grid_json_matches_renderer_with_lurch_weight():
+    wm = gv._load_wpm_mirror()
+    points = wm.sweep_mirror_grid(
+        _LURCH_ARC, _LURCH_BASES, _LURCH_STRENGTHS, initial_speed=1.0
+    )
+    best = wm.pick_best_mirror_config(points, 2.0)
+    expected = gv.render_grid_json(points, best, lurch_weight=2.0)
+    wpms = ",".join(str(int(w)) for w in _LURCH_ARC)
+    lines = _run(
+        [
+            "simulate-mirror",
+            "--wpms", wpms,
+            "--grid",
+            "--base-wpms", ",".join(str(b) for b in _LURCH_BASES),
+            "--strengths", ",".join(str(s) for s in _LURCH_STRENGTHS),
+            "--lurch-weight", "2.0",
+            "--json",
+        ]
+    )
+    assert lines == [expected]
+
+
+def test_lurch_weight_inert_in_trajectory_mode():
+    # Trajectory mode has no score, so --lurch-weight must not change output.
+    base = _run(["simulate-mirror", "--wpms", "120,200,120"])
+    weighted = _run(
+        ["simulate-mirror", "--wpms", "120,200,120", "--lurch-weight", "9.0"]
+    )
+    assert base == weighted

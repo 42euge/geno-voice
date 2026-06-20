@@ -1194,19 +1194,26 @@ def render_trajectory(traj, *, wpms=None):
     return lines
 
 
-def render_grid(points, best):
+def render_grid(points, best, *, lurch_weight=None):
     """Render a grid sweep (``MirrorGridPoint`` list) + the picked best cell.
 
     Pure: returns a list of strings (no I/O). Each row shows a cell's tunables
     and its convergence / lurch / churn diagnostics; the trailing line names
     the data-driven pick (or notes that no cell was scorable).
+
+    ``lurch_weight`` (iter-318) is the weight on the lurch term in
+    :meth:`MirrorGridPoint.score` — the same value the handler passes to
+    :func:`pick_best_mirror_config`, so the displayed ``score`` column always
+    matches the score the pick was made on. ``None`` defers to the engine's
+    :data:`DEFAULT_LURCH_WEIGHT` (the score's own default), preserving the
+    pre-iter-318 behaviour for callers that don't supply one.
     """
     lines = ["WPM-mirror grid sweep (base_wpm × strength)"]
     header = "  base_wpm  strength  final  gap     step   moves  score"
     lines.append(header)
     for p in points:
         gap = "  n/a " if p.final_gap is None else f"{p.final_gap:+.3f}"
-        score = p.score()
+        score = p.score() if lurch_weight is None else p.score(lurch_weight)
         score_s = " n/a " if score is None else f"{score:.3f}"
         lines.append(
             f"  {p.base_wpm:7.1f}  {p.strength:7.2f}  "
@@ -1216,14 +1223,17 @@ def render_grid(points, best):
     if best is None:
         lines.append("  best: none (no scorable cell — no measurable turn in the arc)")
     else:
+        best_score = (
+            best.score() if lurch_weight is None else best.score(lurch_weight)
+        )
         lines.append(
             f"  best: base_wpm={best.base_wpm:.1f} strength={best.strength:.2f} "
-            f"(score {best.score():.3f})"
+            f"(score {best_score:.3f})"
         )
     return lines
 
 
-def render_grid_csv(points, best):
+def render_grid_csv(points, best, *, lurch_weight=None):
     """Render a ``simulate-mirror --grid`` sweep as CSV text (no trailing newline).
 
     The spreadsheet/plot-friendly twin of :func:`render_grid`, the first
@@ -1249,6 +1259,10 @@ def render_grid_csv(points, best):
     ``score`` to 3 places, matching the human report's precision. Pure: returns
     a single string built with the stdlib :mod:`csv` writer (RFC-4180 quoting,
     ``\\r\\n`` row terminators) with the trailing terminator stripped.
+
+    ``lurch_weight`` (iter-318) is the score weight the handler also passes to
+    :func:`pick_best_mirror_config`, so the ``score`` column matches the score
+    the ``is_best`` flag was decided on. ``None`` defers to the engine default.
     """
     # Identify the picked cell by value identity on its tunables so the flag
     # tracks pick_best_mirror_config's verdict without re-implementing scoring.
@@ -1268,7 +1282,7 @@ def render_grid_csv(points, best):
         ]
     )
     for p in points:
-        score = p.score()
+        score = p.score() if lurch_weight is None else p.score(lurch_weight)
         is_best = 1 if best_key is not None and (p.base_wpm, p.strength) == best_key else 0
         writer.writerow(
             [
@@ -1321,7 +1335,7 @@ def render_trajectory_csv(traj, *, wpms=None):
     return buf.getvalue().rstrip("\r\n")
 
 
-def render_grid_json(points, best):
+def render_grid_json(points, best, *, lurch_weight=None):
     """Render a ``simulate-mirror --grid`` sweep as a JSON string.
 
     The nested/programmatic twin of :func:`render_grid` / :func:`render_grid_csv`
@@ -1342,9 +1356,14 @@ def render_grid_json(points, best):
     the same cell shape, or ``null`` when no cell was scorable. Floats round to 3
     places, matching the human / CSV reports. Pure: returns a single JSON string
     (no I/O), built from the points' attributes so it is testable without audio.
+
+    ``lurch_weight`` (iter-318) is the score weight the handler also passes to
+    :func:`pick_best_mirror_config`, so each cell's ``score`` and the ``best``
+    object's ``score`` are computed on the same weight the pick used. ``None``
+    defers to the engine default.
     """
     def _cell(p):
-        score = p.score()
+        score = p.score() if lurch_weight is None else p.score(lurch_weight)
         return {
             "base_wpm": p.base_wpm,
             "strength": p.strength,
@@ -2423,6 +2442,12 @@ def cmd_simulate_mirror(args, *, log=print):
     (:func:`render_grid_json` / :func:`render_trajectory_json`), completing the
     human / ``--json`` / ``--csv`` trio the VAD-analysis surfaces already carry.
     ``--json`` and ``--csv`` are mutually exclusive at the parser.
+
+    iter-318 adds ``--lurch-weight``, the first scoring knob on the grid sweep:
+    it threads the parser value into :func:`pick_best_mirror_config` AND all
+    three grid renderers so the displayed ``score`` column always reflects the
+    weight the best pick was decided on. Trajectory mode has no score, so the
+    knob is inert there.
     """
     wm = _load_wpm_mirror()
     WpmMirrorConfig = wm.WpmMirrorConfig
@@ -2432,6 +2457,7 @@ def cmd_simulate_mirror(args, *, log=print):
 
     as_csv = getattr(args, "csv", False)
     as_json = getattr(args, "json", False)
+    lurch_weight = getattr(args, "lurch_weight", None)
 
     if args.grid:
         points = sweep_mirror_grid(
@@ -2440,13 +2466,16 @@ def cmd_simulate_mirror(args, *, log=print):
             args.strengths,
             initial_speed=args.initial_speed,
         )
-        best = pick_best_mirror_config(points)
-        if as_json:
-            log(render_grid_json(points, best))
-        elif as_csv:
-            log(render_grid_csv(points, best))
+        if lurch_weight is None:
+            best = pick_best_mirror_config(points)
         else:
-            for line in render_grid(points, best):
+            best = pick_best_mirror_config(points, lurch_weight)
+        if as_json:
+            log(render_grid_json(points, best, lurch_weight=lurch_weight))
+        elif as_csv:
+            log(render_grid_csv(points, best, lurch_weight=lurch_weight))
+        else:
+            for line in render_grid(points, best, lurch_weight=lurch_weight):
                 log(line)
         return
 
@@ -2981,6 +3010,7 @@ DEFAULT_HANDLERS = {
 # session package were unavailable; falls back to the documented constants.
 _MIRROR_DEFAULT_BASE_WPM = 165.0
 _MIRROR_DEFAULT_STRENGTH = 0.5
+_MIRROR_DEFAULT_LURCH_WEIGHT = 0.5
 _MIRROR_DEFAULT_CALIB_SPREAD_MAX = 10.0
 _MIRROR_DEFAULT_CALIB_DRIFT_MIN = 5.0
 _MIRROR_DEFAULT_CALIB_MIN_SAMPLES = 3
@@ -3002,12 +3032,14 @@ def build_parser():
         wm = _load_wpm_mirror()
         base_wpm_default = wm.DEFAULT_BASE_WPM
         strength_default = wm.DEFAULT_STRENGTH
+        lurch_weight_default = wm.DEFAULT_LURCH_WEIGHT
         calib_spread_max_default = wm.DEFAULT_CALIB_SPREAD_MAX
         calib_drift_min_default = wm.DEFAULT_CALIB_DRIFT_MIN
         calib_min_samples_default = wm.DEFAULT_CALIB_MIN_SAMPLES
     except Exception:  # pragma: no cover - defensive fallback
         base_wpm_default = _MIRROR_DEFAULT_BASE_WPM
         strength_default = _MIRROR_DEFAULT_STRENGTH
+        lurch_weight_default = _MIRROR_DEFAULT_LURCH_WEIGHT
         calib_spread_max_default = _MIRROR_DEFAULT_CALIB_SPREAD_MAX
         calib_drift_min_default = _MIRROR_DEFAULT_CALIB_DRIFT_MIN
         calib_min_samples_default = _MIRROR_DEFAULT_CALIB_MIN_SAMPLES
@@ -3099,6 +3131,17 @@ def build_parser():
         type=positive_floats_type,
         default=[0.3, 0.5, 0.7],
         help="Grid strength axis (comma-separated; default: 0.3,0.5,0.7)",
+    )
+    sim.add_argument(
+        "--lurch-weight",
+        type=float,
+        default=lurch_weight_default,
+        dest="lurch_weight",
+        help="Grid score weight on the lurch term (max single-turn step) "
+        "relative to the convergence term (|final_gap|); higher penalizes "
+        f"jumpy speed changes more (default: {lurch_weight_default}). "
+        "Affects --grid scoring and the best pick only; ignored in trajectory "
+        "mode (no score)",
     )
     sim_fmt = sim.add_mutually_exclusive_group()
     sim_fmt.add_argument(
