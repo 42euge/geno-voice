@@ -28198,3 +28198,114 @@ purely additive.
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list`
    shows ~30 leftover per-iter worktrees. A future lap could
    `git worktree prune` / remove merged ones.
+
+## iter-308 — barge-teardown consistency sentinel (sustained slow LLM stream cancel)
+
+- **Date:** 2026-06-20
+- **Branch:** iter-308-cancel-close-consistency (ff-merged to main)
+- **Commit:** 0769ae7
+
+**Why.** The `--target` composition space is feature-complete on BOTH
+the VAD grid and sweep (iter-273–304), so the next genuine increment
+stays in the other long-running feature family: the session-summary
+diversity-check pattern (GENO.md). The iter-307 plan named the remaining
+ONE-SIDED continuous metrics as clean clones of the
+iter-140/141/208/209/226/307 monotonic template. Of those,
+`llm_cancel_to_close` (iter-060) is the most mission-relevant — it lives
+squarely in the streaming/barge-in area the loop targets. iter-060
+colors each barge turn's cancel-to-close figure (dim ≤500ms, yellow
+>500ms) and the session summary prints the MEDIAN across barge turns,
+but a median washes out a sustained-slow stretch behind a few prompt
+teardowns. A SUSTAINED run of slow/hung teardowns is the actionable
+signal that the old reply keeps generating server-side past every
+interruption — burning tokens and, on some backends, blocking the next
+request. Barge-in only *feels* instantaneous if the old stream dies
+promptly; this is the sentinel for when it stops.
+
+**What's novel.** TWENTIETH instance of the diversity-check pattern and
+the SEVENTEENTH on a continuous metric. The metric is BARGE-GATED, so it
+is RARER per session than the threshold-5 general signals. Following
+iter-120's barge-phase precedent, the threshold is **4 (not 5)**: a
+shorter run of slow teardowns is already a strong structural signal vs
+natural per-turn jitter — this is the SECOND threshold-4 sentinel and
+the first since iter-120, both justified by the same "barge-gated events
+are rarer and more semantically loaded" reasoning. Like
+iter-140/141/208/209/224/226/307 — and UNLIKE the inverted
+iter-142/143/225 — `llm_cancel_to_close` is smaller-is-better, so the
+boundaries are NOT inverted; the problematic end is a LARGE latency.
+
+**What it is.** A one-sided monotonic sentinel (boundaries aligned with
+iter-060's per-turn display, which skips ≤0, dims ≤500ms, and colors
+>500ms yellow):
+- `prompt` — ≤ 0.50s: the stream closed promptly after the barge
+  trigger; teardown is not in the way. The desired state (filtered).
+- `slow`   — 0.50-1.0s: teardown noticeably laggy; the old reply kept
+  generating for up to a second past the interruption.
+- `hung`   — > 1.0s: the socket is effectively hanging; the old stream
+  runs on for over a second after the user barged in.
+
+`0.0` (a turn with no measured barge teardown — the common no-barge
+turn, where `llm_cancel_to_close` stays at its default) returns `""` and
+is filtered, matching the `> 0` collection filter the summary already
+uses for `cancel_close_lats` (iter-060). So a turn that never barged is
+never counted as a "prompt" teardown. The two flagged buckets stay
+distinct: a slow run and a hung run never merge, so 3 slow + 3 hung
+yields a longest run of 3, below threshold.
+
+**What changed.**
+- **`examples/_chat_metrics.py`** — added `_cancel_close_bucket`
+  (prompt/slow/hung, returns `""` for non-positive) and
+  `_emit_cancel_close_consistency_line` (threshold 4, filters `""` +
+  `prompt` before the run scan, per-value suggestions + defensive
+  `else`, `iter-060 llm_cancel_to_close` attribution). Wired the call
+  into `print_session_summary` right after the iter-307 synth-backlog
+  line, reusing the iter-116 `_longest_consecutive_run` primitive
+  unchanged.
+- **`tests/unit/test_emit_cancel_close_consistency_line.py` (+21
+  tests)** — the full pattern matrix: bucket boundaries incl. float
+  edges (0.50→prompt, 0.5001→slow, 1.0→slow, 1.0001→hung), the
+  0.0-is-no-barge semantics through the consumer (a no-barge 0.0 between
+  hung turns doesn't break the run), empty/all-zero suppression,
+  prompt-run never fires, at/above/below threshold per value, prompt
+  interleaving doesn't break a run, hung breaks a slow run,
+  longest-of-two wins, custom threshold (3 catches, 10 suppresses),
+  output formatting (4-space indent) + iter-060 attribution,
+  1000-element scaling.
+
+No production behavior changed for existing metrics — the new line is
+purely additive.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **3992 passed**
+(3971 prior + 21 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_emit_cancel_close_consistency_line.py`
+  → **21 passed**.
+- Integration: not re-run this lap (no corpus symlinked into this worktree;
+  same as prior corpus-gated laps — the change is a pure session-summary
+  helper with unit-level coverage, no audio I/O).
+
+**Next planned items:**
+1. **[chat-metrics] One-sided continuous metrics still uncovered:**
+   `speaker_open_seconds` (iter-061, yellow >50ms — worker exited before
+   opening the speaker) and `mic_stale_frames` (iter-037, echo signal —
+   bot voice leaking back through the OS mic). Each is a clean clone of
+   the iter-140/141/208/209/226/307/308 monotonic template.
+   `llm_cancel_to_close` (this lap) and `max_queue_depth` (iter-307) are
+   now done. NOTE: `speaker_open_seconds` is near-always 0 after the
+   first turn (persistent speaker reuse), and `mic_stale_frames` is
+   near-always 0 on clean sessions — a SUSTAINED run of either is rarer
+   still, so a threshold-4 (barge/event-gated) bar likely fits both,
+   matching iter-120/308.
+2. **[chat-metrics] Two-sided-band sentinel family — strongest candidates
+   exhausted** (iter-210 bot-wpm, iter-305 ttc, iter-306 token-reveal-lag).
+   `user_wpm` (iter-064) has no "correct" rate so it is likely NOT a good
+   band fit. The band family is probably complete.
+3. **[cli] Grid + sweep cross-surface `--target` matrices — BOTH COMPLETE**
+   (iter-273–304). A next CLI feature would be a different axis (e.g.
+   asymmetric band tolerance, or a soft floor/ceiling beyond an open edge)
+   — scope before building.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list`
+   shows leftover per-iter worktrees. A future lap could
+   `git worktree prune` / remove merged ones.
