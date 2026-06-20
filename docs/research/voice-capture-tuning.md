@@ -163,6 +163,7 @@ gv vad-sweep recording.wav --target 3>5>7                   # preference: prefer
 gv vad-sweep recording.wav --target 3,5:2                   # weighted: prefer 3, accept 5 but 2 worse (iter-250)
 gv vad-sweep recording.wav --target 3,5:1.5                 # fractional weight: 5 is 1.5 segments worse (iter-251)
 gv vad-sweep recording.wav --target 3,5*1.5                 # scaled: prefer 3, accept 5, drift past costs 1.5x (iter-252)
+gv vad-sweep recording.wav --target 3,5*1.5:2               # affine: prefer 3, accept 5 but scale 1.5x THEN add 2 (iter-287)
 ```
 
 The human report is a small table — the WAV name, a `threshold / segments /
@@ -772,12 +773,44 @@ being the **scaled** distance, and the `--json` `target` serialises as a
 order (the first factor wins), and one that collapses to a single element drops the
 now-useless factor (a lone factor scales every cell uniformly and cannot change a
 pick). A `*` factor **requires** a `,` set, and cannot be combined with `>`
-(preference) or `:` (the additive weight) — a set is additively *or*
-multiplicatively weighted, not both, and stacking either with preference is
-rejected as ambiguous. Each factor is a number `>= 1` (`1` is neutral; a factor
-below 1 would *discount* an element, which the other elements' larger factors
-already express); NaN and infinite factors are rejected, and an integral float
-collapses to an int (`5*2.0` → `5*2`).
+(preference) — stacking either weight with preference is rejected as ambiguous.
+Each factor is a number `>= 1` (`1` is neutral; a factor below 1 would *discount*
+an element, which the other elements' larger factors already express); NaN and
+infinite factors are rejected, and an integral float collapses to an int (`5*2.0`
+→ `5*2`). A set carrying ONLY `*` (no `:`) is this scaled form; carrying BOTH is
+the **affine** form below.
+
+#### `--target A,B*F:W` — an affine set (iter-287)
+
+The additive `:penalty` and the multiplicative `*factor` are two independent ways
+to weight one element, and iter-250–252 forced a choice between them. But the two
+compose naturally: an operator may want "accept 5, but every segment past it costs
+1.5× **and** it starts 2 worse than the preferred". iter-287 lets the two weights
+**co-occur** on one set — the **affine** form, scoring `distance * factor +
+penalty` per element (the factor scales, the penalty then offsets). `--target
+3,5*1.5:2` means exactly that. The form activates only when BOTH a `*` and a `:`
+appear somewhere in the set; a set with only `:` is still the iter-250 weighted
+dict and only `*` the iter-252 scaled dict, byte-for-byte unchanged. Per element
+both weights are **optional** and **order-free** — `5*1.5:2` and `5:2*1.5` parse
+identically — defaulting to factor `1` / penalty `0`, and the base may itself be a
+scalar or band (`3,5-7*1.5:2`).
+
+```bash
+gv vad-sweep recording.wav --thresholds 0.3,0.5,0.7 --target 3,5*1.5:2   # scale 1.5x THEN add 2
+gv vad-grid  recording.wav --thresholds 0.3,0.5 --min-silences 400,800 --target 3,8*1.5:1  # affine grid pick
+```
+
+The affine distance **generalises** both prior forms — factor `1` reduces it to
+the weighted set, penalty `0` to the scaled set — so it is the union, not a third
+unrelated scoring rule. The `best:` / `top N:` lines render each element `*factor`
+(when non-neutral) THEN `:penalty` (when non-zero), the canonical order that reads
+back parseable (`3,5*1.5:2`), and the `--json` `target` serialises as a
+`{"affine": [[element, factor, penalty], ...]}` object (a band base nests as its
+own `[lo, hi]`). An affine set is deduped on the element preserving first-seen
+order (the first weights win), and one collapsing to a single element drops BOTH
+now-useless weights. Like its parents the affine weights **require** a `,` set,
+cannot stack with `>` (preference), and a repeated `*`/`:` on one element is
+rejected as malformed.
 
 ### `gv vad-grid` — a 2-D knob grid (iter-240)
 

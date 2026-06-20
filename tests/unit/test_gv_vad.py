@@ -4677,12 +4677,22 @@ def test_target_type_rejects_mixing_factor_and_preference(raw):
         gv.target_type(raw)
 
 
-@pytest.mark.parametrize("raw", ["3,5:2*1.5", "3*1.5,5:2", "3,5*1.5:2"])
-def test_target_type_rejects_mixing_factor_and_penalty(raw):
-    # iter-252: ':' (additive penalty) and '*' (multiplicative factor) are two ways
-    # to weight one set; a set is one OR the other, not both at once.
-    with pytest.raises(argparse.ArgumentTypeError):
-        gv.target_type(raw)
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        # ':' THEN '*' on element 5, '*' THEN ':' on element 5, and the two weights
+        # split across two elements — all three carry BOTH operators in the set, so
+        # all parse to an affine dict (no longer rejected as of iter-287).
+        ("3,5:2*1.5", {"affine": [(3, 1, 0), (5, 1.5, 2)]}),
+        ("3,5*1.5:2", {"affine": [(3, 1, 0), (5, 1.5, 2)]}),
+        ("3*1.5,5:2", {"affine": [(3, 1.5, 0), (5, 1, 2)]}),
+    ],
+)
+def test_target_type_affine_co_occurring_weights_parse_to_affine_dict(raw, expected):
+    # iter-287: ':' (additive penalty) and '*' (multiplicative factor) MAY now
+    # co-occur on one set — the affine form, scoring distance*factor + penalty.
+    # Per element both weights are optional and ORDER-FREE ('5:2*1.5' == '5*1.5:2').
+    assert gv.target_type(raw) == expected
 
 
 @pytest.mark.parametrize("raw", ["3,5*a", "3,5*0.5", "3,a*2", "3,5-3*2"])
@@ -4766,6 +4776,166 @@ def test_render_grid_scaled_target_line_reads_back():
     assert "4 segments" in best_line
     assert "target 3,5*2" in best_line
     assert "scaled" not in best_line
+
+
+# ---------------------------------------------------------------------------
+# iter-287: AFFINE --target set — ':penalty' and '*factor' composed on one set,
+# scoring distance*factor + penalty. Generalises the iter-250 weighted set
+# (factor 1) and the iter-252 scaled set (penalty 0).
+# ---------------------------------------------------------------------------
+
+
+def test_target_type_affine_band_base_composes():
+    # iter-287: an affine element's base may itself be a band — '5-7*1.5:2' scales
+    # AND offsets the (5,7) band's distance.
+    assert gv.target_type("3,5-7*1.5:2") == {"affine": [(3, 1, 0), ((5, 7), 1.5, 2)]}
+
+
+def test_target_type_affine_per_element_weights_optional():
+    # iter-287: each element's factor (default 1) and penalty (default 0) are
+    # INDEPENDENTLY optional — a set qualifies as affine as long as SOME element
+    # carries '*' and SOME element (possibly another) carries ':'.
+    assert gv.target_type("3*2,5:1,7") == {"affine": [(3, 2, 0), (5, 1, 1), (7, 1, 0)]}
+
+
+def test_target_type_affine_fractional_weights_stay_float():
+    # iter-287: a fractional factor/penalty stays a float; an integral one collapses
+    # to int (reusing scale_factor_type / nonneg_penalty_type).
+    value = gv.target_type("3,5*1.5:2.5")
+    assert value == {"affine": [(3, 1, 0), (5, 1.5, 2.5)]}
+    assert isinstance(value["affine"][1][1], float)  # factor 1.5
+    assert isinstance(value["affine"][1][2], float)  # penalty 2.5
+
+
+def test_target_type_affine_dedupes_first_weights_win():
+    # iter-287: dedupe on the element preserving first-seen order — the first
+    # (factor, penalty) for a repeated element wins.
+    assert gv.target_type("3*2:1,5:3,3*9:9") == {
+        "affine": [(3, 2, 1), (5, 1, 3)]
+    }
+
+
+def test_target_type_affine_single_element_collapses():
+    # iter-287: an affine set reducing to one element drops BOTH weights (a lone
+    # factor scales every cell uniformly and a lone penalty is a constant offset —
+    # neither changes a pick), so scalar output is byte-for-byte unchanged.
+    assert gv.target_type("5*2:3,5*9:9") == 5
+
+
+@pytest.mark.parametrize("raw", ["3,5*1.5:2>7", "3*2,5:1>7"])
+def test_target_type_rejects_mixing_affine_and_preference(raw):
+    # iter-287: the affine weights still cannot stack with '>' (preference) — both
+    # express preference, so the combination is ambiguous.
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.target_type(raw)
+
+
+@pytest.mark.parametrize("raw", ["3,5*1.5:a", "3,5*0.5:2", "3,5*a:2", "3,5-3*1.5:2"])
+def test_target_type_rejects_malformed_affine_element(raw):
+    # iter-287: a bad penalty, a below-1 factor, a bad factor, or an inverted band
+    # base fails the whole target.
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.target_type(raw)
+
+
+@pytest.mark.parametrize("raw", ["3,5*1.5*2:1", "3,5:1:2*3"])
+def test_target_type_rejects_repeated_affine_operator(raw):
+    # iter-287: an element with two '*' or two ':' is malformed — the canonical
+    # form carries at most one of each.
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.target_type(raw)
+
+
+def test_format_target_affine_reads_back_as_typed():
+    # iter-287: an affine set renders comma-joined, each element appending '*factor'
+    # (when non-neutral) THEN ':penalty' (when non-zero) — the canonical '*' before
+    # ':' order — so it reads back parseable.
+    assert gv._format_target({"affine": [(3, 1, 0), (5, 1.5, 2)]}) == "3,5*1.5:2"
+    assert gv._format_target({"affine": [(3, 2, 0), (5, 1, 1)]}) == "3*2,5:1"
+    assert gv._format_target({"affine": [(3, 1, 0), ((5, 7), 1.5, 2)]}) == "3,5-7*1.5:2"
+
+
+def test_format_target_affine_round_trips_through_target_type():
+    # iter-287: the rendered string re-parses to the same affine dict (the '*'
+    # before ':' render order is what target_type accepts).
+    target = {"affine": [(3, 2, 1), (5, 1.5, 2)]}
+    assert gv.target_type(gv._format_target(target)) == target
+
+
+def test_grid_cell_distance_affine_scales_then_offsets_min_over_elements():
+    # iter-287: each element's distance is raw*factor + penalty; the set scores as
+    # the MIN over those affine distances. Preferred 3 (neutral), accepted 5
+    # (scale 1.5, offset 2).
+    target = {"affine": [(3, 1, 0), (5, 1.5, 2)]}
+    assert gv.grid_cell_distance({"num_segments": 3}, target) == 0  # 0*1+0 vs 2*1.5+2=5
+    assert gv.grid_cell_distance({"num_segments": 5}, target) == 2  # 2*1 vs 0*1.5+2=2
+    assert gv.grid_cell_distance({"num_segments": 7}, target) == 4  # 4*1=4 vs 2*1.5+2=5
+
+
+def test_grid_cell_distance_affine_generalises_weighted_and_scaled():
+    # iter-287: factor 1 reduces affine to the iter-250 weighted set, penalty 0 to
+    # the iter-252 scaled set — same numbers either way.
+    counts = [3, 5, 6, 7]
+    weighted = {"weighted": [(3, 0), (5, 2)]}
+    affine_w = {"affine": [(3, 1, 0), (5, 1, 2)]}
+    scaled = {"scaled": [(3, 1), (5, 2)]}
+    affine_s = {"affine": [(3, 1, 0), (5, 2, 0)]}
+    for n in counts:
+        cell = {"num_segments": n}
+        assert gv.grid_cell_distance(cell, affine_w) == gv.grid_cell_distance(
+            cell, weighted
+        )
+        assert gv.grid_cell_distance(cell, affine_s) == gv.grid_cell_distance(
+            cell, scaled
+        )
+
+
+def test_grid_cell_sort_key_affine_inserts_no_secondary_key():
+    # iter-287: the affine set's preference is baked into the distance (factor +
+    # penalty), so the sort key carries NO secondary preference-rank component —
+    # only the explicit tie_break (e.g. speech) appends a key.
+    target = {"affine": [(3, 1, 0), (5, 1.5, 2)]}
+    assert gv.grid_cell_sort_key({"num_segments": 3, "speech_s": 1.0}, target) == (0,)
+    assert gv.grid_cell_sort_key(
+        {"num_segments": 7, "speech_s": 1.0}, target, "speech"
+    ) == (4, -1.0)
+
+
+def test_pick_best_grid_cell_affine_overrides_distance_gap():
+    # iter-287: preferred 3 (neutral), accepted 5 carrying scale 1.5 + offset 2.
+    # Count 5 sits at raw distance 0 but its affine distance is 0*1.5+2=2; count 4
+    # is one off the preferred 3 at affine distance 1*1+0=1 — so the affine weight
+    # lets the preferred-side count 4 WIN over the exact-accepted count 5.
+    cells = _seg_speech_cells([(5, 9.0), (4, 1.0)])
+    best = gv.pick_best_grid_cell(cells, {"affine": [(3, 1, 0), (5, 1.5, 2)]})
+    assert best["num_segments"] == 4
+
+
+def test_render_grid_json_carries_affine_target():
+    # iter-287: an affine target serialises as {"affine": [...]} — each element a
+    # nested [element, factor, penalty] array (a band base nests its own [lo,hi]).
+    results = [_cell_result(n) for n in (4, 7)]
+    payload = json.loads(
+        gv.render_vad_grid_json(
+            [0.3], [400.0, 800.0], results, name="rec.wav",
+            target={"affine": [(3, 1, 0), ((5, 7), 1.5, 2)]},
+        )
+    )
+    assert payload["target"] == {"affine": [[3, 1, 0], [[5, 7], 1.5, 2]]}
+
+
+def test_render_grid_affine_target_line_reads_back():
+    # iter-287: the best: line renders the affine weight as typed ('*' before ':')
+    # and shows the affine |Δ| with no dict repr leaking.
+    results = [_cell_result(n) for n in (5, 4)]
+    lines = gv.render_vad_grid(
+        [0.3], [400.0, 800.0], results, name="rec.wav",
+        target={"affine": [(3, 1, 0), (5, 1.5, 2)]},
+    )
+    best_line = lines[-1]
+    assert "4 segments" in best_line
+    assert "target 3,5*1.5:2" in best_line
+    assert "affine" not in best_line
 
 
 def test_pick_best_grid_cell_speech_tie_break_prefers_most_speech():
@@ -7574,6 +7744,54 @@ def test_cmd_vad_sweep_scaled_target_grows_cost_with_distance():
     assert "5 segments" in text
     assert "target 3,8*2" in text
     assert "scaled" not in text
+
+
+def test_cmd_vad_grid_affine_target_combines_factor_and_penalty():
+    # iter-287, grid form, end-to-end FROM THE RAW STRING: preferred 3 (neutral),
+    # accepted 8 scaled by 1.5 then offset by 1. Low gate → 10 segments (raw 2 past
+    # 8, affine 2*1.5+1=4); high gate → 5 (raw 2 from preferred 3, affine 2*1=2). The
+    # combined weight lands the pick on the preferred-side 5-count cell (2 < 4).
+    def seg(wav, params=None):
+        n = 10 if params.threshold < 0.5 else 5
+        return _cell_result(n)
+
+    lines: List[str] = []
+    gv.cmd_vad_grid(
+        _grid_args(
+            thresholds=[0.3, 0.5], min_silences=[400.0],
+            target=gv.target_type("3,8*1.5:1"),
+        ),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    text = "\n".join(lines)
+    assert "best:" in text
+    assert "5 segments" in text
+    assert "target 3,8*1.5:1" in text
+    assert "affine" not in text
+
+
+def test_cmd_vad_sweep_affine_target_combines_factor_and_penalty():
+    # iter-287, sweep form, end-to-end FROM THE RAW STRING: same affine target as the
+    # grid twin. Low gate → 10 (affine 2*1.5+1=4); high gate → 5 (affine 2*1=2), so
+    # the combined weight flips the pick to the 5-count value (2 < 4).
+    def seg(wav, params=None):
+        n = 10 if params.threshold < 0.5 else 5
+        return _cell_result(n)
+
+    lines: List[str] = []
+    gv.cmd_vad_sweep(
+        _sweep_args(thresholds=[0.3, 0.7], target=gv.target_type("3,8*1.5:1")),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    text = "\n".join(lines)
+    assert "best:" in text
+    assert "5 segments" in text
+    assert "target 3,8*1.5:1" in text
+    assert "affine" not in text
 
 
 def test_cmd_vad_grid_csv_ignores_target():

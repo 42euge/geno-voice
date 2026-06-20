@@ -413,6 +413,19 @@ def target_type(raw):
     rides the same min-over-elements distance / pick / render / JSON machinery as
     ``{"weighted": ...}``, only with ``*`` instead of ``+`` folding the weight in.
 
+    iter-287 lets the ``:penalty`` and ``*factor`` weights CO-OCCUR on one set —
+    the AFFINE form: ``--target 3,5*1.5:2`` means "prefer 3, accept 5 but every
+    segment past it costs 1.5× AND it starts 2 worse". When BOTH operators appear
+    somewhere in the set it parses to a ``{"affine": [(element, factor, penalty),
+    ...]}`` dict scoring ``distance * factor + penalty`` per element (the factor
+    scales, the penalty then offsets) — composing iter-252's multiplicative factor
+    and iter-250's additive penalty. Per element both weights are optional and
+    order-free (``5*1.5:2`` == ``5:2*1.5``), defaulting to factor ``1`` / penalty
+    ``0``. A set carrying ONLY ``:`` is still the iter-250 weighted dict and ONLY
+    ``*`` still the iter-252 scaled dict — affine activates only on the mix — so
+    every prior weighted/scaled parse is byte-for-byte unchanged. ``*``/``:`` still
+    require a ``,`` set and still cannot stack with ``>`` (preference).
+
     Each present band edge is a non-negative whole number (reusing
     :func:`nonneg_int_type`'s rules — ``0`` is legitimate, negatives/fractionals
     are rejected), the band separator is a single ``-``, and for a CLOSED band
@@ -449,17 +462,15 @@ def target_type(raw):
         )
     # iter-252: a '*factor' weight (a SCALED set) folds preference into the
     # distance MULTIPLICATIVELY. Like ':penalty' it expresses preference, so it
-    # cannot stack with '>' (preference) nor with ':' (the additive weight — a set
-    # is additively OR multiplicatively weighted, not both), and a factor is
-    # meaningless on a single element (it scales every cell's distance uniformly
-    # and cannot change a pick), so it requires the comma-set context.
+    # cannot stack with '>' (preference), and a factor is meaningless on a single
+    # element (it scales every cell's distance uniformly and cannot change a
+    # pick), so it requires the comma-set context. iter-287: a ':penalty' and a
+    # '*factor' MAY now co-occur — the AFFINE set (see below), where each element
+    # is scaled THEN offset (distance*factor + penalty). The prior
+    # "cannot mix ':' and '*'" rejection is gone.
     if has_scale and has_pref:
         raise argparse.ArgumentTypeError(
             f"target cannot mix '*' (factor) and '>' (preference), got {raw!r}"
-        )
-    if has_scale and has_weight:
-        raise argparse.ArgumentTypeError(
-            f"target cannot mix '*' (factor) and ':' (penalty), got {raw!r}"
         )
     if has_scale and not has_set:
         raise argparse.ArgumentTypeError(
@@ -473,6 +484,16 @@ def target_type(raw):
     if has_pref:
         elements = _parse_target_collection(text, raw, ">", "preference")
         return elements[0] if len(elements) == 1 else {"prefer": elements}
+    # iter-287: a comma-set whose elements carry BOTH a '*factor' and a ':penalty'
+    # (anywhere in the set) is an AFFINE set — each element is scaled THEN offset
+    # (distance*factor + penalty), the multiplicative and additive weights composed
+    # on one element. It generalises both prior forms (factor 1 -> weighted,
+    # penalty 0 -> scaled), so it only activates when BOTH operators are present;
+    # a set with only ':' stays a {"weighted": ...} dict and only '*' stays a
+    # {"scaled": ...} dict, byte-for-byte unchanged. Parses to a distinct
+    # {"affine": [(element, factor, penalty), ...]} dict.
+    if has_set and has_weight and has_scale:
+        return _parse_affine_set(text, raw)
     # iter-250: a comma-set whose elements carry a ':penalty' is a WEIGHTED set —
     # the penalty is ADDED to that element's distance, so a more-preferred count
     # can win even at a slightly larger raw distance (unlike the iter-249
@@ -618,6 +639,81 @@ def _parse_scaled_set(text, raw):
     return {"scaled": scaled}
 
 
+def _parse_affine_part(part, raw):
+    """Parse one AFFINE element ``count[*factor][:penalty]`` (iter-287).
+
+    Both the ``*factor`` (multiplicative, :func:`scale_factor_type`) and
+    ``:penalty`` (additive, :func:`nonneg_penalty_type`) weights are OPTIONAL and
+    may appear in EITHER order — ``5*1.5:2`` and ``5:2*1.5`` parse identically. The
+    base (a scalar or band, parsed by :func:`_parse_single_target`) is the text
+    before the first weight operator, so a band composes (``5-7*1.5:2``). A factor
+    defaults to ``1`` (neutral) and a penalty to ``0`` (none) when absent, so an
+    element with neither is the plain iter-248 element. Returns
+    ``(element, factor, penalty)``. Pure; raises
+    :class:`argparse.ArgumentTypeError` on a duplicated operator or a malformed
+    base/weight.
+    """
+    if part.count("*") > 1 or part.count(":") > 1:
+        raise argparse.ArgumentTypeError(
+            f"target affine element has a repeated weight operator, got {raw!r}"
+        )
+    star = part.find("*")
+    colon = part.find(":")
+    ops = [p for p in (star, colon) if p != -1]
+    base_text = part if not ops else part[: min(ops)]
+    element = _parse_single_target(base_text.strip())
+    factor = 1
+    penalty = 0
+    if star != -1:
+        # The factor token runs from just after '*' to the next operator (the
+        # ':' if it follows '*') or the end of the element.
+        end = colon if (colon != -1 and colon > star) else len(part)
+        factor = scale_factor_type(part[star + 1 : end].strip())
+    if colon != -1:
+        end = star if (star != -1 and star > colon) else len(part)
+        penalty = nonneg_penalty_type(part[colon + 1 : end].strip())
+    return element, factor, penalty
+
+
+def _parse_affine_set(text, raw):
+    """Parse a comma-set whose elements carry BOTH ``*factor`` and ``:penalty`` (iter-287).
+
+    The AFFINE set composes the iter-252 MULTIPLICATIVE factor and the iter-250
+    ADDITIVE penalty on one set: each element contributes
+    ``grid_cell_distance * factor + penalty`` (see :func:`grid_cell_distance`), the
+    factor scaling the distance and the penalty offsetting the scaled result. It
+    activates only when the set carries BOTH a ``*`` and a ``:`` SOMEWHERE — a set
+    with only ``:`` is the iter-250 weighted set and only ``*`` the iter-252 scaled
+    set, both byte-for-byte unchanged. Per element BOTH weights are optional and
+    order-free (``5*1.5:2`` == ``5:2*1.5``), defaulting to factor ``1`` / penalty
+    ``0``; the base may itself be a scalar or band (``3,5-7*1.5:2`` composes).
+
+    Returns a ``{"affine": [(element, factor, penalty), ...]}`` dict (distinct
+    from the flat-set ``list``, the prefer/weighted/scaled dicts), deduped on the
+    element preserving first-seen order (so the first weights for a repeated
+    element win). An affine set that collapses to a single element reduces to the
+    BARE element — a lone factor scales every cell's distance uniformly and a lone
+    penalty is a constant offset, so neither can change a pick, keeping
+    scalar/band output byte-for-byte unchanged. Pure; raises
+    :class:`argparse.ArgumentTypeError` on an empty or malformed element/weight.
+    """
+    parts = [p.strip() for p in text.split(",")]
+    if any(p == "" for p in parts):
+        raise argparse.ArgumentTypeError(
+            f"target affine set must be ','-separated targets, got {raw!r}"
+        )
+    affine = []
+    seen = []
+    for part in parts:
+        element, factor, penalty = _parse_affine_part(part, raw)
+        if element not in seen:  # dedupe on element, first-seen weights win
+            seen.append(element)
+            affine.append((element, factor, penalty))
+    if len(affine) == 1:
+        return affine[0][0]
+    return {"affine": affine}
+
+
 def _parse_single_target(text):
     """Parse one ``--target`` element: a scalar count or a (possibly open) band.
 
@@ -682,6 +778,17 @@ def _format_target(target):
         return ",".join(
             _format_target(element) + (f"*{factor}" if factor != 1 else "")
             for element, factor in target["scaled"]
+        )
+    if isinstance(target, dict) and "affine" in target:
+        # iter-287: an affine set renders comma-joined, each element appending
+        # '*factor' (only when non-neutral) THEN ':penalty' (only when non-zero) —
+        # the canonical '*' before ':' order — so a neither-weighted element reads
+        # as a plain count and the whole thing reads back parseable as typed.
+        return ",".join(
+            _format_target(element)
+            + (f"*{factor}" if factor != 1 else "")
+            + (f":{penalty}" if penalty else "")
+            for element, factor, penalty in target["affine"]
         )
     if isinstance(target, dict):
         return ">".join(_format_target(element) for element in target["prefer"])
@@ -1514,6 +1621,12 @@ def grid_cell_distance(cell, target):
       MULTIPLICATIVE twin of the weighted set. An exact hit stays free
       (``0 * factor = 0``) and the cost grows with distance, so preference scales
       with how far the cell drifts rather than offsetting by a fixed amount.
+    - **affine set (iter-287)** — a ``{"affine": [(element, factor, penalty),
+      ...]}`` dict: the MIN over each element's distance SCALED by its factor THEN
+      OFFSET by its penalty (``distance * factor + penalty``), composing the
+      multiplicative factor and additive penalty on one element. Generalises both
+      weighted (factor ``1``) and scaled (penalty ``0``); the penalty bites even
+      an exact hit while the factor grows the cost with distance.
 
     Pure — reads only ``cell["num_segments"]``, an int, so it never touches
     torch.
@@ -1535,6 +1648,16 @@ def grid_cell_distance(cell, target):
         return min(
             grid_cell_distance(cell, element) * factor
             for element, factor in target["scaled"]
+        )
+    if isinstance(target, dict) and "affine" in target:
+        # iter-287: each element's distance is its raw distance SCALED by its factor
+        # THEN OFFSET by its penalty (distance*factor + penalty), composing the
+        # iter-252 multiplicative and iter-250 additive weights; the set scores as
+        # the MIN over those affine distances. The penalty bites even an exact hit
+        # (0*factor + penalty = penalty) and the factor grows the cost with distance.
+        return min(
+            grid_cell_distance(cell, element) * factor + penalty
+            for element, factor, penalty in target["affine"]
         )
     if isinstance(target, dict):
         return min(grid_cell_distance(cell, element) for element in target["prefer"])
@@ -1574,11 +1697,12 @@ def grid_cell_sort_key(cell, target, tie_break="row-major"):
     tie on preference rank. For a non-preference target the key is byte-for-byte
     the iter-243 shape (no preference key inserted).
 
-    iter-250/252: a ``{"weighted": ...}`` or ``{"scaled": ...}`` set inserts NO
-    secondary key — its preference is already baked into
-    :func:`grid_cell_distance` (the additive penalty / multiplicative factor), so
-    cells at equal weighted distance are a genuine tie that the ``tie_break``
-    decides. Only the ``{"prefer": ...}`` dict gets the preference rank key.
+    iter-250/252/287: a ``{"weighted": ...}``, ``{"scaled": ...}``, or
+    ``{"affine": ...}`` set inserts NO secondary key — its preference is already
+    baked into :func:`grid_cell_distance` (the additive penalty / multiplicative
+    factor / both composed), so cells at equal weighted distance are a genuine tie
+    that the ``tie_break`` decides. Only the ``{"prefer": ...}`` dict gets the
+    preference rank key.
 
     Pure — reads only ``cell["num_segments"]`` and, for ``"speech"`` ties,
     ``cell["speech_s"]``. Never touches torch.
@@ -2833,8 +2957,9 @@ def build_parser():
         "open band (3- = at least 3, -5 = at most 5), set (3,5,7 = 3 OR 5 "
         "OR 7), preference (3>5>7 = prefer 3, accept 5, then 7), weighted set "
         "(3,5:2 = prefer 3, accept 5 but 2 segments worse; the weight may be "
-        "fractional, 3,5:1.5), or scaled set (3,5*1.5 = prefer 3, accept 5 but "
-        "drift past it costs 1.5x) — when given, "
+        "fractional, 3,5:1.5), scaled set (3,5*1.5 = prefer 3, accept 5 but "
+        "drift past it costs 1.5x), or affine set (3,5*1.5:2 = both: scale by 1.5 "
+        "then add 2) — when given, "
         "a data-driven 'best:' pick names the swept value whose recovered "
         "segment count is closest to it (a band/set/preference scores 0 anywhere "
         "it is satisfied; a preference breaks ties toward the earlier-listed "
@@ -2997,14 +3122,16 @@ def build_parser():
         dest="target",
         help="Desired segment count (e.g. 3), closed band (e.g. 3-5), "
         "open band (3- = at least 3, -5 = at most 5), set (3,5,7 = 3 OR 5 "
-        "OR 7), preference (3>5>7 = prefer 3, accept 5, then 7), or weighted set "
+        "OR 7), preference (3>5>7 = prefer 3, accept 5, then 7), weighted set "
         "(3,5:2 = prefer 3, accept 5 but 2 segments worse; the weight may be "
-        "fractional, 3,5:1.5) — when given, "
+        "fractional, 3,5:1.5), scaled set (3,5*1.5 = drift past 5 costs 1.5x), or "
+        "affine set (3,5*1.5:2 = both: scale by 1.5 then add 2) — when given, "
         "a data-driven 'best:' pick names the cell whose recovered segment count "
         "is closest to it (a band/set/preference scores 0 anywhere it is "
         "satisfied; a preference breaks ties toward the earlier-listed count; a "
-        "weight adds to a count's distance so a preferred count can win at a "
-        "larger distance); the vad-grid analogue of simulate-mirror --grid's "
+        ":weight adds to a count's distance and a *factor multiplies it so a "
+        "preferred count can win at a larger distance); the vad-grid analogue of "
+        "simulate-mirror --grid's "
         "best pick; omit for just the table",
     )
     vad_grid.add_argument(
