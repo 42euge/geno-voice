@@ -487,3 +487,137 @@ def test_handler_csv_dispatch_routes(capsys):
     out = capsys.readouterr().out
     assert "sample,words,audio_seconds,speed,bot_wpm,implied_base_wpm" in out
     assert "# implied_base_wpm (median):" in out
+
+
+# ---- iter-317: --json surface (parser, renderer, handler) --------------
+
+import json as _json  # noqa: E402
+
+
+def test_json_flag_defaults_off():
+    args = gv.build_parser().parse_args(["calibrate-base-wpm", "--samples", "50:18.2"])
+    assert args.json is False
+
+
+def test_json_flag_sets_true():
+    args = gv.build_parser().parse_args(
+        ["calibrate-base-wpm", "--samples", "50:18.2", "--json"]
+    )
+    assert args.json is True
+
+
+def test_json_and_csv_mutually_exclusive():
+    with pytest.raises(SystemExit) as exc:
+        gv.build_parser().parse_args(
+            ["calibrate-base-wpm", "--samples", "50:18.2", "--json", "--csv"]
+        )
+    assert exc.value.code == 2
+
+
+def test_render_calibration_json_samples_and_calibration():
+    wm = gv._load_wpm_mirror()
+    samples = _samples([(50, 18.2), (50, 9.1, 2.0)])
+    calib = wm.calibrate_base_wpm(samples)
+    payload = _json.loads(gv.render_calibration_json(samples, calib))
+    assert len(payload["samples"]) == 2
+    assert [s["sample"] for s in payload["samples"]] == [1, 2]
+    assert set(payload["samples"][0]) == {
+        "sample", "words", "audio_seconds", "speed", "bot_wpm", "implied_base_wpm"
+    }
+    cal = payload["calibration"]
+    assert cal["implied_base_wpm"] == round(calib.implied_base_wpm, 3)
+    assert cal["n_samples"] == calib.n_samples
+    assert cal["spread"] == round(calib.spread, 3)
+    assert cal["nominal"] == round(calib.default_base_wpm, 3)
+    assert cal["drift"] == round(calib.drift, 3)
+
+
+def test_render_calibration_json_sample_values_match_engine():
+    wm = gv._load_wpm_mirror()
+    samples = _samples([(50, 18.2), (50, 9.1, 2.0)])
+    calib = wm.calibrate_base_wpm(samples)
+    payload = _json.loads(gv.render_calibration_json(samples, calib))
+    for obj, s in zip(payload["samples"], samples):
+        assert obj["words"] == s.words
+        assert obj["audio_seconds"] == round(float(s.audio_seconds), 3)
+        assert obj["speed"] == round(float(s.speed), 3)
+        assert obj["bot_wpm"] == round(s.bot_wpm, 3)
+        assert obj["implied_base_wpm"] == round(s.implied_base_wpm, 3)
+
+
+def test_render_calibration_json_none_calib_null():
+    # No samples ⇒ None calib ⇒ empty samples list, calibration null.
+    payload = _json.loads(gv.render_calibration_json([], None))
+    assert payload["samples"] == []
+    assert payload["calibration"] is None
+
+
+def test_render_calibration_json_nominal_threads_to_drift():
+    wm = gv._load_wpm_mirror()
+    samples = _samples([(50, 18.2)])
+    calib = wm.calibrate_base_wpm(samples, default_base_wpm=100.0)
+    payload = _json.loads(gv.render_calibration_json(samples, calib))
+    assert payload["calibration"]["nominal"] == 100.0
+    assert payload["calibration"]["drift"] == round(calib.drift, 3)
+
+
+def test_render_calibration_json_omits_verdict():
+    # Like the CSV, the JSON carries no adopt/keep decision — that is --verdict.
+    wm = gv._load_wpm_mirror()
+    samples = _samples([(50, 18.2)])
+    calib = wm.calibrate_base_wpm(samples)
+    payload = _json.loads(gv.render_calibration_json(samples, calib))
+    assert "recommend" not in payload
+    assert "verdict" not in payload
+
+
+def test_handler_json_matches_renderer():
+    wm = gv._load_wpm_mirror()
+    samples = _samples([(50, 18.2), (50, 9.1, 2.0)])
+    calib = wm.calibrate_base_wpm(samples, default_base_wpm=165.0)
+    expected = [gv.render_calibration_json(samples, calib)]
+    lines = _run(["calibrate-base-wpm", "--samples", "50:18.2", "50:9.1:2.0", "--json"])
+    assert lines == expected
+
+
+def test_handler_json_suppresses_human_report():
+    lines = _run(["calibrate-base-wpm", "--samples", "50:18.2", "--json"])
+    text = "\n".join(lines)
+    assert "calibration from rendered samples" not in text
+    payload = _json.loads(text)
+    assert "samples" in payload
+
+
+def test_handler_json_suppresses_verdict():
+    # Even with --verdict, --json wins and no prose decision is emitted.
+    lines = _run(
+        ["calibrate-base-wpm", "--samples", "50:14.0", "50:14.0", "50:14.0",
+         "--verdict", "--json"]
+    )
+    text = "\n".join(lines)
+    assert "calibration verdict" not in text
+    assert "decision:" not in text
+
+
+def test_handler_json_rows_are_parseable():
+    lines = _run(["calibrate-base-wpm", "--samples", "50:18.2", "50:9.1:2.0", "--json"])
+    payload = _json.loads("\n".join(lines))
+    assert len(payload["samples"]) == 2
+    assert [s["sample"] for s in payload["samples"]] == [1, 2]
+
+
+def test_handler_json_default_log_is_print(capsys):
+    args = gv.build_parser().parse_args(
+        ["calibrate-base-wpm", "--samples", "50:18.2", "--json"]
+    )
+    gv.cmd_calibrate_base_wpm(args)
+    out = capsys.readouterr().out
+    payload = _json.loads(out)
+    assert "samples" in payload
+
+
+def test_handler_json_dispatch_routes(capsys):
+    rc = gv.main(["calibrate-base-wpm", "--samples", "50:18.2", "--json"])
+    assert rc == 0
+    payload = _json.loads(capsys.readouterr().out)
+    assert payload["calibration"]["n_samples"] == 1

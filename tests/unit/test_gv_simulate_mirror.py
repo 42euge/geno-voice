@@ -487,3 +487,189 @@ def test_handler_csv_default_log_is_print(capsys):
     gv.cmd_simulate_mirror(args)
     out = capsys.readouterr().out
     assert out.startswith("turn,user_wpm,speed")
+
+
+# ---- iter-317: --json parser wiring ------------------------------------
+
+
+import json as _json  # noqa: E402
+
+
+def test_simulate_mirror_json_defaults_false():
+    args = gv.build_parser().parse_args(["simulate-mirror", "--wpms", "120,200"])
+    assert args.json is False
+
+
+def test_simulate_mirror_json_flag_sets_true():
+    args = gv.build_parser().parse_args(
+        ["simulate-mirror", "--wpms", "120,200", "--json"]
+    )
+    assert args.json is True
+
+
+def test_simulate_mirror_json_and_csv_mutually_exclusive():
+    with pytest.raises(SystemExit) as exc:
+        gv.build_parser().parse_args(
+            ["simulate-mirror", "--wpms", "120,200", "--json", "--csv"]
+        )
+    assert exc.value.code == 2
+
+
+# ---- iter-317: render_grid_json ----------------------------------------
+
+
+def test_render_grid_json_cells_and_best():
+    wm = gv._load_wpm_mirror()
+    points = wm.sweep_mirror_grid(
+        [120, 200, 120], [165.0, 180.0], [0.5], initial_speed=1.0
+    )
+    best = wm.pick_best_mirror_config(points)
+    payload = _json.loads(gv.render_grid_json(points, best))
+    assert payload["mode"] == "grid"
+    # One cell object per swept point.
+    assert len(payload["cells"]) == len(points)
+    cell = payload["cells"][0]
+    assert set(cell) == {
+        "base_wpm", "strength", "final_speed", "final_gap",
+        "max_step", "moves", "score",
+    }
+    # best is the picked cell as the same shape.
+    assert payload["best"]["base_wpm"] == best.base_wpm
+    assert payload["best"]["strength"] == best.strength
+
+
+def test_render_grid_json_values_match_engine():
+    wm = gv._load_wpm_mirror()
+    points = wm.sweep_mirror_grid([120, 200, 120], [165.0], [0.5])
+    best = wm.pick_best_mirror_config(points)
+    payload = _json.loads(gv.render_grid_json(points, best))
+    for cell, p in zip(payload["cells"], points):
+        assert cell["base_wpm"] == p.base_wpm
+        assert cell["strength"] == p.strength
+        assert cell["final_speed"] == round(p.final_speed, 3)
+        assert cell["max_step"] == round(p.max_step, 3)
+        assert cell["moves"] == p.moves
+        assert cell["score"] == round(p.score(), 3)
+
+
+def test_render_grid_json_unscorable_cell_nulls():
+    wm = gv._load_wpm_mirror()
+    # All-non-measurable arc → no scorable cell → best None, gap/score null.
+    points = wm.sweep_mirror_grid([0, -1], [165.0, 180.0], [0.5])
+    best = wm.pick_best_mirror_config(points)
+    assert best is None
+    payload = _json.loads(gv.render_grid_json(points, best))
+    assert payload["best"] is None
+    for cell in payload["cells"]:
+        assert cell["final_gap"] is None
+        assert cell["score"] is None
+
+
+def test_render_grid_json_rounds_to_three_places():
+    wm = gv._load_wpm_mirror()
+    points = wm.sweep_mirror_grid([120, 200, 140], [165.0], [0.5])
+    best = wm.pick_best_mirror_config(points)
+    payload = _json.loads(gv.render_grid_json(points, best))
+    for cell in payload["cells"]:
+        for key in ("final_speed", "max_step", "score"):
+            val = cell[key]
+            if isinstance(val, float):
+                assert round(val, 3) == val
+
+
+# ---- iter-317: render_trajectory_json ----------------------------------
+
+
+def test_render_trajectory_json_turns_and_scalars():
+    wm = gv._load_wpm_mirror()
+    cfg = wm.WpmMirrorConfig(enabled=True, base_wpm=165.0, strength=0.5)
+    wpms = [120.0, 200.0, 120.0]
+    traj = wm.simulate_speed_trajectory(wpms, initial_speed=1.0, config=cfg)
+    payload = _json.loads(gv.render_trajectory_json(traj, wpms=wpms))
+    assert payload["mode"] == "trajectory"
+    # Arc-level scalars carried at top level (unlike the per-turn CSV).
+    assert payload["initial_speed"] == round(traj.initial_speed, 3)
+    assert payload["final_speed"] == round(traj.final_speed, 3)
+    assert payload["moves"] == traj.moves
+    # One turn object per speed, 1-based, paired user_wpm.
+    assert len(payload["turns"]) == len(traj.speeds)
+    for i, (t, speed) in enumerate(zip(payload["turns"], traj.speeds), start=1):
+        assert t["turn"] == i
+        assert t["user_wpm"] == wpms[i - 1]
+        assert t["speed"] == round(speed, 3)
+
+
+def test_render_trajectory_json_empty_arc_keeps_scalars():
+    traj = _traj(speeds=[], initial_speed=1.0, final_speed=1.0)
+    payload = _json.loads(gv.render_trajectory_json(traj, wpms=[]))
+    assert payload["turns"] == []
+    # The scalars are still present even with no turns.
+    assert payload["initial_speed"] == 1.0
+    assert payload["final_speed"] == 1.0
+    assert payload["ideal_final_speed"] is None
+    assert payload["final_gap"] is None
+
+
+def test_render_trajectory_json_unpaired_wpms_user_wpm_null():
+    traj = _traj(speeds=[0.9, 0.85], initial_speed=1.0, final_speed=0.85)
+    payload = _json.loads(gv.render_trajectory_json(traj, wpms=[120.0]))
+    assert [t["user_wpm"] for t in payload["turns"]] == [None, None]
+    assert [t["speed"] for t in payload["turns"]] == [0.9, 0.85]
+
+
+def test_render_trajectory_json_no_wpms_arg_user_wpm_null():
+    traj = _traj(speeds=[0.95], initial_speed=1.0, final_speed=0.95)
+    payload = _json.loads(gv.render_trajectory_json(traj))
+    assert payload["turns"][0]["user_wpm"] is None
+    assert payload["turns"][0]["speed"] == 0.95
+
+
+# ---- iter-317: handler --json routing ----------------------------------
+
+
+def test_handler_trajectory_json_matches_renderer():
+    wm = gv._load_wpm_mirror()
+    cfg = wm.WpmMirrorConfig(enabled=True, base_wpm=165.0, strength=0.5)
+    wpms = [120.0, 200.0, 120.0]
+    traj = wm.simulate_speed_trajectory(wpms, initial_speed=1.0, config=cfg)
+    expected = gv.render_trajectory_json(traj, wpms=wpms)
+    lines = _run(["simulate-mirror", "--wpms", "120,200,120", "--json"])
+    assert lines == [expected]
+
+
+def test_handler_grid_json_matches_renderer():
+    wm = gv._load_wpm_mirror()
+    points = wm.sweep_mirror_grid(
+        [120, 140, 200, 140, 120], [165.0, 180.0], [0.5], initial_speed=1.0
+    )
+    best = wm.pick_best_mirror_config(points)
+    expected = gv.render_grid_json(points, best)
+    lines = _run(
+        [
+            "simulate-mirror",
+            "--wpms", "120,140,200,140,120",
+            "--grid",
+            "--base-wpms", "165,180",
+            "--strengths", "0.5",
+            "--json",
+        ]
+    )
+    assert lines == [expected]
+
+
+def test_handler_json_trajectory_is_parseable():
+    lines = _run(["simulate-mirror", "--wpms", "120,200,120", "--json"])
+    payload = _json.loads("\n".join(lines))
+    assert payload["mode"] == "trajectory"
+    assert len(payload["turns"]) == 3
+    assert [t["user_wpm"] for t in payload["turns"]] == [120.0, 200.0, 120.0]
+
+
+def test_handler_json_default_log_is_print(capsys):
+    args = gv.build_parser().parse_args(
+        ["simulate-mirror", "--wpms", "120,200", "--json"]
+    )
+    gv.cmd_simulate_mirror(args)
+    out = capsys.readouterr().out
+    payload = _json.loads(out)
+    assert payload["mode"] == "trajectory"

@@ -7,7 +7,7 @@ Usage:
     gv talk               # talk mode — STT → NLP → canned response → TTS
     gv chat               # chat mode — STT → LLM (litellm) → TTS
     gv simulate-mirror …  # offline WPM-mirror trajectory / grid-sweep simulator
-    gv calibrate-base-wpm … # offline base_wpm calibration (--verdict for an adopt/keep call; --csv for per-sample data)
+    gv calibrate-base-wpm … # offline base_wpm calibration (--verdict for an adopt/keep call; --json/--csv for per-sample data)
     gv vad recording.wav  # offline Silero VAD — segment a WAV into speech regions
     gv vad recording.wav --json # machine-readable segmentation (SileroResult.to_dict shape)
     gv vad-diff recording.wav --threshold-a 0.5 --threshold-b 0.7  # compare two P(speech) gates
@@ -1111,6 +1111,61 @@ def render_calibration_csv(samples, calib):
     return body + "\n" + "\n".join(summary)
 
 
+def render_calibration_json(samples, calib):
+    """Render a ``calibrate-base-wpm`` calibration as a JSON string.
+
+    The nested/programmatic twin of :func:`render_calibration` /
+    :func:`render_calibration_csv` — the iter-317 next-item that brings the
+    calibration surface the same human / ``--json`` / ``--csv`` trio every
+    VAD-analysis surface already carries. Where the CSV splits the calibration
+    into a per-sample data grid plus a trailing ``#``-comment summary block (so a
+    spreadsheet's rows stay pure), the JSON nests BOTH in one object: a
+    ``samples`` list (one object per render — the per-sample data) AND a
+    ``calibration`` object (the aggregate verdict — median / range / spread /
+    nominal / drift). A nested consumer gets the whole record in one parse
+    instead of having to skip comment lines.
+
+    Each sample object is ``{"sample": 1-based int, "words": int,
+    "audio_seconds": float, "speed": float, "bot_wpm": float,
+    "implied_base_wpm": float}`` — the raw measurement (``bot_wpm``) and the
+    normalized rate (``implied_base_wpm``) the median is taken over, the same
+    fields the CSV row carries. ``calibration`` is ``null`` when there were no
+    samples (nothing to calibrate), mirroring :func:`calibrate_base_wpm`'s empty
+    contract and the CSV's header-only output. Like the CSV, the JSON omits the
+    adopt/keep verdict — that DECISION is the ``--verdict`` human surface, not a
+    data record; a consumer scripts the re-seed off the ``drift`` field. Floats
+    round to 3 places. Pure: returns a single JSON string (no I/O).
+    """
+    sample_objs = [
+        {
+            "sample": i,
+            "words": s.words,
+            "audio_seconds": round(float(s.audio_seconds), 3),
+            "speed": round(float(s.speed), 3),
+            "bot_wpm": round(s.bot_wpm, 3),
+            "implied_base_wpm": round(s.implied_base_wpm, 3),
+        }
+        for i, s in enumerate(samples, start=1)
+    ]
+    payload = {
+        "samples": sample_objs,
+        "calibration": (
+            None
+            if calib is None
+            else {
+                "implied_base_wpm": round(calib.implied_base_wpm, 3),
+                "n_samples": calib.n_samples,
+                "min_base_wpm": round(calib.min_base_wpm, 3),
+                "max_base_wpm": round(calib.max_base_wpm, 3),
+                "spread": round(calib.spread, 3),
+                "nominal": round(calib.default_base_wpm, 3),
+                "drift": round(calib.drift, 3),
+            }
+        ),
+    }
+    return json.dumps(payload, indent=2)
+
+
 def render_trajectory(traj, *, wpms=None):
     """Render a :class:`SpeedTrajectory` as plain-text report lines.
 
@@ -1264,6 +1319,97 @@ def render_trajectory_csv(traj, *, wpms=None):
         user_wpm = round(float(wpms[i - 1]), 3) if paired else ""
         writer.writerow([i, user_wpm, round(speed, 3)])
     return buf.getvalue().rstrip("\r\n")
+
+
+def render_grid_json(points, best):
+    """Render a ``simulate-mirror --grid`` sweep as a JSON string.
+
+    The nested/programmatic twin of :func:`render_grid` / :func:`render_grid_csv`
+    — the iter-317 next-item that brings the WPM-mirror simulator's grid mode the
+    same human / ``--json`` / ``--csv`` trio every VAD-analysis surface (``gv
+    vad`` / ``vad-diff`` / ``vad-sweep`` / ``vad-grid``) already carries. Where
+    the CSV emits a flat one-row-per-cell table, the JSON nests the sweep as a
+    ``cells`` list of objects plus a top-level ``best`` object — the shape a
+    consumer that wants the picked cell as a structured record (not an
+    ``is_best`` column to filter on) reaches for.
+
+    Each cell carries its tunables and convergence / lurch / churn diagnostics
+    (``base_wpm``, ``strength``, ``final_speed``, ``final_gap``, ``max_step``,
+    ``moves``, ``score``). ``final_gap`` / ``score`` are ``null`` for an
+    unscorable cell (no measurable turn) — JSON ``null`` distinguishes "no value"
+    from "0.0", the same distinction the CSV's empty field and the human table's
+    ``n/a`` make. ``best`` is :func:`pick_best_mirror_config`'s pick rendered as
+    the same cell shape, or ``null`` when no cell was scorable. Floats round to 3
+    places, matching the human / CSV reports. Pure: returns a single JSON string
+    (no I/O), built from the points' attributes so it is testable without audio.
+    """
+    def _cell(p):
+        score = p.score()
+        return {
+            "base_wpm": p.base_wpm,
+            "strength": p.strength,
+            "final_speed": round(p.final_speed, 3),
+            "final_gap": None if p.final_gap is None else round(p.final_gap, 3),
+            "max_step": round(p.max_step, 3),
+            "moves": p.moves,
+            "score": None if score is None else round(score, 3),
+        }
+
+    payload = {
+        "mode": "grid",
+        "cells": [_cell(p) for p in points],
+        "best": None if best is None else _cell(best),
+    }
+    return json.dumps(payload, indent=2)
+
+
+def render_trajectory_json(traj, *, wpms=None):
+    """Render a ``simulate-mirror`` single-config trajectory as a JSON string.
+
+    The nested/programmatic twin of :func:`render_trajectory` /
+    :func:`render_trajectory_csv`, the trajectory-mode counterpart to
+    :func:`render_grid_json`. Where the CSV flattens the arc to one row per turn
+    (``turn,user_wpm,speed``) and intentionally drops the arc-level scalars, the
+    JSON carries BOTH: a ``turns`` list (one object per turn, the per-turn curve)
+    AND the convergence diagnostics (``initial_speed`` / ``final_speed`` /
+    ``ideal_final_speed`` / ``final_gap`` / ``max_step`` / ``moves``) as
+    top-level keys — exactly the human report's fields, but structured. A nested
+    consumer gets the whole record in one object instead of having to re-derive
+    the scalars from the speed column the way a CSV reader must.
+
+    Each turn object is ``{"turn": 1-based int, "user_wpm": float|null, "speed":
+    float}``. ``user_wpm`` pairs the driving input arc when ``wpms`` length
+    matches ``traj.speeds`` (the same pairing rule as the CSV), else ``null``.
+    ``ideal_final_speed`` / ``final_gap`` are ``null`` when the arc had no
+    measurable turn (mirroring disabled / all-silent), matching the human
+    report's ``n/a``. An empty arc yields an empty ``turns`` list with the
+    scalars still present. Floats round to 3 places. Pure: returns a single JSON
+    string built from the trajectory's attributes (no I/O, no audio).
+    """
+    paired = wpms is not None and len(wpms) == len(traj.speeds)
+    turns = [
+        {
+            "turn": i,
+            "user_wpm": round(float(wpms[i - 1]), 3) if paired else None,
+            "speed": round(speed, 3),
+        }
+        for i, speed in enumerate(traj.speeds, start=1)
+    ]
+    payload = {
+        "mode": "trajectory",
+        "initial_speed": round(traj.initial_speed, 3),
+        "final_speed": round(traj.final_speed, 3),
+        "ideal_final_speed": (
+            None
+            if traj.ideal_final_speed is None
+            else round(traj.ideal_final_speed, 3)
+        ),
+        "final_gap": None if traj.final_gap is None else round(traj.final_gap, 3),
+        "max_step": round(traj.max_step, 3),
+        "moves": traj.moves,
+        "turns": turns,
+    }
+    return json.dumps(payload, indent=2)
 
 
 def render_vad_segments(result, *, threshold=None):
@@ -2270,11 +2416,13 @@ def cmd_simulate_mirror(args, *, log=print):
     parser stays audio-free and importable on any platform. ``log`` is
     injectable for tests.
 
-    iter-315 adds ``--csv``, the first machine-readable surface on this command:
+    iter-315 added ``--csv``, the first machine-readable surface on this command:
     in ``--grid`` mode it emits the flat per-cell sweep table
     (:func:`render_grid_csv`) and in trajectory mode the per-turn speed curve
-    (:func:`render_trajectory_csv`), bringing the human / ``--csv`` pairing the
-    VAD-analysis surfaces already carry to the WPM-mirror simulator.
+    (:func:`render_trajectory_csv`). iter-317 adds the nested ``--json`` twin
+    (:func:`render_grid_json` / :func:`render_trajectory_json`), completing the
+    human / ``--json`` / ``--csv`` trio the VAD-analysis surfaces already carry.
+    ``--json`` and ``--csv`` are mutually exclusive at the parser.
     """
     wm = _load_wpm_mirror()
     WpmMirrorConfig = wm.WpmMirrorConfig
@@ -2283,6 +2431,7 @@ def cmd_simulate_mirror(args, *, log=print):
     pick_best_mirror_config = wm.pick_best_mirror_config
 
     as_csv = getattr(args, "csv", False)
+    as_json = getattr(args, "json", False)
 
     if args.grid:
         points = sweep_mirror_grid(
@@ -2292,7 +2441,9 @@ def cmd_simulate_mirror(args, *, log=print):
             initial_speed=args.initial_speed,
         )
         best = pick_best_mirror_config(points)
-        if as_csv:
+        if as_json:
+            log(render_grid_json(points, best))
+        elif as_csv:
             log(render_grid_csv(points, best))
         else:
             for line in render_grid(points, best):
@@ -2309,7 +2460,9 @@ def cmd_simulate_mirror(args, *, log=print):
         initial_speed=args.initial_speed,
         config=config,
     )
-    if as_csv:
+    if as_json:
+        log(render_trajectory_json(traj, wpms=args.wpms))
+    elif as_csv:
         log(render_trajectory_csv(traj, wpms=args.wpms))
     else:
         for line in render_trajectory(traj, wpms=args.wpms):
@@ -2329,14 +2482,16 @@ def cmd_calibrate_base_wpm(args, *, log=print):
     The engine is loaded lazily by file path so the parser stays audio-free and
     importable on any platform. ``log`` is injectable for tests.
 
-    iter-316 adds ``--csv``, the machine-readable twin closing the last
-    human-only analysis surface: it emits the per-sample
+    iter-316 added ``--csv``, the machine-readable twin: it emits the per-sample
     ``sample,words,audio_seconds,speed,bot_wpm,implied_base_wpm`` grid with the
     aggregate calibration trailing as ``#`` comment lines
-    (:func:`render_calibration_csv`). ``--csv`` is the whole output in that mode
-    — the ``--verdict`` adopt/keep DECISION is human prose, not a data row, so it
-    is suppressed under ``--csv`` (a consumer scripts the re-seed call off the
-    drift column itself).
+    (:func:`render_calibration_csv`). iter-317 adds the nested ``--json`` twin
+    (:func:`render_calibration_json`), completing the human / ``--json`` /
+    ``--csv`` trio the VAD-analysis surfaces already carry. ``--json`` and
+    ``--csv`` are mutually exclusive at the parser; either is the whole output in
+    that mode — the ``--verdict`` adopt/keep DECISION is human prose, not a data
+    record, so it is suppressed under both (a consumer scripts the re-seed call
+    off the drift field itself).
     """
     wm = _load_wpm_mirror()
     CalibrationSample = wm.CalibrationSample
@@ -2347,6 +2502,9 @@ def cmd_calibrate_base_wpm(args, *, log=print):
         for (words, audio_seconds, speed) in args.samples
     ]
     calib = calibrate_base_wpm(samples, default_base_wpm=args.nominal)
+    if getattr(args, "json", False):
+        log(render_calibration_json(samples, calib))
+        return
     if getattr(args, "csv", False):
         log(render_calibration_csv(samples, calib))
         return
@@ -2942,11 +3100,20 @@ def build_parser():
         default=[0.3, 0.5, 0.7],
         help="Grid strength axis (comma-separated; default: 0.3,0.5,0.7)",
     )
-    sim.add_argument(
+    sim_fmt = sim.add_mutually_exclusive_group()
+    sim_fmt.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit nested machine-readable JSON instead of the human report — a "
+        "cells+best object in --grid mode, a turns+diagnostics object in "
+        "trajectory mode; mutually exclusive with --csv",
+    )
+    sim_fmt.add_argument(
         "--csv",
         action="store_true",
         help="Emit a flat CSV table instead of the human report — per-cell in "
-        "--grid mode, per-turn (speed curve) in trajectory mode",
+        "--grid mode, per-turn (speed curve) in trajectory mode; mutually "
+        "exclusive with --json",
     )
 
     calib = sub.add_parser(
@@ -2999,7 +3166,15 @@ def build_parser():
         help="Verdict gate: min sample count for a robust median "
         f"(default: {calib_min_samples_default})",
     )
-    calib.add_argument(
+    calib_fmt = calib.add_mutually_exclusive_group()
+    calib_fmt.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit nested JSON (samples list + calibration object) instead of "
+        "the human report, for programmatic consumers; mutually exclusive with "
+        "--csv (both suppress the human report and --verdict)",
+    )
+    calib_fmt.add_argument(
         "--csv",
         action="store_true",
         help="Emit per-sample CSV (sample,words,audio_seconds,speed,bot_wpm,"
