@@ -30098,3 +30098,102 @@ byte-for-byte unchanged. Purely additive.
    ~30 leftover per-iter worktrees. A future lap could `git worktree prune` /
    remove the merged ones to keep the list legible. NOTE: this lap correctly
    removed its own worktree.
+
+## iter-328 — gv vad-gaps: the inter-segment silence-gap analysis surface
+
+- **Date:** 2026-06-20
+- **Branch:** iter-328-vad-gaps (ff-merged to main, worktree removed)
+- **Commits:** becf677 (feature), 1565a98 (doc-consistency allowlist)
+
+**Why.** iter-327's next-item recommended declaring the session-summary
+diversity-check family complete and pivoting to a non-metrics source — that
+family now spans 17 near-identical sentinels (the remaining candidate,
+`merge_capped`, "would heavily overlap iter-327 and the value of a separate
+scan is questionable"). This lap pivots back to a genuine VAD-quality gap on
+the gv CLI. Every prior `gv vad*` surface reports where the SPEECH is — segment
+count, per-segment spans, total speech-seconds. NONE reports where the SILENCE
+is: the pauses BETWEEN consecutive speech regions. Yet that gap distribution is
+the direct signal for tuning the end-of-turn hangover (`--min-silence-ms` here
+/ the live `chat.vad.silence_duration`, iter-020): the SHORTEST real pause in a
+recording is the floor above which raising the hangover starts MERGING two
+genuine turns into one, and the spread shows the headroom. Until now an operator
+tuning the hangover had to eyeball the `gv vad` segment table and subtract end
+times by hand.
+
+**What it is.** `gv vad-gaps recording.wav` — the silence-side complement of
+`gv vad`, following the proven `vad-diff` pure-core + human/`--json`/`--csv`
+trio shape (so it can never drift from the family's conventions).
+- **`examples/gv.py`** — one pure core + three renderers + one handler, wired
+  into `DEFAULT_HANDLERS` and `build_parser`:
+  - `vad_silence_gaps(result)` — the pure core. Sorts segments by start before
+    differencing (robust to out-of-order input) and clamps a negative raw
+    difference (touching/overlapping regions, which `--speech-pad-ms` can
+    produce) to `0.0` — an overlap is not silence. Returns segment/gap counts,
+    the per-gap list, each gap's preceding-segment index + end time, and the
+    min/mean/max + total-silence aggregates. min/mean/max are `None` when there
+    are <2 segments (no pause to summarise — distinct from a `0.0` gap). Gap
+    seconds round to 3 places, matching the sibling VAD renderers. Reads only
+    the `SileroResult` shape (`segments[].start_s/.end_s`), so it is testable
+    with lightweight stand-ins — no torch import.
+  - `render_vad_gaps` / `render_vad_gaps_json` / `render_vad_gaps_csv` — the
+    full human / `--json` / `--csv` trio every VAD-analysis surface carries. The
+    human report names the actionable `--min-silence-ms` knob on the min-gap
+    line; the <2-segment case drops that advice (no floor to tune against). The
+    CSV is one row per gap (`index,after_segment,after_segment_end_s,gap_s`);
+    the aggregates are derivable from the `gap_s` column so they are NOT
+    duplicated into a wide row (the `render_vad_diff_csv` reasoning). All three
+    degrade to the shared install hint / `{"available": false}` / `# ...`
+    comment when `silero-vad` is absent.
+  - `cmd_vad_gaps` — handler with the same injected
+    `segmenter`/`availability`/`log` seams as `cmd_vad`/`cmd_vad_diff`, so it is
+    tested without torch. Shares ALL the segmenter knobs with `gv vad`
+    (`--threshold`/`--min-speech-ms`/`--min-silence-ms`/`--speech-pad-ms`/
+    `--max-speech-s`) so the gaps are measured against the same segmentation;
+    `--json` and `--csv` are mutually exclusive.
+- **Docs:** the module-docstring usage block and `docs/research/
+  voice-capture-tuning.md` gain a `gv vad-gaps` section (placed right after the
+  `gv vad` section, before `vad-diff`).
+- **`tests/unit/test_gv_vad_gaps.py`** (new, +29 tests): parser registration /
+  defaults-mirror-SileroParams / json-csv-mutual-exclusion; the pure core
+  (basic two-segment, three-segment stats, shortest-pause min, after-segment
+  indices, single-segment + empty no-gaps, unsorted-gets-sorted,
+  overlap-clamps-to-zero, 3-place rounding); the three renderers (human lines +
+  knob advice, single-segment message dropping the knob advice, unavailable;
+  JSON shape + single-segment nulls + unavailable; CSV rows + header-only +
+  unavailable); the handler (human/json/csv paths, both unavailable paths,
+  segmenter-param passthrough).
+- **`tests/unit/test_gv_cli.py`** + **`tests/unit/test_voice_capture_tuning_doc.py`**:
+  the exact-handler-map assertion gains the new `vad-gaps` entry, and the
+  doc-consistency `VAD_SUBCOMMANDS` allowlist gains `vad-gaps` so its four
+  sentinels (names-all-subcommands / appears-in-examples / routes-to-known /
+  all-parse) now COVER the new surface rather than reject it.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4341 passed**
+(4312 prior + 29 net new), run on main after ff-merge. (The +29 net is exactly
+the new file; the two allowlist edits modify existing assertions in place.)
+- Focused: `pytest tests/unit/test_gv_vad_gaps.py` → **29 passed**;
+  `pytest tests/unit/test_voice_capture_tuning_doc.py` → **10 passed**.
+- Integration: not re-run this lap (pure parsing + list-scanning + string
+  formatting; no torch import, no audio I/O — the handler is exercised with an
+  injected stub segmenter).
+
+**Next planned items:**
+1. **[gv CLI] vad-gaps could grow a sweep/grid integration like vad-sweep.**
+   The min-gap floor is itself a function of the segmenter knobs (a stricter
+   `--threshold` or a longer `--min-silence-ms` changes which pauses survive),
+   so a `gv vad-gaps --sweep` over those knobs — tabulating how the SHORTEST gap
+   moves as the gate tightens — would let an operator find the knob setting that
+   maximises the merge headroom. A future lap could also add an integration test
+   running `gv vad-gaps` over the real `fixtures/` corpus (the analogue of
+   `test_gv_vad_cli.py`) to pin the gap distribution on real recordings.
+2. **[chat-metrics] The diversity-check family is now declared complete.** 17
+   sentinels span every per-turn metric shape and both EOU-misfire booleans;
+   the only remaining candidate (`merge_capped`) heavily overlaps iter-327, so
+   future chat-metrics laps should prefer a genuinely new signal over an 18th
+   near-clone.
+3. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+4. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
