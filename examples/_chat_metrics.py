@@ -3140,6 +3140,142 @@ def _emit_first_synth_overlap_consistency_line(
     )
 
 
+def _preempted_words_bucket(words: int) -> str:
+    """iter-325: bucket a per-turn ``preempted_words`` (iter-080 — the
+    count of words the LLM generated but the user never heard because a
+    barge cut the stream mid-content) into a coarse category. Used by
+    ``_emit_preempted_words_consistency_line`` to detect runs where barges
+    repeatedly threw away generated speech. Metric 3.7 in the perf-metrics
+    taxonomy ("Novel/speculative").
+
+    This is the FIRST diversity-check instance applied to a barge-CONDITIONAL
+    COUNT metric — the structural sibling of iter-120's barge-phase sentinel
+    (the only other barge-conditional one), but quantitative rather than
+    categorical. ``preempted_words`` is only non-zero on a barge turn whose
+    cut landed mid-content; it stays at its 0 default on every non-barge turn
+    AND on barge turns where the cut landed cleanly between sentences (no
+    words lost — a good outcome). So 0 is the fine state and is filtered
+    before the scan, exactly like iter-114's filler-count (drop 0), NOT the
+    empty-string filter of the continuous bucketers.
+
+    NOT inverted (contrast iter-142/143/225/324): more pre-empted words is
+    strictly worse, so the fine state is the LOW end (0, filtered) and the
+    problematic end is HIGH — same direction as iter-114.
+
+    Boundaries align with iter-080's own per-turn display, which dims
+    1-10 words and colors > 10 words yellow ("> 5 seconds of spoken content
+    lost, suggesting the bot was being too verbose"):
+
+        ``minor`` — 1-10 words: a few words clipped mid-sentence. A normal
+            barge that landed inside a sentence rather than in the gap
+            between them; little content was actually lost.
+        ``heavy`` — > 10 words: a large chunk of generated speech thrown
+            away (> ~5s of audio). Per iter-080, a sustained run points at a
+            verbose bot the user keeps cutting off, or a habitually
+            late-interrupting user.
+
+    Returns ``""`` when ``words`` is non-positive (no barge, or a clean
+    inter-sentence cut) — the zero filter applies in the consumer, mirroring
+    iter-114's filler-count.
+    """
+    if words <= 0:
+        return ""
+    if words <= 10:
+        return "minor"
+    return "heavy"
+
+
+def _emit_preempted_words_consistency_line(
+    emit, preempted_list: list[int], threshold: int = 4,
+) -> None:
+    """iter-325: detect consecutive runs of barge turns where the cut
+    repeatedly threw away generated speech (iter-080 ``preempted_words``).
+
+    FIFTEENTH instance of the diversity-check pattern (after iter-114 filler,
+    iter-115/126 naturalness, iter-120 barge-phase, iter-128 sentence-length,
+    iter-140 stt-rtf, iter-141 tts-rtf, iter-142 llm-tps, iter-143
+    streaming-overlap, iter-208 synth-dispatch, iter-209 eot-overhead,
+    iter-210 bot-wpm, iter-323 user-wpm, iter-324 first-synth-overlap). It is
+    the SECOND barge-CONDITIONAL instance after iter-120's barge-phase
+    sentinel, and shares iter-120's threshold of 4 rather than the
+    continuous-metric default of 5: pre-emption only happens on a barge turn
+    whose cut landed mid-content, so these events are already rare and
+    semantically loaded — a shorter run is enough signal.
+
+    iter-080 surfaces a per-turn "Pre-empted: N words" line and the session
+    summary already reports a cumulative "Pre-empted total" (iter-080), but
+    that cumulative figure smears the timing away: it can't tell a session
+    that lost a few words across many scattered barges from one that lost a
+    big chunk on every recent barge in a row. The latter is the actionable
+    pattern — the bot is systematically over-talking and the user keeps
+    cutting it off — and only a *consecutive-run* scan over the barge turns
+    surfaces it. This is the count-valued companion to iter-120's
+    barge-PHASE run scan: iter-120 says *when* the user keeps barging (before
+    vs during speech), this says *how much generated speech* keeps getting
+    thrown away when they do.
+
+    Filter rule: drop 0 (no barge, or a clean inter-sentence cut — no words
+    lost) before the scan, exactly like iter-114's filler-count. Both
+    remaining buckets (``minor`` 1-10, ``heavy`` > 10) warrant a warning,
+    with per-value suggestions — like iter-120, where both barge phases fire.
+    Non-pre-empting turns (the filtered 0s) interleave without breaking a run,
+    mirroring every prior instance; a phase change between ``minor`` and
+    ``heavy`` does break the run (they never merge).
+
+    The two flagged ends localize the cause differently, per iter-080's field
+    comment (pair with iter-047 barge-phase / iter-069 interruption rate):
+
+        ``heavy`` — the bot is being too verbose; the user keeps cutting off
+            long replies, so a lot of synthesized-but-unheard speech is
+            wasted. Shorten replies (system prompt / fewer sentences).
+        ``minor`` — small mid-sentence clips turn after turn; the user
+            habitually barges inside a sentence rather than in the gap. Less
+            a defect than a speaker habit, but a sustained run is worth
+            noting.
+
+    Output:
+
+        Pre-empted run: 4 consecutive 'heavy' barge turns — the bot is too
+                        verbose and the user keeps cutting it off; shorten
+                        replies (system prompt / fewer sentences) (iter-080
+                        preempted_words)
+    """
+    # Bucketize, then drop the "uninteresting" bucket (0 → "", no loss).
+    interesting = {"minor", "heavy"}
+    filtered = [
+        b for b in (
+            _preempted_words_bucket(w) for w in preempted_list
+        )
+        if b in interesting
+    ]
+    if not filtered:
+        return
+
+    longest_run, longest_bucket = _longest_consecutive_run(filtered)
+    if longest_run < threshold:
+        return
+
+    if longest_bucket == "heavy":
+        suggestion = (
+            "the bot is too verbose and the user keeps cutting it off; "
+            "shorten replies (system prompt / fewer sentences)"
+        )
+    elif longest_bucket == "minor":
+        suggestion = (
+            "the user habitually barges mid-sentence, clipping a few "
+            "words each time"
+        )
+    else:
+        # Defensive: future buckets that pass the filter rule.
+        suggestion = "investigate the recurring mid-content barge cut-offs"
+
+    emit(
+        f"    Pre-empted run: {longest_run} consecutive "
+        f"{longest_bucket!r} barge turns — {suggestion} "
+        f"(iter-080 preempted_words)"
+    )
+
+
 def _max_token_gap_bucket(seconds: float) -> str:
     """iter-211: bucket a per-turn ``max_token_gap`` (iter-085's
     maximum inter-token gap during the LLM stream, excluding the
@@ -5787,6 +5923,21 @@ def print_session_summary(
     _emit_first_synth_overlap_consistency_line(
         _emit,
         [m.first_synth_overlap_seconds for m in metrics_list],
+    )
+    # iter-325: pre-empted-words consistency check. Only fires when 4+
+    # consecutive BARGE turns threw away generated speech (minor 1-10 words /
+    # heavy > 10 words). iter-080 already surfaces a per-turn "Pre-empted: N
+    # words" line and a cumulative "Pre-empted total", but the cumulative
+    # figure smears the timing away — it can't distinguish a few words lost
+    # across many scattered barges from a big chunk lost on every recent
+    # barge in a row. The latter is the actionable pattern: the bot is
+    # systematically over-talking and the user keeps cutting it off (heavy),
+    # or the user habitually barges mid-sentence (minor). Count-valued
+    # companion to the iter-120 barge-PHASE run scan; shares its threshold of
+    # 4 because pre-emption events are barge-conditional and already rare.
+    _emit_preempted_words_consistency_line(
+        _emit,
+        [m.preempted_words for m in metrics_list],
     )
     # iter-211: max-token-gap consistency check. Only fires when 5+
     # consecutive turns suffered a noticeable worst-case mid-stream LLM
