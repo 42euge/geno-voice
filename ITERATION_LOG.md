@@ -29633,3 +29633,80 @@ changed — a new test + one doc note only; every existing surface is untouched.
    ~30 leftover per-iter worktrees. A future lap could `git worktree prune` /
    remove the merged ones to keep the list legible. NOTE: this lap correctly
    removed its own worktree.
+
+## iter-323 — user-WPM consistency sentinel (symmetric twin of iter-210 bot-WPM)
+
+- **Date:** 2026-06-20
+- **Branch:** iter-323-user-wpm-sentinel (ff-merged to main, worktree removed)
+- **Commit:** 2a49573
+
+**Why.** The recent docs laps (iter-320/321/322) exhausted the obvious
+research-doc drift-sentinel work — all three research docs now carry a guard.
+Turning back to the chat-metrics surface, `user_wpm` (iter-064, user speaking
+rate = transcript word count / speech_duration) stood out as the one rate metric
+that is *collected and median-emitted* (the iter-094 "Median user WPM" line) but
+had **no consistency-line sentinel** — even though its symmetric twin `bot_wpm`
+(iter-046) got one in iter-210. Both share the same 130-200 WPM conversational
+sweet spot. The gap: the median user-WPM line can read healthy while a SUSTAINED
+run of user speech outside the band hides inside it, and that run is actionable
+— it means the iter-215 WPM mirror's `base_wpm` target (default 165 WPM) is set
+for the wrong speaker, so the bot mirrors a cadence that doesn't match them.
+
+**What it is.**
+- **`examples/_chat_metrics.py`** — two new helpers following the GENO.md
+  session-summary diversity-check template, wired into `print_session_summary`
+  right after the iter-210 bot-WPM call site:
+  - `_user_wpm_bucket(wpm)` — buckets per-turn user WPM into `natural`
+    (130-200, the sweet spot, mirror default 165 sits dead-center) / `fast`
+    (>200) / `slow` (0<wpm<130); `""` when non-positive (no measurable speech).
+    Boundaries mirror iter-210's `_bot_wpm_bucket` exactly.
+  - `_emit_user_wpm_consistency_line(emit, user_wpm_list, threshold=5)` — drops
+    the `natural` + `""` buckets, then fires when 5+ consecutive turns land in
+    `fast` or `slow`. This is the **THIRTEENTH** instance of the diversity-check
+    pattern, the **SECOND** two-sided-band sentinel (after iter-210), and the
+    **NINTH** applied to a continuous metric.
+  - The crucial distinction from iter-210: the bot's rate is OURS to fix (kokoro
+    `speed` knob); the user's rate is fixed, so the remedy is the WPM mirror —
+    a fast user wants `base_wpm` raised, a slow user wants it lowered, both via
+    `gv calibrate-base-wpm` (iter-222). The two flagged ends need OPPOSITE
+    recalibrations, so the per-value suggestion branch is load-bearing and the
+    run scan keeps `fast`/`slow` as distinct phases (they never merge). The
+    bucket NAMES (`fast`/`slow`, not `rushed`/`sluggish`) reflect that a fast
+    user isn't a defect — it's a speaker property the mirror should adapt TO.
+- **`tests/unit/test_emit_user_wpm_consistency_line.py`** (new, +24 tests):
+  bucket boundaries incl. float edges; a **band-parity-with-bot** check that
+  pins the user band to iter-210's bot band so the symmetric reasoning can't
+  silently drift; empty / all-zero suppression; sweet-spot never flagged;
+  threshold (default 5, custom 3/10); natural-interleaving doesn't break a run;
+  the two-sided invariants (fast/slow don't merge, a slow turn breaks a fast
+  run, longer-run-wins); output formatting + iter-064 attribution; and a guard
+  that the line is unambiguously about the USER (`base_wpm` fix, not the bot's
+  kokoro speed-knob fix).
+
+The off-by-default path is preserved: a session whose user always speaks in the
+band (or has no measurable speech) sees no new line — the summary is byte-for-
+byte unchanged. Purely additive.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4233 passed**
+(4209 prior + 24 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_emit_user_wpm_consistency_line.py` →
+  **24 passed** (re-run on main post-merge).
+- Integration: not re-run this lap (a pure list-scanning + string-formatting
+  helper — no torch import, no audio I/O).
+
+**Next planned items:**
+1. **[chat-metrics] The bot/user WPM pair now BOTH carry two-sided-band
+   sentinels (iter-210/323).** Remaining un-sentineled per-turn metrics worth
+   scanning: `first_synth_overlap_seconds` (iter-073, bigger-is-better — a
+   one-sided low-end guard like iter-143's overlap), and `preempted_words`
+   (iter-080, barge-only count). Most other continuous metrics (stt/tts rtf,
+   llm tps, eot, synth-dispatch, ttfs, token-gap, ttc, queue-depth, etc.) are
+   already covered. Scope which remaining metric has a meaningful "sustained
+   run is actionable" story before adding the fourteenth instance.
+2. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+3. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~30 leftover per-iter worktrees. A future lap could `git worktree prune` /
+   remove the merged ones to keep the list legible. NOTE: this lap correctly
+   removed its own worktree.
