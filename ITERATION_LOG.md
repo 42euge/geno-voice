@@ -27221,3 +27221,100 @@ in-band rows in sweep order).
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop should
    track a curated subset, decide the policy and re-run `replay_silero.py --compare` +
    `gv vad` to refresh the comparison table.
+
+## iter-299 — 1-D sweep CSV consumer re-derives JSON --target open-band pick (row-major default)
+
+- **Date:** 2026-06-19
+- **Branch:** iter-299-sweep-rowmajor-open-band (ff-merged to main)
+- **Commit:** b75b4e2
+
+**Why.** iter-297 opened the sweep ROW-MAJOR dict-form cross-surface matrix with
+the flat SET (the sweep twin of iter-280's grid set-under-row-major test), and
+iter-298 added the CLOSED BAND (the twin of iter-275). iter-298 backlog #1 named the
+next gap directly: the remaining dict forms still lack a sweep ROW-MAJOR
+cross-surface re-derive — only the speech matrix (iter-290–296) and the
+scalar/closed-band SCALAR round-trips ever pinned them. The OPEN band is next. The
+speech version (iter-292) forces `tie_break="speech"`, so it never exercises the
+DEFAULT branch of `render_vad_sweep_json` (the branch taken when no `tie_break=`
+kwarg is supplied — the normal CLI path). This lap pins the open band under the
+DEFAULT row-major tie-break, the sweep twin of iter-273's grid
+open-band-under-row-major test.
+
+**The gap this closes.** A regression confined to the DEFAULT row-major path — one
+that coerced an OPEN band to a scalar or a finite closed band on the sweep JSON path
+(collapsing the unbounded side and dropping rows that only tie because the upper
+bound is absent) while a CSV consumer still passed the full open band, OR that
+quietly swapped the row-major earliest-tie rule for a speech-ordered one on the JSON
+path only — would diverge the two surfaces yet ship green, because the iter-292
+open-band test forces `"speech"` and the scalar/closed-band row-major round-trips
+never exercise an UNBOUNDED edge under the earliest-tie rule. The target FORM
+(`grid_cell_distance` — which rows tie at 0) and the tie-break (`grid_cell_sort_key`
+— how the tied rows ORDER) are independent seams; pinning the closed band under
+row-major on the sweep (iter-298) does NOT pin the open band under row-major.
+
+**The mechanism.** A 4-value threshold sweep (0.3/0.5/0.7/0.9) with counts 9/5/7/2,
+target = open band `(5, None)` ("at least 5"). `_sweep_results` couples speech to
+count + index, so the in-band rows carry DIFFERENT speech and the row-major / speech
+tie-breaks genuinely disagree. Open-band distances (count >= 5 → 0, else 5 - count):
+0.30 count 9 → 0 (>= 5, no upper), speech 4.5; 0.50 count 5 → 0 (at lo=5), speech
+3.0; 0.70 count 7 → 0 (>= 5), speech 4.9; 0.90 count 2 → 3 (below lo), speech 1.6.
+THREE rows tie at the open-band floor (counts 9, 5, 7). The DEFAULT row-major
+tie-break keeps the EARLIEST tied row — count 9 (0.30) — despite count 7 (0.70)
+recovering more speech. So the row-major best is the 0.30 row count 9, and the
+top-3 is `[9, 5, 7]` (the three in-band rows in sweep order). The UNBOUNDED upper
+side keeps count 9 — above any finite hi a closed band would cap at — in the tie.
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+1 test).**
+  `test_render_sweep_csv_consumer_rederives_json_open_band_target_rowmajor_pick`:
+  asserts `payload["target"] == [5, None]` and `payload["tie_break"] == "row-major"`
+  with NO `tie_break` kwarg passed (exercising the DEFAULT branch); the CSV body
+  carries no `best`/`distance`/`tie_break`; a CSV consumer re-parses the bare table
+  back to sweep rows and re-runs the SAME pickers with the SAME open band and the
+  DEFAULT tie-break, recovering the JSON-embedded `best` (count 9) and the full top-3
+  (counts `[9, 5, 7]`). TWO controls prove it cannot pass by accident:
+  `tie_break="speech"` flips the pick to count 7 (the most-speech in-band row),
+  proving the default branch is load-bearing; a CLOSED band `(5, 8)` pushes count 9
+  OUT (above hi=8 → dist 1) so the row-major pick flips to count 5 (the new earliest
+  in-band row), proving the open None edge / unbounded upper side is load-bearing —
+  the band is not collapsing to a finite bound on either surface. The top assertions
+  pin all three in-band rows as row-major (count 9 → 5 → 7, speech 4.5 → 3.0 → 4.9 —
+  NOT speech order, where the count-7 row at 4.9s would lead). No production code
+  changed (the sweep wiring was already correct — proved by the green focused run on
+  the unmodified path).
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **3901 passed**
+(3900 prior + 1 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_gv_vad.py -k sweep_csv_consumer_rederives_json_open_band_target_rowmajor` → **1 passed**.
+- Integration: not re-run this lap (no corpus symlinked into this worktree; same as
+  prior corpus-gated laps — the change is a pure CLI cross-surface contract test, no
+  new production code).
+
+**Next planned items:**
+1. **[cli] Sweep ROW-MAJOR cross-surface matrix — continue.** iter-297 opened it
+   (flat SET); iter-298 added the CLOSED BAND; this lap added the OPEN band. The
+   remaining forms still lack a sweep ROW-MAJOR cross-surface re-derive:
+   `{"prefer": …}`, `{"weighted": …}`, `{"scaled": …}`, `{"affine": …}` (grid twins
+   iter-276–279). Each is a near-mechanical clone of this lap's test with the matching
+   `target` and NO `tie_break` kwarg — the fixture must make the row-major
+   earliest-tie rule genuinely DIFFER from speech (a `tie_break="speech"` control
+   flips the pick) so a default-branch regression cannot ship green. NOTE: for
+   `{"prefer": …}`, the row-major fixture must also keep the preference-rank
+   secondary key load-bearing (a `{"prefer": …}` inserts a rank key BEFORE the
+   tie-break — iter-249), so the control set must distinguish preference order from
+   both row position and speech.
+2. **[cli] `simulate-mirror` grid pick round-trips** remain unpinned cross-surface
+   for ALL dict forms (the VAD matrices covered VAD grid + sweep only).
+3. **[cli] A next FEATURE would be a different axis entirely** — the `--target`
+   composition space (scalar → band → set → preference → additive → multiplicative →
+   affine) is feature-complete. Candidates: a per-element ASYMMETRIC band tolerance,
+   or a "soft floor/ceiling" scoring beyond an open edge with a gentle slope rather
+   than a hard 0. Scope before building.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or the
+   pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it stays
+   operator-only / non-headless.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop should
+   track a curated subset, decide the policy and re-run `replay_silero.py --compare` +
+   `gv vad` to refresh the comparison table.
