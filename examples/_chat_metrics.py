@@ -4114,6 +4114,160 @@ def _emit_cancel_close_consistency_line(
     )
 
 
+def _speaker_open_bucket(seconds: float) -> str:
+    """iter-309: bucket a per-turn ``speaker_open_seconds`` (iter-061's
+    speaker-open overhead — the time spent opening the audio output
+    device before a turn's first sentence plays) into a coarse
+    category. Used by ``_emit_speaker_open_consistency_line`` to detect
+    runs where opening the speaker was repeatedly slow. Metric 1.7 in
+    the perf-metrics taxonomy.
+
+    This matters because the iter-008 streaming design assumes the
+    speaker is opened ONCE per turn (and reused across the turn's
+    sentences), not once per sentence — that's what keeps device init
+    out of the hot path. A persistent speaker is reused across turns, so
+    after the first turn the open should cost ~0ms. If speaker-open is
+    sustained-slow, the persistent-speaker win is slipping: every turn
+    pays device-init latency up front, eating into the time-to-first-
+    audio budget the whole pipeline optimizes for. iter-061's own
+    guidance is that >50ms is the yellow flag, so the boundaries hang
+    off that.
+
+    A continuous-metric instance like
+    iter-128/140/141/142/143/208/209/224/225/226/307/308 — buckets a
+    float duration into a coarse category before the run scan. Like
+    iter-140/141/208/209/224/226/307/308 — and UNLIKE the inverted
+    iter-142/143/225 — ``speaker_open_seconds`` is "smaller is better":
+    the fine state is a LOW value (the device opened instantly), so the
+    boundaries are NOT inverted; the problematic end is a LARGE latency.
+
+    Buckets (boundaries aligned with iter-061's per-turn display, which
+    skips ≤0 and colors >50ms yellow — the operator-visible "the
+    persistent-speaker win is slipping" threshold):
+
+        ``instant`` — ≤ 50ms (0.050s): the device opened promptly; the
+            persistent-speaker reuse is holding. The desired state.
+        ``slow``    — 50-150ms: opening the speaker is noticeably laggy;
+            device init is creeping into the time-to-first-audio budget.
+        ``stalled`` — > 150ms: opening the speaker dominates the turn's
+            startup; device init is a hard latency wall on every turn's
+            first audio.
+
+    Returns ``""`` when ``seconds`` is non-positive (a turn whose worker
+    exited before ever opening the speaker — the early error path, or a
+    subsequent turn that reused the persistent speaker without a second
+    open, where ``speaker_open_seconds`` stays at its 0.0 default) —
+    empty-string filter applies in the consumer, mirroring
+    iter-114/115/120/126/128/140/141/142/143/208/209/224/225/226/307/308.
+    This matches the ``> 0`` collection filter the session summary
+    already uses for ``speaker_opens`` (iter-061), so a turn that never
+    opened the speaker is never counted as an "instant" open.
+    """
+    if seconds <= 0:
+        return ""
+    if seconds <= 0.050:
+        return "instant"
+    if seconds <= 0.150:
+        return "slow"
+    return "stalled"
+
+
+def _emit_speaker_open_consistency_line(
+    emit, speaker_open_list: list[float], threshold: int = 5,
+) -> None:
+    """iter-309: detect consecutive runs of turns where opening the
+    audio output device (iter-061 ``speaker_open_seconds``) was
+    repeatedly slow. TWENTY-FIRST instance of the diversity-check
+    pattern after iter-114 (filler), iter-115/126 (naturalness),
+    iter-120 (barge-phase), iter-128 (sentence-length), iter-140
+    (stt-rtf), iter-141 (tts-rtf), iter-142 (llm-tps), iter-143
+    (streaming-overlap), iter-208 (synth-dispatch), iter-209
+    (eot-overhead), iter-210 (bot-wpm), iter-211 (max-token-gap),
+    iter-212 (ttfs), iter-224 (stt-preview-divergence), iter-225
+    (sentence-split-coverage), iter-226 (worker-idle-gap), iter-305
+    (ttc), iter-306 (token-reveal-lag), iter-307 (synth-backlog),
+    iter-308 (cancel-close). EIGHTEENTH instance applied to a
+    CONTINUOUS metric — buckets the per-turn ``speaker_open_seconds``
+    via ``_speaker_open_bucket`` before running the scan.
+
+    iter-061 added the per-turn speaker-open figure (dim ≤50ms, yellow
+    >50ms) and the session summary prints the MEDIAN / WORST across
+    turns that opened the speaker, but median + worst together still
+    wash out a sustained-slow stretch: a few stalled opens push the
+    worst up without telling the operator they were CONSECUTIVE, and the
+    median stays low if most turns were instant. A SUSTAINED run in the
+    slow/stalled bucket is the actionable signal that the persistent-
+    speaker reuse the iter-008 streaming design depends on is no longer
+    holding — every turn re-pays device-init latency before its first
+    audio, eroding the time-to-first-byte budget the whole pipeline is
+    built around.
+
+    Filter rule: drop the ``"instant"`` bucket before the scan (the fine
+    state — the device opened promptly) and ``""`` (turns with no
+    measured open: the persistent-speaker reuse path, where no second
+    open happens, and the early error path). Only ``slow`` and
+    ``stalled`` warrant warning. Like iter-140/141/208/209/224/226/307/308
+    and UNLIKE iter-142/143/225, the fine bucket is a LOW value because
+    open latency is smaller-is-better — the boundaries are NOT inverted.
+
+    Threshold = 5 (the general-signal default, NOT iter-120/308's 4):
+    speaker-open is measured on EVERY turn that opens the device, not
+    just barge turns, so it is a high-frequency signal where natural
+    per-turn variation is normal — it earns the higher bar of the
+    threshold-5 family (iter-115/128/140/141/142/143/.../307) rather than
+    the threshold-4 barge-gated sentinels (iter-120/308). NOTE the
+    interaction with the ``""`` filter: after the FIRST turn opens the
+    persistent speaker, subsequent turns reuse it and record 0 →
+    filtered, so on a healthy session almost every turn drops out and a
+    run of 5 measured slow/stalled opens means the speaker is being
+    RE-opened slowly turn after turn — a strong structural signal.
+
+    Output:
+
+        Speaker open: 5 consecutive 'stalled' turns — opening the audio
+                          device dominates each turn's startup (>150ms);
+                          the persistent-speaker reuse the streaming
+                          design depends on has broken (iter-061
+                          speaker_open_seconds)
+    """
+    # Bucketize, then drop the "uninteresting" buckets (empty, instant).
+    interesting = {"slow", "stalled"}
+    filtered = [
+        b for b in (
+            _speaker_open_bucket(s) for s in speaker_open_list
+        )
+        if b in interesting
+    ]
+    if not filtered:
+        return
+
+    longest_run, longest_bucket = _longest_consecutive_run(filtered)
+    if longest_run < threshold:
+        return
+
+    if longest_bucket == "stalled":
+        suggestion = (
+            "opening the audio device dominates each turn's startup "
+            "(>150ms); the persistent-speaker reuse the streaming "
+            "design depends on has broken"
+        )
+    elif longest_bucket == "slow":
+        suggestion = (
+            "opening the audio device takes 50-150ms each turn; device "
+            "init is creeping into the time-to-first-audio budget — "
+            "check that the persistent speaker is being reused"
+        )
+    else:
+        # Defensive: future buckets that pass the filter rule.
+        suggestion = "investigate the recurring slow speaker open"
+
+    emit(
+        f"    Speaker open: {longest_run} consecutive "
+        f"{longest_bucket!r} turns — {suggestion} "
+        f"(iter-061 speaker_open_seconds)"
+    )
+
+
 def _emit_bargeable_line(emit, bargeable_values: list[float]) -> None:
     """iter-104: extracted from print_session_summary's iter-074
     bargeable line. Reports the WORST bargeable fraction across
@@ -4992,6 +5146,23 @@ def print_session_summary(
     _emit_cancel_close_consistency_line(
         _emit,
         [m.llm_cancel_to_close for m in metrics_list],
+    )
+    # iter-309: speaker-open consistency check. Only fires when 5+
+    # consecutive turns opening the audio output device was slow
+    # (slow 50-150ms / stalled >150ms — iter-061's ">50ms = yellow"
+    # boundary). iter-061 added the per-turn speaker-open figure and the
+    # summary prints the MEDIAN / WORST across turns that opened the
+    # speaker, but those wash out a sustained-slow stretch — a few
+    # stalled opens push the worst up without flagging that they were
+    # CONSECUTIVE. A sustained run is the actionable signal that the
+    # persistent-speaker reuse the iter-008 streaming design depends on
+    # has broken: every turn re-pays device-init latency up front,
+    # eroding the time-to-first-audio budget. Threshold 5 (the general
+    # default, not iter-120/308's barge-gated 4): speaker-open is
+    # measured on every device-opening turn, a high-frequency signal.
+    _emit_speaker_open_consistency_line(
+        _emit,
+        [m.speaker_open_seconds for m in metrics_list],
     )
     # iter-090: barge block extracted to _emit_barge_block helper.
     # ~76 lines of co-emitted lines (count, interruption rate,
