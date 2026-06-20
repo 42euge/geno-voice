@@ -27044,3 +27044,96 @@ count 6 (0.50) at 3.6s over count 4 (0.30) at 2.0s. So the affine+speech best is
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
    should track a curated subset, decide the policy and re-run
    `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
+
+## iter-297 — 1-D sweep CSV consumer re-derives JSON --target flat-set pick (row-major default)
+
+- **Date:** 2026-06-19
+- **Branch:** iter-297-sweep-rowmajor-set-cross-surface (ff-merged to main)
+- **Commit:** e387e81
+
+**Why.** iter-289–296 pinned the 1-D SWEEP CSV↔JSON pick re-derive under
+`tie_break="speech"` for EVERY `--target` form (scalar → band → set → open band →
+preference → weighted → scaled → affine). iter-296 backlog #1 named the next gap
+directly: that whole matrix fixes `tie_break="speech"`; the DEFAULT `row-major`
+tie-break was only ever pinned cross-surface on the sweep for the SCALAR and
+CLOSED-BAND cases, never for the DICT/list forms. The GRID earned the row-major
+cross-surface re-derive for every form at iter-273–280 (scalar, band, prefer,
+weighted, scaled, open band, flat set); the SWEEP never did — all its dict-form
+cross-surface tests force `"speech"`. This lap OPENS the sweep row-major dict-form
+matrix with its first member, the flat SET — the sweep twin of iter-280's grid
+set-under-row-major test, mirroring the iter-291 speech-set fixture but pinning the
+DEFAULT tie-break.
+
+**The gap this closes.** Every existing sweep dict-form cross-surface test passes
+`tie_break="speech"` explicitly, so NONE of them exercises the default branch of
+`render_vad_sweep_json` (the branch taken when no `tie_break=` kwarg is supplied —
+the normal CLI path). A regression confined to the DEFAULT row-major path — one
+that flattened a flat-SET target to its head element on the sweep JSON path while a
+CSV consumer still passed the full set, OR that quietly swapped the row-major
+earliest-tie rule for a speech-ordered one on the JSON path only — would diverge
+the two surfaces yet ship green, because the speech matrix never touches the default
+branch and the scalar/band row-major round-trips don't exercise a multi-element
+list target.
+
+**The mechanism.** A 4-value threshold sweep (0.3/0.5/0.7/0.9) with counts
+3/5/9/1, target = flat set `[9, 3]` (satisfy EITHER 9 or 3). `_sweep_results`
+couples speech to count + index, so the in-set rows carry DIFFERENT speech and the
+row-major / speech tie-breaks genuinely disagree. Set distances (min over the two
+elements): 0.30 count 3 → min(6,0)=0 (exact hit on element 3), speech 1.5; 0.50
+count 5 → min(4,2)=2, speech 3.0; 0.70 count 9 → min(0,6)=0 (exact hit on element
+9), speech 6.3; 0.90 count 1 → min(8,2)=2, speech 0.8. TWO rows tie at the set
+floor distance 0 (counts 3 and 9, each an exact hit on a DIFFERENT set element).
+The DEFAULT row-major tie-break keeps the EARLIEST tied row — count 3 (0.30) —
+despite count 9 (0.70) recovering far more speech. So the row-major best is the
+0.30 row count 3, and the top-3 is `[3, 9, 5]` (the floor pair in row-major order,
+then the nearer dist-2 row).
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+1 test).**
+  `test_render_sweep_csv_consumer_rederives_json_set_target_rowmajor_pick`:
+  asserts `payload["target"] == [9, 3]` and `payload["tie_break"] == "row-major"`
+  with NO `tie_break` kwarg passed (exercising the DEFAULT branch); the CSV body
+  carries no `best`/`distance`/`tie_break`; a CSV consumer re-parses the bare table
+  back to sweep rows and re-runs the SAME pickers with the SAME set and the DEFAULT
+  tie-break, recovering the JSON-embedded `best` (count 3) and the full top-3
+  (counts `[3, 9, 5]`). TWO controls prove it cannot pass by accident:
+  `tie_break="speech"` flips the pick to count 9 (the most-speech in-set row),
+  proving the default branch is load-bearing; a SCALAR equal to the set's head (9)
+  ALSO picks count 9, proving the tail element (3) is load-bearing and the set is
+  not collapsing to its head. The top assertions pin the leading pair as row-major
+  (count 3 then 9, speech 1.5 then 6.3 — the INVERSE of speech order). No production
+  code changed (the sweep wiring was already correct — proved by the green focused
+  run on the unmodified path).
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **3899 passed**
+(3898 prior + 1 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_gv_vad.py -k sweep_csv_consumer_rederives_json_set_target_rowmajor` → **1 passed**.
+- Integration: not re-run this lap (no corpus symlinked into this worktree; same
+  as prior corpus-gated laps — the change is a pure CLI cross-surface contract
+  test, no new production code).
+
+**Next planned items:**
+1. **[cli] Sweep ROW-MAJOR cross-surface matrix — continue.** This lap opened the
+   sweep row-major dict-form matrix with the flat SET (grid twin iter-280). The
+   remaining forms still lack a sweep ROW-MAJOR cross-surface re-derive: closed band
+   (only the scalar/band scalar round-trips exist), open band, `{"prefer": …}`,
+   `{"weighted": …}`, `{"scaled": …}`, `{"affine": …}` (grid twins iter-275–279).
+   Each is a near-mechanical clone of this lap's test with the matching `target` and
+   NO `tie_break` kwarg — the fixture must make the row-major earliest-tie rule
+   genuinely DIFFER from speech (a `tie_break="speech"` control flips the pick) so a
+   default-branch regression cannot ship green.
+2. **[cli] `simulate-mirror` grid pick round-trips** remain unpinned cross-surface
+   for ALL dict forms (the VAD matrices covered VAD grid + sweep only).
+3. **[cli] A next FEATURE would be a different axis entirely** — the `--target`
+   composition space (scalar → band → set → preference → additive →
+   multiplicative → affine) is feature-complete. Candidates: a per-element
+   ASYMMETRIC band tolerance, or a "soft floor/ceiling" scoring beyond an open
+   edge with a gentle slope rather than a hard 0. Scope before building.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or the
+   pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it stays
+   operator-only / non-headless.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
+   should track a curated subset, decide the policy and re-run
+   `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
