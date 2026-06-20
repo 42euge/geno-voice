@@ -3534,6 +3534,149 @@ def _emit_worker_idle_gap_consistency_line(
     )
 
 
+def _ttc_bucket(seconds: float) -> str:
+    """iter-305: bucket a per-turn ``time_to_comprehension`` (iter-082's
+    TTC proxy — the cross-turn gap from the PREVIOUS turn's first bot
+    audio to THIS turn's first speech-detected frame, i.e. how long the
+    user listened before responding) into a coarse category. Used by
+    ``_emit_ttc_consistency_line`` to detect runs where the user
+    repeatedly responded outside the natural listening window. Metric
+    3.14 in the perf-metrics taxonomy.
+
+    SEVENTEENTH instance of the diversity-check pattern, and the
+    FOURTEENTH applied to a continuous metric. It is the SECOND with a
+    TWO-SIDED (band) sweet spot — after iter-210's ``bot_wpm``: the fine
+    state is a BAND in the MIDDLE, and the two problematic buckets sit at
+    OPPOSITE ends and carry OPPOSITE diagnoses (the user answered too
+    fast vs too slow). Unlike ``bot_wpm`` (whose two ends call for
+    opposite turns of ONE kokoro knob), TTC's two ends are not a single
+    tunable — they are distinct *signals* about the exchange, so the
+    per-value suggestion branch is informational rather than a knob
+    direction.
+
+    Buckets (boundaries aligned with the existing per-turn yellow
+    display, which colors TTC yellow below 500ms or above 5000ms — see
+    ``TurnMetrics.print``'s TTC row; the bell-curve target is 1-3s):
+
+        ``natural`` — 0.5-5.0s inclusive: the user listened to the bot
+            for a comfortable beat before answering; the desired state.
+        ``rushed``  — 0 < ttc < 0.5s: the user answered almost
+            instantly — they likely already knew what the bot would say
+            (the bot was telling them something they didn't need), or
+            they barged the thought. Consider whether the bot is being
+            redundant / over-explaining.
+        ``pensive`` — > 5.0s: the user took a long beat before
+            responding — they may be confused by the bot's reply or the
+            task is genuinely hard. Consider whether the bot's answers
+            are clear and well-scoped.
+
+    Returns ``""`` when ``seconds`` is non-positive (turn 1, or a turn
+    whose prior turn produced no audio — the cross-turn measurement
+    wasn't possible) — empty-string filter applies in the consumer,
+    mirroring iter-114/115/120/126/128/140/141/142/143/208/209/210/211/
+    212/224/225/226.
+    """
+    if seconds <= 0:
+        return ""
+    if seconds < 0.5:
+        return "rushed"
+    if seconds <= 5.0:
+        return "natural"
+    return "pensive"
+
+
+def _emit_ttc_consistency_line(
+    emit, ttc_list: list[float], threshold: int = 5,
+) -> None:
+    """iter-305: detect consecutive runs of turns where the user's
+    time-to-comprehension (iter-082 ``time_to_comprehension`` — the
+    cross-turn gap from the prior turn's first bot audio to this turn's
+    first speech frame) sat outside the natural listening window.
+    SEVENTEENTH instance of the diversity-check pattern after iter-114
+    (filler), iter-115/126 (naturalness), iter-120 (barge-phase),
+    iter-128 (sentence-length), iter-140 (stt-rtf), iter-141 (tts-rtf),
+    iter-142 (llm-tps), iter-143 (streaming-overlap), iter-208
+    (synth-dispatch), iter-209 (eot-overhead), iter-210 (bot-wpm),
+    iter-211 (max-token-gap), iter-212 (ttfs), iter-224
+    (stt-preview-divergence), iter-225 (sentence-split-coverage),
+    iter-226 (worker-idle-gap). FOURTEENTH instance applied to a
+    CONTINUOUS metric — buckets it via ``_ttc_bucket`` before running
+    the scan.
+
+    SECOND instance with a TWO-SIDED (band) sweet spot — after iter-210
+    (bot-wpm). The fine state is the MIDDLE band (``natural``, 0.5-5.0s),
+    and BOTH extremes are flagged but they are NOT interchangeable:
+    ``rushed`` (the user answered before they could have absorbed the
+    reply) and ``pensive`` (the user took a long beat — possibly
+    confused) point at OPPOSITE problems. The per-value suggestion branch
+    is therefore load-bearing, and the run scan keeps the two flagged
+    buckets distinct — a rushed run and a pensive run never merge.
+
+    The session summary already reports the TTC median + one-shot
+    rushed/slow outlier COUNTS (iter-082's "Median TTC" line), but a
+    count of scattered outliers reads very differently from a SUSTAINED
+    run: five rushed turns spread across a 40-turn session is noise,
+    whereas five rushed turns BACK TO BACK means the bot is reliably
+    telling the user things they already know (or being barged) for a
+    whole stretch of the conversation — the actionable conversational-
+    quality signal the bell-curve target (1-3s) exists to protect.
+    Distinct from the iter-082 count: that answers "how many turns were
+    odd"; this answers "did the oddness persist".
+
+    Filter rule: drop the ``"natural"`` bucket (the sweet spot) and
+    ``""`` (turn 1 / no prior audio) before the scan. Only ``rushed``
+    and ``pensive`` warrant warning. Like iter-210 and UNLIKE the
+    one-sided continuous sentinels, the fine bucket is the MIDDLE band,
+    not an extreme.
+
+    Threshold = 5: same as iter-115/128/140/141/142/143/208/209/210/211/
+    212/224/225/226. TTC varies turn to turn with how much the user had
+    to think; a single fast or slow answer is normal, a sustained run is
+    the real signal.
+
+    Output:
+
+        User response gap: 5 consecutive 'rushed' turns — the user
+                           answers before absorbing the reply; the bot
+                           may be over-explaining what they already know
+                           (iter-082 time_to_comprehension)
+    """
+    # Bucketize, then drop the "uninteresting" buckets (empty, natural).
+    interesting = {"rushed", "pensive"}
+    filtered = [
+        b for b in (
+            _ttc_bucket(t) for t in ttc_list
+        )
+        if b in interesting
+    ]
+    if not filtered:
+        return
+
+    longest_run, longest_bucket = _longest_consecutive_run(filtered)
+    if longest_run < threshold:
+        return
+
+    if longest_bucket == "rushed":
+        suggestion = (
+            "the user answers before absorbing the reply; the bot may "
+            "be over-explaining what they already know"
+        )
+    elif longest_bucket == "pensive":
+        suggestion = (
+            "the user takes a long beat before answering; the bot's "
+            "replies may be unclear or the task too broad"
+        )
+    else:
+        # Defensive: future buckets that pass the filter rule.
+        suggestion = "the user's response timing sits outside the 1-3s window"
+
+    emit(
+        f"    User response gap: {longest_run} consecutive "
+        f"{longest_bucket!r} turns — {suggestion} "
+        f"(iter-082 time_to_comprehension)"
+    )
+
+
 def _emit_bargeable_line(emit, bargeable_values: list[float]) -> None:
     """iter-104: extracted from print_session_summary's iter-074
     bargeable line. Reports the WORST bargeable fraction across
@@ -4346,6 +4489,22 @@ def print_session_summary(
     _emit_worker_idle_gap_consistency_line(
         _emit,
         [m.worker_idle_gap_total for m in metrics_list],
+    )
+    # iter-305: TTC consistency check. Only fires when 5+ consecutive
+    # turns the user responded outside the natural listening window
+    # (rushed < 0.5s / pensive > 5.0s). iter-082 added the per-turn TTC
+    # proxy + a session median with scattered rushed/slow COUNTS, but a
+    # count of spread-out outliers reads nothing like a SUSTAINED run:
+    # five rushed turns back to back means the bot is reliably telling
+    # the user what they already know (or being barged) for a whole
+    # stretch, while five scattered across the session is noise. SECOND
+    # two-sided-band sentinel after iter-210 (bot-wpm) — the fine state
+    # is the MIDDLE band (0.5-5.0s) and the two flagged ends (rushed /
+    # pensive) carry OPPOSITE diagnoses, so the per-value suggestion is
+    # load-bearing.
+    _emit_ttc_consistency_line(
+        _emit,
+        [m.time_to_comprehension for m in metrics_list],
     )
     # iter-090: barge block extracted to _emit_barge_block helper.
     # ~76 lines of co-emitted lines (count, interruption rate,
