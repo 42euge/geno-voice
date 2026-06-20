@@ -28421,3 +28421,106 @@ purely additive.
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list`
    shows leftover per-iter worktrees. A future lap could
    `git worktree prune` / remove merged ones.
+
+## iter-310 — mic-stale consistency sentinel (sustained stale-frame flushes)
+
+- **Date:** 2026-06-20
+- **Branch:** iter-310-mic-stale-consistency (ff-merged to main)
+- **Commit:** bfc6d7f
+
+**Why.** The `--target` composition space is feature-complete on BOTH
+the VAD grid and sweep (iter-273–304), so the next genuine increment
+stays in the session-summary diversity-check pattern (GENO.md). The
+iter-309 plan named `mic_stale_frames` (iter-037) as the LAST clean
+clone of the iter-140/141/208/209/226/307/308/309 monotonic template.
+iter-037 surfaces the bot's voice leaking back through the OS mic
+between turns (acoustic echo / Bluetooth duplex / loopback) via stale
+frames flushed at turn start, and prints the per-turn line plus an
+AGGREGATE session total — but a one-off total washes out a SUSTAINED
+stretch: a single noisy turn inflates the total without flagging that
+the flushes were turn-after-turn. A sustained run of non-zero flushes is
+the actionable signal that echo is persistently leaking and the user's
+setup needs echo cancellation.
+
+**What's novel.** TWENTY-SECOND instance of the diversity-check pattern
+and the NINETEENTH on a continuous metric. Like
+iter-140/141/208/209/224/226/307/308/309 — and UNLIKE the inverted
+iter-142/143/225 — `mic_stale_frames` is smaller-is-better (no stale
+audio is best), so the boundaries are NOT inverted; the problematic end
+is a LARGE count. The structural novelty vs iter-309: there is NO
+"measured but fine" intermediate bucket. Opening a speaker (iter-309) is
+an EXPECTED cost so it keeps an `instant` fine-bucket that gets dropped;
+but ANY stale frame here is a symptom — the desired state is literally
+0. So this bucketer mirrors iter-114's FILLER COUNT (filter only the
+no-event 0, flag every measured value) rather than iter-309's
+instant/slow/stalled triad. Threshold is **4** (NOT the threshold-5
+general default): stale frames are near-always 0 on a clean session, so
+a non-zero flush is itself an event — like iter-120's barge-phase and
+iter-308's cancel-close, event-gated rare signals earn the lower bar.
+
+**What it is.** A one-sided monotonic sentinel (boundaries aligned with
+iter-037's per-turn display, which colors >0.5s of stale audio yellow,
+i.e. 8000 frames at the 16 kHz mic rate):
+- `minor` — 1-8000 frames (≤0.5s): the mic accumulated a little stale
+  audio between turns; some echo leaking but below iter-037's yellow.
+- `echo`  — >8000 frames (>0.5s): the mic accumulated over half a second
+  of stale audio; the bot's voice is reliably leaking back (yellow).
+
+`0` (a clean turn where the mic was silent between turns — the common
+case, where `mic_stale_frames` stays at its 0 default) returns `""` and
+is filtered. The two flagged buckets stay distinct: a minor run and an
+echo run never merge, so 3 minor + 3 echo yields a longest run of 3,
+below threshold.
+
+**What changed.**
+- **`examples/_chat_metrics.py`** — added `_mic_stale_bucket`
+  (minor/echo, returns `""` for ≤0) and
+  `_emit_mic_stale_consistency_line` (threshold 4, filters `""` before
+  the run scan, per-value suggestions + defensive `else`, `iter-037
+  mic_stale_frames` attribution). Wired the call into
+  `print_session_summary` right after the iter-309 speaker-open line,
+  reusing the iter-116 `_longest_consecutive_run` primitive unchanged.
+- **`tests/unit/test_emit_mic_stale_consistency_line.py` (+19 tests)** —
+  the full pattern matrix: bucket boundaries incl. the 8000-frame edge
+  (8000→minor, 8001→echo) and ≤0 → `""`, the 0-is-clean-turn semantics
+  through the consumer (a clean 0 between echo turns doesn't break the
+  run), empty/all-zero suppression, at/above/below threshold per value,
+  minor/echo never merge into one run, echo breaks a minor run,
+  longest-of-two wins, custom threshold (3 catches, 10 suppresses),
+  per-value suggestion divergence, output formatting (4-space indent) +
+  iter-037 attribution, 1000-element scaling.
+
+No production behavior changed for existing metrics — the new line is
+purely additive.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4032 passed**
+(4013 prior + 19 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_emit_mic_stale_consistency_line.py`
+  → **19 passed**.
+- Integration: not re-run this lap (no corpus symlinked into this worktree;
+  same as prior corpus-gated laps — the change is a pure session-summary
+  helper with unit-level coverage, no audio I/O).
+
+**Next planned items:**
+1. **[chat-metrics] One-sided continuous monotonic clones — EXHAUSTED.**
+   With `mic_stale_frames` (this lap), `speaker_open_seconds` (iter-309),
+   `llm_cancel_to_close` (iter-308) and `max_queue_depth` (iter-307) all
+   done, the named one-sided continuous metrics from the iter-307–309
+   plans are covered. A future lap would need to scan `TurnMetrics` for
+   any remaining un-sentinelled continuous field (e.g. `user_wpm`
+   iter-064 — but it has no "correct" rate, so likely NOT a good fit) or
+   a NEW per-turn metric not yet emitted.
+2. **[chat-metrics] Two-sided-band sentinel family — strongest candidates
+   exhausted** (iter-210 bot-wpm, iter-305 ttc, iter-306 token-reveal-lag).
+   `user_wpm` (iter-064) has no "correct" rate so it is likely NOT a good
+   band fit. The band family is probably complete.
+3. **[cli] Grid + sweep cross-surface `--target` matrices — BOTH COMPLETE**
+   (iter-273–304). A next CLI feature would be a different axis (e.g.
+   asymmetric band tolerance, or a soft floor/ceiling beyond an open edge)
+   — scope before building.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list`
+   shows leftover per-iter worktrees. A future lap could
+   `git worktree prune` / remove merged ones.
