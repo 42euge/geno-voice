@@ -29482,3 +29482,74 @@ No code changed — docs + test only; every existing CLI surface is untouched.
    ~30 leftover per-iter worktrees (iter-001…028, 232, 317). A future lap could
    `git worktree prune` / remove the merged ones to keep the list legible.
    NOTE: this lap correctly removed its own worktree.
+
+## iter-321 — backport command-parse drift sentinel to voice-capture-tuning doc
+
+- **Date:** 2026-06-20
+- **Branch:** iter-321-vad-doc-sentinel (ff-merged to main, worktree removed)
+- **Commit:** 840e4ff
+
+**Why.** iter-320 gave the TTS-pacing mirror doc a command-parse **drift
+sentinel** (`test_tts_pacing_mirror_doc.py`): it extracts every `gv` example
+from the doc's fenced code blocks and parses each through the real
+`build_parser`, so a renamed/removed documented flag turns the test red instead
+of rotting silently. iter-320's own next-item flagged that the much larger,
+older VAD-analysis doc `docs/research/voice-capture-tuning.md` — grown across
+~30 laps (iters 189→287+: the `replay_vad.py`/`replay_silero.py` harnesses, then
+`gv vad` / `vad-diff` / `vad-sweep` / `vad-grid` and the `--target` grammar) and
+showing dozens of copy-pasteable `gv` examples — had NO such guard. That is the
+surface most prone to silent rot: a reader who copies a stale flag hits
+`SystemExit(2)`. This lap backports the guard.
+
+**What it is.**
+- **`tests/unit/test_voice_capture_tuning_doc.py`** (new, +10 tests) — the
+  drift sentinel for the VAD doc, reusing the iter-320 extractor shape verbatim:
+  re-join `\`-continued lines, strip inline `# comments`, and **filter on the
+  leading `gv ` token** so the doc's `python fixtures/replay_vad.py` /
+  `replay_silero.py` examples are skipped (this doc mixes `gv` and non-`gv`
+  examples — the mirror doc was `gv`-only). All **81** documented `gv` commands
+  parse today.
+  - `test_all_documented_gv_commands_parse` — the core sentinel: parses each
+    documented `gv` line and asserts the parsed `args.command` matches the
+    line's leading subcommand.
+  - `test_documented_gv_commands_route_to_known_subcommands` — every example
+    targets one of the four `{vad, vad-diff, vad-sweep, vad-grid}` subcommands,
+    so a doc drifting onto an uncovered subcommand also fires.
+  - `test_every_documented_vad_subcommand_appears_in_examples` — each of the
+    four subcommands the prose names also appears as a *runnable* example.
+  - Structural pointers: all four subcommands named, `--json`/`--csv` described
+    as "mutually exclusive", the two replay harnesses + `vad/silero.py` named
+    AND existence-checked, the mkdocs nav entry present.
+  - `test_doc_has_command_examples` (>= 30 floor) keeps the extraction regex
+    from silently matching nothing and making the parse tests vacuously pass.
+- **`docs/research/voice-capture-tuning.md`** — a Methodology-notes bullet names
+  the sentinel test so an operator editing the examples knows the guard exists,
+  and cross-references iter-320's mirror-doc guard.
+
+No code or CLI changed — a new test + one doc bullet only.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4201 passed**
+(4191 prior + 10 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_voice_capture_tuning_doc.py` → **10 passed**
+  (re-run on main post-merge).
+- Integration: not re-run this lap (a pure parser/regex test over the doc — no
+  torch import, no audio I/O).
+
+**Next planned items:**
+1. **[docs] All three research docs now have homes; the two CLI-bearing docs
+   (`tts-pacing-mirror.md`, `voice-capture-tuning.md`) now BOTH carry a
+   command-parse drift sentinel.** The third, `organic-turn-taking.md`
+   (139KB — the largest), is design/narrative and shows few if any `gv`
+   examples; a future docs lap could check whether it has any runnable CLI
+   examples worth guarding, or whether its drift risk is structural (named
+   modules/functions) and warrants a lighter existence-check sentinel instead.
+2. **[chat-metrics] Continuous-clone + two-sided-band sentinel families — both
+   declared complete (iter-311/312, iter-306).** A NEW per-turn metric not yet
+   emitted would be needed to extend either; none obvious.
+3. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+4. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~30 leftover per-iter worktrees. A future lap could `git worktree prune` /
+   remove the merged ones to keep the list legible. NOTE: this lap correctly
+   removed its own worktree.
