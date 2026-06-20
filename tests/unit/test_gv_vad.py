@@ -996,6 +996,7 @@ def _diff_args(**over):
         speech_pad_ms=30.0,
         max_speech_s=float("inf"),
         json=False,
+        csv=False,
     )
     base.update(over)
     return argparse.Namespace(**base)
@@ -1039,6 +1040,22 @@ def test_vad_diff_rejects_out_of_range_threshold():
 def test_vad_diff_json_flag():
     args = gv.build_parser().parse_args(["vad-diff", "rec.wav", "--json"])
     assert args.json is True
+
+
+def test_vad_diff_csv_defaults_false():
+    args = gv.build_parser().parse_args(["vad-diff", "rec.wav"])
+    assert args.csv is False
+
+
+def test_vad_diff_csv_flag():
+    args = gv.build_parser().parse_args(["vad-diff", "rec.wav", "--csv"])
+    assert args.csv is True
+    assert args.json is False
+
+
+def test_vad_diff_json_and_csv_mutually_exclusive():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(["vad-diff", "rec.wav", "--json", "--csv"])
 
 
 # ---- vad_segmentation_delta: pure delta core ---------------------------
@@ -1175,6 +1192,68 @@ def test_render_diff_json_carries_both_sides_and_deltas():
     assert payload["speech_s_delta"] == -2.0
 
 
+# ---- render_vad_diff_csv: machine-readable CSV (iter-313) --------------
+
+
+def test_render_diff_csv_none_marks_unavailable():
+    text = gv.render_vad_diff_csv(None, None, label_a=0.5, label_b=0.7)
+    # A degraded run is a single self-describing comment, not empty output.
+    assert text.startswith("#")
+    assert "silero-vad" in text
+
+
+def test_render_diff_csv_one_none_marks_unavailable():
+    r = _Result(name="r.wav", sample_rate=16000, duration_s=5.0)
+    text = gv.render_vad_diff_csv(r, None, label_a=0.5, label_b=0.7)
+    assert text.startswith("#")
+    assert "silero-vad" in text
+
+
+def test_render_diff_csv_header_and_two_rows():
+    a = _Result(
+        name="rec.wav",
+        sample_rate=16000,
+        duration_s=10.0,
+        segments=[_Seg(0.0, 1.0), _Seg(2.0, 3.0), _Seg(5.0, 6.0)],
+    )
+    b = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=10.0, segments=[_Seg(0.0, 1.0)]
+    )
+    text = gv.render_vad_diff_csv(a, b, label_a=0.3, label_b=0.9)
+    rows = list(csv.reader(io.StringIO(text)))
+    assert rows[0] == ["threshold", "num_segments", "speech_s"]
+    assert rows[1] == ["0.3", "3", "3.0"]
+    assert rows[2] == ["0.9", "1", "1.0"]
+    # header + exactly one row per threshold, nothing else.
+    assert len(rows) == 3
+
+
+def test_render_diff_csv_no_trailing_newline():
+    a = _Result(name="rec.wav", sample_rate=16000, duration_s=5.0, segments=[_Seg(0.0, 1.0)])
+    b = _Result(name="rec.wav", sample_rate=16000, duration_s=5.0, segments=[_Seg(0.0, 1.0)])
+    text = gv.render_vad_diff_csv(a, b, label_a=0.5, label_b=0.7)
+    assert not text.endswith("\n")
+    assert not text.endswith("\r")
+
+
+def test_render_diff_csv_byte_identical_to_two_value_sweep():
+    # A diff IS the two-point degenerate of a threshold sweep, so a vad-diff
+    # --csv and a two-value vad-sweep --csv over the same pair must produce
+    # byte-identical tables (the whole point of sharing the schema).
+    a = _Result(
+        name="rec.wav",
+        sample_rate=16000,
+        duration_s=10.0,
+        segments=[_Seg(0.0, 1.0), _Seg(2.0, 3.0)],
+    )
+    b = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=10.0, segments=[_Seg(0.0, 1.0)]
+    )
+    diff_text = gv.render_vad_diff_csv(a, b, label_a=0.3, label_b=0.9)
+    sweep_text = gv.render_vad_sweep_csv([0.3, 0.9], [a, b], name="rec.wav")
+    assert diff_text == sweep_text
+
+
 # ---- cmd_vad_diff: the handler -----------------------------------------
 
 
@@ -1255,6 +1334,43 @@ def test_cmd_vad_diff_json_branch():
     assert payload["num_segments_delta"] == -2
     assert payload["threshold_a"] == 0.5
     assert payload["threshold_b"] == 0.7
+
+
+def test_cmd_vad_diff_unavailable_csv():
+    lines: List[str] = []
+    gv.cmd_vad_diff(
+        _diff_args(csv=True),
+        log=lines.append,
+        segmenter=lambda *a, **k: (_ for _ in ()).throw(AssertionError("no")),
+        availability=lambda: False,
+    )
+    assert len(lines) == 1
+    assert lines[0].startswith("#")
+    assert "silero-vad" in lines[0]
+
+
+def test_cmd_vad_diff_csv_branch():
+    def seg(wav, params=None):
+        n = 3 if params.threshold < 0.6 else 1
+        return _Result(
+            name="rec.wav",
+            sample_rate=16000,
+            duration_s=10.0,
+            segments=[_Seg(float(i), i + 0.5) for i in range(n)],
+        )
+
+    lines: List[str] = []
+    gv.cmd_vad_diff(
+        _diff_args(threshold_a=0.5, threshold_b=0.7, csv=True),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    assert len(lines) == 1
+    rows = list(csv.reader(io.StringIO(lines[0])))
+    assert rows[0] == ["threshold", "num_segments", "speech_s"]
+    assert rows[1][0] == "0.5" and rows[1][1] == "3"
+    assert rows[2][0] == "0.7" and rows[2][1] == "1"
 
 
 def test_cmd_vad_diff_shares_knobs_across_both_runs():

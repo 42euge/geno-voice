@@ -1268,6 +1268,41 @@ def render_vad_diff_json(result_a, result_b, *, label_a, label_b):
     return json.dumps(payload, indent=2)
 
 
+def render_vad_diff_csv(result_a, result_b, *, label_a, label_b):
+    """Render a two-threshold segmentation comparison as CSV text.
+
+    The spreadsheet/plot-friendly twin of :func:`render_vad_diff_json`,
+    completing the human / ``--json`` / ``--csv`` trio that ``gv vad-sweep`` and
+    ``gv vad-grid`` already carry (iter-237 / iter-251) but ``gv vad-diff`` was
+    missing. A diff IS the two-point degenerate of a threshold sweep, so this
+    emits the SAME flat ``threshold,num_segments,speech_s`` schema as
+    :func:`render_vad_sweep_csv` — one row for threshold A, one for threshold B —
+    which means a two-value ``gv vad-sweep --csv`` and a ``gv vad-diff --csv``
+    over the same pair produce byte-identical tables, and a consumer can
+    ``pandas.concat`` diffs and sweeps without reconciling columns. The signed
+    deltas the human/JSON twins surface are trivially derivable from the two
+    rows (b minus a), so they are left out rather than duplicated into an
+    awkward wide row. Either result ``None`` (segmenter unavailable) yields a
+    single ``# silero VAD unavailable: ...`` comment line, matching
+    :func:`render_vad_sweep_csv` so a degraded run is self-describing rather than
+    silently empty. Pure: returns a single string built with the stdlib
+    :mod:`csv` writer (RFC-4180 quoting, ``\\r\\n`` row terminators) with the
+    trailing terminator stripped.
+    """
+    if result_a is None or result_b is None:
+        return (
+            "# silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        )
+    d = vad_segmentation_delta(result_a, result_b)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["threshold", "num_segments", "speech_s"])
+    writer.writerow([label_a, d["num_segments_a"], d["speech_s_a"]])
+    writer.writerow([label_b, d["num_segments_b"], d["speech_s_b"]])
+    return buf.getvalue().rstrip("\r\n")
+
+
 # gv vad-sweep axis metadata. iter-236 swept only the P(speech) gate; iter-238
 # adds the trailing-silence hangover as a second axis; iter-239 adds the
 # minimum-speech floor as a third; iter-253 adds the symmetric region padding
@@ -2150,6 +2185,10 @@ def cmd_vad_diff(args, *, log=print, segmenter=None, availability=None):
     ``availability`` default to the real :mod:`vad.silero` functions, imported
     lazily so the parser stays torch-free. When ``silero-vad`` is absent the
     handler prints the install hint and returns, never crashing.
+
+    iter-313 adds ``--csv`` (mutually exclusive with ``--json``), the
+    spreadsheet/plot-friendly twin completing the human / ``--json`` / ``--csv``
+    trio that ``gv vad-sweep`` / ``gv vad-grid`` already carry.
     """
     if segmenter is None or availability is None:
         from vad.silero import segment_recording, silero_available
@@ -2158,11 +2197,15 @@ def cmd_vad_diff(args, *, log=print, segmenter=None, availability=None):
         availability = silero_available if availability is None else availability
 
     as_json = getattr(args, "json", False)
+    as_csv = getattr(args, "csv", False)
 
     if not availability():
         if as_json:
             log(render_vad_diff_json(None, None, label_a=args.threshold_a,
                                      label_b=args.threshold_b))
+        elif as_csv:
+            log(render_vad_diff_csv(None, None, label_a=args.threshold_a,
+                                    label_b=args.threshold_b))
         else:
             for line in render_vad_diff(None, None, label_a=args.threshold_a,
                                         label_b=args.threshold_b):
@@ -2186,6 +2229,9 @@ def cmd_vad_diff(args, *, log=print, segmenter=None, availability=None):
     if as_json:
         log(render_vad_diff_json(result_a, result_b, label_a=args.threshold_a,
                                  label_b=args.threshold_b))
+    elif as_csv:
+        log(render_vad_diff_csv(result_a, result_b, label_a=args.threshold_a,
+                                label_b=args.threshold_b))
     else:
         for line in render_vad_diff(result_a, result_b, label_a=args.threshold_a,
                                     label_b=args.threshold_b):
@@ -2828,10 +2874,18 @@ def build_parser():
         help="Force-split regions longer than this, in seconds — shared by "
         "both runs; 'inf'/'none' never splits (default: inf)",
     )
-    vad_diff.add_argument(
+    vad_diff_fmt = vad_diff.add_mutually_exclusive_group()
+    vad_diff_fmt.add_argument(
         "--json",
         action="store_true",
         help="Emit machine-readable JSON instead of the human-readable report",
+    )
+    vad_diff_fmt.add_argument(
+        "--csv",
+        action="store_true",
+        help="Emit a flat threshold,num_segments,speech_s CSV table (one row "
+        "per threshold) for spreadsheets/plots — byte-identical to a two-value "
+        "vad-sweep --csv; mutually exclusive with --json",
     )
 
     # gv vad-sweep — segment one WAV across a swept knob and tabulate the result.
