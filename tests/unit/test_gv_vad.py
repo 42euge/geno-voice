@@ -2348,6 +2348,145 @@ def test_render_sweep_csv_consumer_rederives_json_preference_target_speech_tie_p
     assert [c["speech_s"] for c in payload["top"]] == [3.6, 2.0, 5.6]
 
 
+def test_render_sweep_csv_consumer_rederives_json_weighted_target_speech_tie_pick():
+    # iter-294: iter-289 pinned the 1-D sweep CSV↔JSON pick re-derive under
+    # tie_break="speech" for a SCALAR target, iter-290 added the first DICT form (a
+    # CLOSED BAND), iter-291 the flat SET, iter-292 the OPEN band, and iter-293 the
+    # {"prefer": [...]} PREFERENCE. iter-293 backlog #1 named the next gap: the sweep
+    # still lacks the speech-tie cross-surface re-derive for the WEIGHTED/scaled/affine
+    # forms the GRID earned at iter-285–286/288. This lap closes the NEXT one — a
+    # {"weighted": [(element, penalty), ...]} ADDITIVE-WEIGHTED set (iter-250) under
+    # tie_break="speech" (the sweep twin of iter-285's grid weighted-under-speech test).
+    #
+    # The weighted set is the FIRST sweep cross-surface form whose precedence lives in
+    # the DISTANCE itself, not the sort key. The {"prefer": ...} of iter-293 left the
+    # distance IDENTICAL to a flat set (the MIN over its elements) and inserted the
+    # precedence as a SECONDARY sort key (_preference_rank), so a count's distance was
+    # untouched by the precedence. The weighted set INVERTS that: grid_cell_distance
+    # ADDS each element's penalty to its raw distance and takes the MIN over those
+    # PENALISED distances (iter-250), so the penalty can OVERRIDE a raw-distance gap —
+    # an exact hit on a high-penalty element scores WORSE than a one-off miss on a
+    # zero-penalty one. And grid_cell_sort_key inserts NO secondary key for a weighted
+    # set (the precedence is already baked into the distance), so the key is the SAME
+    # TWO-level (distance, -speech_s) shape as the band/set/open-band twins — but the
+    # DISTANCE feeding it is the penalised one, NOT the raw set distance. That is a
+    # mechanism NO prior sweep twin exercises: iter-290/291/292 (band/set/open-band)
+    # all score the RAW geometric distance with no precedence in it, and iter-293
+    # (preference) carries precedence ONLY in the sort key with the distance left as
+    # the raw set MIN. Here the precedence is in the distance and the sort key is the
+    # plain two-level one — the EXACT opposite split from the preference.
+    # render_vad_sweep_json threads BOTH the weighted target AND tie_break="speech"
+    # into the pickers, embedding best/top/target/tie_break; render_vad_sweep_csv
+    # emits only the bare <axis>,num_segments,speech_s table. A regression that dropped
+    # the tie_break on the sweep JSON path (falling back to row-major) while a CSV
+    # consumer still passed "speech", OR flattened the {"weighted": ...} dict to a
+    # plain set on the JSON path (dropping the penalty so the high-penalty element
+    # reverts to a free exact hit), would diverge the two surfaces yet ship green — a
+    # failure mode neither iter-289 (scalar, no ties), iter-290/291/292
+    # (band/set/open-band, raw distance), nor iter-293 (preference, precedence in the
+    # sort key) can catch, and the weighted-under-speech tests live ONLY on the GRID
+    # (iter-285), never the sweep.
+    #
+    # Fixture: a 4-value threshold sweep with counts 4/6/8/1, target = weighted set
+    # 5(+0), 8(+3) ({"weighted": [(5, 0), (8, 3)]}). _sweep_results couples speech to
+    # count + index, so the rows carry DIFFERENT speech and the tie-breaks genuinely
+    # DISAGREE. Each element's distance is its raw distance PLUS its penalty, the set
+    # scoring the MIN over those penalised distances:
+    #   - 0.30 count 4 → min(|4-5|+0, |4-8|+3)=min(1,7)=1,  speech 2.0
+    #   - 0.50 count 6 → min(|6-5|+0, |6-8|+3)=min(1,5)=1,  speech 3.6
+    #   - 0.70 count 8 → min(|8-5|+0, |8-8|+3)=min(3,3)=3,  speech 5.6
+    #   - 0.90 count 1 → min(|1-5|+0, |1-8|+3)=min(4,10)=4, speech 0.8
+    # The +3 penalty on element 8 is load-bearing: count 8 is an EXACT hit on 8 (raw
+    # distance 0) but the penalty lifts it to 3, so it NO LONGER ties at the floor.
+    # TWO rows tie at the penalised floor distance 1 (counts 4 and 6, both one off the
+    # zero-penalty element 5). The two-level key (distance, -speech_s) then prefers the
+    # MOST-speech of the tied pair, count 6 (0.50) at 3.6s over count 4 (0.30) at 2.0s.
+    # So the weighted+speech best is the 0.50 row count 6.
+    thresholds = [0.3, 0.5, 0.7, 0.9]
+    results = _sweep_results([4, 6, 8, 1])
+    target = {"weighted": [(5, 0), (8, 3)]}
+    csv_text = gv.render_vad_sweep_csv(thresholds, results, name="rec.wav")
+    payload = json.loads(
+        gv.render_vad_sweep_json(
+            thresholds, results, name="rec.wav",
+            target=target, top=3, tie_break="speech",
+        )
+    )
+    # The JSON twin records BOTH the weighted target (a {"weighted": [...]} object —
+    # JSON renders the (element, penalty) tuples as 2-element lists) and WHICH
+    # tie-break produced its pick.
+    assert payload["target"] == {"weighted": [[5, 0], [8, 3]]}
+    assert payload["tie_break"] == "speech"
+    # The CSV body still carries no pick columns, tie_break, or weighting — it is the
+    # bare sweep.
+    assert "best" not in csv_text and "distance" not in csv_text
+    assert "tie_break" not in csv_text and "weighted" not in csv_text
+    # A CSV consumer re-parses the flat table back to sweep rows...
+    rows = [
+        {
+            "threshold": float(row["threshold"]),
+            "num_segments": int(row["num_segments"]),
+            "speech_s": float(row["speech_s"]),
+        }
+        for row in csv.DictReader(io.StringIO(csv_text))
+    ]
+    # ...and re-runs the SAME picker with the SAME weighted target AND the SAME
+    # tie_break="speech". The CSV-derived best equals the JSON `best` (distance key
+    # stripped), and the re-derived penalised distance matches the one the JSON
+    # embedded (1 — one off the zero-penalty element 5).
+    csv_best = gv.pick_best_grid_cell(rows, target, "speech")
+    json_best = dict(payload["best"])
+    assert json_best.pop("distance") == gv.grid_cell_distance(csv_best, target)
+    assert csv_best == json_best
+    assert csv_best["threshold"] == 0.5 and csv_best["num_segments"] == 6
+    assert payload["best"]["distance"] == 1
+    # CONTROL 1: the SAME weighted target under the DEFAULT row-major tie-break picks a
+    # DIFFERENT row (the earliest floor row, count 4 at 0.30), so this test cannot pass
+    # by the JSON path silently dropping the speech tie-break (falling back to
+    # row-major). The speech tie-break is load-bearing for the count-6 pick — it
+    # decides between the two floor rows the penalised distance leaves tied.
+    rowmajor_best = gv.pick_best_grid_cell(rows, target)
+    assert rowmajor_best != csv_best
+    assert rowmajor_best["threshold"] == 0.3 and rowmajor_best["num_segments"] == 4
+    # CONTROL 2: a flat SET of the SAME two elements [5, 8] carries NO penalty —
+    # grid_cell_distance scores the RAW set MIN — so count 8 is a FREE exact hit
+    # (distance 0) that beats the count-4/count-6 floor (distance 1) OUTRIGHT, no
+    # tie-break needed. The speech tie never even bites: count 8 (0.70) wins on
+    # distance alone. A DIFFERENT pick from the weighted best, proving the +3 penalty
+    # is load-bearing: flattening {"weighted": [(5,0),(8,3)]} to [5,8] on either
+    # surface would change the pick (the penalty is what demotes count 8's exact hit
+    # below the count-6 near-miss).
+    set_best = gv.pick_best_grid_cell(rows, [5, 8], "speech")
+    assert set_best != csv_best
+    assert set_best["threshold"] == 0.7 and set_best["num_segments"] == 8
+    # The top shortlist agrees row-for-row (distance stripped). Ordering is by the
+    # two-level (penalised distance, -speech) key: the two floor rows lead
+    # (speech-ordered, count 6 at 3.6s before count 4 at 2.0s), THEN count 8 — DESPITE
+    # count 8 having the most speech — because its penalised distance (3) sorts it
+    # behind the floor pair. The dist-4 row (count 1) never reaches the top 3.
+    csv_top = gv.pick_top_grid_cells(rows, target, 3, "speech")
+    json_top = [dict(c) for c in payload["top"]]
+    for c in json_top:
+        c.pop("distance")
+    assert csv_top == json_top
+    # Head of the shortlist is the single best pick, on both surfaces.
+    assert csv_top[0] == csv_best
+    # Order [6, 4, 8] — NOT the pure-speech order [8, 6, 4] the set control would give
+    # (count 8 leads there as the most-speech FREE exact hit). The +3 penalty pushes
+    # count 8's distance to 3, so the floor pair (counts 6, 4) outranks it despite
+    # count 8's higher speech: the weighting reorders ahead of speech BY MOVING THE
+    # DISTANCE, the opposite seam from iter-293's preference rank.
+    assert [r["num_segments"] for r in csv_top] == [6, 4, 8]
+    set_top = gv.pick_top_grid_cells(rows, [5, 8], 3, "speech")
+    assert [r["num_segments"] for r in set_top] == [8, 6, 4]
+    # The two leading rows scored the penalised floor (distance 1 — each one off the
+    # zero-penalty element 5); count 8 trails at distance 3 (its exact hit lifted by
+    # the +3 penalty). The penalised distance, then speech among the floor pair, NOT
+    # the raw distance, decided the order.
+    assert [c["distance"] for c in payload["top"]] == [1, 1, 3]
+    assert [c["speech_s"] for c in payload["top"]] == [3.6, 2.0, 5.6]
+
+
 # ---- cmd_vad_sweep --csv: the handler ----------------------------------
 
 
