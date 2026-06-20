@@ -30197,3 +30197,79 @@ the new file; the two allowlist edits modify existing assertions in place.)
 4. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-329 — gv vad-gaps end-to-end integration test over the real corpus
+
+- **Date:** 2026-06-20
+- **Branch:** iter-329-vad-gaps-integration (ff-merged to main, worktree removed)
+- **Commit:** 0348aff
+
+**Why.** iter-328 shipped `gv vad-gaps` — the inter-segment silence-gap
+analysis surface — with full *unit* coverage, but exercised the handler only
+through an injected stub segmenter. Its next-item #1 recommended "an
+integration test running `gv vad-gaps` over the real `fixtures/` corpus (the
+analogue of `test_gv_vad_cli.py`) to pin the gap distribution on real
+recordings." This lap does exactly that. The unit tests prove the pure core /
+renderers / handler are individually correct; none drives the REAL Silero
+engine, so nothing guarantees the CLI surface wires the engine correctly or
+that the gaps it reports are the genuine pauses of a real segmentation.
+
+**What it is.** `tests/integration/test_gv_vad_gaps_cli.py` (new, +247 lines) —
+the silence-side companion to `test_gv_vad_cli.py`, driving `cmd_vad_gaps`
+through the CLI with the real `vad.silero.segment_recording` (no injected stub)
+over the committed-host recording corpus. Same skip contract as the sibling
+module (skips cleanly when the binary recordings or silero-vad + torch are
+absent), so the unit GATE is unaffected.
+
+The **anchoring property** is the one that matters: each gap `gv vad-gaps`
+reports must equal the pause between the corresponding consecutive segments an
+*independent* `gv vad --json` run produces at the SAME knobs — including the
+1-based after-segment index and that segment's end time. This proves the new
+surface segments once with the real engine and differences THAT exact
+segmentation, not a re-derived one. THE GATE recording (the 31s continuous
+capture energy-VAD cannot split, `voice-20260618-110355.wav`) is the gate here
+too: it must yield ≥2 segments hence ≥1 measurable gap.
+
+Seven tests (12 instances after parametrization over the 6-recording corpus):
+- **THE GATE:** 31s recording → `num_gaps == num_segments - 1 >= 1`.
+- **Anchoring:** gaps equal the pauses between independent `gv vad --json`
+  segments (same values, same after-segment anchors).
+- **Aggregate consistency:** min/mean/max/total derivable from the per-gap list
+  (no stale or independently-computed summary).
+- **Physical tiling invariant:** total speech (from `gv vad`) + total
+  inter-segment silence (from `gv vad-gaps`) == the first-start-to-last-end
+  window, within tolerance — every instant in the segmented window is either
+  speech or an inter-segment pause.
+- **Monotonicity:** a longer `--min-silence-ms` never grows the gap count (the
+  silence-side echo of the vad-sweep segment-count monotonicity).
+- **CSV↔JSON agreement:** `--csv` describes the same per-gap rows as `--json`.
+- **Corpus sweep (parametrized):** every recording emits a well-formed human
+  report + parseable JSON whose `num_gaps == num_segments - 1` (or 0 with null
+  aggregates for a single-region recording).
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4341 passed**
+(unchanged from iter-328 — this lap adds only an integration test, no unit
+tests or production code). Run in the feature worktree before ff-merge.
+- Integration: the new module was verified **12/12 passed** against the REAL
+  Silero engine + recording corpus, both in the worktree (by temporarily
+  symlinking the host recordings in, then removing the symlink before commit)
+  and on main post-merge (`pytest tests/integration/test_gv_vad_gaps_cli.py` →
+  12 passed in ~10s).
+
+**Next planned items:**
+1. **[gv CLI] `gv vad-gaps --sweep` (the iter-328 next-item #1 sweep/grid
+   integration).** The min-gap floor is itself a function of the segmenter
+   knobs (a stricter `--threshold` or a longer `--min-silence-ms` changes which
+   pauses survive), so a `gv vad-gaps --sweep` over those knobs — tabulating how
+   the SHORTEST gap moves as the gate tightens — would let an operator find the
+   knob setting that maximises the merge headroom. This is the still-open half
+   of iter-328's next-item; this lap completed the integration-test half.
+2. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+3. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+4. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
