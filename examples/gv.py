@@ -219,6 +219,31 @@ def nonneg_float_type(raw):
     return value
 
 
+def positive_float_type(raw):
+    """Argparse ``type`` for ``simulate-mirror``'s ``--min-speed`` / ``--max-speed``
+    intelligibility-band overrides (iter-319).
+
+    Each is a TTS speed multiplier floor/ceiling handed to ``WpmMirrorConfig``,
+    where ``WpmMirrorConfig.__post_init__`` requires ``min_speed > 0`` and
+    ``max_speed >= min_speed``. A non-positive band edge is rejected here so the
+    operator gets the usual argparse ``SystemExit(2)`` instead of a config
+    ``ValueError`` deep in the handler. The cross-edge ordering
+    (``max >= min``) is still left to the config validator since it spans two
+    args. The positive-scalar twin of :func:`nonneg_float_type`.
+
+    Pure and side-effect-free for direct unit testing.
+    """
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(f"value must be a number, got {raw!r}")
+    if value != value:  # NaN is unordered.
+        raise argparse.ArgumentTypeError("value must be a number, got nan")
+    if value <= 0:
+        raise argparse.ArgumentTypeError(f"value must be positive, got {value}")
+    return value
+
+
 def nonneg_int_type(raw):
     """Argparse ``type`` for ``gv vad-grid --target``: a target segment count.
 
@@ -2448,6 +2473,14 @@ def cmd_simulate_mirror(args, *, log=print):
     three grid renderers so the displayed ``score`` column always reflects the
     weight the best pick was decided on. Trajectory mode has no score, so the
     knob is inert there.
+
+    iter-319 adds ``--min-speed`` / ``--max-speed`` / ``--min-delta``, the
+    intelligibility-band overrides. They thread into BOTH modes: in ``--grid``
+    mode as the ``template`` whose band every cell clones (so a sweep can run
+    against a non-seed band, e.g. a wider window for a faster voice), and in
+    trajectory mode directly on the single config. The cross-edge ordering
+    (``max_speed >= min_speed``) is validated by ``WpmMirrorConfig``; a bad pair
+    is reported as a clean ``error:`` line rather than a traceback.
     """
     wm = _load_wpm_mirror()
     WpmMirrorConfig = wm.WpmMirrorConfig
@@ -2459,12 +2492,30 @@ def cmd_simulate_mirror(args, *, log=print):
     as_json = getattr(args, "json", False)
     lurch_weight = getattr(args, "lurch_weight", None)
 
+    # Band overrides (iter-319). getattr with the engine defaults keeps the
+    # handler runnable from tests that build args without the new attributes.
+    min_speed = getattr(args, "min_speed", wm.DEFAULT_MIN_SPEED)
+    max_speed = getattr(args, "max_speed", wm.DEFAULT_MAX_SPEED)
+    min_delta = getattr(args, "min_delta", wm.DEFAULT_MIN_DELTA)
+
     if args.grid:
+        # The template carries only the shared band; sweep_mirror_grid overrides
+        # base_wpm/strength per cell. A bad band (max < min) raises here.
+        try:
+            template = WpmMirrorConfig(
+                min_speed=min_speed,
+                max_speed=max_speed,
+                min_delta=min_delta,
+            )
+        except ValueError as exc:
+            log(f"error: {exc}")
+            return
         points = sweep_mirror_grid(
             args.wpms,
             args.base_wpms,
             args.strengths,
             initial_speed=args.initial_speed,
+            template=template,
         )
         if lurch_weight is None:
             best = pick_best_mirror_config(points)
@@ -2479,11 +2530,18 @@ def cmd_simulate_mirror(args, *, log=print):
                 log(line)
         return
 
-    config = WpmMirrorConfig(
-        enabled=True,
-        base_wpm=args.base_wpm,
-        strength=args.strength,
-    )
+    try:
+        config = WpmMirrorConfig(
+            enabled=True,
+            base_wpm=args.base_wpm,
+            strength=args.strength,
+            min_speed=min_speed,
+            max_speed=max_speed,
+            min_delta=min_delta,
+        )
+    except ValueError as exc:
+        log(f"error: {exc}")
+        return
     traj = simulate_speed_trajectory(
         args.wpms,
         initial_speed=args.initial_speed,
@@ -3011,6 +3069,9 @@ DEFAULT_HANDLERS = {
 _MIRROR_DEFAULT_BASE_WPM = 165.0
 _MIRROR_DEFAULT_STRENGTH = 0.5
 _MIRROR_DEFAULT_LURCH_WEIGHT = 0.5
+_MIRROR_DEFAULT_MIN_SPEED = 0.8
+_MIRROR_DEFAULT_MAX_SPEED = 1.3
+_MIRROR_DEFAULT_MIN_DELTA = 0.05
 _MIRROR_DEFAULT_CALIB_SPREAD_MAX = 10.0
 _MIRROR_DEFAULT_CALIB_DRIFT_MIN = 5.0
 _MIRROR_DEFAULT_CALIB_MIN_SAMPLES = 3
@@ -3033,6 +3094,9 @@ def build_parser():
         base_wpm_default = wm.DEFAULT_BASE_WPM
         strength_default = wm.DEFAULT_STRENGTH
         lurch_weight_default = wm.DEFAULT_LURCH_WEIGHT
+        min_speed_default = wm.DEFAULT_MIN_SPEED
+        max_speed_default = wm.DEFAULT_MAX_SPEED
+        min_delta_default = wm.DEFAULT_MIN_DELTA
         calib_spread_max_default = wm.DEFAULT_CALIB_SPREAD_MAX
         calib_drift_min_default = wm.DEFAULT_CALIB_DRIFT_MIN
         calib_min_samples_default = wm.DEFAULT_CALIB_MIN_SAMPLES
@@ -3040,6 +3104,9 @@ def build_parser():
         base_wpm_default = _MIRROR_DEFAULT_BASE_WPM
         strength_default = _MIRROR_DEFAULT_STRENGTH
         lurch_weight_default = _MIRROR_DEFAULT_LURCH_WEIGHT
+        min_speed_default = _MIRROR_DEFAULT_MIN_SPEED
+        max_speed_default = _MIRROR_DEFAULT_MAX_SPEED
+        min_delta_default = _MIRROR_DEFAULT_MIN_DELTA
         calib_spread_max_default = _MIRROR_DEFAULT_CALIB_SPREAD_MAX
         calib_drift_min_default = _MIRROR_DEFAULT_CALIB_DRIFT_MIN
         calib_min_samples_default = _MIRROR_DEFAULT_CALIB_MIN_SAMPLES
@@ -3131,6 +3198,35 @@ def build_parser():
         type=positive_floats_type,
         default=[0.3, 0.5, 0.7],
         help="Grid strength axis (comma-separated; default: 0.3,0.5,0.7)",
+    )
+    sim.add_argument(
+        "--min-speed",
+        type=positive_float_type,
+        default=min_speed_default,
+        dest="min_speed",
+        help="Intelligibility-band floor on the resulting speed multiplier; the "
+        "mirror never goes below this no matter how slow the user "
+        f"(default: {min_speed_default}). Applies to BOTH trajectory and --grid "
+        "mode (every cell shares the band)",
+    )
+    sim.add_argument(
+        "--max-speed",
+        type=positive_float_type,
+        default=max_speed_default,
+        dest="max_speed",
+        help="Intelligibility-band ceiling on the resulting speed multiplier; the "
+        "mirror never exceeds this no matter how fast the user "
+        f"(default: {max_speed_default}). Must be >= --min-speed. Applies to BOTH "
+        "trajectory and --grid mode",
+    )
+    sim.add_argument(
+        "--min-delta",
+        type=nonneg_float_type,
+        default=min_delta_default,
+        dest="min_delta",
+        help="Deadband on the per-turn speed CHANGE: sub-threshold nudges are "
+        f"dropped so the rate doesn't churn (default: {min_delta_default}; 0 "
+        "disables). Applies to BOTH trajectory and --grid mode",
     )
     sim.add_argument(
         "--lurch-weight",

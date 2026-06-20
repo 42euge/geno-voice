@@ -841,3 +841,178 @@ def test_lurch_weight_inert_in_trajectory_mode():
         ["simulate-mirror", "--wpms", "120,200,120", "--lurch-weight", "9.0"]
     )
     assert base == weighted
+
+
+# ---- iter-319: --min-speed / --max-speed / --min-delta band overrides ----
+
+
+def test_positive_float_type_parses_positive():
+    assert gv.positive_float_type("0.8") == 0.8
+    assert gv.positive_float_type("1.3") == 1.3
+
+
+def test_positive_float_type_rejects_zero_negative_nan_nonnumber():
+    for bad in ["0", "-0.5", "nan"]:
+        with pytest.raises(argparse.ArgumentTypeError):
+            gv.positive_float_type(bad)
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.positive_float_type("fast")
+
+
+def test_simulate_mirror_band_defaults_sourced_from_engine():
+    args = gv.build_parser().parse_args(["simulate-mirror", "--wpms", "120,200"])
+    wm = gv._load_wpm_mirror()
+    assert args.min_speed == wm.DEFAULT_MIN_SPEED
+    assert args.max_speed == wm.DEFAULT_MAX_SPEED
+    assert args.min_delta == wm.DEFAULT_MIN_DELTA
+
+
+def test_simulate_mirror_band_overrides_parse():
+    args = gv.build_parser().parse_args(
+        [
+            "simulate-mirror",
+            "--wpms", "120,200",
+            "--min-speed", "0.6",
+            "--max-speed", "1.8",
+            "--min-delta", "0.0",
+        ]
+    )
+    assert args.min_speed == 0.6
+    assert args.max_speed == 1.8
+    assert args.min_delta == 0.0
+
+
+def test_simulate_mirror_min_speed_rejects_zero_at_parser():
+    with pytest.raises(SystemExit) as exc:
+        gv.build_parser().parse_args(
+            ["simulate-mirror", "--wpms", "120,200", "--min-speed", "0"]
+        )
+    assert exc.value.code == 2
+
+
+# An arc that pushes against both band edges: a slow turn (would drone below the
+# floor) and a fast burst (would slur past the ceiling). A wider band lets the
+# bot follow further; the default band clamps it.
+_BAND_ARC = [60, 60, 400, 400]
+
+
+def test_band_widens_trajectory_reach():
+    # With a wider band the final speed reaches further than the default clamp.
+    wm = gv._load_wpm_mirror()
+    default_cfg = wm.WpmMirrorConfig(enabled=True, base_wpm=165.0, strength=1.0)
+    wide_cfg = wm.WpmMirrorConfig(
+        enabled=True, base_wpm=165.0, strength=1.0,
+        min_speed=0.5, max_speed=2.0,
+    )
+    default_traj = wm.simulate_speed_trajectory(_BAND_ARC, 1.0, default_cfg)
+    wide_traj = wm.simulate_speed_trajectory(_BAND_ARC, 1.0, wide_cfg)
+    # The fast burst pins the speed to the ceiling; a higher ceiling = faster.
+    assert wide_traj.final_speed > default_traj.final_speed
+
+
+def test_handler_trajectory_threads_band():
+    # The handler's trajectory must reflect the band overrides, matching a
+    # direct engine fold with the same config.
+    wm = gv._load_wpm_mirror()
+    cfg = wm.WpmMirrorConfig(
+        enabled=True, base_wpm=165.0, strength=0.5,
+        min_speed=0.6, max_speed=1.8, min_delta=0.1,
+    )
+    traj = wm.simulate_speed_trajectory([120.0, 400.0, 60.0], 1.0, cfg)
+    expected = gv.render_trajectory(traj, wpms=[120.0, 400.0, 60.0])
+    lines = _run(
+        [
+            "simulate-mirror",
+            "--wpms", "120,400,60",
+            "--strength", "0.5",
+            "--min-speed", "0.6",
+            "--max-speed", "1.8",
+            "--min-delta", "0.1",
+        ]
+    )
+    assert lines == expected
+
+
+def test_handler_grid_threads_band_template():
+    # In grid mode the band is the template every cell clones; the handler's
+    # sweep must match a direct engine sweep with that template.
+    wm = gv._load_wpm_mirror()
+    template = wm.WpmMirrorConfig(min_speed=0.6, max_speed=1.8, min_delta=0.1)
+    points = wm.sweep_mirror_grid(
+        _BAND_ARC, [150.0, 165.0], [0.5, 0.7],
+        initial_speed=1.0, template=template,
+    )
+    best = wm.pick_best_mirror_config(points)
+    expected = gv.render_grid(points, best)
+    lines = _run(
+        [
+            "simulate-mirror",
+            "--wpms", "60,60,400,400",
+            "--grid",
+            "--base-wpms", "150,165",
+            "--strengths", "0.5,0.7",
+            "--min-speed", "0.6",
+            "--max-speed", "1.8",
+            "--min-delta", "0.1",
+        ]
+    )
+    assert lines == expected
+
+
+def test_grid_band_default_matches_seed_template():
+    # Omitting the band flags must reproduce the pre-iter-319 seed-band sweep.
+    wm = gv._load_wpm_mirror()
+    points = wm.sweep_mirror_grid(
+        _BAND_ARC, [150.0, 165.0], [0.5, 0.7], initial_speed=1.0
+    )
+    best = wm.pick_best_mirror_config(points)
+    expected = gv.render_grid(points, best)
+    lines = _run(
+        [
+            "simulate-mirror",
+            "--wpms", "60,60,400,400",
+            "--grid",
+            "--base-wpms", "150,165",
+            "--strengths", "0.5,0.7",
+        ]
+    )
+    assert lines == expected
+
+
+def test_handler_reports_bad_band_pair_cleanly_trajectory():
+    # max < min is a cross-edge error the parser can't catch; the handler emits
+    # a clean error: line instead of a traceback.
+    lines = _run(
+        [
+            "simulate-mirror",
+            "--wpms", "120,200",
+            "--min-speed", "1.5",
+            "--max-speed", "1.0",
+        ]
+    )
+    assert len(lines) == 1
+    assert lines[0].startswith("error:")
+    assert "max_speed" in lines[0]
+
+
+def test_handler_reports_bad_band_pair_cleanly_grid():
+    lines = _run(
+        [
+            "simulate-mirror",
+            "--wpms", "120,200",
+            "--grid",
+            "--min-speed", "1.5",
+            "--max-speed", "1.0",
+        ]
+    )
+    assert len(lines) == 1
+    assert lines[0].startswith("error:")
+    assert "max_speed" in lines[0]
+
+
+def test_band_inert_when_arc_stays_inside_window():
+    # An arc whose speeds never reach either edge is unaffected by a wider band.
+    inside = ["simulate-mirror", "--wpms", "160,170,165"]
+    base = _run(inside)
+    wide = _run(inside + ["--min-speed", "0.5", "--max-speed", "2.0"])
+    assert base == wide
