@@ -10,6 +10,8 @@ Usage:
     gv calibrate-base-wpm … # offline base_wpm calibration (--verdict for an adopt/keep call; --json/--csv for per-sample data)
     gv vad recording.wav  # offline Silero VAD — segment a WAV into speech regions
     gv vad recording.wav --json # machine-readable segmentation (SileroResult.to_dict shape)
+    gv vad-gaps recording.wav  # report the silence gaps BETWEEN speech regions (tune --min-silence-ms)
+    gv vad-gaps recording.wav --json # machine-readable gap stats + per-gap list
     gv vad-diff recording.wav --threshold-a 0.5 --threshold-b 0.7  # compare two P(speech) gates
     gv vad-sweep recording.wav --thresholds 0.3,0.5,0.7,0.9  # sweep N gates, tabulate the elbow
     gv vad-sweep recording.wav --min-silences 200,400,800,1600  # sweep the hangover instead
@@ -1590,6 +1592,185 @@ def render_vad_csv(result, *, threshold=None):
     return buf.getvalue().rstrip("\r\n")
 
 
+def vad_silence_gaps(result):
+    """Compute the inter-segment silence gaps of one Silero segmentation (iter-328).
+
+    Every prior ``gv vad*`` surface reports where the *speech* is — segment
+    count, per-segment spans, total speech-seconds. None reports where the
+    *silence* is: the pauses BETWEEN consecutive speech regions. That gap
+    distribution is the direct signal for tuning the end-of-turn hangover (the
+    ``--min-silence-ms`` knob here / the live ``chat.vad.silence_duration``,
+    iter-020): the SHORTEST real pause in a recording is the floor above which
+    raising the hangover starts merging two genuine turns into one, and the
+    spread tells the operator how much headroom they have. This is the
+    silence-side complement of :func:`render_vad_segments`.
+
+    Pure: takes any object exposing the ``SileroResult`` shape (a ``segments``
+    list whose elements have ``start_s`` / ``end_s``) and returns a plain
+    ``dict`` — no I/O, no torch import, so it is testable with lightweight
+    stand-ins. Segments are sorted by start before differencing so out-of-order
+    input is handled robustly, and a negative raw difference (touching /
+    overlapping regions, which padding can produce) clamps to ``0.0`` — an
+    overlap is not silence. Each gap records the 1-based index of the segment it
+    FOLLOWS and that segment's end time, so a consumer can locate the pause in
+    the recording. Gap seconds round to 3 places, matching the sibling VAD
+    renderers. A result with fewer than 2 segments has no gaps: the ``gaps``
+    list is empty and the min/max/mean are ``None`` (no pause to summarise),
+    distinct from a ``0.0`` gap.
+    """
+    segs = sorted(result.segments, key=lambda s: s.start_s)
+    gaps = []
+    after_segment = []
+    after_segment_end_s = []
+    for i in range(1, len(segs)):
+        prev_end = segs[i - 1].end_s
+        raw = segs[i].start_s - prev_end
+        # A negative gap means the regions touch/overlap (padding can do this) —
+        # that is not silence, so clamp to 0.0.
+        gaps.append(round(max(0.0, raw), 3))
+        after_segment.append(i)  # 1-based index of the segment the gap follows
+        after_segment_end_s.append(round(prev_end, 3))
+    n_gaps = len(gaps)
+    return {
+        "num_segments": len(segs),
+        "num_gaps": n_gaps,
+        "gaps": gaps,
+        "after_segment": after_segment,
+        "after_segment_end_s": after_segment_end_s,
+        "min_gap_s": min(gaps) if gaps else None,
+        "max_gap_s": max(gaps) if gaps else None,
+        "mean_gap_s": round(sum(gaps) / n_gaps, 3) if gaps else None,
+        "total_silence_s": round(sum(gaps), 3),
+    }
+
+
+def render_vad_gaps(result):
+    """Render the inter-segment silence gaps as plain-text report lines (iter-328).
+
+    The human-readable face of :func:`vad_silence_gaps`, the silence-side twin
+    of :func:`render_vad_segments`. ``result`` of ``None`` (segmenter
+    unavailable) yields the shared install hint, matching the sibling
+    renderers. A result with fewer than 2 segments has no gaps to report, so it
+    prints a short explanatory line WITHOUT the ``--min-silence-ms`` advice
+    (there is no shortest-pause floor to tune against). Otherwise it summarises
+    the distribution (min/mean/max, total silence) — naming the actionable knob
+    on the min-gap line — then lists each gap with the segment it follows. Pure:
+    returns a list of strings (no I/O, no ANSI).
+    """
+    if result is None:
+        return [
+            "silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        ]
+    d = vad_silence_gaps(result)
+    lines = [
+        f"silero VAD silence gaps — {result.name}",
+        f"  segments:     {d['num_segments']}",
+        f"  gaps:         {d['num_gaps']} (pauses between consecutive speech regions)",
+    ]
+    if d["num_gaps"] == 0:
+        lines.append("  (fewer than 2 segments — no inter-segment pause to measure)")
+        return lines
+    lines.append(
+        f"  min gap:      {d['min_gap_s']:.3f}s "
+        "(shortest real pause — keep --min-silence-ms below this to avoid "
+        "merging turns)"
+    )
+    lines.append(f"  mean gap:     {d['mean_gap_s']:.3f}s")
+    lines.append(f"  max gap:      {d['max_gap_s']:.3f}s")
+    lines.append(f"  total silence:{d['total_silence_s']:8.3f}s")
+    for i, (gap, after, end) in enumerate(
+        zip(d["gaps"], d["after_segment"], d["after_segment_end_s"]), start=1
+    ):
+        lines.append(
+            f"  [{i:>2}] {gap:6.3f}s  after seg {after} (ends {end:.2f}s)"
+        )
+    return lines
+
+
+def render_vad_gaps_json(result):
+    """Render the inter-segment silence gaps as a JSON string (iter-328).
+
+    The machine-readable twin of :func:`render_vad_gaps`, mirroring the
+    degrade-to-``{"available": false}`` contract the other VAD JSON renderers
+    use. Carries the aggregate stats (``num_segments`` / ``num_gaps`` /
+    ``min_gap_s`` / ``max_gap_s`` / ``mean_gap_s`` / ``total_silence_s``) plus a
+    ``gaps`` list of per-gap objects (``index`` 1-based, ``after_segment``,
+    ``after_segment_end_s``, ``gap_s``). The min/max/mean are ``null`` when
+    there are fewer than 2 segments (no pause to summarise) — JSON ``null``
+    distinguishing "no gap" from a ``0.0`` gap, the same distinction the human
+    report's omission and the CSV's empty body make. Pure: built from the
+    result's attributes, so it works on any ``SileroResult``-shaped object.
+    """
+    if result is None:
+        return json.dumps(
+            {
+                "available": False,
+                "hint": (
+                    "install 'silero-vad' (pulls torch + torchaudio) to enable "
+                    "offline neural segmentation"
+                ),
+            },
+            indent=2,
+        )
+    d = vad_silence_gaps(result)
+    payload = {
+        "available": True,
+        "name": result.name,
+        "num_segments": d["num_segments"],
+        "num_gaps": d["num_gaps"],
+        "min_gap_s": d["min_gap_s"],
+        "max_gap_s": d["max_gap_s"],
+        "mean_gap_s": d["mean_gap_s"],
+        "total_silence_s": d["total_silence_s"],
+        "gaps": [
+            {
+                "index": i,
+                "after_segment": after,
+                "after_segment_end_s": end,
+                "gap_s": gap,
+            }
+            for i, (gap, after, end) in enumerate(
+                zip(d["gaps"], d["after_segment"], d["after_segment_end_s"]), start=1
+            )
+        ],
+    }
+    return json.dumps(payload, indent=2)
+
+
+def render_vad_gaps_csv(result):
+    """Render the inter-segment silence gaps as a per-gap CSV table (iter-328).
+
+    The spreadsheet/plot-friendly twin of :func:`render_vad_gaps` /
+    :func:`render_vad_gaps_json`, completing the human / ``--json`` / ``--csv``
+    trio every VAD-analysis surface carries. The natural CSV unit is one row per
+    gap: ``index,after_segment,after_segment_end_s,gap_s`` — the machine
+    expansion of the human report's per-gap lines, the shape a plotter wants
+    (gap-vs-position) and a spreadsheet wants (one pause per line). The
+    aggregate stats (min/mean/max/total) are derivable from the ``gap_s`` column
+    so they are NOT duplicated into a wide row, matching
+    :func:`render_vad_diff_csv`'s reasoning. A result with fewer than 2 segments
+    yields the header alone (a valid empty-bodied table). ``result`` of ``None``
+    (segmenter unavailable) yields a single ``# silero VAD unavailable: ...``
+    comment line, matching the sibling CSV renderers. Pure: built with the
+    stdlib :mod:`csv` writer, trailing terminator stripped.
+    """
+    if result is None:
+        return (
+            "# silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        )
+    d = vad_silence_gaps(result)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["index", "after_segment", "after_segment_end_s", "gap_s"])
+    for i, (gap, after, end) in enumerate(
+        zip(d["gaps"], d["after_segment"], d["after_segment_end_s"]), start=1
+    ):
+        writer.writerow([i, after, end, gap])
+    return buf.getvalue().rstrip("\r\n")
+
+
 def vad_segmentation_delta(result_a, result_b):
     """Compute the delta between two Silero segmentations of the same WAV.
 
@@ -2670,6 +2851,62 @@ def cmd_vad(args, *, log=print, segmenter=None, availability=None):
             log(line)
 
 
+def cmd_vad_gaps(args, *, log=print, segmenter=None, availability=None):
+    """Segment a WAV offline and report the inter-segment silence gaps.
+
+    The silence-side complement of :func:`cmd_vad`: where ``gv vad`` reports the
+    speech regions, ``gv vad-gaps recording.wav`` reports the pauses BETWEEN
+    them — the gap distribution an operator reads to choose the end-of-turn
+    hangover (``--min-silence-ms`` / the live ``chat.vad.silence_duration``).
+    The shortest real pause is the floor above which raising the hangover starts
+    merging two genuine turns into one.
+
+    Same injected-dependency contract as :func:`cmd_vad` / :func:`cmd_vad_diff`:
+    ``segmenter`` / ``availability`` default to the real :mod:`vad.silero`
+    functions, imported lazily so the parser stays torch-free. The segmenter
+    knobs are shared with ``gv vad`` so the gaps are measured against the same
+    segmentation. ``--csv`` is mutually exclusive with ``--json``; when
+    ``silero-vad`` is absent the handler prints the install hint and returns,
+    never crashing.
+    """
+    if segmenter is None or availability is None:
+        from vad.silero import segment_recording, silero_available
+
+        segmenter = segment_recording if segmenter is None else segmenter
+        availability = silero_available if availability is None else availability
+
+    as_json = getattr(args, "json", False)
+    as_csv = getattr(args, "csv", False)
+
+    if not availability():
+        if as_json:
+            log(render_vad_gaps_json(None))
+        elif as_csv:
+            log(render_vad_gaps_csv(None))
+        else:
+            for line in render_vad_gaps(None):
+                log(line)
+        return
+
+    from vad.silero import SileroParams
+
+    params = SileroParams(
+        threshold=args.threshold,
+        min_speech_ms=args.min_speech_ms,
+        min_silence_ms=args.min_silence_ms,
+        speech_pad_ms=args.speech_pad_ms,
+        max_speech_s=args.max_speech_s,
+    )
+    result = segmenter(args.wav, params=params)
+    if as_json:
+        log(render_vad_gaps_json(result))
+    elif as_csv:
+        log(render_vad_gaps_csv(result))
+    else:
+        for line in render_vad_gaps(result):
+            log(line)
+
+
 def cmd_vad_diff(args, *, log=print, segmenter=None, availability=None):
     """Segment one WAV under two thresholds and report how the result shifts.
 
@@ -3057,6 +3294,7 @@ DEFAULT_HANDLERS = {
     "simulate-mirror": cmd_simulate_mirror,
     "calibrate-base-wpm": cmd_calibrate_base_wpm,
     "vad": cmd_vad,
+    "vad-gaps": cmd_vad_gaps,
     "vad-diff": cmd_vad_diff,
     "vad-sweep": cmd_vad_sweep,
     "vad-grid": cmd_vad_grid,
@@ -3400,6 +3638,74 @@ def build_parser():
         action="store_true",
         help="Emit a flat index,start_s,end_s,duration_s CSV table (one row per "
         "detected segment) for spreadsheets/plots; mutually exclusive with --json",
+    )
+
+    # gv vad-gaps — segment one WAV and report the inter-segment SILENCE gaps.
+    # The silence-side complement of `gv vad`: where vad reports the speech
+    # regions, vad-gaps reports the pauses between them — the gap distribution
+    # an operator reads to choose the end-of-turn hangover (--min-silence-ms).
+    # Shares all the segmenter knobs with `gv vad` so the gaps are measured
+    # against the same segmentation.
+    vad_gaps = sub.add_parser(
+        "vad-gaps",
+        help="Offline Silero VAD — segment a WAV and report the silence gaps "
+        "between speech regions (tune the end-of-turn hangover / min-silence)",
+    )
+    vad_gaps.add_argument(
+        "wav",
+        help="Path to a 16-bit PCM WAV file to segment",
+    )
+    vad_gaps.add_argument(
+        "--threshold",
+        type=unit_interval_type,
+        default=vad_threshold_default,
+        help=f"P(speech) gate in [0, 1] (default: {vad_threshold_default})",
+    )
+    vad_gaps.add_argument(
+        "--min-speech-ms",
+        type=nonneg_float_type,
+        default=vad_min_speech_default,
+        dest="min_speech_ms",
+        help="Drop speech regions shorter than this, in ms "
+        f"(default: {vad_min_speech_default})",
+    )
+    vad_gaps.add_argument(
+        "--min-silence-ms",
+        type=nonneg_float_type,
+        default=vad_min_silence_default,
+        dest="min_silence_ms",
+        help="Trailing silence before a region ends, in ms — matches the "
+        f"pipecat stop_secs=0.8 live default (default: {vad_min_silence_default})",
+    )
+    vad_gaps.add_argument(
+        "--speech-pad-ms",
+        type=nonneg_float_type,
+        default=vad_speech_pad_default,
+        dest="speech_pad_ms",
+        help="Symmetric padding added to each region, in ms "
+        f"(default: {vad_speech_pad_default})",
+    )
+    vad_gaps.add_argument(
+        "--max-speech-s",
+        type=max_speech_type,
+        default=vad_max_speech_default,
+        dest="max_speech_s",
+        help="Force-split regions longer than this, in seconds; 'inf'/'none' "
+        "never splits (default: inf)",
+    )
+    vad_gaps_fmt = vad_gaps.add_mutually_exclusive_group()
+    vad_gaps_fmt.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON (aggregate gap stats + per-gap list) "
+        "instead of the human-readable report",
+    )
+    vad_gaps_fmt.add_argument(
+        "--csv",
+        action="store_true",
+        help="Emit a flat index,after_segment,after_segment_end_s,gap_s CSV "
+        "table (one row per gap) for spreadsheets/plots; mutually exclusive "
+        "with --json",
     )
 
     # gv vad-diff — segment one WAV under two thresholds and report the delta.

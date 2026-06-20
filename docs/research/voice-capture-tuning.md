@@ -109,6 +109,37 @@ the same keys (`name`, `sample_rate`, `duration_s`, `num_segments`, `speech_s`,
 JSON is `{"available": false, "hint": …}` so a consumer detects the degraded
 path from the document itself rather than parsing prose.
 
+### `gv vad-gaps` — the silence between regions (iter-328)
+
+Every other `gv vad*` surface reports where the *speech* is — segment count,
+spans, total speech-seconds. `gv vad-gaps` reports where the *silence* is: the
+pauses **between** consecutive speech regions. That gap distribution is the
+direct signal for choosing the end-of-turn hangover (`--min-silence-ms` here /
+the live `chat.vad.silence_duration`): the **shortest** real pause in a
+recording is the floor above which raising the hangover starts merging two
+genuine turns into one, and the spread shows how much headroom there is.
+
+```
+gv vad-gaps recording.wav                  # min/mean/max gap + per-gap table
+gv vad-gaps recording.wav --threshold 0.7  # gaps under a stricter gate
+gv vad-gaps recording.wav --json           # aggregate stats + per-gap list
+gv vad-gaps recording.wav --csv            # one row per gap for a spreadsheet
+```
+
+It shares all the segmenter knobs with `gv vad` (so the gaps are measured
+against the same segmentation) and carries the full human / `--json` / `--csv`
+trio. The pure core `vad_silence_gaps` sorts segments by start before
+differencing (robust to out-of-order input) and clamps a negative difference —
+touching/overlapping regions, which `--speech-pad-ms` can produce — to `0.0`
+(an overlap is not silence). Each gap records the 1-based index of the segment
+it follows and that segment's end time, so a consumer can locate the pause. A
+recording with fewer than 2 segments has no inter-segment pause: the human
+report says so (and drops the `--min-silence-ms` advice), the JSON sets the
+min/mean/max to `null` (distinct from a `0.0` gap), and the CSV emits the header
+alone. Same degrade-to-install-hint contract as `gv vad` when `silero-vad` is
+absent. `tests/unit/test_gv_vad_gaps.py` covers the core, the three renderers,
+and the handler without torch.
+
 ### `gv vad-diff` — compare two thresholds (iter-235)
 
 The first consumer of the `gv vad --json` surface. Tuning the P(speech) gate

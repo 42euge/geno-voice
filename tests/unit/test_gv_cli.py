@@ -395,6 +395,7 @@ def test_dispatch_default_handlers_are_the_real_cmds():
         "simulate-mirror": gv.cmd_simulate_mirror,
         "calibrate-base-wpm": gv.cmd_calibrate_base_wpm,
         "vad": gv.cmd_vad,
+        "vad-gaps": gv.cmd_vad_gaps,
         "vad-diff": gv.cmd_vad_diff,
         "vad-sweep": gv.cmd_vad_sweep,
         "vad-grid": gv.cmd_vad_grid,
