@@ -4268,6 +4268,156 @@ def _emit_speaker_open_consistency_line(
     )
 
 
+def _mic_stale_bucket(frames: int) -> str:
+    """iter-310: bucket a per-turn ``mic_stale_frames`` count (iter-037's
+    echo signal — the number of mic frames flushed at the start of a turn
+    because the mic accumulated unwanted audio between turns) into a
+    coarse category. Used by ``_emit_mic_stale_consistency_line`` to
+    detect runs where the mic was repeatedly fed stale audio. Metric 2.19
+    in the perf-metrics taxonomy.
+
+    This matters because stale frames mean the bot's own voice (or other
+    audio) is leaking back into the OS mic between turns — acoustic echo,
+    a Bluetooth duplex path, or a loopback misconfiguration. On a clean
+    session the mic is silent between turns, so ``mic_stale_frames`` stays
+    at its 0 default; a SUSTAINED run of non-zero flushes is the signal
+    that the user's setup needs echo cancellation. iter-037's own
+    per-turn guidance is that >0.5s of stale audio (>8000 frames at the
+    16 kHz mic rate) is the yellow flag, so the boundary hangs off that.
+
+    A continuous-metric instance like
+    iter-128/140/141/142/143/208/209/224/225/226/307/308/309 — buckets a
+    count into a coarse category before the run scan. Like
+    iter-140/141/208/209/224/226/307/308/309 — and UNLIKE the inverted
+    iter-142/143/225 — ``mic_stale_frames`` is "smaller is better": the
+    desired state is a LOW value (no stale audio leaked in), so the
+    boundaries are NOT inverted; the problematic end is a LARGE count.
+
+    Unlike speaker-open (iter-309), there is NO "measured but fine"
+    intermediate here: opening a speaker is an EXPECTED cost (instant is
+    fine), but ANY stale frame at all is a symptom — the desired state is
+    literally 0. So this bucketer mirrors iter-114's filler count (drop
+    only the no-event 0, flag every measured value) rather than
+    iter-309's instant/slow/stalled (which keeps a measured-fine bucket).
+
+    Buckets (the ``minor``/``echo`` split hangs off iter-037's >0.5s
+    yellow boundary, i.e. 8000 frames at 16 kHz):
+
+        ``minor`` — 1-8000 frames (≤ 0.5s): the mic accumulated a little
+            stale audio between turns; some echo is leaking but it is
+            below iter-037's yellow flag.
+        ``echo``  — > 8000 frames (> 0.5s): the mic accumulated over half
+            a second of stale audio; the bot's voice is reliably leaking
+            back through the OS mic (iter-037's yellow flag).
+
+    Returns ``""`` when ``frames`` is non-positive (a clean turn where the
+    mic was silent between turns — the common case, where
+    ``mic_stale_frames`` stays at its 0 default) — empty-string filter
+    applies in the consumer, mirroring
+    iter-114/115/120/126/128/140/141/142/143/208/209/224/225/226/307/308/309.
+    Like iter-114's filler count, the no-event 0 is filtered and EVERY
+    measured value is flagged (there is no measured-fine bucket to drop).
+    """
+    if frames <= 0:
+        return ""
+    if frames <= 8000:
+        return "minor"
+    return "echo"
+
+
+def _emit_mic_stale_consistency_line(
+    emit, mic_stale_list: list[int], threshold: int = 4,
+) -> None:
+    """iter-310: detect consecutive runs of turns where the mic was fed
+    stale audio at the start of the turn (iter-037 ``mic_stale_frames``).
+    TWENTY-SECOND instance of the diversity-check pattern after iter-114
+    (filler), iter-115/126 (naturalness), iter-120 (barge-phase),
+    iter-128 (sentence-length), iter-140 (stt-rtf), iter-141 (tts-rtf),
+    iter-142 (llm-tps), iter-143 (streaming-overlap), iter-208
+    (synth-dispatch), iter-209 (eot-overhead), iter-210 (bot-wpm),
+    iter-211 (max-token-gap), iter-212 (ttfs), iter-224
+    (stt-preview-divergence), iter-225 (sentence-split-coverage),
+    iter-226 (worker-idle-gap), iter-305 (ttc), iter-306
+    (token-reveal-lag), iter-307 (synth-backlog), iter-308 (cancel-close),
+    iter-309 (speaker-open). NINETEENTH instance applied to a CONTINUOUS
+    metric — buckets the per-turn ``mic_stale_frames`` count via
+    ``_mic_stale_bucket`` before running the scan.
+
+    iter-037 added the per-turn stale-frame line (dim ≤0.5s, yellow
+    >0.5s) and the session summary prints the AGGREGATE total of stale
+    frames flushed across the whole session, but a one-off total washes
+    out a sustained stretch: a single noisy turn inflates the total
+    without telling the operator the stale flushes were happening
+    turn-after-turn. A SUSTAINED run of non-zero flushes is the
+    actionable signal that the bot's voice is reliably leaking back
+    through the OS mic between turns — acoustic echo, a Bluetooth duplex
+    path, or a loopback misconfiguration that needs echo cancellation.
+
+    Filter rule: drop ``""`` (clean turns where the mic was silent
+    between turns — the common case, ``mic_stale_frames`` at its 0
+    default). Flag BOTH ``minor`` and ``echo``: unlike speaker-open
+    (iter-309), opening the device is an expected cost so its fine bucket
+    is kept-but-dropped, whereas ANY stale frame here is a symptom (the
+    desired state is literally 0). So this mirrors iter-114's filler
+    count — filter only the no-event value, flag every measured value.
+    Like iter-140/141/208/209/224/226/307/308/309 and UNLIKE
+    iter-142/143/225, the problematic end is a LARGE value because stale
+    audio is smaller-is-better — the boundaries are NOT inverted.
+
+    Threshold = 4 (NOT the threshold-5 general default): stale frames are
+    near-always 0 on a clean session, so a non-zero flush is itself an
+    event — a run of 4 consecutive turns flushing stale audio is already
+    a strong structural signal that echo is persistently leaking (vs a
+    one-off noisy turn). This mirrors iter-120's barge-phase and
+    iter-308's cancel-close threshold of 4 for the same reason —
+    event-gated signals that are rare per session earn a lower bar than
+    the high-frequency threshold-5 family.
+
+    Output:
+
+        Mic stale: 4 consecutive 'echo' turns — the mic accumulates >0.5s
+                          of stale audio each turn; the bot's voice is
+                          leaking back through the OS mic — enable echo
+                          cancellation (iter-037 mic_stale_frames)
+    """
+    # Bucketize, then drop the "uninteresting" bucket (empty / clean).
+    interesting = {"minor", "echo"}
+    filtered = [
+        b for b in (
+            _mic_stale_bucket(f) for f in mic_stale_list
+        )
+        if b in interesting
+    ]
+    if not filtered:
+        return
+
+    longest_run, longest_bucket = _longest_consecutive_run(filtered)
+    if longest_run < threshold:
+        return
+
+    if longest_bucket == "echo":
+        suggestion = (
+            "the mic accumulates >0.5s of stale audio each turn; the "
+            "bot's voice is leaking back through the OS mic — enable "
+            "echo cancellation"
+        )
+    elif longest_bucket == "minor":
+        suggestion = (
+            "the mic accumulates stale audio every turn (under 0.5s); "
+            "some audio is leaking back between turns — check for "
+            "acoustic echo / a Bluetooth duplex path"
+        )
+    else:
+        # Defensive: future buckets that pass the filter rule.
+        suggestion = "investigate the recurring stale mic frames"
+
+    emit(
+        f"    Mic stale: {longest_run} consecutive "
+        f"{longest_bucket!r} turns — {suggestion} "
+        f"(iter-037 mic_stale_frames)"
+    )
+
+
 def _emit_bargeable_line(emit, bargeable_values: list[float]) -> None:
     """iter-104: extracted from print_session_summary's iter-074
     bargeable line. Reports the WORST bargeable fraction across
@@ -5163,6 +5313,25 @@ def print_session_summary(
     _emit_speaker_open_consistency_line(
         _emit,
         [m.speaker_open_seconds for m in metrics_list],
+    )
+    # iter-310: mic-stale consistency check. Only fires when 4+
+    # consecutive turns flushed stale mic frames (minor 1-8000 frames /
+    # echo >8000 frames — iter-037's ">0.5s = yellow" boundary at the
+    # 16 kHz mic rate). iter-037 added the per-turn stale-frame line and
+    # the summary prints the AGGREGATE session total, but a one-off total
+    # washes out a sustained stretch — a single noisy turn inflates the
+    # total without flagging that the flushes were turn-after-turn. A
+    # sustained run is the actionable signal that the bot's voice is
+    # reliably leaking back through the OS mic between turns (acoustic
+    # echo / Bluetooth duplex / loopback) and the user's setup needs echo
+    # cancellation. Threshold 4 (not the threshold-5 general default):
+    # stale frames are near-always 0 on a clean session, so a non-zero
+    # flush is itself an event — like iter-120's barge-phase and
+    # iter-308's cancel-close, event-gated rare signals earn the lower
+    # bar.
+    _emit_mic_stale_consistency_line(
+        _emit,
+        [m.mic_stale_frames for m in metrics_list],
     )
     # iter-090: barge block extracted to _emit_barge_block helper.
     # ~76 lines of co-emitted lines (count, interruption rate,
