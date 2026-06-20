@@ -1895,6 +1895,100 @@ def test_render_sweep_csv_consumer_rederives_json_speech_tie_break_pick():
     assert [r["num_segments"] for r in csv_top] == [4, 2, 5]
 
 
+def test_render_sweep_csv_consumer_rederives_json_band_target_speech_tie_pick():
+    # iter-290: iter-289 pinned the 1-D sweep CSV↔JSON pick re-derive under
+    # tie_break="speech" for a SCALAR target (the sweep twin of iter-274's grid
+    # test). But the sweep still lacks the speech-tie cross-surface re-derive for
+    # the DICT/band forms the GRID earned at iter-281–286/288. This is the first
+    # such sweep clone: a CLOSED BAND target under tie_break="speech".
+    #
+    # The target FORM (grid_cell_distance — which rows tie at the band floor) and
+    # the tie-break (grid_cell_sort_key — how tied rows order) are independent
+    # seams. A closed band makes MULTIPLE rows tie at distance 0, so it stresses
+    # the speech tie-break far harder than a scalar (which produces at most a pair
+    # of equal-distance ties). render_vad_sweep_json threads BOTH the band target
+    # AND tie_break="speech" into the pickers; render_vad_sweep_csv emits only the
+    # bare table, so a CSV consumer re-running the SAME pickers with the SAME band
+    # AND the SAME tie_break MUST recover the SAME speech-ordered pick. A
+    # regression that dropped the tie_break on the sweep JSON path (falling back to
+    # row-major) while the CSV consumer still passed "speech", OR coerced the band
+    # to a scalar (undoing the multi-row tie the speech tie-break needs to bite),
+    # would diverge the two surfaces yet ship green — iter-289 pins speech only for
+    # a scalar (no band ties to reorder) and iter-275-style band tests live only on
+    # the GRID, never the sweep. Pin both sweep surfaces to name the SAME
+    # speech-broken in-band best row and the SAME speech-ordered band top
+    # shortlist, with a ROW-MAJOR control proving the speech tie-break genuinely
+    # changes the pick.
+    #
+    # Fixture: a 4-value threshold sweep with counts 4/6/5/1, target = closed band
+    # (4, 6). _sweep_results couples speech to count + index, so the in-band rows
+    # carry DIFFERENT speech and the two tie-breaks genuinely DISAGREE. Band
+    # distances (0 inside [4, 6], else the gap to the nearest edge):
+    #   - 0.30 count 4 → at lo=4   → dist 0 (in band), speech 2.0
+    #   - 0.50 count 6 → at hi=6   → dist 0 (in band), speech 3.6
+    #   - 0.70 count 5 → inside    → dist 0 (in band), speech 3.5
+    #   - 0.90 count 1 → below lo  → dist 3, speech 0.8
+    # THREE rows tie at the band floor (dist 0): counts 4, 6, 5. ROW-MAJOR keeps
+    # the 0.30 row first (earliest in the sweep, count 4), but tie_break="speech"
+    # prefers the MOST-speech in-band row, count 6 (0.50) at 3.6s. So the speech
+    # best is the 0.50 row, NOT the row-major pick.
+    thresholds = [0.3, 0.5, 0.7, 0.9]
+    results = _sweep_results([4, 6, 5, 1])
+    target = (4, 6)
+    csv_text = gv.render_vad_sweep_csv(thresholds, results, name="rec.wav")
+    payload = json.loads(
+        gv.render_vad_sweep_json(
+            thresholds, results, name="rec.wav",
+            target=target, top=3, tie_break="speech",
+        )
+    )
+    # The JSON twin records BOTH the band target (a tuple serialises to a list) and
+    # WHICH tie-break produced its pick.
+    assert payload["target"] == [4, 6]
+    assert payload["tie_break"] == "speech"
+    # The CSV body still carries no pick columns or tie_break — it is the bare sweep.
+    assert "best" not in csv_text and "distance" not in csv_text
+    assert "tie_break" not in csv_text
+    # A CSV consumer re-parses the flat table back to sweep rows...
+    rows = [
+        {
+            "threshold": float(row["threshold"]),
+            "num_segments": int(row["num_segments"]),
+            "speech_s": float(row["speech_s"]),
+        }
+        for row in csv.DictReader(io.StringIO(csv_text))
+    ]
+    # ...and re-runs the SAME picker with the SAME band target AND the SAME
+    # tie_break="speech". The CSV-derived best equals the JSON `best` (distance key
+    # stripped), and the re-derived band distance matches the one the JSON embedded
+    # (0 — inside the band).
+    csv_best = gv.pick_best_grid_cell(rows, target, "speech")
+    json_best = dict(payload["best"])
+    assert json_best.pop("distance") == gv.grid_cell_distance(csv_best, target)
+    assert csv_best == json_best
+    # CONTROL 1: the speech pick is genuinely DIFFERENT from the row-major pick, so
+    # this test could not pass by both tie-breaks accidentally coinciding.
+    assert gv.pick_best_grid_cell(rows, target) != csv_best
+    assert csv_best["threshold"] == 0.5 and csv_best["num_segments"] == 6
+    assert gv.pick_best_grid_cell(rows, target)["threshold"] == 0.3
+    # CONTROL 2: coercing the band to a SCALAR (its lo edge) collapses the in-band
+    # tie — count 4 becomes the sole dist-0 row — so the band form is load-bearing,
+    # not interchangeable with a scalar.
+    assert gv.pick_best_grid_cell(rows, 4, "speech")["num_segments"] == 4
+    # The top shortlist agrees row-for-row (distance stripped), including the
+    # speech-ordered tie among the three in-band rows.
+    csv_top = gv.pick_top_grid_cells(rows, target, 3, "speech")
+    json_top = [dict(c) for c in payload["top"]]
+    for c in json_top:
+        c.pop("distance")
+    assert csv_top == json_top
+    # Head of the shortlist is the single best pick, on both surfaces.
+    assert csv_top[0] == csv_best
+    # All three in-band rows lead, speech-ordered (count 6 → 5 → 4, most speech
+    # first), and the dist-3 count-1 row is excluded by the top=3 cut.
+    assert [r["num_segments"] for r in csv_top] == [6, 5, 4]
+
+
 # ---- cmd_vad_sweep --csv: the handler ----------------------------------
 
 
