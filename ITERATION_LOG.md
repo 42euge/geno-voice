@@ -28309,3 +28309,115 @@ purely additive.
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list`
    shows leftover per-iter worktrees. A future lap could
    `git worktree prune` / remove merged ones.
+
+## iter-309 — speaker-open consistency sentinel (sustained slow audio-device open)
+
+- **Date:** 2026-06-20
+- **Branch:** iter-309-speaker-open-consistency (ff-merged to main)
+- **Commit:** 8fdbcf1
+
+**Why.** The `--target` composition space is feature-complete on BOTH
+the VAD grid and sweep (iter-273–304), so the next genuine increment
+stays in the other long-running feature family: the session-summary
+diversity-check pattern (GENO.md). The iter-308 plan named the remaining
+ONE-SIDED continuous metrics as clean clones of the
+iter-140/141/208/209/226/307/308 monotonic template. Of those,
+`speaker_open_seconds` (iter-061) is the most mission-relevant — it sits
+directly on the time-to-first-audio path the whole pipeline optimizes
+for. The iter-008 streaming design assumes the speaker is opened ONCE
+per turn (reused across the turn's sentences) and a persistent speaker
+is reused across turns, so after the first turn the open should cost
+~0ms. iter-061 colors the per-turn figure (dim ≤50ms, yellow >50ms) and
+the session summary prints median/worst across opening turns, but
+neither surfaces a CONSECUTIVE slow stretch: the median stays low if
+most turns were instant, and the worst doesn't say the bad opens were
+back-to-back. A SUSTAINED slow/stalled run is the actionable signal that
+the persistent-speaker win is slipping — every turn re-pays device-init
+latency up front, eroding the time-to-first-byte budget.
+
+**What's novel.** TWENTY-FIRST instance of the diversity-check pattern
+and the EIGHTEENTH on a continuous metric. Like
+iter-140/141/208/209/224/226/307/308 — and UNLIKE the inverted
+iter-142/143/225 — `speaker_open_seconds` is smaller-is-better (an
+instant open is best), so the boundaries are NOT inverted; the
+problematic end is a LARGE latency. Threshold is **5** (the
+general-signal default, NOT iter-120/308's barge-gated 4): speaker-open
+is measured on EVERY device-opening turn, a high-frequency signal where
+natural per-turn variation is normal, so it earns the higher bar of the
+threshold-5 family. NOTE the interaction with the `""` filter: after the
+first turn opens the persistent speaker, subsequent turns reuse it and
+record 0 → filtered, so a run of 5 measured slow/stalled opens means the
+speaker is being RE-opened slowly turn after turn — a strong structural
+signal.
+
+**What it is.** A one-sided monotonic sentinel (boundaries aligned with
+iter-061's per-turn display, which skips ≤0 and colors >50ms yellow):
+- `instant` — ≤ 50ms: the device opened promptly; persistent-speaker
+  reuse is holding. The desired state (filtered).
+- `slow`    — 50-150ms: opening the speaker is noticeably laggy; device
+  init is creeping into the time-to-first-audio budget.
+- `stalled` — > 150ms: opening the speaker dominates the turn's startup;
+  device init is a hard latency wall on every turn's first audio.
+
+`0.0` (a turn with no measured open — persistent-speaker reuse or the
+early error path, where `speaker_open_seconds` stays at its default)
+returns `""` and is filtered, matching iter-061's own `> 0` collection
+filter for `speaker_opens`. So a turn that never opened the speaker is
+never counted as an "instant" open. The two flagged buckets stay
+distinct: a slow run and a stalled run never merge.
+
+**What changed.**
+- **`examples/_chat_metrics.py`** — added `_speaker_open_bucket`
+  (instant/slow/stalled, `""` for ≤0) and
+  `_emit_speaker_open_consistency_line` (threshold 5, filters `""` +
+  `instant` before the run scan, per-value suggestions + defensive
+  `else`, `iter-061 speaker_open_seconds` attribution). Wired the call
+  into `print_session_summary` right after the iter-308 cancel-close
+  line, reusing the iter-116 `_longest_consecutive_run` primitive
+  unchanged.
+- **`tests/unit/test_emit_speaker_open_consistency_line.py` (+21
+  tests)** — the full pattern matrix: bucket boundaries incl. float
+  edges (0.050→instant, 0.0501→slow, 0.150→slow, 0.1501→stalled), the
+  0.0-is-no-open semantics through the consumer (a reuse 0.0 between
+  stalled turns doesn't break the run), empty/all-zero suppression,
+  instant-run never fires, at/above/below threshold per value, instant
+  interleaving doesn't break a run, stalled breaks a slow run,
+  longest-of-two wins, custom threshold (3 catches, 10 suppresses),
+  output formatting (4-space indent) + iter-061 attribution,
+  1000-element scaling.
+
+No production behavior changed for existing metrics — the new line is
+purely additive.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4013 passed**
+(3992 prior + 21 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_emit_speaker_open_consistency_line.py`
+  → **21 passed**.
+- Integration: not re-run this lap (no corpus symlinked into this worktree;
+  same as prior corpus-gated laps — the change is a pure session-summary
+  helper with unit-level coverage, no audio I/O).
+
+**Next planned items:**
+1. **[chat-metrics] One-sided continuous metrics still uncovered:**
+   `mic_stale_frames` (iter-037, echo signal — bot voice leaking back
+   through the OS mic) is the last clean clone of the
+   iter-140/141/208/209/226/307/308/309 monotonic template.
+   `speaker_open_seconds` (this lap), `llm_cancel_to_close` (iter-308)
+   and `max_queue_depth` (iter-307) are now done. NOTE:
+   `mic_stale_frames` is near-always 0 on clean sessions — a SUSTAINED
+   run is rarer still, so a threshold-4 (event-gated) bar likely fits,
+   matching iter-120/308.
+2. **[chat-metrics] Two-sided-band sentinel family — strongest candidates
+   exhausted** (iter-210 bot-wpm, iter-305 ttc, iter-306 token-reveal-lag).
+   `user_wpm` (iter-064) has no "correct" rate so it is likely NOT a good
+   band fit. The band family is probably complete.
+3. **[cli] Grid + sweep cross-surface `--target` matrices — BOTH COMPLETE**
+   (iter-273–304). A next CLI feature would be a different axis (e.g.
+   asymmetric band tolerance, or a soft floor/ceiling beyond an open edge)
+   — scope before building.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list`
+   shows leftover per-iter worktrees. A future lap could
+   `git worktree prune` / remove merged ones.
