@@ -29710,3 +29710,86 @@ byte unchanged. Purely additive.
    ~30 leftover per-iter worktrees. A future lap could `git worktree prune` /
    remove the merged ones to keep the list legible. NOTE: this lap correctly
    removed its own worktree.
+
+## iter-324 — first-synth-overlap consistency sentinel (TTFS-leg twin of iter-143)
+
+- **Date:** 2026-06-20
+- **Branch:** iter-324-first-synth-overlap-sentinel (ff-merged to main, worktree removed)
+- **Commit:** be132e2
+
+**Why.** iter-323's next-item flagged `first_synth_overlap_seconds`
+(iter-073 — seconds of the FIRST synth masked by ongoing LLM streaming)
+as a remaining un-sentineled per-turn metric: it is *collected and
+median-emitted* (the "1st-synth saved" line, line 5944) but had no
+consistency-line guard. It's a clean target — a bigger-is-better
+continuous metric with iter-143's streaming-overlap sentinel as the
+direct template (same inverted-direction, three-bucket high/low/very_low
+shape).
+
+**What it is.**
+- **`examples/_chat_metrics.py`** — two new helpers following the
+  GENO.md session-summary diversity-check template, wired into
+  `print_session_summary` right after the iter-323 user-WPM call site:
+  - `_first_synth_overlap_bucket(seconds)` — buckets per-turn save into
+    `high` (>=0.10s — matches the per-turn GREEN display threshold,
+    "meaningful TTFS win") / `low` (0.02-0.10s, sub-perceptible) /
+    `very_low` (<0.02s, essentially sequential); `""` when non-positive.
+    The **FOURTH** inverted-direction continuous bucketer (after iter-142
+    llm-tps, iter-143 streaming-overlap, iter-225 split-coverage):
+    first-synth save is bigger-is-better, so the fine state is a HIGH
+    value and the boundaries invert — the problematic end is a small save.
+  - `_emit_first_synth_overlap_consistency_line(emit, list, threshold=5)`
+    — drops `high` + `""`, fires when 5+ consecutive turns land in
+    `low`/`very_low`, with per-value suggestions pointing at the
+    actionable knob (first-sentence latency / synth dispatch). The
+    **FOURTEENTH** instance of the diversity-check pattern and the
+    **TENTH** applied to a continuous metric.
+- The crucial distinction from iter-143 (and why it is NOT redundant):
+  iter-143 watches the WHOLE-stream overlap fraction; this watches the
+  FIRST-sentence overlap in absolute seconds — the leg that actually
+  gates TTFS. The two can disagree (a turn can overlap lots of late
+  synth, passing iter-143, yet still ship its first sentence
+  sequentially, failing here), and the first-synth gap is the more
+  user-perceptible failure because TTFS is what the user feels. A test
+  pins this: 0.30 is a `low` whole-stream ratio for iter-143 but a `high`
+  first-synth save here, so the two sentinels can't be silently collapsed
+  into one.
+
+The off-by-default path is preserved: a session whose first synth is
+always well-masked (or unmeasured) sees no new line — the summary is
+byte-for-byte unchanged. Purely additive.
+
+- **`tests/unit/test_emit_first_synth_overlap_consistency_line.py`**
+  (new, +24 tests): bucket boundaries incl. float edges; the
+  distinctness check vs iter-143; empty/all-zero suppression; high-run
+  never flagged; threshold (default 5, custom 3/10); high-interleaving
+  and zero-turn don't break a run while a phase change (low↔very_low)
+  does; longest-of-multiple; output formatting + iter-073 attribution;
+  the TTFS-actionability guard; large-input scaling.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4257 passed**
+(4233 prior + 24 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_emit_first_synth_overlap_consistency_line.py`
+  → **24 passed** (re-run on main post-merge).
+- Integration: not re-run this lap (a pure list-scanning + string-formatting
+  helper — no torch import, no audio I/O).
+
+**Next planned items:**
+1. **[chat-metrics] First-synth overlap now sentineled (iter-324).**
+   Of iter-323's two candidates, `first_synth_overlap_seconds` is now
+   done; `preempted_words` (iter-080, barge-only count) remains. Unlike
+   the rate/latency metrics, preempted_words is event-conditional (only
+   non-zero on a mid-speech barge), so a "sustained run" story is weaker
+   — scope whether a run of high-preemption turns is actionable (it would
+   point at the user habitually interrupting, or the bot over-talking)
+   before adding the fifteenth instance. Most other continuous metrics
+   (stt/tts rtf, llm tps, eot, synth-dispatch, ttfs, token-gap, ttc,
+   queue-depth, wpm pair, split-coverage, fta, llm-ft, speaker-open,
+   mic-stale) are now covered.
+2. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+3. **[housekeeping] Stale worktrees accumulating** — `git worktree list`
+   shows leftover per-iter worktrees. A future lap could `git worktree
+   prune` / remove the merged ones to keep the list legible. NOTE: this
+   lap correctly removed its own worktree.
