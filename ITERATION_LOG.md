@@ -26439,3 +26439,94 @@ surfaces.
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
    should track a curated subset, decide the policy and re-run
    `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
+
+## iter-291 — 1-D sweep CSV consumer re-derives JSON --target set pick (speech tie)
+
+- **Date:** 2026-06-19
+- **Branch:** iter-291-sweep-set-cross-surface (ff-merged to main)
+- **Commit:** a3ee87d
+
+**Why.** iter-289 pinned the 1-D SWEEP CSV↔JSON pick re-derive under
+`tie_break="speech"` for a SCALAR target, and iter-290 added the first DICT form —
+a CLOSED BAND. iter-290 backlog #1 named the next gap directly: the sweep still
+lacks the speech-tie cross-surface re-derive for the OTHER dict forms the GRID
+earned at iter-282–286/288 (flat set, open band, preference, weighted, scaled,
+affine). This lap closes the NEXT one — a flat SET target `[a, b, c]` under
+`tie_break="speech"`, the sweep twin of iter-282's grid set-under-speech test.
+
+**The gap this closes.** A set produces multi-row ties like a band, but via a
+DIFFERENT mechanism: MIN distance over the listed elements (iter-248), so a count
+satisfying ANY element scores 0. The band ties of iter-290 all sit between one
+lo/hi pair; the set ties here are independent EXACT HITS on DIFFERENT elements.
+The target FORM (`grid_cell_distance`, which rows tie at 0) and the tie-break
+(`grid_cell_sort_key`, how tied rows order) are independent seams, so pinning the
+band under speech on the sweep (iter-290) does NOT pin the set under speech.
+`render_vad_sweep_json` threads BOTH the set target AND `tie_break="speech"` into
+the pickers, embedding `best`/`top`/`target`/`tie_break`; `render_vad_sweep_csv`
+emits ONLY the bare `<axis>,num_segments,speech_s` table. A regression that
+dropped the tie_break on the sweep JSON path (silently falling back to row-major)
+while a CSV consumer still passed `"speech"`, OR collapsed the set to its head
+element (undoing the min-over-elements multi-row tie the speech tie-break needs
+to bite), would diverge the two surfaces yet ship green — a failure mode neither
+iter-289 (scalar, no ties) nor iter-290 (band, single lo/hi tie mechanism) can
+catch, and the set-under-speech tests live ONLY on the GRID (iter-282), never the
+sweep.
+
+**The mechanism.** A 4-value threshold sweep (0.3/0.5/0.7/0.9) with counts
+3/8/5/1, target = flat set `[3, 5, 8]` (satisfy ANY of 3, 5, 8). `_sweep_results`
+couples speech to count + index, so the three in-set rows carry DIFFERENT speech
+and the two tie-breaks genuinely disagree. Set distances (min over the elements):
+0.30 count 3 → exact hit on 3 → dist 0 (speech 1.5), 0.50 count 8 → exact hit on
+8 → dist 0 (speech 4.8), 0.70 count 5 → exact hit on 5 → dist 0 (speech 3.5),
+0.90 count 1 → min(2,4,7)=2 (speech 0.8). THREE rows tie at dist 0, each an exact
+hit on a DIFFERENT element. Row-major keeps the 0.30 row (count 3, earliest);
+`tie_break="speech"` prefers the most-speech in-set row, count 8 (0.50) at 4.8s.
+So the speech best is the 0.50 row, NOT the row-major pick.
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+1 test).**
+  `test_render_sweep_csv_consumer_rederives_json_set_target_speech_tie_pick`:
+  asserts `payload["target"] == [3, 5, 8]` and `payload["tie_break"] == "speech"`;
+  the CSV body carries no `best`/`distance`/`tie_break`; a CSV consumer re-parses
+  the bare table back to sweep rows and re-runs the SAME pickers with the SAME set
+  AND `"speech"`, recovering the JSON-embedded `best` (count 8) and the full
+  speech-ordered top-3 (counts `[8, 5, 3]` — all three in-set rows lead, most
+  speech first, the dist-2 count-1 row cut by top=3). TWO controls prove it cannot
+  pass by accident: ROW-MAJOR flips to count 3, and coercing the set to its FIRST
+  element (scalar 3) collapses the multi-row tie to a sole count-3 winner (proving
+  the set's tail elements 5/8 are load-bearing, not interchangeable with a
+  scalar). No production code changed (the sweep wiring was already correct —
+  proved by the green focused run on the unmodified path).
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **3893 passed**
+(3892 prior + 1 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_gv_vad.py -k sweep_csv_consumer_rederives_json_set_target_speech` → **1 passed**.
+- Integration: not re-run this lap (no corpus symlinked into this worktree; same
+  as prior corpus-gated laps — the change is a pure CLI cross-surface contract
+  test, no new production code).
+
+**Next planned items:**
+1. **[cli] Sweep cross-surface speech-tie matrix — remaining dict forms.** This
+   lap pinned the sweep CSV↔JSON pick re-derive for the flat SET target under
+   `tie_break="speech"` (the grid earned this at iter-282). The sweep still lacks
+   the cross-surface re-derive for the OTHER dict forms the grid pinned at
+   iter-283–286/288 (open band, preference, weighted, scaled, affine). Each is a
+   near-mechanical clone of this lap's test with a different `target` value — pick
+   one per lap. Confirm the sweep JSON path threads each form before assuming the
+   gap.
+2. **[cli] `simulate-mirror` grid pick round-trips** remain unpinned cross-surface
+   for ALL dict forms (the speech matrix only covered VAD grid + sweep
+   scalar/band/set).
+3. **[cli] A next FEATURE would be a different axis entirely** — the `--target`
+   composition space (scalar → band → set → preference → additive →
+   multiplicative → affine) is feature-complete. Candidates: a per-element
+   ASYMMETRIC band tolerance, or a "soft floor/ceiling" scoring beyond an open
+   edge with a gentle slope rather than a hard 0. Scope before building.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or the
+   pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it stays
+   operator-only / non-headless.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
+   should track a curated subset, decide the policy and re-run
+   `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
