@@ -3537,6 +3537,162 @@ def test_render_sweep_csv_consumer_rederives_json_scaled_target_rowmajor_pick():
     assert [r["threshold"] for r in csv_top] == [0.5, 0.7, 0.3]
 
 
+def test_render_sweep_csv_consumer_rederives_json_affine_target_rowmajor_pick():
+    # iter-303: iter-297 opened the sweep ROW-MAJOR dict-form cross-surface matrix
+    # with the flat SET (the sweep twin of iter-280's grid set-under-row-major test),
+    # iter-298 added the CLOSED BAND (twin of iter-275), iter-299 the OPEN band (twin
+    # of iter-273), iter-300 the {"prefer": [...]} PREFERENCE (twin of iter-276),
+    # iter-301 the {"weighted": [...]} ADDITIVE-WEIGHTED set (twin of iter-277), and
+    # iter-302 the {"scaled": [...]} MULTIPLICATIVE set (twin of iter-278). iter-302
+    # backlog #1 named the LAST gap directly: the sweep still lacks the row-major
+    # cross-surface re-derive for the {"affine": [...]} set (iter-287, grid row-major
+    # twin iter-279, sweep speech twin iter-296). This lap closes it — the sweep twin
+    # of iter-279's grid affine-under-row-major test — COMPLETING the cross-surface
+    # ROW-MAJOR matrix over every --target dict form (scalar -> band -> set -> open
+    # band -> preference -> weighted -> scaled -> affine), mirroring the grid
+    # iter-273-280 set in full.
+    #
+    # The affine set GENERALISES iter-301's weighted and iter-302's scaled twins: each
+    # element's distance is its raw distance SCALED by its factor THEN OFFSET by its
+    # penalty (distance*factor + penalty), the set scoring the MIN over those affine
+    # distances (iter-287). Like both predecessors its precedence lives in the DISTANCE
+    # itself — grid_cell_sort_key inserts NO secondary key for an affine set — so under
+    # the DEFAULT row-major tie-break the key is the SAME single-level (distance,) shape
+    # as the band/set/open-band/weighted/scaled twins (iter-298/297/299/301/302). What
+    # no prior ROW-MAJOR sweep twin exercises is BOTH weight operators biting AT ONCE on
+    # the same fixture: the penalty taxes even an EXACT HIT (0*factor + penalty =
+    # penalty, the iter-301 weighted behaviour) AND the factor amplifies a non-zero gap
+    # (the iter-302 scaled behaviour). A regression confined to the DEFAULT row-major
+    # path — one that flattened the {"affine": [...]} dict to a plain set on the sweep
+    # JSON path (dropping BOTH weights so the row-major floor moves) while a CSV consumer
+    # still passed them, that dropped EITHER weight alone, OR that quietly swapped the
+    # row-major fallback for a speech-ordered one on the JSON path only — would diverge
+    # the two surfaces yet ship green, because the iter-296 affine test forces "speech"
+    # (so it never exercises the row-major fallback under an affine set) and no other
+    # row-major sweep twin folds BOTH a *factor AND a +penalty INTO the distance.
+    #
+    # Fixture: a 4-value threshold sweep with counts 4/9/2/8, target = affine set
+    # 5(*1+0), 9(*3+1) ({"affine": [(5, 1, 0), (9, 3, 1)]}). _sweep_results couples
+    # speech to count + index, so the in-floor rows carry DIFFERENT speech and the
+    # row-major / speech tie-breaks genuinely DISAGREE. Each element's distance is
+    # raw*factor + penalty, the set scoring the MIN over those affine distances:
+    #   - 0.30 count 4 → min(|4-5|*1+0, |4-9|*3+1)=min(1,16)=1, speech 2.0
+    #   - 0.50 count 9 → min(|9-5|*1+0, |9-9|*3+1)=min(4, 1)=1, speech 5.4
+    #   - 0.70 count 2 → min(|2-5|*1+0, |2-9|*3+1)=min(3,22)=3, speech 1.4
+    #   - 0.90 count 8 → min(|8-5|*1+0, |8-9|*3+1)=min(3, 4)=3, speech 6.4
+    # The floor PAIR shows BOTH weight operators biting AT ONCE, in OPPOSITE directions:
+    # count 4 is an UNTAXED near-miss on the 0-penalty element 5 (raw 1 → 1*1+0 = 1),
+    # while count 9 is an EXACT HIT on element 9 (raw 0) that the +1 penalty taxes UP to
+    # 1 (0*3+1 = 1) — so an exact hit and a near-miss are leveled to the SAME floor only
+    # because the penalty lifts the hit. TWO rows tie at the affine floor distance 1
+    # (counts 4 and 9). The DEFAULT row-major tie-break keeps the EARLIEST tied row —
+    # count 4 (0.30) — DESPITE count 9 (0.50) recovering more speech (5.4s vs 2.0s). So
+    # the row-major best is the 0.30 row count 4, and the top-3 is [4, 9, 2] (the two
+    # floor rows in sweep order, THEN count 2 — its min affine distance 3, |2-5|*1+0,
+    # ties count 8's 3 but count 2 is the earlier row).
+    thresholds = [0.3, 0.5, 0.7, 0.9]
+    results = _sweep_results([4, 9, 2, 8])
+    target = {"affine": [(5, 1, 0), (9, 3, 1)]}
+    csv_text = gv.render_vad_sweep_csv(thresholds, results, name="rec.wav")
+    payload = json.loads(
+        # No tie_break kwarg — exercise the DEFAULT row-major path explicitly.
+        gv.render_vad_sweep_json(
+            thresholds, results, name="rec.wav", target=target, top=3,
+        )
+    )
+    # The JSON twin records the affine target (an {"affine": [...]} object — JSON renders
+    # the (element, factor, penalty) tuples as 3-element lists) and the DEFAULT tie-break
+    # it used.
+    assert payload["target"] == {"affine": [[5, 1, 0], [9, 3, 1]]}
+    assert payload["tie_break"] == "row-major"
+    # The CSV body still carries no pick columns, tie_break, or weights — it is the bare
+    # sweep.
+    assert "best" not in csv_text and "distance" not in csv_text
+    assert "tie_break" not in csv_text and "affine" not in csv_text
+    # A CSV consumer re-parses the flat table back to sweep rows...
+    rows = [
+        {
+            "threshold": float(row["threshold"]),
+            "num_segments": int(row["num_segments"]),
+            "speech_s": float(row["speech_s"]),
+        }
+        for row in csv.DictReader(io.StringIO(csv_text))
+    ]
+    # ...and re-runs the SAME picker with the SAME affine target and the DEFAULT
+    # (row-major) tie-break. The CSV-derived best equals the JSON `best` (distance key
+    # stripped), and the re-derived affine distance matches the one the JSON embedded
+    # (1 — one off the *1+0 element 5, whose 0 penalty leaves the near-miss untaxed).
+    csv_best = gv.pick_best_grid_cell(rows, target)
+    json_best = dict(payload["best"])
+    assert json_best.pop("distance") == gv.grid_cell_distance(csv_best, target)
+    assert csv_best == json_best
+    assert csv_best["threshold"] == 0.3 and csv_best["num_segments"] == 4
+    assert payload["best"]["distance"] == 1
+    # CONTROL 1: the SAME affine target under tie_break="speech" picks a DIFFERENT row —
+    # the MOST-speech floor row, count 9 (0.50) at 5.4s, NOT the earliest floor row. So
+    # the default pick is genuinely row-major-specific among the floor pair, not a value
+    # both tie-breaks share; the default branch is load-bearing for the count-4 pick.
+    speech_best = gv.pick_best_grid_cell(rows, target, "speech")
+    assert speech_best != csv_best
+    assert speech_best["threshold"] == 0.5 and speech_best["num_segments"] == 9
+    # CONTROL 2: a flat SET of the SAME two elements [5, 9] carries NEITHER weight —
+    # grid_cell_distance scores the RAW set MIN — so count 9 becomes a FREE exact hit
+    # (distance 0) and wins the row-major pick OUTRIGHT (the only dist-0 row). A DIFFERENT
+    # pick from the affine best, proving the weights are load-bearing: flattening
+    # {"affine": [(5,1,0),(9,3,1)]} to [5,9] on either surface would change the pick (the
+    # +1 penalty is what lifts count 9's exact hit to distance 1, leveling it with count
+    # 4's near-miss instead of letting it lead alone).
+    set_best = gv.pick_best_grid_cell(rows, [5, 9])
+    assert set_best != csv_best
+    assert set_best["threshold"] == 0.5 and set_best["num_segments"] == 9
+    # CONTROL 3: dropping ONLY the penalty (the {"scaled": [(5,1),(9,3)]} twin of
+    # iter-302) makes count 9 a FREE exact hit again (0*3 = 0), so it leads the row-major
+    # shortlist OUTRIGHT — the scaled top is [9, 4, 2], NOT the affine [4, 9, 2]. A
+    # DIFFERENT shortlist head, proving the +1 penalty is independently load-bearing —
+    # dropping it on either surface would change the pick (it is the ONLY thing leveling
+    # count 9's exact hit up to the count-4 floor).
+    scaled_top = gv.pick_top_grid_cells(rows, {"scaled": [(5, 1), (9, 3)]}, 3)
+    assert [r["num_segments"] for r in scaled_top] == [9, 4, 2]
+    # CONTROL 4: dropping ONLY the factor (the {"weighted": [(5,0),(9,1)]} twin of
+    # iter-301) lowers count 8's near-miss on element 9 from raw 1 → 1*3+1=4 (affine)
+    # down to 1+1=2 (weighted), so count 8 overtakes count 2 for the 3rd top slot. The
+    # weighted top is [4, 9, 8], NOT the affine [4, 9, 2]. A DIFFERENT shortlist tail,
+    # proving the *3 factor is independently load-bearing — dropping it on either surface
+    # would change the pick. CONTROLS 3 and 4 together pin that BOTH affine weights
+    # matter at once, the property no weighted-only (iter-301) or scaled-only (iter-302)
+    # row-major sweep twin can establish.
+    weighted_top = gv.pick_top_grid_cells(rows, {"weighted": [(5, 0), (9, 1)]}, 3)
+    assert [r["num_segments"] for r in weighted_top] == [4, 9, 8]
+    # The top shortlist agrees row-for-row (distance stripped). Ordering is by the
+    # single-level (affine distance,) key with row-major among equal distance: the two
+    # floor rows lead (sweep-ordered, count 4 at 0.30 before count 9 at 0.50) DESPITE
+    # count 9 having more speech, THEN count 2 — its min affine distance (3) ties count
+    # 8's 3 but count 2 is the earlier row.
+    csv_top = gv.pick_top_grid_cells(rows, target, 3)
+    json_top = [dict(c) for c in payload["top"]]
+    for c in json_top:
+        c.pop("distance")
+    assert csv_top == json_top
+    # Head of the shortlist is the single best pick, on both surfaces.
+    assert csv_top[0] == csv_best
+    # Order [4, 9, 2] — UNIQUE to the affine target under row-major. The flat-set control
+    # gives a count-9-led order (free exact hit), the scaled-only control [9, 4, 2]
+    # (penalty dropped, count 9 free), the weighted-only control [4, 9, 8] (factor
+    # dropped, count 8 recovers the tail). Only when BOTH weights bite under row-major
+    # does count 4 lead (earliest floor) and count 2 (earlier of the two dist-3 rows)
+    # take the tail over count 8.
+    assert [r["num_segments"] for r in csv_top] == [4, 9, 2]
+    set_top = gv.pick_top_grid_cells(rows, [5, 9], 3)
+    assert [r["num_segments"] for r in set_top] == [9, 4, 8]
+    # The two leading rows scored the affine floor (distance 1 — count 4 a 0-penalty
+    # near-miss on element 5, count 9 an exact hit on element 9 taxed up by +1); count 2
+    # trails at distance 3 (its min affine distance: |2-5|*1+0=3 beats |2-9|*3+1=22). The
+    # affine distance, then row position among the floor pair, NOT speech, decided the
+    # order — the earlier row (count 4, 0.30) leads the higher-speech row (count 9, 0.50).
+    assert [c["distance"] for c in payload["top"]] == [1, 1, 3]
+    assert [r["threshold"] for r in csv_top] == [0.3, 0.5, 0.7]
+
+
 # ---- cmd_vad_sweep --csv: the handler ----------------------------------
 
 
