@@ -3276,6 +3276,78 @@ def _emit_preempted_words_consistency_line(
     )
 
 
+def _emit_regret_barge_consistency_line(
+    emit, regret_flags: list[bool], threshold: int = 4,
+) -> None:
+    """iter-326: detect consecutive runs of *regret* barges (iter-056
+    ``barge_in_regret`` — a barge firing within 200ms of bot first audio,
+    implying the bot started talking while the user was still mid-utterance,
+    so the end-of-turn detector fired too early). Metric 3.4 in the
+    perf-metrics taxonomy ("Novel/speculative").
+
+    SIXTEENTH instance of the diversity-check pattern and the FIRST applied
+    to a BOOLEAN per-turn metric (after the categorical iter-120 barge-phase,
+    the count-valued iter-325 preempted-words, and the continuous bucketers
+    iter-140/141/142/143/208/209/210/211/323/324). It is the THIRD
+    barge-CONDITIONAL instance (after iter-120 and iter-325) and shares their
+    threshold of 4 rather than the continuous-metric default of 5: a regret
+    barge is barge-conditional AND a subset of barges (only the too-early
+    ones), so it is already rare and semantically loaded — a shorter run is
+    enough signal.
+
+    Why a boolean needs no bucketer: unlike iter-325's count or iter-128's
+    continuous value, ``barge_in_regret`` is already categorical. There is
+    exactly ONE interesting value (``True`` — the regret), so the run scan
+    only ever finds runs of one kind and no per-value suggestion branching is
+    needed (contrast iter-120's two phases and iter-325's minor/heavy). True
+    maps to the marker ``"regret"`` and everything else (a non-barge turn, OR
+    a barge turn where the EOU timing was fine) filters out — exactly the
+    iter-114 zero-filter shape, here a boolean-False filter. A clean (non-
+    regret) barge is a *good* outcome and, like iter-325's clean inter-
+    sentence cut, is filtered so it neither fires nor breaks a run.
+
+    What the cumulative figure misses: iter-056 already reports a session
+    "Regret rate: N/M (P%)" line, but that ratio smears the timing away — it
+    can't distinguish a handful of regret barges scattered across a long
+    session from a streak of them on every recent barge in a row. The latter
+    is the actionable pattern: the EOU detector is *systematically* cutting
+    the user off, turn after turn. Only a consecutive-run scan over the barge
+    turns surfaces it, and it points straight at the fix iter-056 already
+    names — raise ``chat.vad.silence_duration`` (iter-020) so the recorder
+    waits longer before declaring the user done (iter-001 end-of-turn).
+
+    Distinct from iter-120 (barge-PHASE) and iter-325 (preempted-WORDS): all
+    three are run scans over barge turns, but iter-120 says *when* the user
+    barged (before vs during bot speech), iter-325 says *how much* generated
+    speech was thrown away, and this says *whether the bot pre-empted the
+    user* (a latency-defined EOU misfire). A regret barge is necessarily a
+    ``playback``-phase barge (the bot had already started), but the regret
+    flag is the stricter 200ms-window judgment, not the phase itself.
+
+    Output:
+
+        Regret run:     4 consecutive regret barges — the end-of-turn
+                        detector is firing too early; raise
+                        chat.vad.silence_duration (iter-056 barge_in_regret)
+    """
+    # True → "regret" marker; False (no barge, or a well-timed barge) is the
+    # fine state and is filtered before the scan, mirroring iter-114's
+    # zero-filter. Single interesting value → no per-value branching.
+    fired = ["regret" for flag in regret_flags if flag]
+    if not fired:
+        return
+
+    longest_run, _ = _longest_consecutive_run(fired)
+    if longest_run < threshold:
+        return
+
+    emit(
+        f"    Regret run:     {longest_run} consecutive regret barges "
+        f"— the end-of-turn detector is firing too early; raise "
+        f"chat.vad.silence_duration (iter-056 barge_in_regret)"
+    )
+
+
 def _max_token_gap_bucket(seconds: float) -> str:
     """iter-211: bucket a per-turn ``max_token_gap`` (iter-085's
     maximum inter-token gap during the LLM stream, excluding the
@@ -5938,6 +6010,23 @@ def print_session_summary(
     _emit_preempted_words_consistency_line(
         _emit,
         [m.preempted_words for m in metrics_list],
+    )
+    # iter-326: regret-barge consistency check. Only fires when 4+
+    # consecutive BARGE turns were regret barges (iter-056 barge_in_regret
+    # — a barge within 200ms of bot first audio, meaning the bot started
+    # talking while the user was still going, so end-of-turn detection
+    # fired too early). iter-056 already reports a cumulative "Regret rate:
+    # N/M (P%)", but that ratio smears the timing away — it can't tell a few
+    # scattered regret barges from a streak of them on every recent barge in
+    # a row. The latter is the actionable pattern: the EOU detector is
+    # systematically cutting the user off, and the fix iter-056 names (raise
+    # chat.vad.silence_duration) applies. FIRST boolean-valued instance of
+    # the diversity-check family and the THIRD barge-conditional one (after
+    # iter-120 barge-phase and iter-325 preempted-words); shares their
+    # threshold of 4 because regret barges are a rare subset of barges.
+    _emit_regret_barge_consistency_line(
+        _emit,
+        [m.barge_in_regret for m in metrics_list],
     )
     # iter-211: max-token-gap consistency check. Only fires when 5+
     # consecutive turns suffered a noticeable worst-case mid-stream LLM
