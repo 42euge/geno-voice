@@ -26941,3 +26941,106 @@ the scaled+speech best is the 0.50 row count 6.
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
    should track a curated subset, decide the policy and re-run
    `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
+
+## iter-296 — 1-D sweep CSV consumer re-derives JSON --target affine set pick (speech tie)
+
+- **Date:** 2026-06-19
+- **Branch:** iter-296-sweep-affine-cross-surface (ff-merged to main)
+- **Commit:** 32a796d
+
+**Why.** iter-289 pinned the 1-D SWEEP CSV↔JSON pick re-derive under
+`tie_break="speech"` for a SCALAR target; iter-290 added the CLOSED BAND, iter-291
+the flat SET, iter-292 the OPEN band, iter-293 the `{"prefer": [...]}` PREFERENCE,
+iter-294 the `{"weighted": [...]}` ADDITIVE-WEIGHTED set, iter-295 the
+`{"scaled": [...]}` MULTIPLICATIVE set. iter-295 backlog #1 named the LAST gap
+directly: the sweep still lacked the speech-tie cross-surface re-derive for the
+`{"affine": [...]}` set (iter-287, grid iter-288). This lap closes it — the sweep
+twin of iter-288's grid affine-under-speech test — COMPLETING the cross-surface
+speech-tie matrix over every `--target` dict form (scalar → band → set → open band
+→ preference → weighted → scaled → affine).
+
+**The gap this closes.** The affine set GENERALISES iter-294's weighted and
+iter-295's scaled twins: `grid_cell_distance` SCALES each element's raw distance by
+its factor THEN OFFSETS by its penalty (`distance*factor + penalty`) and takes the
+MIN over those affine distances (iter-287). Like both predecessors its precedence
+lives in the DISTANCE itself — `grid_cell_sort_key` inserts NO secondary key for an
+affine set — so the sort key is the SAME two-level `(distance, -speech_s)` shape as
+the band/set/open-band/weighted/scaled twins. What no prior sweep twin exercises is
+BOTH weight operators biting AT ONCE on the same fixture: the penalty taxes even an
+exact hit (`0*factor + penalty = penalty`, the iter-294 weighted behaviour) AND the
+factor amplifies a non-zero gap (the iter-295 scaled behaviour). A regression that
+dropped the tie_break on the sweep JSON path (falling back to row-major) while a CSV
+consumer still passed `"speech"`, OR flattened the `{"affine": ...}` dict to a plain
+set / dropped EITHER weight on the JSON path, would diverge the two surfaces yet
+ship green — a failure mode neither iter-289 (scalar), iter-290/291/292
+(band/set/open-band, raw distance), iter-293 (preference, sort-key precedence),
+iter-294 (weighted, additive only), nor iter-295 (scaled, multiplicative only) can
+catch, and the affine-under-speech tests live ONLY on the GRID (iter-288), never the
+sweep.
+
+**The mechanism.** A 4-value threshold sweep (0.3/0.5/0.7/0.9) with counts
+4/6/8/10, target = affine set `{"affine": [(5, 1, 0), (9, 3, 1)]}`. `_sweep_results`
+couples speech to count + index, so the rows carry DIFFERENT speech and the
+tie-breaks genuinely disagree. Each element's distance is `raw*factor + penalty`,
+the set scoring the MIN over those affine distances: 0.30 count 4 →
+min(1·1+0, 5·3+1)=1, speech 2.0; 0.50 count 6 → min(1, 10)=1, speech 3.6; 0.70
+count 8 → min(3, 4)=3, speech 5.6; 0.90 count 10 → min(5, 4)=4, speech 8.0. BOTH
+weights are load-bearing AND act in the SAME direction on the SAME element 9: the
+`*3` factor lifts counts 8/10's one-off near-miss to 3, and the `+1` penalty lifts
+it FURTHER to 4 — together demoting count 10 (raw one-off, most speech) all the way
+to distance 4. TWO rows tie at the affine floor distance 1 (counts 4 and 6, each one
+off the `*1+0` element 5, whose penalty is 0 so its near-miss is untaxed). The
+two-level `(distance, -speech_s)` key then prefers the MOST-speech of the tied pair,
+count 6 (0.50) at 3.6s over count 4 (0.30) at 2.0s. So the affine+speech best is the
+0.50 row count 6, and the top-3 is the UNIQUE `[6, 4, 8]`.
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+1 test).**
+  `test_render_sweep_csv_consumer_rederives_json_affine_target_speech_tie_pick`:
+  asserts `payload["target"] == {"affine": [[5, 1, 0], [9, 3, 1]]}` (JSON renders
+  the 3-tuples as 3-element lists) and `payload["tie_break"] == "speech"`; the CSV
+  body carries no `best`/`distance`/`tie_break`/`affine`; a CSV consumer re-parses
+  the bare table back to sweep rows and re-runs the SAME pickers with the SAME affine
+  dict AND `"speech"`, recovering the JSON-embedded `best` (count 6) and the full
+  top-3 (counts `[6, 4, 8]`). FOUR controls prove it cannot pass by accident:
+  ROW-MAJOR flips to count 4 (earliest floor row); a flat SET `[5, 9]` (no weights →
+  all rows distance 1) flips the top to `[10, 8, 6]` (pure speech); dropping ONLY the
+  penalty (`{"scaled": [(5,1),(9,3)]}`) flips the top tail to `[6, 4, 10]`; dropping
+  ONLY the factor (`{"weighted": [(5,0),(9,1)]}`) ALSO flips the top tail to
+  `[6, 4, 10]`. Controls 3 and 4 together pin that BOTH affine weights matter at
+  once — the property no weighted-only (iter-294) or scaled-only (iter-295) sweep
+  twin can establish. No production code changed (the sweep wiring was already
+  correct — proved by the green focused run on the unmodified path).
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **3898 passed**
+(3897 prior + 1 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_gv_vad.py -k sweep_csv_consumer_rederives_json_affine` → **1 passed**.
+- Integration: not re-run this lap (no corpus symlinked into this worktree; same
+  as prior corpus-gated laps — the change is a pure CLI cross-surface contract
+  test, no new production code).
+
+**Next planned items:**
+1. **[cli] Sweep cross-surface speech-tie matrix — COMPLETE.** With this lap the
+   sweep CSV↔JSON pick re-derive under `tie_break="speech"` is pinned for EVERY
+   `--target` form (scalar → band → set → open band → preference → weighted →
+   scaled → affine). The next cross-surface gap is the `simulate-mirror` grid pick
+   round-trips (item 2), or a DIFFERENT tie_break axis: the matrix above is all
+   `tie_break="speech"`; the `"row-major"` default and any other tie-breaks are only
+   pinned cross-surface for the scalar/band cases, not the dict forms. Confirm which
+   tie-breaks the sweep JSON path threads before assuming the gap.
+2. **[cli] `simulate-mirror` grid pick round-trips** remain unpinned cross-surface
+   for ALL dict forms (the speech matrix only covered VAD grid + sweep
+   scalar/band/set/open-band/preference/weighted/scaled/affine).
+3. **[cli] A next FEATURE would be a different axis entirely** — the `--target`
+   composition space (scalar → band → set → preference → additive →
+   multiplicative → affine) is feature-complete. Candidates: a per-element
+   ASYMMETRIC band tolerance, or a "soft floor/ceiling" scoring beyond an open
+   edge with a gentle slope rather than a hard 0. Scope before building.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or the
+   pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it stays
+   operator-only / non-headless.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
+   should track a curated subset, decide the policy and re-run
+   `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
