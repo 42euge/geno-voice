@@ -1811,6 +1811,90 @@ def test_render_sweep_csv_min_silence_axis_round_trips_to_json_twin():
     ] == json_rows
 
 
+# ---- 1-D sweep CSV consumer re-derives the JSON --target pick (iter-289) -
+#
+# iter-274/281/282/283/284/285/286/288 pinned the cross-surface --target pick
+# AGREEMENT under tie_break="speech" for EVERY dict form — but ONLY on the 2-D
+# GRID (render_vad_grid_csv ↔ render_vad_grid_json). The 1-D SWEEP has its own
+# pick machinery (iter-244 threaded target/top/tie_break into
+# render_vad_sweep_json, embedding `best`/`top`/`target`/`tie_break`), yet the
+# sweep CSV (render_vad_sweep_csv) emits ONLY the bare <axis>,num_segments,
+# speech_s table — no pick columns, exactly like the grid CSV. So the sweep has
+# the SAME cross-surface contract the grid earned: a consumer reading the bare
+# sweep CSV, re-parsing the rows back to cells and re-running the SAME pickers
+# with the SAME tie_break, MUST recover the JSON-embedded `best`/`top`
+# identically. That sweep-side agreement was NEVER pinned — the only sweep
+# CSV↔JSON tests (test_render_sweep_csv_*round_trips*) compare the bare
+# segmentation NUMBERS, never the derived PICK. A regression that dropped the
+# tie_break on the sweep JSON path (falling back to row-major) while a CSV
+# consumer still passed "speech", or that diverged the sweep pickers from the
+# grid pickers, would ship green because no sweep test re-derives a pick from
+# the CSV under the non-default tie-break. This closes that hole on the 1-D
+# sweep, the cross-surface twin of iter-274's grid test. No production code
+# changed (the wiring was already correct — proved by a pre-test smoke run).
+
+
+def test_render_sweep_csv_consumer_rederives_json_speech_tie_break_pick():
+    # Same fixture shape as the grid speech-tie test
+    # (test_render_grid_csv_consumer_rederives_json_speech_tie_break_pick): a
+    # sweep over 4 threshold values with counts 2/4/7/5. _sweep_results couples
+    # speech to count + index, so cells at equal distance carry DIFFERENT speech
+    # and the two tie-breaks genuinely DISAGREE.
+    #   target=3 distances row-major: |2-3|=1, |4-3|=1, |7-3|=4, |5-3|=2.
+    # The two dist-1 rows tie: row-major keeps the 0.30 value (count 2, earlier in
+    # the sweep) but tie_break="speech" prefers the 0.50 value (count 4 → more
+    # recovered speech). So the speech best is the 0.50 row, NOT the row-major
+    # pick — proving the tie-break actually flips the result on both surfaces.
+    thresholds = [0.3, 0.5, 0.7, 0.9]
+    results = _sweep_results([2, 4, 7, 5])
+    target = 3
+    csv_text = gv.render_vad_sweep_csv(thresholds, results, name="rec.wav")
+    payload = json.loads(
+        gv.render_vad_sweep_json(
+            thresholds, results, name="rec.wav",
+            target=target, top=3, tie_break="speech",
+        )
+    )
+    # The JSON twin records WHICH tie-break produced its pick.
+    assert payload["tie_break"] == "speech"
+    # The CSV body still carries no pick columns or tie_break — it is the bare sweep.
+    assert "best" not in csv_text and "distance" not in csv_text
+    assert "tie_break" not in csv_text
+    # A CSV consumer re-parses the flat table back to sweep rows...
+    rows = [
+        {
+            "threshold": float(row["threshold"]),
+            "num_segments": int(row["num_segments"]),
+            "speech_s": float(row["speech_s"]),
+        }
+        for row in csv.DictReader(io.StringIO(csv_text))
+    ]
+    # ...and re-runs the SAME picker with the SAME tie_break="speech". The
+    # CSV-derived best equals the JSON `best` (distance key stripped), and the
+    # re-derived distance matches the one the JSON embedded.
+    csv_best = gv.pick_best_grid_cell(rows, target, "speech")
+    json_best = dict(payload["best"])
+    assert json_best.pop("distance") == gv.grid_cell_distance(csv_best, target)
+    assert csv_best == json_best
+    # CONTROL: the speech pick is genuinely DIFFERENT from the row-major pick, so
+    # this test could not pass by both tie-breaks accidentally coinciding.
+    assert gv.pick_best_grid_cell(rows, target) != csv_best
+    assert csv_best["threshold"] == 0.5 and csv_best["num_segments"] == 4
+    assert gv.pick_best_grid_cell(rows, target)["threshold"] == 0.3
+    # The top shortlist agrees row-for-row (distance stripped), including the
+    # speech-ordered tie among the two dist-1 rows (the higher-count one first).
+    csv_top = gv.pick_top_grid_cells(rows, target, 3, "speech")
+    json_top = [dict(c) for c in payload["top"]]
+    for c in json_top:
+        c.pop("distance")
+    assert csv_top == json_top
+    # Head of the shortlist is the single best pick, on both surfaces.
+    assert csv_top[0] == csv_best
+    # The dist-1 tie resolved on speech (count-4 row first), then the count-2 row,
+    # then the dist-2 count-5 row.
+    assert [r["num_segments"] for r in csv_top] == [4, 2, 5]
+
+
 # ---- cmd_vad_sweep --csv: the handler ----------------------------------
 
 
