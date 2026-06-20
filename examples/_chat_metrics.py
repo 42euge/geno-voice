@@ -4588,6 +4588,166 @@ def _emit_fta_consistency_line(
     )
 
 
+def _llm_ft_bucket(seconds: float) -> str:
+    """iter-312: bucket a per-turn ``llm_first_token`` (iter-052 — the
+    time from the LLM stream starting to its FIRST token arriving) into a
+    coarse category. Used by ``_emit_llm_ft_consistency_line`` to detect
+    runs where the LLM-side half of TTFS consistently dominated
+    time-to-first-sound. Metric 1.9 in the perf-metrics taxonomy.
+
+    This is the SIBLING half of iter-311's FT-A sentinel. iter-083
+    decomposes TTFS into two halves: ``llm_first_token`` (LLM-side — how
+    long until the model produced its first token) and FT-A (post-LLM-side
+    — sentence-split + TTS + queue dispatch before the first audio chunk
+    plays). The session summary prints the MEDIAN of each side-by-side
+    (``Median LLM 1st`` / ``Median FT-A``) so the operator can see which
+    half dominates at a glance, but a healthy median hides a sustained-slow
+    stretch: a few snappy turns early pull the median down while the back
+    half of the session crawls. iter-311 closed that gap for the post-LLM
+    half (FT-A); THIS closes it for the LLM half. A SUSTAINED run in the
+    slow/very_slow bucket is the actionable signal that the LLM's
+    time-to-first-byte is the persistent bottleneck — model warmup, an
+    overloaded backend, or context bloat (iter-077 ``context_tokens``)
+    slowing first-token generation, eating the sub-500ms TTFS budget the
+    whole pipeline (VISION: "latency is the feature") optimizes for.
+
+    A continuous-metric instance like
+    iter-128/140/141/142/143/208/209/224/225/226/307/308/309/310/311 —
+    buckets a float duration into a coarse category before the run scan.
+    Like iter-140/141/208/209/224/226/307/308/309/310/311 — and UNLIKE the
+    inverted iter-142/143/225 — ``llm_first_token`` is "smaller is better":
+    the fine state is a LOW value (the model emits its first token
+    promptly), so the boundaries are NOT inverted; the problematic end is a
+    LARGE latency.
+
+    Buckets (anchored on the iter-051 filler ``idle_threshold`` default of
+    0.6s — the point where the pipeline decides the LLM is taking too long
+    and plays a filler to cover the wait, so a turn whose first token
+    arrives past that threshold has demonstrably blown the latency budget):
+
+        ``snappy``   — < 0.3s: the model emits its first token promptly;
+            the LLM is a thin slice of TTFS. The desired state.
+        ``slow``     — 0.3-0.6s: the LLM's first-token wait is eating a
+            noticeable chunk of the opening latency and approaching the
+            filler threshold; a smaller/faster model or trimmed context
+            would help.
+        ``very_slow``— > 0.6s: first-token latency alone exceeds the filler
+            ``idle_threshold`` — the bot would have to play a filler every
+            turn just to cover the LLM wait; the model backend is the
+            bottleneck regardless of how fast the post-LLM leg runs.
+
+    Returns ``""`` when ``seconds`` is non-positive (a turn where the LLM
+    never produced a token — errored before first token, where
+    ``llm_first_token`` stays at its 0.0 default) — empty-string filter
+    applies in the consumer, mirroring iter-114/115/120/126/128/140/141/
+    142/143/208/209/224/225/226/307/308/309/310/311.
+    """
+    if seconds <= 0:
+        return ""
+    if seconds < 0.3:
+        return "snappy"
+    if seconds <= 0.6:
+        return "slow"
+    return "very_slow"
+
+
+def _emit_llm_ft_consistency_line(
+    emit, llm_ft_list: list[float], threshold: int = 5,
+) -> None:
+    """iter-312: detect consecutive runs of turns where the LLM-side half
+    of TTFS (iter-052 ``llm_first_token``) consistently dominated the
+    opening latency. TWENTY-FOURTH instance of the diversity-check pattern
+    after iter-114 (filler), iter-115/126 (naturalness), iter-120
+    (barge-phase), iter-128 (sentence-length), iter-140 (stt-rtf), iter-141
+    (tts-rtf), iter-142 (llm-tps), iter-143 (streaming-overlap), iter-208
+    (synth-dispatch), iter-209 (eot-overhead), iter-210 (bot-wpm), iter-211
+    (max-token-gap), iter-212 (ttfs), iter-224 (stt-preview-divergence),
+    iter-225 (sentence-split-coverage), iter-226 (worker-idle-gap),
+    iter-305 (ttc), iter-306 (token-reveal-lag), iter-307 (synth-backlog),
+    iter-308 (cancel-close), iter-309 (speaker-open), iter-310 (mic-stale),
+    iter-311 (fta). TWENTY-FIRST instance applied to a CONTINUOUS metric —
+    buckets the per-turn ``llm_first_token`` via ``_llm_ft_bucket`` before
+    running the scan.
+
+    This is the SIBLING of iter-311's FT-A sentinel. The two together watch
+    BOTH halves of iter-083's TTFS decomposition: FT-A (post-LLM:
+    sentence-split + TTS + dispatch) and this (LLM: time-to-first-token).
+    The session summary prints the MEDIAN of each (``Median LLM 1st`` /
+    ``Median FT-A``) so the operator can see which half dominates, but the
+    median washes out a sustained-slow stretch: a few snappy turns early
+    pull it down while the back half crawls. A SUSTAINED run in the
+    slow/very_slow bucket is the actionable signal that the LLM's
+    time-to-first-byte is the persistent bottleneck — model warmup, an
+    overloaded backend, or context creep (iter-077 ``context_tokens``)
+    slowing first-token generation, eroding the sub-500ms TTFS budget the
+    whole pipeline is built around. Complementary to the iter-212 TTFS
+    sentinel (the whole speech-stop → speaker latency) and the iter-311
+    FT-A sentinel (the post-LLM leg): this watches specifically the LLM's
+    first-token wait.
+
+    Filter rule: drop the ``"snappy"`` bucket before the scan (the fine
+    state — the model emits its first token promptly) and ``""`` (turns
+    where the LLM never produced a token). Only ``slow`` and ``very_slow``
+    warrant warning. Like iter-140/141/208/209/224/226/307/308/309/310/311
+    and UNLIKE iter-142/143/225, the fine bucket is a LOW value because
+    ``llm_first_token`` is smaller-is-better — the boundaries are NOT
+    inverted.
+
+    Threshold = 5 (the general-signal default, same as
+    iter-115/128/140/141/142/143/208/209/210/211/212/224/225/226/305/306/
+    307/309/311): ``llm_first_token`` is measured on essentially every turn
+    the LLM responds, a high-frequency signal where natural per-turn
+    variation is normal (warmup, GC, backend scheduling jitter) — it earns
+    the higher bar of the threshold-5 family rather than the threshold-4
+    barge/event-gated sentinels (iter-120/308/310).
+
+    Output:
+
+        LLM 1st tok:      5 consecutive 'slow' turns — the LLM's
+                          first-token wait is eating a noticeable chunk of
+                          the opening latency and approaching the filler
+                          threshold — try a smaller/faster model or trim
+                          context (iter-052 llm_first_token)
+    """
+    # Bucketize, then drop the "uninteresting" buckets (empty, snappy).
+    interesting = {"slow", "very_slow"}
+    filtered = [
+        b for b in (_llm_ft_bucket(s) for s in llm_ft_list)
+        if b in interesting
+    ]
+    if not filtered:
+        return
+
+    longest_run, longest_bucket = _longest_consecutive_run(filtered)
+    if longest_run < threshold:
+        return
+
+    if longest_bucket == "very_slow":
+        suggestion = (
+            "first-token latency alone exceeds the filler idle_threshold "
+            "(>600ms) — the bot would play a filler every turn just to "
+            "cover the LLM wait; the model backend is the bottleneck — "
+            "try a smaller/faster model or trim context"
+        )
+    elif longest_bucket == "slow":
+        suggestion = (
+            "the LLM's first-token wait is eating a noticeable chunk of "
+            "the opening latency and approaching the filler threshold — "
+            "try a smaller/faster model or trim context"
+        )
+    else:
+        # Defensive: future buckets that pass the filter rule.
+        suggestion = (
+            "investigate the recurring slow LLM first-token latency"
+        )
+
+    emit(
+        f"    LLM 1st tok: {longest_run} consecutive "
+        f"{longest_bucket!r} turns — {suggestion} "
+        f"(iter-052 llm_first_token)"
+    )
+
+
 def _emit_bargeable_line(emit, bargeable_values: list[float]) -> None:
     """iter-104: extracted from print_session_summary's iter-074
     bargeable line. Reports the WORST bargeable fraction across
@@ -5523,6 +5683,23 @@ def print_session_summary(
         _emit,
         [m.first_token_to_audio for m in metrics_list],
     )
+    # iter-312: LLM-first-token consistency check — the SIBLING of the
+    # iter-311 FT-A sentinel. Only fires when 5+ consecutive turns had a
+    # slow LLM-side half of TTFS (slow 0.3-0.6s / very_slow >0.6s —
+    # anchored on the iter-051 filler idle_threshold default of 0.6s,
+    # the point where the pipeline decides the LLM is too slow and plays a
+    # filler). iter-083 decomposes TTFS into LLM-side (llm_first_token) and
+    # post-LLM-side (FT-A); the summary prints the MEDIAN of each so the
+    # operator can see which half dominates, but the median washes out a
+    # sustained-slow stretch. With FT-A already sentinelled (iter-311),
+    # this watches the OTHER half: a sustained run is the actionable signal
+    # that the LLM's time-to-first-byte is the persistent bottleneck (model
+    # warmup, overloaded backend, or context creep). Threshold 5 (the
+    # general default, not iter-120/308/310's event-gated 4):
+    # llm_first_token is measured on essentially every responding turn, a
+    # high-frequency signal. llm_ft is reused unfiltered — the bucket drops
+    # zero (no-token) turns itself.
+    _emit_llm_ft_consistency_line(_emit, llm_ft)
     # iter-090: barge block extracted to _emit_barge_block helper.
     # ~76 lines of co-emitted lines (count, interruption rate,
     # latency, phase distribution, regret, pre-empted words)
