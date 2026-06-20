@@ -2986,6 +2986,123 @@ def test_render_sweep_csv_consumer_rederives_json_band_target_rowmajor_pick():
     assert [c["speech_s"] for c in payload["top"]] == [2.0, 3.6, 3.5]
 
 
+def test_render_sweep_csv_consumer_rederives_json_open_band_target_rowmajor_pick():
+    # iter-299: iter-297 opened the sweep ROW-MAJOR dict-form cross-surface matrix
+    # with the flat SET (the sweep twin of iter-280's grid set-under-row-major test),
+    # and iter-298 added the CLOSED BAND (the twin of iter-275). Its backlog #1 named
+    # the next gap directly: the remaining dict forms still lack a sweep ROW-MAJOR
+    # cross-surface re-derive — only the speech matrix (iter-290–296) and the
+    # scalar/closed-band SCALAR round-trips ever pinned them. The OPEN band is next:
+    # the speech version (iter-292) forces tie_break="speech", so it never exercises
+    # the DEFAULT branch of render_vad_sweep_json (the branch taken when no tie_break=
+    # kwarg is supplied — the normal CLI path). This lap pins the open band under the
+    # DEFAULT row-major tie-break, the sweep twin of iter-273's grid
+    # open-band-under-row-major test.
+    #
+    # The gap this closes: a regression confined to the DEFAULT row-major path — one
+    # that coerced an OPEN band to a scalar or a finite closed band on the sweep JSON
+    # path (collapsing the unbounded side and dropping rows that only tie because the
+    # upper bound is absent) while a CSV consumer still passed the full open band, OR
+    # that quietly swapped the row-major earliest-tie rule for a speech-ordered one on
+    # the JSON path only — would diverge the two surfaces yet ship green, because the
+    # iter-292 open-band test forces "speech" and the scalar/closed-band row-major
+    # round-trips never exercise an UNBOUNDED edge under the earliest-tie rule.
+    #
+    # An open band produces multi-row ties like a closed band, but via a DIFFERENT
+    # mechanism: the UNBOUNDED side simply SKIPS its bound check, so the in-band region
+    # is open above and ARBITRARILY many rows can tie at the floor — not capped by an
+    # upper edge. The target FORM (grid_cell_distance — which rows tie at 0) and the
+    # tie-break (grid_cell_sort_key — how the tied rows ORDER) are independent seams;
+    # pinning the closed band under row-major on the sweep (iter-298) does NOT pin the
+    # open band under row-major.
+    #
+    # Fixture: a 4-value threshold sweep with counts 9/5/7/2, target = open band
+    # (5, None) ("at least 5"). _sweep_results couples speech to count + index, so the
+    # in-band rows carry DIFFERENT speech and the row-major / speech tie-breaks
+    # genuinely DISAGREE. Open-band distances (count >= 5 → 0, else 5 - count):
+    #   - 0.30 count 9 → >= 5, no upper → dist 0 (in band), speech 4.5
+    #   - 0.50 count 5 → at lo=5        → dist 0 (in band), speech 3.0
+    #   - 0.70 count 7 → >= 5           → dist 0 (in band), speech 4.9
+    #   - 0.90 count 2 → below lo=5     → dist 3,            speech 1.6
+    # THREE rows tie at the open-band floor (dist 0): counts 9, 5, 7. The DEFAULT
+    # row-major tie-break keeps the EARLIEST tied row — count 9 (0.30) — even though
+    # count 7 (0.70) recovered more speech. So the row-major best is the 0.30 row
+    # count 9, and the UNBOUNDED upper side keeps count 9 (above any finite hi a closed
+    # band would cap at) in the tie.
+    thresholds = [0.3, 0.5, 0.7, 0.9]
+    results = _sweep_results([9, 5, 7, 2])
+    target = (5, None)
+    csv_text = gv.render_vad_sweep_csv(thresholds, results, name="rec.wav")
+    payload = json.loads(
+        # No tie_break kwarg — exercise the DEFAULT row-major path explicitly.
+        gv.render_vad_sweep_json(
+            thresholds, results, name="rec.wav", target=target, top=3,
+        )
+    )
+    # The JSON twin records the open band target (a tuple serialises to a list; the
+    # None edge becomes JSON null) and the DEFAULT tie-break it actually used.
+    assert payload["target"] == [5, None]
+    assert payload["tie_break"] == "row-major"
+    # The CSV body still carries no pick columns or tie_break — it is the bare sweep.
+    assert "best" not in csv_text and "distance" not in csv_text
+    assert "tie_break" not in csv_text
+    # A CSV consumer re-parses the flat table back to sweep rows...
+    rows = [
+        {
+            "threshold": float(row["threshold"]),
+            "num_segments": int(row["num_segments"]),
+            "speech_s": float(row["speech_s"]),
+        }
+        for row in csv.DictReader(io.StringIO(csv_text))
+    ]
+    # ...and re-runs the SAME picker with the SAME open band target and the DEFAULT
+    # (row-major) tie-break. The CSV-derived best equals the JSON `best` (distance key
+    # stripped), and the re-derived open-band distance matches the one the JSON
+    # embedded (0 — inside the unbounded band).
+    csv_best = gv.pick_best_grid_cell(rows, target)
+    json_best = dict(payload["best"])
+    assert json_best.pop("distance") == gv.grid_cell_distance(csv_best, target)
+    assert csv_best == json_best
+    assert csv_best["threshold"] == 0.3 and csv_best["num_segments"] == 9
+    assert payload["best"]["distance"] == 0
+    # CONTROL 1: the SAME open band under tie_break="speech" picks the MOST-speech
+    # in-band row, count 7 (0.70) at 4.9s — NOT the earliest. So the default pick is
+    # genuinely row-major-specific, not a value both tie-breaks happen to share; the
+    # default branch is load-bearing for the count-9 pick.
+    speech_best = gv.pick_best_grid_cell(rows, target, "speech")
+    assert speech_best != csv_best
+    assert speech_best["threshold"] == 0.7 and speech_best["num_segments"] == 7
+    # CONTROL 2: a CLOSED band (5, 8) — the open band's lo paired with a finite upper
+    # edge — pushes count 9 OUT (above hi=8 → dist 1), so under the SAME row-major
+    # tie-break the earliest in-band (dist-0) row is now count 5 (0.50), a DIFFERENT
+    # pick from the open-band best (count 9). Proves the open None edge is load-bearing:
+    # the band is not silently collapsing to a finite bound on either surface, and the
+    # UNBOUNDED upper side is what keeps count 9 the earliest tied row.
+    closed_best = gv.pick_best_grid_cell(rows, (5, 8))
+    assert closed_best != csv_best
+    assert closed_best["threshold"] == 0.5 and closed_best["num_segments"] == 5
+    # The top shortlist agrees row-for-row (distance stripped), with the three in-band
+    # (dist-0) rows in ROW-MAJOR order (count 9 → 5 → 7, sweep order, NOT speech order).
+    csv_top = gv.pick_top_grid_cells(rows, target, 3)
+    json_top = [dict(c) for c in payload["top"]]
+    for c in json_top:
+        c.pop("distance")
+    assert csv_top == json_top
+    # Head of the shortlist is the single best pick, on both surfaces.
+    assert csv_top[0] == csv_best
+    # All three in-band rows lead in ROW-MAJOR order (count 9 then 5 then 7) — NOT
+    # speech order (which would be 7 → 9 → 5) — and the dist-3 count-2 row is excluded
+    # by the top=3 cut.
+    assert [r["num_segments"] for r in csv_top] == [9, 5, 7]
+    # All three leading rows scored the open-band floor (distance 0); row position, not
+    # distance or speech, decided their order.
+    assert [c["distance"] for c in payload["top"]] == [0, 0, 0]
+    # And the leading rows are NOT speech-ordered — the count-9 row (4.5s) precedes the
+    # count-5 row (3.0s), and the most-speech count-7 row (4.9s) sorts LAST of the
+    # three, the inverse of what tie_break="speech" would produce.
+    assert [c["speech_s"] for c in payload["top"]] == [4.5, 3.0, 4.9]
+
+
 # ---- cmd_vad_sweep --csv: the handler ----------------------------------
 
 
