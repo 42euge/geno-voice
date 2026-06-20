@@ -26270,3 +26270,85 @@ prefers the most-speech floor cell, count 5 at 2.5s. Both surfaces name count 5.
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
    should track a curated subset, decide the policy and re-run
    `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
+
+## iter-289 — 1-D sweep CSV consumer re-derives JSON --target pick (speech tie)
+
+- **Date:** 2026-06-19
+- **Branch:** iter-289-sweep-cross-surface (ff-merged to main)
+- **Commit:** cac6170
+
+**Why.** iter-288 declared the dict-form speech-tie cross-surface matrix COMPLETE
+— but only on the 2-D GRID. iter-274/281/282/283/284/285/286/288 pinned the
+CSV↔JSON pick AGREEMENT under `tie_break="speech"` for every target form via
+`render_vad_grid_csv` ↔ `render_vad_grid_json`. The 1-D SWEEP has its OWN pick
+machinery: iter-244 threaded `target`/`top`/`tie_break` into
+`render_vad_sweep_json`, embedding `best`/`top`/`target`/`tie_break`, while
+`render_vad_sweep_csv` emits ONLY the bare `<axis>,num_segments,speech_s` table —
+no pick columns, exactly like the grid CSV. So the sweep carries the SAME
+cross-surface contract the grid earned, and it was the next unpinned gap (named
+directly by iter-288 backlog #1).
+
+**The gap this closes.** The only existing sweep CSV↔JSON tests
+(`test_render_sweep_csv_*round_trips*`) compare the bare segmentation NUMBERS
+across rows, never the derived PICK. The target FORM (`grid_cell_distance`, which
+rows tie at the floor) and the tie-break (`grid_cell_sort_key`, how tied rows
+order) are independent seams. A regression that dropped the tie_break on the
+sweep JSON path (silently falling back to row-major) while a CSV consumer still
+passed `"speech"`, or that diverged the sweep pickers from the grid pickers,
+would ship green — no sweep test re-derives a pick from the CSV under the
+non-default tie-break.
+
+**The mechanism.** A 4-value threshold sweep (0.3/0.5/0.7/0.9) with counts
+2/4/7/5, target 3. `_sweep_results` couples speech to count + index, so equal-
+distance rows carry DIFFERENT speech and the two tie-breaks genuinely disagree.
+Distances row-major: |2-3|=1, |4-3|=1, |7-3|=4, |5-3|=2. The two dist-1 rows tie:
+row-major keeps the 0.30 value (count 2, earlier in the sweep) but
+`tie_break="speech"` prefers the 0.50 value (count 4 → more recovered speech). So
+the speech best is the 0.50 row, NOT the row-major pick — the tie-break flips the
+result on both surfaces.
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+1 test).**
+  `test_render_sweep_csv_consumer_rederives_json_speech_tie_break_pick`: asserts
+  `payload["tie_break"] == "speech"`; the CSV body carries no `best`/`distance`/
+  `tie_break`; a CSV consumer re-parses the bare table back to sweep rows and
+  re-runs the SAME pickers with `"speech"`, recovering the JSON-embedded `best`
+  (count 4) and the full speech-ordered top-3 shortlist row-for-row (counts
+  `[4, 2, 5]` — the dist-1 tie resolved on speech, then the dist-2 count-5 row).
+  A CONTROL asserts the row-major pick (count 2 at 0.30) genuinely differs, so
+  the test cannot pass by the two tie-breaks coinciding. No production code
+  changed (the sweep wiring was already correct — proved by a pre-test smoke run).
+  This is the 1-D sweep twin of iter-274's grid test.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **3891 passed**
+(3890 prior + 1 net new), run on the feature branch before ff-merge.
+- Focused: `pytest tests/unit/test_gv_vad.py -k sweep_csv_consumer_rederives` →
+  **1 passed**.
+- Integration: not re-run this lap (no corpus symlinked into this worktree; same
+  as prior corpus-gated laps — the change is a pure CLI cross-surface contract
+  test, no new production code).
+
+**Next planned items:**
+1. **[cli] Sweep cross-surface matrix — remaining forms.** This lap pinned the
+   sweep CSV↔JSON pick re-derive for the SCALAR target under `tie_break="speech"`
+   (the grid earned this for scalar at iter-274). The sweep still lacks the
+   cross-surface re-derive for the DICT forms the grid pinned at
+   iter-281–286/288 (closed band, flat set, open band, preference, weighted,
+   scaled, affine). Each is a near-mechanical clone of this lap's test with a
+   different `target` value — pick one per lap. Confirm the sweep JSON path
+   threads each form before assuming the gap.
+2. **[cli] `simulate-mirror` grid pick round-trips** remain unpinned cross-surface
+   for ALL dict forms (the speech matrix only covered VAD grid + now sweep-scalar).
+3. **[cli] A next FEATURE would be a different axis entirely** — the `--target`
+   composition space (scalar → band → set → preference → additive →
+   multiplicative → affine) is feature-complete. Candidates: a per-element
+   ASYMMETRIC band tolerance, or a "soft floor/ceiling" scoring beyond an open
+   edge with a gentle slope rather than a hard 0. Scope before building.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or the
+   pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it stays
+   operator-only / non-headless.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
+   should track a curated subset, decide the policy and re-run
+   `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
