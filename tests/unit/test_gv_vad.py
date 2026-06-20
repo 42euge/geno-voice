@@ -743,6 +743,7 @@ def _args(**over):
         speech_pad_ms=30.0,
         max_speech_s=float("inf"),
         json=False,
+        csv=False,
     )
     base.update(over)
     return argparse.Namespace(**base)
@@ -979,6 +980,156 @@ def test_cmd_vad_without_json_stays_human_readable():
     assert len(lines) > 1
     with pytest.raises(json.JSONDecodeError):
         json.loads(lines[0])
+
+
+# ====================================================================
+# iter-314 — gv vad --csv: per-segment spreadsheet/plot twin
+# Completes the human / --json / --csv trio on the foundational gv vad
+# surface (vad-sweep/-diff/-grid already carry it). Unlike those aggregate
+# CSVs (one row per swept config), a single run's natural CSV unit is one
+# row per detected segment: index,start_s,end_s,duration_s.
+# ====================================================================
+
+
+# ---- parser: the --csv flag --------------------------------------------
+
+
+def test_vad_csv_defaults_false():
+    args = gv.build_parser().parse_args(["vad", "rec.wav"])
+    assert args.csv is False
+
+
+def test_vad_csv_flag_sets_true():
+    args = gv.build_parser().parse_args(["vad", "rec.wav", "--csv"])
+    assert args.csv is True
+    assert args.json is False
+
+
+def test_vad_json_and_csv_mutually_exclusive():
+    # --json and --csv share one mutually-exclusive group, mirroring vad-diff.
+    with pytest.raises(SystemExit) as exc:
+        gv.build_parser().parse_args(["vad", "rec.wav", "--json", "--csv"])
+    assert exc.value.code == 2
+
+
+# ---- render_vad_csv: pure per-segment table ----------------------------
+
+
+def test_render_vad_csv_none_marks_unavailable():
+    text = gv.render_vad_csv(None)
+    # A degraded run is a single self-describing comment, not empty output.
+    assert text.startswith("#")
+    assert "silero-vad" in text
+
+
+def test_render_vad_csv_header_and_rows():
+    result = _Result(
+        name="rec.wav",
+        sample_rate=16000,
+        duration_s=10.0,
+        segments=[_Seg(0.5, 1.5), _Seg(2.0, 4.0), _Seg(6.25, 6.75)],
+    )
+    text = gv.render_vad_csv(result, threshold=0.5)
+    rows = list(csv.reader(io.StringIO(text)))
+    assert rows[0] == ["index", "start_s", "end_s", "duration_s"]
+    # One row per segment, 1-based index, seconds to 3 places.
+    assert rows[1] == ["1", "0.5", "1.5", "1.0"]
+    assert rows[2] == ["2", "2.0", "4.0", "2.0"]
+    assert rows[3] == ["3", "6.25", "6.75", "0.5"]
+    # header + exactly one row per segment, nothing else.
+    assert len(rows) == 4
+
+
+def test_render_vad_csv_zero_segments_is_header_only():
+    # No speech detected → a valid, empty-bodied table (header alone). The
+    # consumer reads "no speech" from absent rows, not from prose.
+    result = _Result(name="rec.wav", sample_rate=16000, duration_s=5.0, segments=[])
+    text = gv.render_vad_csv(result)
+    rows = list(csv.reader(io.StringIO(text)))
+    assert rows == [["index", "start_s", "end_s", "duration_s"]]
+
+
+def test_render_vad_csv_rounds_seconds_to_three_places():
+    # Matches render_vad_json's 3-place rounding so the two machine surfaces
+    # agree to the digit.
+    result = _Result(
+        name="rec.wav",
+        sample_rate=16000,
+        duration_s=5.0,
+        segments=[_Seg(0.123456, 1.987654)],
+    )
+    text = gv.render_vad_csv(result)
+    rows = list(csv.reader(io.StringIO(text)))
+    assert rows[1] == ["1", "0.123", "1.988", "1.864"]
+
+
+def test_render_vad_csv_no_trailing_newline():
+    result = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=5.0, segments=[_Seg(0.0, 1.0)]
+    )
+    text = gv.render_vad_csv(result)
+    assert not text.endswith("\n")
+    assert not text.endswith("\r")
+
+
+def test_render_vad_csv_threshold_not_emitted_as_column():
+    # threshold is accepted for signature parity but NOT a column: every row of
+    # a single run shares the one gate, so a per-row column would be redundant
+    # (contrast vad-sweep/-diff, where threshold varies row to row).
+    result = _Result(
+        name="rec.wav", sample_rate=16000, duration_s=5.0, segments=[_Seg(0.0, 1.0)]
+    )
+    with_thr = gv.render_vad_csv(result, threshold=0.9)
+    without_thr = gv.render_vad_csv(result)
+    assert with_thr == without_thr
+    assert "threshold" not in with_thr.splitlines()[0]
+
+
+# ---- cmd_vad: the --csv branch -----------------------------------------
+
+
+def test_cmd_vad_csv_unavailable_emits_comment():
+    lines: List[str] = []
+    gv.cmd_vad(
+        _args(csv=True),
+        log=lines.append,
+        segmenter=lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("must not segment when unavailable")
+        ),
+        availability=lambda: False,
+    )
+    assert len(lines) == 1
+    assert lines[0].startswith("#")
+    assert "silero-vad" in lines[0]
+
+
+def test_cmd_vad_csv_branch():
+    lines: List[str] = []
+    captured = {}
+
+    def seg(wav, params=None):
+        captured["threshold"] = params.threshold
+        return _Result(
+            name="rec.wav",
+            sample_rate=16000,
+            duration_s=5.0,
+            segments=[_Seg(0.5, 1.5), _Seg(2.0, 4.0)],
+        )
+
+    gv.cmd_vad(
+        _args(csv=True, threshold=0.6),
+        log=lines.append,
+        segmenter=seg,
+        availability=lambda: True,
+    )
+    # The knob still reached the segmenter.
+    assert captured["threshold"] == 0.6
+    # One CSV document: header + one row per segment, parseable.
+    assert len(lines) == 1
+    rows = list(csv.reader(io.StringIO(lines[0])))
+    assert rows[0] == ["index", "start_s", "end_s", "duration_s"]
+    assert len(rows) == 3
+    assert rows[1][0] == "1" and rows[2][0] == "2"
 
 
 # ====================================================================
