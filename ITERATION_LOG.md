@@ -29893,3 +29893,99 @@ below threshold" semantics, which is the genuine guard.
    ~30 leftover per-iter worktrees. A future lap could `git worktree prune` /
    remove the merged ones to keep the list legible. NOTE: this lap correctly
    removed its own worktree.
+
+## iter-326 — regret-barge consistency sentinel (first boolean-valued diversity-check)
+
+- **Date:** 2026-06-20
+- **Branch:** iter-326-regret-barge-sentinel (ff-merged to main, worktree removed)
+- **Commit:** 3c6db63
+
+**Why.** iter-325's next-item explicitly scoped this: "scope whether a
+boolean-rate sentinel (e.g. a run of regret barges) is a distinct enough shape
+to warrant a sixteenth instance." It is. `barge_in_regret` (iter-056 — a barge
+firing within 200ms of bot first audio, meaning the bot started talking while
+the user was still mid-utterance, so end-of-turn detection fired too early) was
+the remaining un-sentineled per-turn metric with a meaningful "sustained run is
+actionable" story. iter-056 already reports a cumulative "Regret rate: N/M
+(P%)" session line, but that ratio smears the timing away — it cannot
+distinguish a few regret barges scattered across a long session from a streak
+of them on every recent barge **in a row**. The latter is the actionable
+pattern: the EOU detector is *systematically* cutting the user off, and the fix
+iter-056 already names (raise `chat.vad.silence_duration`, iter-020) applies.
+Only a consecutive-run scan over the barge turns surfaces it.
+
+**What it is.**
+- **`examples/_chat_metrics.py`** — one new helper following the GENO.md
+  session-summary diversity-check template, wired into `print_session_summary`
+  right after the iter-325 preempted-words call site:
+  - `_emit_regret_barge_consistency_line(emit, regret_flags, threshold=4)` —
+    the **SIXTEENTH** instance of the diversity-check pattern and the **FIRST**
+    applied to a **BOOLEAN** per-turn metric. It is the **THIRD**
+    barge-CONDITIONAL instance (after iter-120 barge-phase and iter-325
+    preempted-words) and shares their threshold of **4** (vs the
+    continuous-metric default of 5): regret barges are a rare subset of barges,
+    already semantically loaded, so a shorter run is enough signal.
+- **No bucketer.** Unlike iter-325's count or iter-128's continuous value,
+  `barge_in_regret` is already categorical. There is exactly ONE interesting
+  value (`True` → mapped to a `"regret"` marker), so the run scan only ever
+  finds runs of one kind and no per-value suggestion branching is needed
+  (contrast iter-120's two phases and iter-325's minor/heavy). `False` (a
+  non-barge turn OR a well-timed barge) is the fine state and is filtered
+  before the scan — exactly the iter-114 zero-filter shape, here a
+  boolean-False filter. A clean (non-regret) barge is a *good* outcome and,
+  like iter-325's clean inter-sentence cut, neither fires nor breaks a run.
+  NOT inverted: a regret barge is strictly worse than its absence.
+- **Distinctness (why it is NOT redundant):** all three barge-conditional
+  sentinels are run scans over barge turns but answer different questions —
+  iter-120 says *when* the user barged (phase: llm_stream vs playback),
+  iter-325 says *how much* generated speech was thrown away (words), and
+  iter-326 says *whether the bot pre-empted the user* (a latency-defined EOU
+  misfire). A regret barge is necessarily a `playback`-phase barge (the bot had
+  already started), but the regret flag is the stricter 200ms-window judgment,
+  not the phase itself. A test pins that the line names `barge_in_regret` and
+  never says `llm_stream` / `playback` / `preempted_words`.
+
+The off-by-default path is preserved: a session with no regret barges (the
+common case) sees no new line — the summary is byte-for-byte unchanged. Purely
+additive.
+
+- **`tests/unit/test_emit_regret_barge_consistency_line.py`** (new, +16
+  tests): empty / all-False suppression; at/above threshold (default 4, custom
+  3/10); False-interleaving doesn't break a run; small scatter of regret barges
+  stays below threshold; merged-run length across a False gap; output
+  formatting + iter-056 attribution; the `silence_duration` actionability
+  guard; the "regret barges" unit wording; the single-interesting-value boolean
+  guard (all-False never fires regardless of length); distinctness vs iter-120
+  and iter-325; large-input scaling.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4295 passed**
+(4279 prior + 16 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_emit_regret_barge_consistency_line.py` →
+  **16 passed** (re-run on main post-merge).
+- Integration: not re-run this lap (a pure list-scanning + string-formatting
+  helper — no torch import, no audio I/O).
+
+**Next planned items:**
+1. **[chat-metrics] The diversity-check family now spans every per-turn metric
+   shape.** With `barge_in_regret` covered, the sixteen instances span:
+   continuous latency/rate metrics (stt/tts rtf, llm tps, eot, synth-dispatch,
+   ttfs, token-gap, ttc, queue-depth, wpm pair, split-coverage, fta, llm-ft,
+   speaker-open, mic-stale, first-synth-overlap, streaming-overlap), the
+   categorical filler/naturalness/sentence-length/barge-phase signals, the
+   count-valued preempted-words (iter-325), and now the boolean regret-barge
+   (iter-326). The remaining un-sentineled boolean is `false_endpoint`
+   (iter-154 — EOU decided the user was done but a continuer arrived). A future
+   chat-metrics lap should scope whether a run of consecutive false_endpoints
+   is distinct enough from the existing `false_endpoints` count/rate aggregate
+   (already reported at line ~1158) to warrant a SEVENTEENTH instance — note
+   the regret/false_endpoint pair are near-mirror EOU-misfire signals (regret =
+   fired too early; false_endpoint = could-fire-but-continuer), so a
+   false_endpoint run sentinel would be the natural symmetric twin of iter-326,
+   just as iter-323 user-WPM twinned iter-210 bot-WPM.
+2. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+3. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~30 leftover per-iter worktrees. A future lap could `git worktree prune` /
+   remove the merged ones to keep the list legible. NOTE: this lap correctly
+   removed its own worktree.
