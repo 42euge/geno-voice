@@ -3001,6 +3001,145 @@ def _emit_user_wpm_consistency_line(
     )
 
 
+def _first_synth_overlap_bucket(seconds: float) -> str:
+    """iter-324: bucket a per-turn ``first_synth_overlap_seconds``
+    (iter-073 — how many seconds of the FIRST synth were masked by
+    ongoing LLM streaming) into a coarse category. Used by
+    ``_emit_first_synth_overlap_consistency_line`` to detect runs of
+    turns where the iter-008 streaming-overlap design bought little or
+    nothing for TTFS specifically — the first sentence (the leg that
+    gates time-to-first-speech) ran nearly sequentially after the LLM
+    finished, so the streaming machinery shaved no opening latency.
+
+    Distinct from iter-143's ``streaming_overlap_ratio`` (which it
+    superficially resembles): iter-143 watches the WHOLE-stream overlap
+    fraction, this watches the FIRST-sentence overlap in absolute
+    seconds. They can disagree — a turn can overlap a lot of late synth
+    (high whole-stream ratio) yet still ship its first sentence
+    sequentially (zero first-synth save), which is the worse outcome for
+    perceived latency because TTFS is what the user feels.
+
+    FOURTH inverted-direction continuous bucketer (after iter-142
+    ``llm_tps``, iter-143 ``streaming_overlap_ratio``, iter-225
+    ``sentence_split_coverage``): like those — and UNLIKE the iter-140/
+    141 RTF bucketers — first-synth save is "bigger is better", so the
+    fine state is a HIGH value (lots of masked synth) and the boundaries
+    invert; the problematic end is a small saving.
+
+    Boundaries anchored to the per-turn display, which already colors a
+    save GREEN above 100ms ("meaningful TTFS win") and DIM otherwise:
+
+        ``high`` — >= 0.10s (100ms): streaming masked a meaningful chunk
+            of the first synth; the iter-008 design is paying off for
+            TTFS. The desired state (matches the green display).
+        ``low``  — 0.02-0.10s (20-100ms): a small, sub-perceptible save.
+            Streaming overlapped the tail of the first synth but most of
+            it still gated TTFS.
+        ``very_low`` — < 0.02s (but > 0): the first synth ran essentially
+            sequentially after the LLM stream — streaming bought ~nothing
+            for opening latency. Investigate first-sentence latency
+            (iter-038 TTFsent) and synth dispatch.
+
+    Returns ``""`` when ``seconds`` is non-positive — a 0 is ambiguous
+    (either a genuinely sequential turn or a no-audio turn; iter-073
+    sets the field only when all three timestamps exist, and the median
+    line at the call site already filters zeros), so it's treated as "no
+    measurable first-synth overlap this turn" and dropped by the
+    consumer, mirroring iter-114/.../143/225.
+    """
+    if seconds <= 0:
+        return ""
+    if seconds >= 0.10:
+        return "high"
+    if seconds >= 0.02:
+        return "low"
+    return "very_low"
+
+
+def _emit_first_synth_overlap_consistency_line(
+    emit, overlap_secs_list: list[float], threshold: int = 5,
+) -> None:
+    """iter-324: detect consecutive runs of turns where the first synth
+    was barely masked by LLM streaming, so the iter-008 streaming-overlap
+    design shaved little or no time off TTFS specifically.
+
+    FOURTEENTH instance of the diversity-check pattern (after iter-114
+    filler, iter-115/126 naturalness, iter-120 barge-phase, iter-128
+    sentence-length, iter-140 stt-rtf, iter-141 tts-rtf, iter-142
+    llm-tps, iter-143 streaming-overlap, iter-208 synth-dispatch,
+    iter-209 eot-overhead, iter-210 bot-wpm, iter-323 user-wpm) and the
+    TENTH applied to a CONTINUOUS metric — buckets it via
+    ``_first_synth_overlap_bucket`` before running the scan (same shape
+    as iter-128/140/141/142/143/208/209/225).
+
+    Closely related to iter-143's whole-stream overlap sentinel but
+    NOT redundant with it: iter-143 watches the fraction of the ENTIRE
+    bot stream that overlapped the LLM, while this watches the FIRST
+    sentence's overlap in seconds — the leg that actually gates TTFS.
+    A turn can pass iter-143 (lots of late synth overlapped) yet fail
+    here (the first sentence shipped sequentially). Surfacing the
+    first-synth gap is the more user-perceptible signal: a sustained run
+    means opening latency isn't being masked even if mid-stream synth is.
+
+    Filter rule: drop the ``"high"`` bucket (the fine state) and ``""``
+    (no measurable first-synth overlap that turn) before the scan. Only
+    ``low`` and ``very_low`` warrant warning. Like iter-142/143/225 and
+    UNLIKE iter-140/141/208/209, the fine bucket is a HIGH value because
+    first-synth save is bigger-is-better — the FOURTH inverted-direction
+    instance. The filter rule absorbs the inversion; the run-scan stays
+    direction-agnostic.
+
+    Threshold = 5: same as iter-115/128/140/141/142/143/208/209/210/323.
+    First-synth save varies turn to turn with response shape (a
+    one-sentence reply can't overlap its first synth with much stream),
+    so a brief low excursion is normal; a sustained run is the real
+    signal that streaming isn't masking opening latency.
+
+    Output:
+
+        1st-synth save: 5 consecutive 'very_low' turns — the first
+                        sentence ships sequentially after the LLM stream;
+                        streaming isn't masking opening latency, check
+                        first-sentence latency and synth dispatch
+                        (iter-073 first_synth_overlap_seconds)
+    """
+    # Bucketize, then drop the "uninteresting" buckets (empty, high).
+    interesting = {"low", "very_low"}
+    filtered = [
+        b for b in (
+            _first_synth_overlap_bucket(s) for s in overlap_secs_list
+        )
+        if b in interesting
+    ]
+    if not filtered:
+        return
+
+    longest_run, longest_bucket = _longest_consecutive_run(filtered)
+    if longest_run < threshold:
+        return
+
+    if longest_bucket == "very_low":
+        suggestion = (
+            "the first sentence ships sequentially after the LLM "
+            "stream; streaming isn't masking opening latency, check "
+            "first-sentence latency and synth dispatch"
+        )
+    elif longest_bucket == "low":
+        suggestion = (
+            "streaming masks only the tail of the first synth; most "
+            "of it still gates TTFS, check first-sentence latency"
+        )
+    else:
+        # Defensive: future buckets that pass the filter rule.
+        suggestion = "check first-sentence latency and synth dispatch"
+
+    emit(
+        f"    1st-synth save: {longest_run} consecutive "
+        f"{longest_bucket!r} turns — {suggestion} "
+        f"(iter-073 first_synth_overlap_seconds)"
+    )
+
+
 def _max_token_gap_bucket(seconds: float) -> str:
     """iter-211: bucket a per-turn ``max_token_gap`` (iter-085's
     maximum inter-token gap during the LLM stream, excluding the
@@ -5632,6 +5771,22 @@ def print_session_summary(
     _emit_user_wpm_consistency_line(
         _emit,
         [m.user_wpm for m in metrics_list],
+    )
+    # iter-324: first-synth-overlap consistency check. Only fires when 5+
+    # consecutive turns shaved little or nothing off TTFS by masking the
+    # FIRST synth under LLM streaming (low 20-100ms / very_low < 20ms).
+    # Closely related to the iter-143 streaming-overlap sentinel but NOT
+    # redundant: iter-143 watches the WHOLE-stream overlap fraction, this
+    # watches the FIRST-sentence overlap in seconds — the leg that gates
+    # TTFS. A turn can overlap lots of late synth (passes iter-143) yet
+    # ship its first sentence sequentially (fails here), and the latter
+    # is the more user-perceptible failure. FOURTH inverted-direction
+    # continuous-metric sentinel whose fine state is a HIGH value (lots
+    # of masked first synth). The iter-073 "1st-synth saved" median line
+    # can read healthy while a sustained low/very_low run hides inside it.
+    _emit_first_synth_overlap_consistency_line(
+        _emit,
+        [m.first_synth_overlap_seconds for m in metrics_list],
     )
     # iter-211: max-token-gap consistency check. Only fires when 5+
     # consecutive turns suffered a noticeable worst-case mid-stream LLM
