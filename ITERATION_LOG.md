@@ -26184,3 +26184,89 @@ cannot stack with `>` (preference), and rejects a repeated `*`/`:` on one elemen
    `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
    should track a curated subset, decide the policy and re-run
    `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
+
+## iter-288 — affine --target cross-surface speech-tie round-trip
+
+- **Date:** 2026-06-19
+- **Branch:** iter-288-affine-cross-surface (ff-merged to main)
+- **Commit:** b83e256
+
+**Why.** iter-287 shipped the FINAL `--target` FORM — the
+`{"affine": [(element, factor, penalty), ...]}` set scoring `|Δ| * factor +
+penalty` per element — but only under row-major picks. Its iter-287 backlog #3
+named the next item directly: the affine set should earn the same speech-tie
+cross-surface coverage its two parents did. iter-274/281/282/283/284/285/286
+pinned the cross-surface CSV↔JSON pick round-trip (a CSV consumer re-parses the
+bare grid back to cells and re-runs the SAME pickers to recover the JSON-embedded
+`best`/`top` identically) under `tie_break="speech"` for the scalar, closed band,
+flat set, open band, `{"prefer": ...}` preference, `{"weighted": ...}` additive,
+and `{"scaled": ...}` multiplicative forms. Affine — the COMPOSITION of the last
+two — was the LAST unpinned dict form under speech.
+
+**The gap this closes.** The target FORM (`grid_cell_distance`, which cells tie at
+the affine floor) and the tie-break (`grid_cell_sort_key`, how tied cells order)
+are independent seams. Pinning affine under row-major (iter-287) and its two
+parents under speech (iter-285/286) does NOT pin affine under speech. A regression
+that dropped the tie_break on the JSON path (falling back to row-major) while the
+CSV consumer still passed `"speech"`, OR collapsed the affine set to one of its
+single-weight parents (dropping factors → weighted, or penalties → scaled), would
+diverge the two surfaces yet ship green — a failure mode neither iter-287 (affine,
+no speech reordering) nor iter-281–286 (other forms under speech) can catch.
+
+**The mechanism / why both weights are load-bearing.** Config: 2×2 grid, row-major
+counts 1/2/5/12, target `{"affine": [(3,2,1),(8,1,0)]}` (raw `"3*2:1,8"`:
+preferred-3 scaled ×2 then +1 penalty, accepted-8 neutral). `_cell_result` couples
+speech to count (n → n*0.5s). Affine distances: count 1 → 5, count 2 → 3 (via
+`|2-3|*2+1`), count 5 → 3 (via `|5-8|*1+0`), count 12 → 4. TWO cells tie at the
+affine floor (dist 3): count 2 (0.3,800) and count 5 (0.5,400). Count 2's floor
+membership is DOUBLY contingent — drop the ×2 factor and it scores `|2-3|*1+1 = 2`
+(below floor, sole winner); drop the +1 penalty and it scores `|2-3|*2 = 2`
+(likewise below). Only with BOTH weights does count 2 land exactly on count 5's
+floor. Row-major keeps the earliest floor cell (count 2); `tie_break="speech"`
+prefers the most-speech floor cell, count 5 at 2.5s. Both surfaces name count 5.
+
+**What changed.**
+- **`tests/unit/test_gv_vad.py` (+1 test).**
+  `test_render_grid_csv_consumer_rederives_json_affine_target_speech_tie_pick`:
+  asserts `payload["target"] == {"affine": [[3,2,1],[8,1,0]]}` and
+  `payload["tie_break"] == "speech"`; the CSV body carries no pick/weight columns;
+  the CSV consumer re-derives `best` (count 5, dist 3) and the top-3 shortlist
+  cell-for-cell. FOUR controls prove it cannot pass by accident: ROW-MAJOR (flips
+  to count 2), WEIGHTED-only (count 2 becomes sole floor), SCALED-only (count 2
+  becomes sole floor), and the top-3 order (the two affine-3 floor cells lead
+  speech-ordered, THEN the affine-4 count-12 cell DESPITE it carrying the most
+  speech, 6.0s — its distance sits above the floor, so the weights, not speech,
+  keep it third).
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **3890 passed**
+(3889 prior + 1 net new), run on the feature branch before ff-merge.
+- Focused: `pytest tests/unit/test_gv_vad.py -k affine_target_speech` → **1 passed**.
+- Integration: not re-run this lap (no corpus symlinked into this worktree; same
+  as prior corpus-gated laps — the change is a pure CLI parse/score/render
+  cross-surface contract test, no new production code).
+
+**Next planned items:**
+1. **[cli] The dict-form speech-tie cross-surface matrix is now COMPLETE.** scalar
+   (iter-274), closed band (iter-281), flat set (iter-282), open band (iter-283),
+   preference (iter-284), weighted (iter-285), scaled (iter-286), affine
+   (iter-288) all round-trip under `tie_break="speech"`. The remaining
+   cross-surface gaps lie on OTHER surfaces: the 1-D `vad-sweep` cross-surface
+   forms (does the sweep CSV↔JSON round-trip pin the same picks under each target
+   form / tie-break?) and the `simulate-mirror` grid pick round-trips. Confirm no
+   existing test already exercises the chosen form cross-surface before assuming a
+   gap.
+2. **[cli] A next FEATURE would be a different axis entirely** — the `--target`
+   composition space (scalar → band → set → preference → additive → multiplicative
+   → affine) is feature-complete. Candidates: a per-element ASYMMETRIC band
+   tolerance, or a "soft floor/ceiling" scoring beyond an open edge with a gentle
+   slope rather than a hard 0. Scope before building.
+3. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** (or the
+   pipecat :8765 WS) and GUI-test on the Mac. Needs a browser + mic, so it stays
+   operator-only / non-headless.
+4. **[client] Adopt `prewarm()` in the desktop app** (iter-227/229/230 backlog) and
+   TIME click-to-capture before/after on real hardware.
+5. **[recordings] Ingest new recordings every lap** — the new WAVs under
+   `fixtures/recordings/` are untracked and large (one is 98 MB); if the loop
+   should track a curated subset, decide the policy and re-run
+   `replay_silero.py --compare` + `gv vad` to refresh the comparison table.
