@@ -29402,3 +29402,83 @@ overrides are purely additive.
    ~30 leftover per-iter worktrees (iter-001…028, 232, plus iter-317's
    leftover). A future lap could `git worktree prune` / remove the merged ones
    to keep the list legible. NOTE: this lap correctly removed its own worktree.
+
+## iter-320 — TTS-pacing WPM-mirror research doc + drift-sentinel test
+
+- **Date:** 2026-06-20
+- **Branch:** iter-320-mirror-docs (ff-merged to main, worktree removed)
+- **Commit:** 20213ee
+
+**Why.** The `simulate-mirror` / `calibrate-base-wpm` surface grew FIVE laps
+(iters 215–319: the `session/wpm_mirror.py` engine, the two `gv` subcommands,
+then `--csv` / `--json`, `--lurch-weight`, and the
+`--min-speed`/`--max-speed`/`--min-delta` band overrides) without ever getting a
+prose home — every other CLI analysis family (the VAD surfaces `gv vad` /
+`vad-diff` / `vad-sweep` / `vad-grid`) has a rich living doc under
+`docs/research/`, but the TTS-pacing mirror had nothing. iter-319's own
+next-item had run out of obvious CLI knobs to add ("All `simulate-mirror`
+tunables now have a CLI surface"), so the highest-value increment was no longer
+a new flag — it was documenting the surface that five laps had built, and
+guarding that doc against drift the same way the README/GENO.md pattern docs are
+guarded (iter-129/130/144).
+
+**What it is.**
+- **`docs/research/tts-pacing-mirror.md`** (new) — a living doc for the
+  TTS-pacing subsystem. Explains what the WPM mirror does (matches the agent's
+  Kokoro `speed` multiplier to the user's words-per-minute, easing toward a
+  `base_wpm`-derived target), the two shaping knobs (`strength` damping; the
+  `min_speed`/`max_speed` intelligibility band + `min_delta` deadband), and full
+  usage for both subcommands:
+  - **`gv simulate-mirror`** — the offline trajectory replay and the `--grid`
+    `base_wpm × strength` sweep, with the `--lurch-weight` score knob (iter-318)
+    and the band overrides (iter-319), plus the human / `--json` / `--csv` trio.
+  - **`gv calibrate-base-wpm`** — backing `base_wpm` out of real TTS renders
+    (`words:audio_seconds[:speed]`), the spread/drift diagnostics, the
+    `--verdict` adopt/keep call (iter-222/223), and the trio.
+  Records iter-219's hard finding (`base_wpm` is a MEASUREMENT, not
+  replay-tunable — circular target) and the pure-stdlib / offline-twin
+  methodology. Cross-references the sibling *Voice-capture tuning* VAD doc for
+  the trio claim.
+- **`mkdocs.yml`** — added the doc to the Research nav beside the VAD doc.
+- **`tests/unit/test_tts_pacing_mirror_doc.py`** (new, +13 tests) — the
+  **drift sentinel**, stronger than the iter-129/130/144 "named section exists"
+  shape because the subject matter allows it: it EXTRACTS every `gv` command
+  from the doc's fenced code blocks (re-joining backslash continuations,
+  stripping inline `# comments`) and PARSES each through the real
+  `build_parser`. A renamed/removed documented flag stops parsing → red.
+  Also pins the structural pointers (both subcommands named, the trio described
+  + "mutually exclusive", the VAD doc + `session/wpm_mirror.py` cross-referenced,
+  the nav entry present) and the seed defaults the prose asserts as fact
+  (`base_wpm` 165, `strength` 0.5, band 0.8/1.3, `min_delta` 0.05, lurch 0.5) so
+  a future seed change forces a doc edit. A `test_doc_has_command_examples`
+  guard (>= 8 commands) prevents the extraction regex from silently matching
+  nothing and making the parse tests vacuously pass.
+
+No code changed — docs + test only; every existing CLI surface is untouched.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4191 passed**
+(4178 prior + 13 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_tts_pacing_mirror_doc.py` → **13 passed**
+  (re-run on main post-merge).
+- Integration: not re-run this lap (docs + a pure parser/regex test — no torch
+  import, no audio I/O).
+
+**Next planned items:**
+1. **[docs] The VAD-analysis surfaces are documented in `voice-capture-tuning.md`
+   and now the TTS-pacing surfaces in `tts-pacing-mirror.md`** — both with a
+   drift-sentinel test for the *mirror* doc but NOT for the VAD doc. A future
+   docs lap could backport the same command-parse drift sentinel to
+   `voice-capture-tuning.md` (extract its `gv vad*` examples and parse them
+   through `build_parser`) so that older doc gains the same guard. Scope: its
+   examples mix `gv` and `python fixtures/replay_*.py` lines, so the extractor
+   needs to skip the non-`gv` ones (already does — it filters on `gv `).
+2. **[chat-metrics] Continuous-clone + two-sided-band sentinel families — both
+   declared complete (iter-311/312, iter-306).** A NEW per-turn metric not yet
+   emitted would be needed to extend either; none obvious.
+3. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+4. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~30 leftover per-iter worktrees (iter-001…028, 232, 317). A future lap could
+   `git worktree prune` / remove the merged ones to keep the list legible.
+   NOTE: this lap correctly removed its own worktree.
