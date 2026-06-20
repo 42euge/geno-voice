@@ -28844,3 +28844,97 @@ human and `--json` outputs are untouched.
    shows ~29 leftover per-iter worktrees (iter-001…iter-028, iter-232).
    A future lap could `git worktree prune` / remove the merged ones to
    keep the worktree list legible.
+
+## iter-314 — gv vad --csv (per-segment spreadsheet/plot twin completing the format trio)
+
+- **Date:** 2026-06-20
+- **Branch:** iter-314-vad-csv (ff-merged to main, worktree removed)
+- **Commit:** a5b57d2
+
+**Why.** The foundational `gv vad` single-file segmentation surface
+carried human + `--json` but no `--csv`, while `gv vad-sweep` (iter-237),
+`gv vad-diff` (iter-313), and `gv vad-grid` (iter-251) each already carry
+the full human / `--json` / `--csv` format trio. iter-313's own
+next-items block flagged exactly this: "a `--csv` for the
+`simulate-mirror`/`calibrate-base-wpm` surfaces … OR a derived-view
+feature" — but the cleaner, more obvious gap was the trio itself being
+incomplete on the simplest and most-used VAD surface. This lap closes
+that last gap so all four VAD-analysis surfaces are format-consistent: an
+operator segmenting a single recording can now pipe a plot/spreadsheet
+table straight out of `gv vad --csv` without dropping to `--json` + a
+parsing step.
+
+**What it is.** Unlike the sweep/diff/grid CSVs — which emit one row per
+*swept config*, aggregating each run down to count + speech-seconds — a
+single `gv vad` run produces exactly one segmentation, so its natural CSV
+unit is one row per detected *segment*:
+`index,start_s,end_s,duration_s`. That is the machine-readable expansion
+of the human report's `[ n]  start – end (dur)` lines, and precisely the
+shape a plotter (draw a span per row) or spreadsheet (one region per
+line) wants. Design decisions:
+- **Seconds rounded to 3 places**, matching `render_vad_json`, so the two
+  machine surfaces agree to the digit.
+- **1-based `index`**, matching the human report's `[ n]` numbering.
+- **`threshold` accepted but NOT emitted as a column** — every row of a
+  single run shares the one gate, so a per-row threshold column would be
+  pure redundancy. This is the deliberate contrast with vad-sweep/-diff,
+  where the threshold genuinely *varies* row to row and so IS a column
+  there. The renderer keeps the `threshold=` kwarg only for signature
+  parity with its siblings.
+- **Zero segments → header alone** (a valid, empty-bodied table; the
+  consumer reads "no speech" from absent rows, not from prose).
+- **`None` result (segmenter unavailable) → the shared
+  `# silero VAD unavailable: ...` comment line**, matching
+  `render_vad_sweep_csv` / `render_vad_diff_csv` so a degraded run is
+  self-describing rather than silently empty.
+
+**What changed.**
+- **`examples/gv.py`** — new pure `render_vad_csv(result, *,
+  threshold=None)` (stdlib `csv` writer, RFC-4180 quoting, trailing
+  `\r\n` stripped). Wired `--csv` into `cmd_vad` (`elif as_csv:` in both
+  the unavailable and available branches, right after the `--json`
+  branch). Converted the `vad` parser's lone `--json` arg into a NEW
+  mutually-exclusive group with `--csv`, mirroring the `vad-diff` group
+  exactly. Updated the `cmd_vad` docstring with the iter-314 note.
+- **`tests/unit/test_gv_vad.py` (+11 tests)** — parser: `csv` defaults
+  False, `--csv` sets the flag (and leaves `json` False), `--json --csv`
+  raises `SystemExit` (mutual exclusion); render: `None` → comment,
+  header + one row per segment (1-based index, 3-place seconds),
+  zero-segment header-only, explicit 3-place rounding, no trailing
+  newline, the **threshold-is-not-a-column** invariant (with/without
+  `threshold=` produce byte-identical output); handler: unavailable-csv
+  emits the comment without segmenting, csv-branch segments and emits a
+  parseable header + one row per segment with the knob reaching the
+  segmenter. Extended `_args` with `csv=False`.
+
+No existing behavior changed — the CSV path is purely additive; the human
+and `--json` outputs are untouched.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4097 passed**
+(4086 prior + 11 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_gv_vad.py` → **685 passed**.
+- Integration: not re-run this lap (no corpus symlinked into this
+  worktree; same as prior corpus-gated laps — the change is a pure
+  renderer + parser/handler wiring with unit-level coverage, no torch
+  import and no audio I/O).
+
+**Next planned items:**
+1. **[cli] Format-trio parity — NOW COMPLETE across ALL FOUR VAD surfaces**
+   (vad / vad-diff / vad-sweep / vad-grid). The non-VAD analysis surfaces
+   `simulate-mirror` and `calibrate-base-wpm` still lack `--csv` — a
+   trajectory or grid table from `simulate-mirror`, or the per-sample
+   calibration table from `calibrate-base-wpm`, would be the next trio
+   extension OFF the VAD surfaces. Scope which is the better fit before
+   building (the grid mode of simulate-mirror already shares
+   `render_grid` with the WPM sweep, so a `--csv` there has the clearest
+   row shape).
+2. **[chat-metrics] Continuous-clone + two-sided-band sentinel families —
+   both declared complete (iter-311/312, iter-306).** A NEW per-turn
+   metric not yet emitted would be needed to extend either; none obvious.
+3. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+4. **[housekeeping] Stale worktrees accumulating** — `git worktree list`
+   shows ~29 leftover per-iter worktrees (iter-001…iter-028, iter-232).
+   A future lap could `git worktree prune` / remove the merged ones to
+   keep the worktree list legible.
