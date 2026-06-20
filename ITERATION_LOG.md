@@ -29217,3 +29217,94 @@ reports and `--csv` surfaces are untouched.
 4. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    leftover per-iter worktrees. A future lap could `git worktree prune` /
    remove the merged ones to keep the list legible.
+
+## iter-318 — gv simulate-mirror --lurch-weight (grid scoring knob)
+
+- **Date:** 2026-06-20
+- **Branch:** iter-318-lurch-weight (ff-merged to main, worktree removed)
+- **Commit:** 1c367f1
+
+**Why.** After iter-317 every gv analysis surface carried the full human /
+`--json` / `--csv` trio, so there was no remaining format asymmetry; iter-317's
+own next-item named a `simulate-mirror` scoring override as the natural way to
+extend the surface. The engine's `MirrorGridPoint.score()` and
+`pick_best_mirror_config()` have always accepted a `lurch_weight` (the weight on
+the max-single-turn-step "lurch" term relative to the `|final_gap|` convergence
+term; `DEFAULT_LURCH_WEIGHT = 0.5`), but the CLI hard-coded the default — an
+operator could not ask "which `(base_wpm, strength)` pair wins if I care twice
+as much about a smooth approach as about converging exactly?" without editing the
+engine. This lap exposes that one already-plumbed-but-unreachable score
+parameter as `--lurch-weight`, the first *scoring* knob on the simulator.
+
+**What it is.** A `--lurch-weight` `float` flag on `simulate-mirror`, defaulting
+to the engine's `DEFAULT_LURCH_WEIGHT` (sourced in `build_parser` with the same
+documented-constant fallback the other mirror defaults use, so the CLI default
+tracks the live config). The flag's value threads into BOTH:
+
+- `pick_best_mirror_config(points, lurch_weight)` — so the chosen cell reflects
+  the operator's trade-off, and
+- all three grid renderers (`render_grid` / `render_grid_csv` /
+  `render_grid_json`) — so the displayed `score` column / field always equals
+  the score the best pick was decided on. The table never shows a 0.5-weighted
+  score next to a 2.0-weighted pick.
+
+Each renderer gained a keyword-only `lurch_weight=None` arg. `None` defers to
+`score()`'s own default, preserving the exact pre-iter-318 behaviour for any
+caller that omits it (a test pins `render_grid(..., lurch_weight=None) ==
+render_grid(...)`). Trajectory mode has no score, so the knob is inert there
+(also pinned by a test). The handler reads `getattr(args, "lurch_weight", None)`
+and passes `None` straight through when absent, so the positional-default path
+on `pick_best_mirror_config` is preserved.
+
+**What changed.**
+- **`examples/gv.py`** — added `_MIRROR_DEFAULT_LURCH_WEIGHT = 0.5` and sourced
+  `lurch_weight_default` from `wm.DEFAULT_LURCH_WEIGHT` in `build_parser`
+  (fallback path included). Added the `--lurch-weight` `store`-float argument to
+  the `simulate-mirror` parser (before the `--json`/`--csv` mutual-exclusion
+  group). Gave `render_grid` / `render_grid_csv` / `render_grid_json` a
+  keyword-only `lurch_weight=None` that, when supplied, is passed to every
+  `p.score(...)` / `best.score(...)` call. `cmd_simulate_mirror` now reads the
+  parser value and threads it into the picker + all three grid renderers; the
+  trajectory branch is untouched. Updated the handler docstring with the iter-318
+  note.
+- **`tests/unit/test_gv_simulate_mirror.py` (+10 net new)** — parser (default
+  sourced from `DEFAULT_LURCH_WEIGHT`, override parses); the knob changes the
+  pick in the handler (low weight → lowest-`|gap|` cell `165/0.7`; high weight →
+  smoothest cell `180/0.3` on a fixed `[120,140,200,230,200,140,120]` arc over
+  the `[150,165,180] × [0.3,0.5,0.7]` grid); the `score` column/field in all
+  three renderers tracks the supplied weight not the default; `lurch_weight=None`
+  matches the pre-iter-318 `render_grid` output; the CSV `is_best` column and
+  JSON `best` object reflect the weighted pick; handler `--csv`/`--json` output
+  equals the renderers with the weight; the knob is inert in trajectory mode.
+
+No existing behavior changed when `--lurch-weight` is omitted — the flag is
+purely additive and defaults to the value `score()` already used.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4166 passed**
+(4156 prior + 10 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_gv_simulate_mirror.py` → **78 passed**
+  (re-run on main post-merge).
+- Integration: not re-run this lap (pure renderer + picker + parser/handler
+  wiring over the stdlib `wpm_mirror` engine loaded by file path — no torch
+  import, no audio I/O, same as prior CLI laps).
+
+**Next planned items:**
+1. **[cli] simulate-mirror grid axes are still the only sweep knobs without a
+   matching override pair.** With `--lurch-weight` exposed, the remaining
+   non-axis tunables in `sweep_mirror_grid`'s template config (`min_speed` /
+   `max_speed` / `min_delta` — the intelligibility band + deadband) are still
+   fixed at the seed defaults for every cell. A future lap could add
+   `--min-speed` / `--max-speed` / `--min-delta` flags so an operator can sweep a
+   grid against a *non-seed* band (e.g. a wider intelligibility window for a
+   faster voice). Scope whether the band is worth exposing per-run vs. leaving it
+   a calibration constant before building.
+2. **[chat-metrics] Continuous-clone + two-sided-band sentinel families — both
+   declared complete (iter-311/312, iter-306).** A NEW per-turn metric not yet
+   emitted would be needed to extend either; none obvious.
+3. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+4. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~30 leftover per-iter worktrees (iter-001…028, 232, plus this lap's now
+   removed). A future lap could `git worktree prune` / remove the merged ones to
+   keep the list legible. NOTE: this lap correctly removed its own worktree.
