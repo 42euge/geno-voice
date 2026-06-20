@@ -28524,3 +28524,128 @@ purely additive.
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list`
    shows leftover per-iter worktrees. A future lap could
    `git worktree prune` / remove merged ones.
+
+## iter-311 — FT-A consistency sentinel (sustained slow first-token-to-audio)
+
+- **Date:** 2026-06-20
+- **Branch:** iter-311-fta-consistency (ff-merged to main)
+- **Commit:** dad9775
+
+**Why.** The iter-310 plan declared the NAMED one-sided continuous
+monotonic clones EXHAUSTED (`mic_stale_frames`, `speaker_open_seconds`,
+`llm_cancel_to_close`, `max_queue_depth` all done) and pointed a future
+lap at any REMAINING un-sentinelled continuous `TurnMetrics` field.
+`first_token_to_audio` (iter-083, FT-A) is exactly that: a high-value
+continuous metric sitting directly on the time-to-first-byte path the
+whole VISION optimizes for ("latency is the feature"), and not on any
+prior exhausted list. iter-083 decomposes TTFS into two halves —
+`llm_first_token` (LLM-side: how long until the model produced its first
+token) and FT-A (post-LLM-side: sentence-split + TTS + queue dispatch
+before the first audio chunk plays). The session summary already prints
+the MEDIAN of each side-by-side (`Median LLM 1st` / `Median FT-A`) so the
+operator can see at a glance which half dominates, but a healthy median
+hides a sustained-slow stretch: a few snappy turns early pull the median
+down while the back half of the session crawls. A SUSTAINED run in the
+slow/very_slow bucket is the actionable signal that sentence-split + TTS
+is the persistent post-LLM bottleneck — the bot has tokens but can't
+speak yet, eroding the sub-500ms TTFS budget.
+
+**What's novel.** TWENTY-THIRD instance of the diversity-check pattern
+(GENO.md) and the TWENTIETH on a continuous metric. Like
+iter-140/141/208/209/224/226/307/308/309/310 — and UNLIKE the inverted
+iter-142/143/225 — `first_token_to_audio` is smaller-is-better (the bot
+starting to speak almost as soon as it has tokens is best), so the
+boundaries are NOT inverted; the problematic end is a LARGE latency, and
+the `snappy` fine-bucket is a LOW value that gets filtered alongside the
+empty (no-measurement) bucket. Boundaries are deliberately aligned with
+iter-208's synth-dispatch triad (snappy <0.15s / slow 0.15-0.35s /
+very_slow >0.35s) because FT-A is the SAME final-leg latency anchored one
+step earlier — on the LLM's first TOKEN rather than its first complete
+sentence — so FT-A uniquely ALSO covers the sentence-split wait (first
+token → first complete sentence) that iter-208's synth-dispatch residual
+excludes. This makes FT-A complementary to BOTH the iter-212 TTFS
+sentinel (whole speech-stop → speaker latency) and the iter-208
+synth-dispatch sentinel (residual after the first complete sentence):
+this watches specifically the first-token → first-audio leg. Threshold
+is **5** (the high-frequency general default, NOT iter-120/308/310's
+event-gated 4): FT-A is measured on essentially every audio-producing
+turn, where natural per-turn variation (model warmup, GC,
+first-sentence-length jitter) is normal — it earns the higher bar of the
+threshold-5 family.
+
+**What it is.** A one-sided monotonic sentinel:
+- `snappy`    — < 0.15s: the bot starts speaking almost as soon as the
+  LLM emits its first token; sentence-split + TTS is a thin slice of
+  TTFS. The desired state (filtered).
+- `slow`      — 0.15-0.35s: the post-LLM leg is eating a noticeable chunk
+  of opening latency; a lighter voice/engine or smaller first-chunk
+  dispatch would help.
+- `very_slow` — > 0.35s: sentence-split + TTS alone blows most of the
+  sub-500ms budget; the bot has tokens but stays silent so long the
+  opening feels laggy regardless of how fast the LLM produced its first
+  token.
+
+`0.0` (a turn where either timestamp was missing — errored before the
+LLM produced a token or before any audio played) returns `""` and is
+filtered, matching iter-083's own `> 0` collection filter for
+`fta_values` in the session summary.
+
+**What changed.**
+- **`examples/_chat_metrics.py`** — added `_fta_bucket`
+  (snappy/slow/very_slow, `""` for ≤0) and
+  `_emit_fta_consistency_line` (threshold 5, filters `""` + `snappy`
+  before the run scan, per-value suggestions + defensive `else`,
+  `iter-083 first_token_to_audio` attribution). Wired the call into
+  `print_session_summary` right after the iter-310 mic-stale line,
+  reusing the iter-116 `_longest_consecutive_run` primitive unchanged.
+- **`tests/unit/test_emit_fta_consistency_line.py` (+22 tests)** — the
+  full pattern matrix: bucket boundaries incl. float edges
+  (0.1499→snappy, 0.15→slow, 0.35→slow, 0.3501→very_slow) and ≤0 → `""`,
+  the 0.0-is-no-measurement semantics through the consumer (a 0.0
+  between slow turns doesn't break the run), empty/all-zero/all-snappy
+  suppression, at/above/below threshold per value, snappy + empty
+  interleaving doesn't break a run, very_slow breaks a slow run,
+  slow/very_slow never merge, longest-of-two wins, custom threshold (3
+  catches, 10 suppresses), per-value suggestion divergence, output
+  formatting (4-space indent) + iter-083 attribution, 1000-element
+  scaling.
+
+No production behavior changed for existing metrics — the new line is
+purely additive.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4054 passed**
+(4032 prior + 22 net new), run in the feature worktree before ff-merge.
+- Focused: `pytest tests/unit/test_emit_fta_consistency_line.py`
+  → **22 passed**.
+- Integration: not re-run this lap (no corpus symlinked into this worktree;
+  same as prior corpus-gated laps — the change is a pure session-summary
+  helper with unit-level coverage, no audio I/O).
+
+**Next planned items:**
+1. **[chat-metrics] Continuous-metric sentinels — survey for any LAST
+   un-covered field.** With FT-A (this lap), the iter-307–310 named
+   one-sided clones, and FT-A's sibling halves all sentinelled, the
+   remaining un-watched continuous `TurnMetrics` fields are thin:
+   `eot_latency` (iter-063 — but `eot_overhead` iter-209 already
+   sentinels the actionable residual, so the raw latency is mostly
+   knob-budget and likely NOT a good fit), `context_tokens` (iter-077 —
+   a TREND/creep signal, not a consecutive-run signal, so the
+   diversity-check shape doesn't fit), `time_to_comprehension` (iter-082
+   — already band-sentinelled by iter-305 ttc). The continuous-clone
+   family is now effectively complete; a NEW per-turn metric not yet
+   emitted would be needed to extend it.
+2. **[chat-metrics] Two-sided-band sentinel family — strongest
+   candidates exhausted** (iter-210 bot-wpm, iter-305 ttc, iter-306
+   token-reveal-lag). `user_wpm` (iter-064) has no "correct" rate so it
+   is likely NOT a good band fit. The band family is probably complete.
+3. **[cli] Grid + sweep cross-surface `--target` matrices — BOTH
+   COMPLETE** (iter-273–304). A next CLI feature would be a different
+   axis (e.g. asymmetric band tolerance, or a soft floor/ceiling beyond
+   an open edge) — scope before building.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list`
+   shows ~30 leftover per-iter worktrees (iter-001…iter-028, iter-232).
+   A future lap could `git worktree prune` / remove the merged ones to
+   keep the worktree list legible.
