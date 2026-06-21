@@ -968,3 +968,321 @@ def test_handler_top_n_csv_schema_unchanged(monkeypatch):
     header = list(csv.reader(io.StringIO(out[0])))[0]
     assert "peaks" not in out[0]
     assert header[0] == "threshold"
+
+
+# ==== iter-371: per-cell rate floor (--min-rate / --min-rate-pct) ==========
+#
+# The 2-D analogue of the iter-370 sweep floor. Where band_rate_dist (iter-367)
+# and top_n (iter-369) are purely additive, the floor FILTERS bands before
+# ranking, so the scalar peak columns + the ranking reflect it on ALL three
+# faces. The genuinely-new per-cell datum is `effective_min_rate`: the adaptive
+# floor resolves to a DIFFERENT absolute cut at each cell. band_rate_dist stays
+# the full pre-floor distribution (the sample the percentile floor reads
+# against).
+#
+# _multi_band has 3 distinct gaps → band rates 0.5 / 0.25 / 0.125. So:
+#   p75 of [0.125, 0.25, 0.5] = 0.375 → only the 0.5 band survives.
+#   --min-rate 0.3 (absolute) → only the 0.5 band survives.
+#   --min-rate 1.0 → no band survives → no peak.
+
+
+def test_core_cell_carries_effective_min_rate_default():
+    """With no floor every cell carries effective_min_rate == 0.0 (a strict
+    superset of the iter-369 shape)."""
+    cells = gv.vad_gap_peak_grid([0.5], [800.0], [_multi_band()])
+    assert cells[0]["effective_min_rate"] == 0.0
+
+
+def test_core_absolute_floor_filters_bands():
+    """--min-rate drops bands below the absolute threshold; the steepest survivor
+    becomes the scalar peak, and effective_min_rate echoes the floor."""
+    cells = gv.vad_gap_peak_grid([0.5], [800.0], [_multi_band()], min_rate=0.3)
+    assert cells[0]["effective_min_rate"] == 0.3
+    assert cells[0]["peak_found"] is True
+    # Only the 0.5 band clears 0.3 → it is the (single) survivor.
+    assert cells[0]["peak_rate_per_100ms"] == 0.5
+    assert len(cells[0]["peaks"]) == 1
+
+
+def test_core_absolute_floor_can_eliminate_peak():
+    """A floor above every band's rate leaves no surviving peak — the no-peak
+    verdict (peak_found False, empty peaks) exactly as an all-valley cell."""
+    cells = gv.vad_gap_peak_grid([0.5], [800.0], [_multi_band()], min_rate=1.0)
+    assert cells[0]["peak_found"] is False
+    assert cells[0]["peak_rate_per_100ms"] is None
+    assert cells[0]["peaks"] == []
+    # The floor still rode the cell (it describes the cutoff, not the peak).
+    assert cells[0]["effective_min_rate"] == 1.0
+
+
+def test_core_pct_floor_resolves_per_cell_cut():
+    """--min-rate-pct resolves to the Pth percentile of THIS cell's own band
+    rates — p75 of [0.125,0.25,0.5] = 0.375."""
+    cells = gv.vad_gap_peak_grid([0.5], [800.0], [_multi_band()], min_rate_pct=75.0)
+    assert cells[0]["effective_min_rate"] == 0.375
+    # Only the 0.5 band clears 0.375.
+    assert cells[0]["peak_rate_per_100ms"] == 0.5
+    assert len(cells[0]["peaks"]) == 1
+
+
+def test_core_floor_matches_single_shot():
+    """Each cell's floored verdict equals an independent vad_gap_peak with the
+    same floor — the grid names the SAME survivors the single-shot does."""
+    r = _multi_band()
+    direct = gv.vad_gap_peak(r, min_rate_pct=75.0)
+    cell = gv.vad_gap_peak_grid([0.5], [800.0], [r], min_rate_pct=75.0)[0]
+    assert cell["effective_min_rate"] == direct["effective_min_rate"]
+    assert cell["peak_rate_per_100ms"] == direct["peak_rate_per_100ms"]
+    assert cell["peaks"] == direct["peaks"]
+
+
+def test_core_band_rate_dist_is_full_pre_floor():
+    """band_rate_dist is UNCHANGED by the floor — always the full pre-floor
+    distribution (the sample --min-rate-pct reads against)."""
+    floored = gv.vad_gap_peak_grid([0.5], [800.0], [_multi_band()],
+                                   min_rate_pct=75.0)[0]
+    unfloored = gv.vad_gap_peak_grid([0.5], [800.0], [_multi_band()])[0]
+    assert floored["band_rate_dist"] == unfloored["band_rate_dist"]
+    assert floored["band_rate_dist"]["count"] == 3
+
+
+def test_core_pct_floor_reshapes_across_cells():
+    """The adaptive cut differs cell to cell when the cost distribution differs:
+    _multi_band (rates 0.5/0.25/0.125) vs _three (single 0.125 band)."""
+    cells = gv.vad_gap_peak_grid([0.3], [400.0, 800.0],
+                                 [_multi_band(), _three()], min_rate_pct=75.0)
+    assert cells[0]["effective_min_rate"] == 0.375  # p75 of three rates
+    assert cells[1]["effective_min_rate"] == 0.125  # p75 of one rate == that rate
+
+
+def test_core_mutually_exclusive_floors_raise():
+    """Setting both floors is rejected (delegated to vad_gap_peak)."""
+    with pytest.raises(ValueError):
+        gv.vad_gap_peak_grid([0.5], [800.0], [_multi_band()], min_rate=0.2,
+                             min_rate_pct=75.0)
+
+
+# ---- renderer: human floor header + per-cell adaptive note ---------------
+
+
+def test_render_human_default_omits_floor_header():
+    """No floor → no 'rate floor' header line (byte-for-byte unchanged)."""
+    lines = gv.render_vad_gap_peak_grid([0.5], [800.0], [_multi_band()],
+                                        name="rec.wav")
+    assert not any("rate floor" in ln for ln in lines)
+    assert not any("floor: p" in ln for ln in lines)
+
+
+def test_render_human_absolute_floor_header_no_per_cell_note():
+    """--min-rate prints the header once; no per-cell note (the cut is the same
+    at every cell)."""
+    lines = gv.render_vad_gap_peak_grid([0.3], [400.0, 800.0],
+                                        [_multi_band(), _multi_band()],
+                                        name="rec.wav", min_rate=0.3)
+    header = [ln for ln in lines if "rate floor" in ln]
+    assert len(header) == 1
+    assert "0.300 per +100ms" in header[0]
+    assert not any("floor: p" in ln for ln in lines)
+
+
+def test_render_human_pct_floor_per_cell_note():
+    """--min-rate-pct prints the header plus one per-cell note naming the resolved
+    cut (which can differ cell to cell)."""
+    lines = gv.render_vad_gap_peak_grid([0.3], [400.0, 800.0],
+                                        [_multi_band(), _three()],
+                                        name="rec.wav", min_rate_pct=75.0)
+    assert any("rate floor:   p75" in ln for ln in lines)
+    notes = [ln for ln in lines if "floor: p75 =" in ln]
+    assert len(notes) == 2
+    assert "0.375 per +100ms" in notes[0]
+    assert "0.125 per +100ms" in notes[1]
+
+
+def test_render_human_floor_unavailable_hint():
+    """A None result still yields the shared install hint regardless of floor."""
+    lines = gv.render_vad_gap_peak_grid([], [], [None], name="rec.wav",
+                                        min_rate_pct=75.0)
+    assert lines == [
+        "silero VAD unavailable: install 'silero-vad' (pulls torch + "
+        "torchaudio) to enable offline neural segmentation"
+    ]
+
+
+def test_render_human_floor_and_top_n_both_appear():
+    """The per-cell floor note (iter-371) and the top-N ranking (iter-369) are
+    independent — both appear under a cell, the floor note first."""
+    lines = gv.render_vad_gap_peak_grid([0.3], [800.0], [_multi_band()],
+                                        name="rec.wav", min_rate_pct=75.0,
+                                        top_n=3)
+    floor_idx = next(i for i, ln in enumerate(lines) if "floor: p75 =" in ln)
+    rank_idx = next(i for i, ln in enumerate(lines)
+                    if "costliest bands" in ln)
+    assert floor_idx < rank_idx
+
+
+# ---- renderer: JSON echoes floor + per-cell effective_min_rate -----------
+
+
+def test_render_json_echoes_floor_and_per_cell_cut():
+    out = gv.render_vad_gap_peak_grid_json([0.5], [800.0], [_multi_band()],
+                                           name="rec.wav", min_rate_pct=75.0)
+    payload = json.loads(out)
+    assert payload["min_rate"] == 0.0
+    assert payload["min_rate_pct"] == 75.0
+    assert payload["grid"][0]["effective_min_rate"] == 0.375
+
+
+def test_render_json_default_floor_shape():
+    """No floor → min_rate 0.0 / min_rate_pct null / effective_min_rate 0.0 (a
+    strict superset of the iter-369 JSON)."""
+    out = gv.render_vad_gap_peak_grid_json([0.5], [800.0], [_multi_band()],
+                                           name="rec.wav")
+    payload = json.loads(out)
+    assert payload["min_rate"] == 0.0
+    assert payload["min_rate_pct"] is None
+    assert payload["grid"][0]["effective_min_rate"] == 0.0
+
+
+def test_render_json_absolute_floor_echo():
+    out = gv.render_vad_gap_peak_grid_json([0.5], [800.0], [_multi_band()],
+                                           name="rec.wav", min_rate=0.3)
+    payload = json.loads(out)
+    assert payload["min_rate"] == 0.3
+    assert payload["min_rate_pct"] is None
+    assert payload["grid"][0]["effective_min_rate"] == 0.3
+
+
+# ---- renderer: CSV appends effective_min_rate column only under a floor ---
+
+
+def test_render_csv_default_schema_unchanged():
+    """No floor → the iter-365 ten-column schema, no effective_min_rate column."""
+    out = gv.render_vad_gap_peak_grid_csv([0.5], [800.0], [_multi_band()],
+                                          name="rec.wav")
+    header = list(csv.reader(io.StringIO(out)))[0]
+    assert header == [
+        "threshold", "min_silence_ms", "num_segments", "num_gaps", "peak_found",
+        "peak_from_ms", "peak_to_ms", "peak_width_ms", "peak_merged_added",
+        "peak_rate_per_100ms",
+    ]
+    assert "effective_min_rate" not in out
+
+
+def test_render_csv_floor_appends_column():
+    """A floor adds the trailing effective_min_rate column with the resolved cut."""
+    out = gv.render_vad_gap_peak_grid_csv([0.5], [800.0], [_multi_band()],
+                                          name="rec.wav", min_rate_pct=75.0)
+    rows = list(csv.reader(io.StringIO(out)))
+    assert rows[0][-1] == "effective_min_rate"
+    assert rows[1][-1] == "0.375"
+    # The scalar peak columns reflect the floor (only the 0.5 band survives).
+    assert rows[1][rows[0].index("peak_rate_per_100ms")] == "0.5"
+
+
+def test_render_csv_floor_column_on_no_peak_cell():
+    """Even a cell the floor eliminates carries the cut in the column (it
+    describes the cutoff, not the peak)."""
+    out = gv.render_vad_gap_peak_grid_csv([0.5], [800.0], [_multi_band()],
+                                          name="rec.wav", min_rate=1.0)
+    rows = list(csv.reader(io.StringIO(out)))
+    pk_idx = rows[0].index("peak_found")
+    assert rows[1][pk_idx] == "False"
+    assert rows[1][-1] == "1.0"
+
+
+# ---- parser: --min-rate / --min-rate-pct --------------------------------
+
+
+def test_parser_floor_defaults():
+    args = gv.build_parser().parse_args(["vad-gap-peak-grid", "rec.wav"])
+    assert args.min_rate == 0.0
+    assert args.min_rate_pct is None
+
+
+def test_parser_min_rate_parsed():
+    args = gv.build_parser().parse_args(
+        ["vad-gap-peak-grid", "rec.wav", "--min-rate", "0.3"]
+    )
+    assert args.min_rate == 0.3
+
+
+def test_parser_min_rate_pct_parsed():
+    args = gv.build_parser().parse_args(
+        ["vad-gap-peak-grid", "rec.wav", "--min-rate-pct", "75"]
+    )
+    assert args.min_rate_pct == 75.0
+
+
+def test_parser_floors_mutually_exclusive():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-gap-peak-grid", "rec.wav", "--min-rate", "0.2",
+             "--min-rate-pct", "75"]
+        )
+
+
+def test_parser_min_rate_pct_rejects_out_of_range():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-gap-peak-grid", "rec.wav", "--min-rate-pct", "150"]
+        )
+
+
+# ---- handler: end-to-end floor threading --------------------------------
+
+
+def test_handler_pct_floor_human(monkeypatch):
+    _stub_silero(monkeypatch)
+    args = gv.build_parser().parse_args(
+        ["vad-gap-peak-grid", "rec.wav", "--thresholds", "0.5",
+         "--min-silences", "800", "--min-rate-pct", "75"]
+    )
+    lines = []
+    gv.cmd_vad_gap_peak_grid(args, log=lines.append,
+                             segmenter=_make_segmenter(_multi_band()),
+                             availability=_avail_true)
+    assert any("rate floor:   p75" in ln for ln in lines)
+    assert any("floor: p75 = 0.375" in ln for ln in lines)
+
+
+def test_handler_default_no_floor_header(monkeypatch):
+    _stub_silero(monkeypatch)
+    args = gv.build_parser().parse_args(
+        ["vad-gap-peak-grid", "rec.wav", "--thresholds", "0.5",
+         "--min-silences", "800"]
+    )
+    lines = []
+    gv.cmd_vad_gap_peak_grid(args, log=lines.append,
+                             segmenter=_make_segmenter(_multi_band()),
+                             availability=_avail_true)
+    assert not any("rate floor" in ln for ln in lines)
+
+
+def test_handler_threads_floor_to_json(monkeypatch):
+    _stub_silero(monkeypatch)
+    args = gv.build_parser().parse_args(
+        ["vad-gap-peak-grid", "rec.wav", "--thresholds", "0.5",
+         "--min-silences", "800", "--min-rate-pct", "75", "--json"]
+    )
+    out = []
+    gv.cmd_vad_gap_peak_grid(args, log=out.append,
+                             segmenter=_make_segmenter(_multi_band()),
+                             availability=_avail_true)
+    payload = json.loads(out[0])
+    assert payload["min_rate_pct"] == 75.0
+    assert payload["grid"][0]["effective_min_rate"] == 0.375
+
+
+def test_handler_threads_floor_to_csv(monkeypatch):
+    """--min-rate adds the effective_min_rate column to the CSV face."""
+    _stub_silero(monkeypatch)
+    args = gv.build_parser().parse_args(
+        ["vad-gap-peak-grid", "rec.wav", "--thresholds", "0.5",
+         "--min-silences", "800", "--min-rate", "0.3", "--csv"]
+    )
+    out = []
+    gv.cmd_vad_gap_peak_grid(args, log=out.append,
+                             segmenter=_make_segmenter(_multi_band()),
+                             availability=_avail_true)
+    header = list(csv.reader(io.StringIO(out[0])))[0]
+    assert header[-1] == "effective_min_rate"

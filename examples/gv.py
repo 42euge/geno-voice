@@ -4897,9 +4897,11 @@ def vad_gap_peak_grid(
     row_axis="threshold",
     col_axis="min_silence_ms",
     top_n=1,
+    min_rate=0.0,
+    min_rate_pct=None,
     rate_pcts=DEFAULT_BAND_RATE_PCTS,
 ):
-    """Pair each (row, col) axis-value cell with its COSTLIEST cost-curve band (iter-365; ``band_rate_dist`` iter-367; ``top_n`` iter-369).
+    """Pair each (row, col) axis-value cell with its COSTLIEST cost-curve band (iter-365; ``band_rate_dist`` iter-367; ``top_n`` iter-369; ``min_rate`` / ``min_rate_pct`` iter-371).
 
     The 2-D analogue of :func:`vad_gap_peak_sweep`, and the peak-side twin of
     :func:`vad_gap_grid`. Where :func:`vad_gap_grid` tabulates the silence-gap
@@ -4925,11 +4927,11 @@ def vad_gap_peak_grid(
     Pure: returns a flat list of cell dicts ``{row_axis, col_axis,
     "num_segments", "num_gaps", "peak_found", "peak_from_ms", "peak_to_ms",
     "peak_width_ms", "peak_merged_added", "peak_rate_per_100ms", "peaks",
-    "band_rate_dist"}`` in that same row-major order. The peak fields are
-    ``None`` / ``False`` for a cell whose segmentation names no cost peak (a
-    <2-segment result with no gaps, or an all-valley range with no pause
-    cluster), exactly the "no structure to name" spelling :func:`vad_gap_peak`
-    returns and :func:`vad_gap_peak_sweep` carries per row.
+    "effective_min_rate", "band_rate_dist"}`` in that same row-major order. The
+    peak fields are ``None`` / ``False`` for a cell whose segmentation names no
+    cost peak (a <2-segment result with no gaps, or an all-valley range with no
+    pause cluster), exactly the "no structure to name" spelling
+    :func:`vad_gap_peak` returns and :func:`vad_gap_peak_sweep` carries per row.
 
     iter-369 adds ``top_n`` — the iter-354 single-shot ranking, carried per grid
     cell, completing the top-N view across the single-shot / sweep / grid trio
@@ -4961,10 +4963,38 @@ def vad_gap_peak_grid(
     floor), so it always agrees with ``gv vad-gap-peak --show-rate-dist`` /
     ``gv vad-gap-peak-sweep --show-rate-dist`` at the matching cell.
 
+    iter-371 adds ``min_rate`` / ``min_rate_pct`` — the iter-355/357 single-shot
+    rate FLOOR, applied per grid cell, completing the floor view across the
+    single-shot / sweep / grid trio (iter-355/357 / iter-370 / this lap). Where
+    ``band_rate_dist`` and ``top_n`` are purely additive (they never change
+    ``peak_found`` or the scalar columns), the floor FILTERS: it drops cost bands
+    cheaper than the threshold before ranking, so the steepest SURVIVING band —
+    and whether any survives at all — can change with the floor. The two knobs set
+    the same floor two ways and are mutually exclusive (delegated to
+    :func:`vad_gap_peak`, which raises if both are given): ``min_rate`` is an
+    ABSOLUTE rate (same cut at every cell), while ``min_rate_pct`` is an ADAPTIVE
+    percentile of THAT cell's own observed non-empty band rates — so the concrete
+    cut it resolves to differs from cell to cell. Each cell therefore carries
+    ``effective_min_rate``: the absolute rate the floor resolved to at that cell
+    (it equals ``min_rate`` when an absolute floor or no floor is in play, and the
+    per-cell percentile cut under ``min_rate_pct``). Reading across that column an
+    operator sees how the adaptive cutoff itself reshapes across two knobs as the
+    segmenter reshapes the cost distribution — invisible to a fixed absolute
+    floor. The floor reflects through the EXISTING scalar ``peak_*`` columns and
+    the ``peaks`` ranking (both now name only surviving bands); ``band_rate_dist``
+    is UNCHANGED — it is always the FULL pre-floor distribution (the sample the
+    percentile floor reads against), the same stance the single-shot and sweep
+    surfaces take. A cell whose every band is filtered out by the floor spells the
+    no-peak verdict exactly as an all-valley cell does (``peak_found`` ``False``,
+    scalar fields ``None``, empty ``peaks``). The floor is threaded straight into
+    :func:`vad_gap_peak`, so each cell agrees EXACTLY with ``gv vad-gap-peak
+    --min-rate`` / ``--min-rate-pct`` at the matching cell.
+
     No I/O, no torch import, so it is testable in isolation. Raises
     :class:`ValueError` if ``results`` length differs from the row×col product
-    (or if ``cuts_ms`` is empty / negative, or ``top_n`` < 1, delegated to
-    :func:`vad_gap_peak`).
+    (or if ``cuts_ms`` is empty / negative, ``top_n`` < 1, ``min_rate`` < 0, or
+    ``min_rate_pct`` is out of range / set together with ``min_rate``, delegated
+    to :func:`vad_gap_peak`).
     """
     expected = len(row_values) * len(col_values)
     if len(results) != expected:
@@ -4978,7 +5008,14 @@ def vad_gap_peak_grid(
         for cv in col_values:
             r = results[i]
             i += 1
-            p = vad_gap_peak(r, cuts_ms=cuts_ms, top_n=top_n, rate_pcts=rate_pcts)
+            p = vad_gap_peak(
+                r,
+                cuts_ms=cuts_ms,
+                top_n=top_n,
+                min_rate=min_rate,
+                min_rate_pct=min_rate_pct,
+                rate_pcts=rate_pcts,
+            )
             cells.append(
                 {
                     row_axis: rv,
@@ -4994,8 +5031,15 @@ def vad_gap_peak_grid(
                     # iter-369: the iter-354 top-N ranking at this cell (the
                     # scalar peak_* fields above still echo peaks[0]).
                     "peaks": p["peaks"],
+                    # iter-371: the iter-355/357 rate floor resolved to an absolute
+                    # rate at THIS cell. Equals min_rate for an absolute / no floor;
+                    # the per-cell percentile cut under min_rate_pct (so it reshapes
+                    # cell to cell as the cost distribution shifts).
+                    "effective_min_rate": p["effective_min_rate"],
                     # iter-367: the observed non-empty band-rate distribution at
                     # this cell (the iter-358 single-shot view, per grid cell).
+                    # Always the FULL pre-floor distribution — the sample
+                    # min_rate_pct reads against — so it is unchanged by the floor.
                     "band_rate_dist": p["band_rate_dist"],
                 }
             )
@@ -5012,10 +5056,12 @@ def render_vad_gap_peak_grid(
     row_axis="threshold",
     col_axis="min_silence_ms",
     top_n=1,
+    min_rate=0.0,
+    min_rate_pct=None,
     show_rate_dist=False,
     rate_pcts=DEFAULT_BAND_RATE_PCTS,
 ):
-    """Render a 2-D cost-peak grid as a plain-text table (iter-365; ``show_rate_dist`` iter-367; ``top_n`` iter-369).
+    """Render a 2-D cost-peak grid as a plain-text table (iter-365; ``show_rate_dist`` iter-367; ``top_n`` iter-369; ``min_rate`` / ``min_rate_pct`` iter-371).
 
     The human-readable twin of :func:`render_vad_gap_peak_grid_json`, the
     peak-side analogue of :func:`render_vad_gap_grid` and the 2-D analogue of
@@ -5057,6 +5103,17 @@ def render_vad_gap_peak_grid(
     already carry the single steepest band). The ranked block and the
     ``show_rate_dist`` block are independent — both may appear under a cell, the
     ranking first, mirroring :func:`render_vad_gap_peak_sweep`.
+
+    With ``min_rate`` / ``min_rate_pct`` (iter-371) the table gains a header line
+    naming the active rate floor (the iter-355/357 single-shot floor, applied per
+    grid cell), and the scalar peak columns + ``--top-n`` ranking already reflect
+    it (they name only surviving bands). For the ADAPTIVE ``min_rate_pct`` floor —
+    whose absolute cut differs at each cell — each cell also prints a short
+    "(floor: p<P> = <rate>/100ms)" note so the operator sees how the cutoff itself
+    reshapes across two knobs; the fixed absolute ``min_rate`` floor needs no
+    per-cell note (the cut is the same everywhere, so the header alone suffices).
+    The default (no floor) leaves the table byte-for-byte unchanged. Mirrors
+    :func:`render_vad_gap_peak_sweep`.
     """
     if any(r is None for r in results):
         return [
@@ -5065,15 +5122,31 @@ def render_vad_gap_peak_grid(
         ]
     cells = vad_gap_peak_grid(
         row_values, col_values, results, cuts_ms=cuts_ms,
-        row_axis=row_axis, col_axis=col_axis, top_n=top_n, rate_pcts=rate_pcts,
+        row_axis=row_axis, col_axis=col_axis, top_n=top_n,
+        min_rate=min_rate, min_rate_pct=min_rate_pct, rate_pcts=rate_pcts,
     )
     row_label = _SWEEP_AXIS_LABEL.get(row_axis, row_axis)
     col_label = _SWEEP_AXIS_LABEL.get(col_axis, col_axis)
     lines = [
         f"silero VAD gap cost-peak grid — {name} ({row_label} × {col_label})",
-        f"  {row_label:>11}  {col_label:>11}  segments  gaps  "
-        "peak_band_ms  merged  rate/100ms",
     ]
+    # iter-371: name the active rate floor once at the top — the per-cell scalar
+    # peak columns + --top-n ranking already exclude bands cheaper than it. Only
+    # emitted when a floor is set, so the default (no floor) header is unchanged.
+    if min_rate_pct is not None:
+        lines.append(
+            f"  rate floor:   p{_format_percentile_label(min_rate_pct)} of each "
+            "cell's observed band rates (per-cell cut shown below) (iter-371)"
+        )
+    elif min_rate > 0:
+        lines.append(
+            f"  rate floor:   {min_rate:.3f} per +100ms (only bands at or above "
+            "this are named) (iter-371)"
+        )
+    lines.append(
+        f"  {row_label:>11}  {col_label:>11}  segments  gaps  "
+        "peak_band_ms  merged  rate/100ms"
+    )
     for cell in cells:
         if not cell["peak_found"]:
             peak_cols = f"{'-':>12}  {'-':>6}  {'-':>10}"
@@ -5091,6 +5164,16 @@ def render_vad_gap_peak_grid(
             f"{_format_sweep_axis_value(col_axis, cell[col_axis]):>11}  "
             f"{cell['num_segments']:>8}  {cell['num_gaps']:>4}  {peak_cols}"
         )
+        if min_rate_pct is not None:
+            # iter-371: the adaptive floor resolves to a DIFFERENT absolute rate at
+            # each cell (it is the Pth percentile of THAT cell's own band rates),
+            # so name the per-cell cut under its row. The fixed absolute --min-rate
+            # floor is the same everywhere, so it needs no per-cell note — the
+            # header line above already states it.
+            lines.append(
+                f"      floor: p{_format_percentile_label(min_rate_pct)} = "
+                f"{cell['effective_min_rate']:.3f} per +100ms"
+            )
         if top_n > 1:
             # iter-369: the iter-354 top-N ranking at this cell, indented under
             # its row — one numbered line per ranked band (fewer than top_n when
@@ -5142,9 +5225,11 @@ def render_vad_gap_peak_grid_json(
     row_axis="threshold",
     col_axis="min_silence_ms",
     top_n=1,
+    min_rate=0.0,
+    min_rate_pct=None,
     rate_pcts=DEFAULT_BAND_RATE_PCTS,
 ):
-    """Render a 2-D cost-peak grid as a JSON string (iter-365; ``band_rate_dist`` iter-367; ``top_n`` iter-369).
+    """Render a 2-D cost-peak grid as a JSON string (iter-365; ``band_rate_dist`` iter-367; ``top_n`` iter-369; ``min_rate`` / ``min_rate_pct`` iter-371).
 
     Machine-readable twin of :func:`render_vad_gap_peak_grid`, so the grid can
     feed a plotting/tuning script. The payload carries both swept axis names
@@ -5175,6 +5260,17 @@ def render_vad_gap_peak_grid_json(
     echoed once at top level as ``top_n``. At the default ``top_n=1`` each cell's
     ``peaks`` holds the single steepest band (or is empty for a no-peak cell), so
     the payload is a strict superset of the iter-365/367 shape.
+
+    iter-371: like the single-shot JSON and the sweep's
+    ``render_vad_gap_peak_sweep_json`` (which echo ``min_rate`` / ``min_rate_pct``
+    and carry ``effective_min_rate`` per row), the payload echoes the requested
+    ``min_rate`` / ``min_rate_pct`` floor once at top level and every grid cell
+    carries ``effective_min_rate`` (the absolute rate the floor resolved to at
+    that cell — equal to ``min_rate`` when an absolute / no floor is in play, the
+    per-cell percentile cut under ``min_rate_pct``). The default no-floor payload
+    is a strict superset of the iter-369 shape (``effective_min_rate`` then 0.0 on
+    every cell). The floor genuinely filters, so the scalar ``peak_*`` columns and
+    each cell's ``peaks`` ranking already name only surviving bands.
     """
     if any(r is None for r in results):
         return json.dumps(
@@ -5189,7 +5285,8 @@ def render_vad_gap_peak_grid_json(
         )
     cells = vad_gap_peak_grid(
         row_values, col_values, results, cuts_ms=cuts_ms,
-        row_axis=row_axis, col_axis=col_axis, top_n=top_n, rate_pcts=rate_pcts,
+        row_axis=row_axis, col_axis=col_axis, top_n=top_n,
+        min_rate=min_rate, min_rate_pct=min_rate_pct, rate_pcts=rate_pcts,
     )
     payload = {
         "available": True,
@@ -5198,6 +5295,8 @@ def render_vad_gap_peak_grid_json(
         "col_axis": col_axis,
         "cuts_ms": list(cuts_ms),
         "top_n": top_n,
+        "min_rate": min_rate,
+        "min_rate_pct": min_rate_pct,
         "rate_pcts": list(rate_pcts),
         "grid": cells,
     }
@@ -5213,8 +5312,11 @@ def render_vad_gap_peak_grid_csv(
     cuts_ms=DEFAULT_GAP_CDF_CUTS_MS,
     row_axis="threshold",
     col_axis="min_silence_ms",
+    min_rate=0.0,
+    min_rate_pct=None,
+    rate_pcts=DEFAULT_BAND_RATE_PCTS,
 ):
-    """Render a 2-D cost-peak grid as CSV text (no trailing newline) (iter-365).
+    """Render a 2-D cost-peak grid as CSV text (no trailing newline) (iter-365; ``min_rate`` / ``min_rate_pct`` iter-371).
 
     The spreadsheet/plot-friendly twin of :func:`render_vad_gap_peak_grid_json`:
     where JSON nests the cells under a ``grid`` key, CSV emits a flat
@@ -5230,63 +5332,81 @@ def render_vad_gap_peak_grid_csv(
     table's ``-``). Any ``None`` in ``results`` (segmenter unavailable) yields a
     single ``# silero VAD unavailable: ...`` comment line. Pure: returns a single
     string built with the stdlib :mod:`csv` writer, trailing terminator stripped.
+
+    iter-371 threads the ``min_rate`` / ``min_rate_pct`` rate floor (iter-355/357)
+    into the core, so the scalar peak columns + ``peak_found`` already reflect it
+    (they name only surviving bands — unlike ``top_n`` / ``band_rate_dist``, the
+    floor genuinely filters, so the CSV MUST thread it to stay consistent with the
+    other faces). Because ``effective_min_rate`` is a SCALAR (not a nested ranking
+    / distribution), it fits cleanly as a column — so when a floor is active the
+    CSV appends a trailing ``effective_min_rate`` column carrying the per-cell
+    resolved cut (the same reshape the human note and JSON field show). The default
+    no-floor table is byte-for-byte unchanged (no extra column, exactly the
+    iter-365 ten-column schema), mirroring :func:`render_vad_gap_peak_sweep_csv`.
     """
     if any(r is None for r in results):
         return (
             "# silero VAD unavailable: install 'silero-vad' (pulls torch + "
             "torchaudio) to enable offline neural segmentation"
         )
+    # iter-371: only when a floor is active does the schema gain the trailing
+    # effective_min_rate column — the default no-floor CSV is unchanged.
+    floor_active = min_rate_pct is not None or min_rate > 0
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(
-        [
-            row_axis,
-            col_axis,
-            "num_segments",
-            "num_gaps",
-            "peak_found",
-            "peak_from_ms",
-            "peak_to_ms",
-            "peak_width_ms",
-            "peak_merged_added",
-            "peak_rate_per_100ms",
-        ]
-    )
+    header = [
+        row_axis,
+        col_axis,
+        "num_segments",
+        "num_gaps",
+        "peak_found",
+        "peak_from_ms",
+        "peak_to_ms",
+        "peak_width_ms",
+        "peak_merged_added",
+        "peak_rate_per_100ms",
+    ]
+    if floor_active:
+        header.append("effective_min_rate")
+    writer.writerow(header)
     for cell in vad_gap_peak_grid(
         row_values, col_values, results, cuts_ms=cuts_ms,
         row_axis=row_axis, col_axis=col_axis,
+        min_rate=min_rate, min_rate_pct=min_rate_pct, rate_pcts=rate_pcts,
     ):
         if cell["peak_found"]:
-            writer.writerow(
-                [
-                    cell[row_axis],
-                    cell[col_axis],
-                    cell["num_segments"],
-                    cell["num_gaps"],
-                    cell["peak_found"],
-                    _format_cut_label(cell["peak_from_ms"]),
-                    _format_cut_label(cell["peak_to_ms"]),
-                    _format_cut_label(cell["peak_width_ms"]),
-                    cell["peak_merged_added"],
-                    cell["peak_rate_per_100ms"],
-                ]
-            )
+            cells = [
+                cell[row_axis],
+                cell[col_axis],
+                cell["num_segments"],
+                cell["num_gaps"],
+                cell["peak_found"],
+                _format_cut_label(cell["peak_from_ms"]),
+                _format_cut_label(cell["peak_to_ms"]),
+                _format_cut_label(cell["peak_width_ms"]),
+                cell["peak_merged_added"],
+                cell["peak_rate_per_100ms"],
+            ]
         else:
             # None → "" (empty cell), the CSV spelling of JSON null / human "-".
-            writer.writerow(
-                [
-                    cell[row_axis],
-                    cell[col_axis],
-                    cell["num_segments"],
-                    cell["num_gaps"],
-                    cell["peak_found"],
-                    "",
-                    "",
-                    "",
-                    "",
-                    "",
-                ]
-            )
+            cells = [
+                cell[row_axis],
+                cell[col_axis],
+                cell["num_segments"],
+                cell["num_gaps"],
+                cell["peak_found"],
+                "",
+                "",
+                "",
+                "",
+                "",
+            ]
+        if floor_active:
+            # The per-cell resolved floor is always a number (min_rate, or the
+            # percentile cut) even on a no-peak cell — it describes the cutoff, not
+            # the peak — so it is filled regardless of peak_found.
+            cells.append(cell["effective_min_rate"])
+        writer.writerow(cells)
     return buf.getvalue().rstrip("\r\n")
 
 
@@ -8217,6 +8337,20 @@ def cmd_vad_gap_peak_grid(args, *, log=print, segmenter=None, availability=None)
     cell; the ``--json`` face always carries the ranking per cell as ``peaks`` plus
     a top-level ``top_n``; the CSV verdict-row schema is unchanged (the iter-368
     stance — it keeps echoing the single steepest band).
+
+    iter-371 adds ``--min-rate`` / ``--min-rate-pct``: the iter-355/357 single-shot
+    rate FLOOR, applied per grid cell (mutually exclusive, like the single-shot,
+    mirroring :func:`cmd_vad_gap_peak_sweep`'s per-row iter-370 view and completing
+    the floor view across the single-shot / sweep / grid trio). Unlike
+    ``--show-rate-dist`` / ``--top-n`` (purely additive), the floor FILTERS: it
+    drops bands cheaper than the threshold before ranking, so the scalar peak
+    columns + ``--top-n`` ranking reflect it on ALL three faces. The human table
+    gains a header naming the floor (plus, for the adaptive ``--min-rate-pct``, a
+    per-cell note of the resolved cut, which differs cell to cell); the ``--json``
+    face echoes ``min_rate`` / ``min_rate_pct`` and carries ``effective_min_rate``
+    per cell; the CSV — because the resolved cut is a SCALAR — appends a trailing
+    ``effective_min_rate`` column when a floor is active (the default no-floor CSV
+    is unchanged).
     """
     if segmenter is None or availability is None:
         from vad.silero import segment_recording, silero_available
@@ -8239,6 +8373,12 @@ def cmd_vad_gap_peak_grid(args, *, log=print, segmenter=None, availability=None)
     # 'peaks' + a top-level 'top_n'). The CSV's flat verdict-row schema keeps the
     # single steepest band, exactly the iter-368 stance.
     top_n = getattr(args, "top_n", 1)
+    # iter-371: --min-rate / --min-rate-pct set the iter-355/357 rate floor, per
+    # cell. The floor FILTERS bands (it can flip peak_found), so unlike
+    # --show-rate-dist / --top-n it threads into ALL three faces — including the
+    # CSV, which gains a trailing effective_min_rate column when a floor is active.
+    min_rate = getattr(args, "min_rate", 0.0)
+    min_rate_pct = getattr(args, "min_rate_pct", None)
 
     # Rows are always the gate; the column axis is whichever list was passed
     # (--min-speeches → floor; --speech-pads → region padding; --max-speeches →
@@ -8269,6 +8409,7 @@ def cmd_vad_gap_peak_grid(args, *, log=print, segmenter=None, availability=None)
                 render_vad_gap_peak_grid_json(
                     [], [], unavailable, name=args.wav, cuts_ms=cuts_ms,
                     row_axis=row_axis, col_axis=col_axis, top_n=top_n,
+                    min_rate=min_rate, min_rate_pct=min_rate_pct,
                     rate_pcts=rate_pcts,
                 )
             )
@@ -8277,12 +8418,15 @@ def cmd_vad_gap_peak_grid(args, *, log=print, segmenter=None, availability=None)
                 render_vad_gap_peak_grid_csv(
                     [], [], unavailable, name=args.wav, cuts_ms=cuts_ms,
                     row_axis=row_axis, col_axis=col_axis,
+                    min_rate=min_rate, min_rate_pct=min_rate_pct,
+                    rate_pcts=rate_pcts,
                 )
             )
         else:
             for line in render_vad_gap_peak_grid(
                 [], [], unavailable, name=args.wav, cuts_ms=cuts_ms,
                 row_axis=row_axis, col_axis=col_axis, top_n=top_n,
+                min_rate=min_rate, min_rate_pct=min_rate_pct,
                 show_rate_dist=show_rate_dist, rate_pcts=rate_pcts,
             ):
                 log(line)
@@ -8324,6 +8468,7 @@ def cmd_vad_gap_peak_grid(args, *, log=print, segmenter=None, availability=None)
             render_vad_gap_peak_grid_json(
                 row_values, col_values, results, name=name, cuts_ms=cuts_ms,
                 row_axis=row_axis, col_axis=col_axis, top_n=top_n,
+                min_rate=min_rate, min_rate_pct=min_rate_pct,
                 rate_pcts=rate_pcts,
             )
         )
@@ -8332,12 +8477,15 @@ def cmd_vad_gap_peak_grid(args, *, log=print, segmenter=None, availability=None)
             render_vad_gap_peak_grid_csv(
                 row_values, col_values, results, name=name, cuts_ms=cuts_ms,
                 row_axis=row_axis, col_axis=col_axis,
+                min_rate=min_rate, min_rate_pct=min_rate_pct,
+                rate_pcts=rate_pcts,
             )
         )
     else:
         for line in render_vad_gap_peak_grid(
             row_values, col_values, results, name=name, cuts_ms=cuts_ms,
             row_axis=row_axis, col_axis=col_axis, top_n=top_n,
+            min_rate=min_rate, min_rate_pct=min_rate_pct,
             show_rate_dist=show_rate_dist, rate_pcts=rate_pcts,
         ):
             log(line)
@@ -10553,6 +10701,37 @@ def build_parser():
         "the WHOLE ranking reorders across two knobs at once. The --json face "
         "always carries the ranking per cell as 'peaks'; the CSV keeps the single "
         "steepest band. Default: 1",
+    )
+    # iter-371: the iter-355/357 rate FLOOR, applied per grid cell. The two knobs
+    # set the same floor two ways (absolute vs adaptive percentile) and are
+    # mutually exclusive — the core also raises ValueError if both are given.
+    # Unlike --top-n / --show-rate-dist, the floor FILTERS bands, so the scalar
+    # peak columns reflect it on ALL three faces (the CSV gains a trailing
+    # effective_min_rate column when a floor is active). Mirrors
+    # vad-gap-peak-sweep's iter-370 floor group exactly.
+    vad_gap_peak_grid_floor = vad_gap_peak_grid.add_mutually_exclusive_group()
+    vad_gap_peak_grid_floor.add_argument(
+        "--min-rate",
+        type=nonneg_float_type,
+        default=0.0,
+        dest="min_rate",
+        help="Drop cost bands cheaper than this ABSOLUTE marginal rate (pauses "
+        "merged per +100ms of hangover) before ranking at EACH grid cell — the "
+        "iter-355 single-shot --min-rate, applied per cell (same cut everywhere). "
+        "Pairs with --top-n; mutually exclusive with --min-rate-pct. Default: 0.0 "
+        "(keep every non-empty band)",
+    )
+    vad_gap_peak_grid_floor.add_argument(
+        "--min-rate-pct",
+        type=percentile_type,
+        default=None,
+        dest="min_rate_pct",
+        help="Drop cost bands cheaper than the Pth PERCENTILE of EACH cell's OWN "
+        "observed non-empty band rates before ranking — the iter-357 single-shot "
+        "--min-rate-pct, applied per cell (an ADAPTIVE floor whose absolute cut "
+        "differs cell to cell, shown in the human note / JSON effective_min_rate / "
+        "CSV column). In (0, 100]; mutually exclusive with --min-rate. Default: "
+        "unset (use --min-rate)",
     )
     vad_gap_peak_grid.add_argument(
         "--show-rate-dist",
