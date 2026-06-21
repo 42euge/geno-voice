@@ -4414,8 +4414,15 @@ def render_vad_gap_sweep_csv(values, results, *, name, axis="threshold"):
     return buf.getvalue().rstrip("\r\n")
 
 
-def vad_gap_peak_sweep(values, results, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, axis="threshold"):
-    """Pair each swept-axis value with its COSTLIEST cost-curve band (iter-364).
+def vad_gap_peak_sweep(
+    values,
+    results,
+    *,
+    cuts_ms=DEFAULT_GAP_CDF_CUTS_MS,
+    axis="threshold",
+    rate_pcts=DEFAULT_BAND_RATE_PCTS,
+):
+    """Pair each swept-axis value with its COSTLIEST cost-curve band (iter-364; ``band_rate_dist`` iter-366).
 
     The peak-side analogue of :func:`vad_gap_sweep`. Where ``vad_gap_sweep``
     tabulates the silence-gap distribution (min/mean/max gap) across a swept
@@ -4435,11 +4442,26 @@ def vad_gap_peak_sweep(values, results, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, axis
     ``results`` list (each a ``SileroResult``-shaped object segmented at the
     matching value) and returns a list of rows ``{axis, "num_segments",
     "num_gaps", "peak_found", "peak_from_ms", "peak_to_ms", "peak_width_ms",
-    "peak_merged_added", "peak_rate_per_100ms"}``. The peak fields are ``None`` /
-    ``False`` for a row whose segmentation names no cost peak (a <2-segment
-    result with no gaps, or an all-valley range with no pause cluster), exactly
-    the "no structure to name" spelling :func:`vad_gap_peak` returns. The row's
-    swept-axis key IS ``axis`` (default ``"threshold"``). Anchors to
+    "peak_merged_added", "peak_rate_per_100ms", "band_rate_dist"}``. The peak
+    fields are ``None`` / ``False`` for a row whose segmentation names no cost
+    peak (a <2-segment result with no gaps, or an all-valley range with no pause
+    cluster), exactly the "no structure to name" spelling :func:`vad_gap_peak`
+    returns.
+
+    iter-366 adds ``band_rate_dist`` — the iter-358 summary of the OBSERVED
+    non-empty band-rate distribution at each swept value (``count`` / ``min`` /
+    ``mean`` / ``max`` + a ``percentiles`` list over ``rate_pcts``, default
+    p50/p75/p90/p99). It is the sweep-side view of where a chosen
+    ``--min-rate-pct`` floor would land at EACH knob setting: reading down the
+    column an operator sees not just how the steepest band moves but how the whole
+    cost-rate spread shifts as the segmenter knob tightens. A row whose
+    segmentation has no non-empty bands carries the empty distribution
+    (``count`` 0, aggregates ``None``, ``percentiles`` ``[]``) — the same "no
+    distribution to summarise" spelling the single-shot peak uses. The
+    distribution is computed over the FULL band set (before any floor), so it
+    always agrees with ``gv vad-gap-peak --show-rate-dist`` at the matching value.
+
+    The row's swept-axis key IS ``axis`` (default ``"threshold"``). Anchors to
     :func:`vad_gap_peak` (single peak — ``top_n=1``) so the per-row numbers agree
     EXACTLY with ``gv vad-gap-peak`` at each swept value. No I/O, no torch import,
     so it is testable in isolation. Raises :class:`ValueError` if the two lists
@@ -4453,7 +4475,7 @@ def vad_gap_peak_sweep(values, results, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, axis
         )
     rows = []
     for v, r in zip(values, results):
-        p = vad_gap_peak(r, cuts_ms=cuts_ms)
+        p = vad_gap_peak(r, cuts_ms=cuts_ms, rate_pcts=rate_pcts)
         rows.append(
             {
                 axis: v,
@@ -4465,13 +4487,25 @@ def vad_gap_peak_sweep(values, results, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, axis
                 "peak_width_ms": p["peak_width_ms"],
                 "peak_merged_added": p["peak_merged_added"],
                 "peak_rate_per_100ms": p["peak_rate_per_100ms"],
+                # iter-366: the observed non-empty band-rate distribution at this
+                # swept value (the iter-358 single-shot view, per row).
+                "band_rate_dist": p["band_rate_dist"],
             }
         )
     return rows
 
 
-def render_vad_gap_peak_sweep(values, results, *, name, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, axis="threshold"):
-    """Render a cost-peak sweep as a plain-text table (iter-364).
+def render_vad_gap_peak_sweep(
+    values,
+    results,
+    *,
+    name,
+    cuts_ms=DEFAULT_GAP_CDF_CUTS_MS,
+    axis="threshold",
+    show_rate_dist=False,
+    rate_pcts=DEFAULT_BAND_RATE_PCTS,
+):
+    """Render a cost-peak sweep as a plain-text table (iter-364; ``show_rate_dist`` iter-366).
 
     The human-readable twin of :func:`render_vad_gap_peak_sweep_json`, the
     peak-side analogue of :func:`render_vad_gap_sweep`. ``name`` is the WAV being
@@ -4485,13 +4519,25 @@ def render_vad_gap_peak_sweep(values, results, *, name, cuts_ms=DEFAULT_GAP_CDF_
     named peak always has rate > 0). Reading down the table the peak rate shows
     how expensive the densest pause cluster is at each knob setting — where it
     SHRINKS, raising the hangover through the steepest band costs less.
+
+    With ``show_rate_dist`` (iter-366) each row is followed by an indented
+    band-rate-distribution sub-block — the iter-358 single-shot ``--show-rate-dist``
+    view, per swept value: the count of non-empty bands, their min/mean/max rate,
+    and the ``rate_pcts`` percentiles (default p50/p75/p90/p99) — so an operator
+    sees not just how the steepest band moves but how the whole cost-rate spread
+    (the ``--min-rate-pct`` sample) shifts as the segmenter knob tightens. A row
+    whose segmentation has no non-empty bands prints a short "(no non-empty
+    bands)" note instead. The default ``False`` leaves the table byte-for-byte
+    unchanged. ``rate_pcts`` selects the displayed quantiles (and is threaded into
+    the core so the printed percentiles match ``gv vad-gap-peak --show-rate-dist
+    --rate-pcts`` at the matching value).
     """
     if any(r is None for r in results):
         return [
             "silero VAD unavailable: install 'silero-vad' (pulls torch + "
             "torchaudio) to enable offline neural segmentation"
         ]
-    rows = vad_gap_peak_sweep(values, results, cuts_ms=cuts_ms, axis=axis)
+    rows = vad_gap_peak_sweep(values, results, cuts_ms=cuts_ms, axis=axis, rate_pcts=rate_pcts)
     label = _SWEEP_AXIS_LABEL.get(axis, axis)
     lines = [
         f"silero VAD gap cost-peak sweep — {name}",
@@ -4513,11 +4559,31 @@ def render_vad_gap_peak_sweep(values, results, *, name, cuts_ms=DEFAULT_GAP_CDF_
             f"  {_format_sweep_axis_value(axis, row[axis]):>9}  "
             f"{row['num_segments']:>8}  {row['num_gaps']:>4}  {peak_cols}"
         )
+        if show_rate_dist:
+            # iter-366: the observed non-empty band-rate distribution at this
+            # swept value — the iter-358 single-shot view, indented under its row.
+            dist = row["band_rate_dist"]
+            if dist["count"] == 0:
+                lines.append(
+                    "      band-rate dist: (no non-empty bands — no rate "
+                    "distribution to summarise) (iter-366)"
+                )
+            else:
+                lines.append(
+                    f"      band-rate dist: {dist['count']} non-empty bands, "
+                    f"min {dist['min']:.3f} / mean {dist['mean']:.3f} / "
+                    f"max {dist['max']:.3f} per +100ms (iter-366)"
+                )
+                for entry in dist["percentiles"]:
+                    lines.append(
+                        f"        p{_format_percentile_label(entry['p'])}: "
+                        f"{entry['rate']:.3f} per +100ms"
+                    )
     return lines
 
 
-def render_vad_gap_peak_sweep_json(values, results, *, name, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, axis="threshold"):
-    """Render a cost-peak sweep as a JSON string (iter-364).
+def render_vad_gap_peak_sweep_json(values, results, *, name, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, axis="threshold", rate_pcts=DEFAULT_BAND_RATE_PCTS):
+    """Render a cost-peak sweep as a JSON string (iter-364; ``band_rate_dist`` iter-366).
 
     Machine-readable twin of :func:`render_vad_gap_peak_sweep`, so the sweep can
     feed a plotting/tuning script. The payload carries the swept ``axis`` name
@@ -4527,9 +4593,16 @@ def render_vad_gap_peak_sweep_json(values, results, *, name, cuts_ms=DEFAULT_GAP
     ``peak_to_ms`` / ``peak_width_ms`` / ``peak_merged_added`` /
     ``peak_rate_per_100ms`` (the peak fields ``null`` / ``false`` for a row that
     names no cost peak, the same JSON spelling of "no structure" the other peak
-    surfaces use). Any ``None`` in ``results`` → ``{"available": false}`` +
-    install hint, mirroring :func:`render_vad_gap_sweep_json`. Pure: returns a
-    single JSON string.
+    surfaces use).
+
+    iter-366: like the single-shot ``render_vad_gap_peak_json`` (which always
+    carries ``band_rate_dist`` regardless of ``--show-rate-dist``), every sweep
+    row carries a ``band_rate_dist`` summary of the observed non-empty band-rate
+    distribution at that swept value (the iter-358 view, per row); the payload
+    also echoes the ``rate_pcts`` the percentiles were taken at so a consumer can
+    label the quantiles without re-deriving them. Any ``None`` in ``results`` →
+    ``{"available": false}`` + install hint, mirroring
+    :func:`render_vad_gap_sweep_json`. Pure: returns a single JSON string.
     """
     if any(r is None for r in results):
         return json.dumps(
@@ -4542,12 +4615,13 @@ def render_vad_gap_peak_sweep_json(values, results, *, name, cuts_ms=DEFAULT_GAP
             },
             indent=2,
         )
-    rows = vad_gap_peak_sweep(values, results, cuts_ms=cuts_ms, axis=axis)
+    rows = vad_gap_peak_sweep(values, results, cuts_ms=cuts_ms, axis=axis, rate_pcts=rate_pcts)
     payload = {
         "available": True,
         "name": name,
         "axis": axis,
         "cuts_ms": list(cuts_ms),
+        "rate_pcts": list(rate_pcts),
         "sweep": rows,
     }
     return json.dumps(payload, indent=2)
@@ -7099,6 +7173,12 @@ def cmd_vad_gap_peak_sweep(args, *, log=print, segmenter=None, availability=None
     lazily so the parser stays torch-free. ``--csv`` is mutually exclusive with
     ``--json``; when ``silero-vad`` is absent the handler prints the install hint
     and returns, never crashing.
+
+    iter-366 adds ``--show-rate-dist`` / ``--rate-pcts``: the iter-358 single-shot
+    band-rate-distribution view, carried per swept value. ``--show-rate-dist``
+    appends an indented distribution sub-block under each human row; the ``--json``
+    face always carries it per row as ``band_rate_dist``; the CSV verdict-row
+    schema is unchanged (the iter-358 stance).
     """
     if segmenter is None or availability is None:
         from vad.silero import segment_recording, silero_available
@@ -7109,6 +7189,13 @@ def cmd_vad_gap_peak_sweep(args, *, log=print, segmenter=None, availability=None
     as_json = getattr(args, "json", False)
     as_csv = getattr(args, "csv", False)
     cuts_ms = args.cuts_ms
+    # iter-366: --show-rate-dist gates ONLY the human face's per-row band-rate
+    # distribution block (the JSON always carries band_rate_dist for machine
+    # consumers; the CSV's flat verdict-row schema has no place for it, exactly
+    # the iter-358 single-shot stance). --rate-pcts drives the percentile set for
+    # the human AND json faces.
+    show_rate_dist = getattr(args, "show_rate_dist", False)
+    rate_pcts = getattr(args, "rate_pcts", DEFAULT_BAND_RATE_PCTS)
 
     # Pick the swept axis, mirroring cmd_vad_gap_sweep: --min-silences sweeps the
     # hangover, --min-speeches the minimum-speech floor, --speech-pads the region
@@ -7137,11 +7224,11 @@ def cmd_vad_gap_peak_sweep(args, *, log=print, segmenter=None, availability=None
 
     if not availability():
         if as_json:
-            log(render_vad_gap_peak_sweep_json([], [None], name=args.wav, cuts_ms=cuts_ms, axis=axis))
+            log(render_vad_gap_peak_sweep_json([], [None], name=args.wav, cuts_ms=cuts_ms, axis=axis, rate_pcts=rate_pcts))
         elif as_csv:
             log(render_vad_gap_peak_sweep_csv([], [None], name=args.wav, cuts_ms=cuts_ms, axis=axis))
         else:
-            for line in render_vad_gap_peak_sweep([], [None], name=args.wav, cuts_ms=cuts_ms, axis=axis):
+            for line in render_vad_gap_peak_sweep([], [None], name=args.wav, cuts_ms=cuts_ms, axis=axis, show_rate_dist=show_rate_dist, rate_pcts=rate_pcts):
                 log(line)
         return
 
@@ -7167,11 +7254,11 @@ def cmd_vad_gap_peak_sweep(args, *, log=print, segmenter=None, availability=None
     results = [_seg(v) for v in values]
     name = results[0].name if results else args.wav
     if as_json:
-        log(render_vad_gap_peak_sweep_json(values, results, name=name, cuts_ms=cuts_ms, axis=axis))
+        log(render_vad_gap_peak_sweep_json(values, results, name=name, cuts_ms=cuts_ms, axis=axis, rate_pcts=rate_pcts))
     elif as_csv:
         log(render_vad_gap_peak_sweep_csv(values, results, name=name, cuts_ms=cuts_ms, axis=axis))
     else:
-        for line in render_vad_gap_peak_sweep(values, results, name=name, cuts_ms=cuts_ms, axis=axis):
+        for line in render_vad_gap_peak_sweep(values, results, name=name, cuts_ms=cuts_ms, axis=axis, show_rate_dist=show_rate_dist, rate_pcts=rate_pcts):
             log(line)
 
 
@@ -9255,6 +9342,27 @@ def build_parser():
         help="Force-split regions longer than this, in seconds — shared by "
         "all runs when sweeping --thresholds; ignored when sweeping "
         "--max-speeches; 'inf'/'none' never splits (default: inf)",
+    )
+    vad_gap_peak_sweep.add_argument(
+        "--show-rate-dist",
+        action="store_true",
+        dest="show_rate_dist",
+        help="Append the observed non-empty band-rate distribution (count, "
+        "min/mean/max, and the --rate-pcts percentiles) under EACH swept row of "
+        "the human table — the iter-358 single-shot --show-rate-dist view, per "
+        "swept value, so you can watch how the whole cost-rate spread (the "
+        "--min-rate-pct sample) shifts as the swept knob tightens. The --json "
+        "face always carries this per row as 'band_rate_dist'. Default: off",
+    )
+    vad_gap_peak_sweep.add_argument(
+        "--rate-pcts",
+        type=percentile_list_type,
+        default=list(DEFAULT_BAND_RATE_PCTS),
+        dest="rate_pcts",
+        help="Comma-separated percentiles to summarise each swept value's "
+        "band-rate distribution at, e.g. '50,90,99' (each in (0, 100]; order "
+        "preserved). Drives both the --show-rate-dist block and the --json "
+        "per-row 'band_rate_dist' percentiles (default 50,75,90,99)",
     )
     vad_gap_peak_sweep_fmt = vad_gap_peak_sweep.add_mutually_exclusive_group()
     vad_gap_peak_sweep_fmt.add_argument(

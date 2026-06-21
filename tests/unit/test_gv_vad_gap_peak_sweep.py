@@ -168,8 +168,22 @@ def test_core_basic_two_value_threshold_sweep():
         "peak_width_ms": 800.0,
         "peak_merged_added": 1,
         "peak_rate_per_100ms": 0.125,
+        # iter-366: the observed non-empty band-rate distribution at this value.
+        "band_rate_dist": {
+            "count": 1,
+            "min": 0.125,
+            "mean": 0.125,
+            "max": 0.125,
+            "percentiles": [
+                {"p": 50.0, "rate": 0.125},
+                {"p": 75.0, "rate": 0.125},
+                {"p": 90.0, "rate": 0.125},
+                {"p": 99.0, "rate": 0.125},
+            ],
+        },
     }
-    # The single-segment row has no pause: no peak, fields None / False.
+    # The single-segment row has no pause: no peak, fields None / False, and the
+    # empty band-rate distribution (iter-366).
     assert rows[1] == {
         "threshold": 0.9,
         "num_segments": 1,
@@ -180,6 +194,13 @@ def test_core_basic_two_value_threshold_sweep():
         "peak_width_ms": None,
         "peak_merged_added": None,
         "peak_rate_per_100ms": None,
+        "band_rate_dist": {
+            "count": 0,
+            "min": None,
+            "mean": None,
+            "max": None,
+            "percentiles": [],
+        },
     }
 
 
@@ -470,3 +491,214 @@ def test_handler_unavailable_csv():
                               segmenter=_make_segmenter(_three()),
                               availability=_avail_false)
     assert out[0].startswith("# silero VAD unavailable")
+
+
+# ---- iter-366: per-row band_rate_dist on the cost-peak sweep ------------
+#
+# iter-358 added the observed non-empty band-rate distribution (the
+# --min-rate-pct sample) to the SINGLE-shot `gv vad-gap-peak`. iter-366 carries
+# that same view into the SWEEP, one distribution per swept value, so an
+# operator watches not just how the steepest band moves but how the whole
+# cost-rate spread shifts as a segmenter knob tightens. The core + JSON always
+# carry it (machine consumers); --show-rate-dist gates the human face; the CSV
+# verdict-row schema is unchanged (iter-358 stance).
+
+
+def _multi_band():
+    """4 segments / 3 gaps (0.3s, 0.5s, 1.0s) landing in three distinct cost
+    bands, so band_rate_dist has count 3 — a meaningful spread to summarise."""
+    return _result((0.0, 1.0), (1.3, 2.0), (2.5, 3.0), (4.0, 5.0))
+
+
+def test_core_row_carries_band_rate_dist():
+    rows = gv.vad_gap_peak_sweep([0.5], [_multi_band()])
+    dist = rows[0]["band_rate_dist"]
+    assert dist["count"] == 3
+    assert dist["min"] == 0.125
+    assert dist["max"] == 0.5
+    # Default percentiles p50/p75/p90/p99.
+    assert [e["p"] for e in dist["percentiles"]] == [50.0, 75.0, 90.0, 99.0]
+
+
+def test_core_band_rate_dist_matches_single_shot():
+    """The per-row distribution equals an independent vad_gap_peak on the same
+    result — the sweep names the SAME spread the single-shot verdict does."""
+    r = _multi_band()
+    direct = gv.vad_gap_peak(r)["band_rate_dist"]
+    row = gv.vad_gap_peak_sweep([0.5], [r])[0]
+    assert row["band_rate_dist"] == direct
+
+
+def test_core_band_rate_dist_honors_rate_pcts():
+    rows = gv.vad_gap_peak_sweep([0.5], [_multi_band()], rate_pcts=[90.0])
+    assert [e["p"] for e in rows[0]["band_rate_dist"]["percentiles"]] == [90.0]
+
+
+def test_core_no_peak_row_has_empty_dist():
+    """An all-valley row has bands but none non-empty → the empty distribution
+    (count 0, aggregates None, percentiles [])."""
+    rows = gv.vad_gap_peak_sweep([0.5], [_all_valley()])
+    dist = rows[0]["band_rate_dist"]
+    assert dist["count"] == 0
+    assert dist["min"] is None
+    assert dist["percentiles"] == []
+
+
+def test_core_single_segment_row_has_empty_dist():
+    rows = gv.vad_gap_peak_sweep([0.9], [_single()])
+    assert rows[0]["band_rate_dist"]["count"] == 0
+
+
+def test_render_human_default_omits_dist():
+    """Without --show-rate-dist the human table is byte-for-byte the old shape:
+    no 'band-rate dist' sub-block."""
+    lines = gv.render_vad_gap_peak_sweep([0.3], [_multi_band()], name="rec.wav")
+    assert not any("band-rate dist" in ln for ln in lines)
+
+
+def test_render_human_show_rate_dist_appends_block():
+    lines = gv.render_vad_gap_peak_sweep([0.3], [_multi_band()], name="rec.wav",
+                                         show_rate_dist=True)
+    dist_lines = [ln for ln in lines if "band-rate dist" in ln]
+    assert len(dist_lines) == 1
+    assert "3 non-empty bands" in dist_lines[0]
+    assert "(iter-366)" in dist_lines[0]
+    # The default four percentile rows follow.
+    assert any(ln.strip().startswith("p50:") for ln in lines)
+    assert any(ln.strip().startswith("p99:") for ln in lines)
+
+
+def test_render_human_show_rate_dist_per_row():
+    """One distribution block per swept value (here two values)."""
+    lines = gv.render_vad_gap_peak_sweep([0.3, 0.7], [_multi_band(), _multi_band()],
+                                         name="rec.wav", show_rate_dist=True)
+    assert len([ln for ln in lines if "band-rate dist" in ln]) == 2
+
+
+def test_render_human_show_rate_dist_no_peak_note():
+    """A no-peak row under --show-rate-dist prints the 'no non-empty bands' note
+    rather than percentile rows."""
+    lines = gv.render_vad_gap_peak_sweep([0.5], [_all_valley()], name="rec.wav",
+                                         show_rate_dist=True)
+    note = [ln for ln in lines if "band-rate dist" in ln]
+    assert len(note) == 1
+    assert "no non-empty bands" in note[0]
+    assert not any(ln.strip().startswith("p50:") for ln in lines)
+
+
+def test_render_human_show_rate_dist_honors_rate_pcts():
+    lines = gv.render_vad_gap_peak_sweep([0.3], [_multi_band()], name="rec.wav",
+                                         show_rate_dist=True, rate_pcts=[90.0])
+    assert any(ln.strip().startswith("p90:") for ln in lines)
+    assert not any(ln.strip().startswith("p50:") for ln in lines)
+
+
+def test_render_json_rows_carry_band_rate_dist():
+    """The JSON face ALWAYS carries band_rate_dist per row (no flag), like the
+    single-shot render_vad_gap_peak_json."""
+    out = gv.render_vad_gap_peak_sweep_json([0.3], [_multi_band()], name="rec.wav")
+    payload = json.loads(out)
+    assert payload["rate_pcts"] == list(gv.DEFAULT_BAND_RATE_PCTS)
+    dist = payload["sweep"][0]["band_rate_dist"]
+    assert dist["count"] == 3
+    assert [e["p"] for e in dist["percentiles"]] == [50.0, 75.0, 90.0, 99.0]
+
+
+def test_render_json_echoes_custom_rate_pcts():
+    out = gv.render_vad_gap_peak_sweep_json([0.3], [_multi_band()], name="rec.wav",
+                                            rate_pcts=[50.0, 99.0])
+    payload = json.loads(out)
+    assert payload["rate_pcts"] == [50.0, 99.0]
+    assert [e["p"] for e in payload["sweep"][0]["band_rate_dist"]["percentiles"]] \
+        == [50.0, 99.0]
+
+
+def test_render_csv_schema_unchanged_no_dist_column():
+    """The CSV body is the iter-364 nine-column schema — band_rate_dist is NOT a
+    column (the iter-358 verdict-row stance)."""
+    out = gv.render_vad_gap_peak_sweep_csv([0.3], [_multi_band()], name="rec.wav")
+    header = list(csv.reader(io.StringIO(out)))[0]
+    assert header == [
+        "threshold", "num_segments", "num_gaps", "peak_found",
+        "peak_from_ms", "peak_to_ms", "peak_width_ms", "peak_merged_added",
+        "peak_rate_per_100ms",
+    ]
+    assert "band_rate_dist" not in out
+
+
+def test_parser_show_rate_dist_and_rate_pcts_defaults():
+    args = gv.build_parser().parse_args(["vad-gap-peak-sweep", "rec.wav"])
+    assert args.show_rate_dist is False
+    assert args.rate_pcts == list(gv.DEFAULT_BAND_RATE_PCTS)
+
+
+def test_parser_custom_rate_pcts_parsed():
+    args = gv.build_parser().parse_args(
+        ["vad-gap-peak-sweep", "rec.wav", "--rate-pcts", "50,99"]
+    )
+    assert args.rate_pcts == [50.0, 99.0]
+
+
+def test_handler_show_rate_dist_human(monkeypatch):
+    import types
+    fake = types.ModuleType("vad.silero")
+    fake.SileroParams = lambda **kw: kw
+    monkeypatch.setitem(sys.modules, "vad.silero", fake)
+    args = gv.build_parser().parse_args(
+        ["vad-gap-peak-sweep", "rec.wav", "--thresholds", "0.5",
+         "--show-rate-dist"]
+    )
+    lines = []
+    gv.cmd_vad_gap_peak_sweep(args, log=lines.append,
+                              segmenter=_make_segmenter(_multi_band()),
+                              availability=_avail_true)
+    assert any("band-rate dist" in ln for ln in lines)
+
+
+def test_handler_human_default_no_dist(monkeypatch):
+    import types
+    fake = types.ModuleType("vad.silero")
+    fake.SileroParams = lambda **kw: kw
+    monkeypatch.setitem(sys.modules, "vad.silero", fake)
+    args = gv.build_parser().parse_args(
+        ["vad-gap-peak-sweep", "rec.wav", "--thresholds", "0.5"]
+    )
+    lines = []
+    gv.cmd_vad_gap_peak_sweep(args, log=lines.append,
+                              segmenter=_make_segmenter(_multi_band()),
+                              availability=_avail_true)
+    assert not any("band-rate dist" in ln for ln in lines)
+
+
+def test_handler_threads_rate_pcts_to_json(monkeypatch):
+    import types
+    fake = types.ModuleType("vad.silero")
+    fake.SileroParams = lambda **kw: kw
+    monkeypatch.setitem(sys.modules, "vad.silero", fake)
+    args = gv.build_parser().parse_args(
+        ["vad-gap-peak-sweep", "rec.wav", "--thresholds", "0.5",
+         "--rate-pcts", "50,99", "--json"]
+    )
+    out = []
+    gv.cmd_vad_gap_peak_sweep(args, log=out.append,
+                              segmenter=_make_segmenter(_multi_band()),
+                              availability=_avail_true)
+    payload = json.loads(out[0])
+    assert payload["rate_pcts"] == [50.0, 99.0]
+    assert [e["p"] for e in payload["sweep"][0]["band_rate_dist"]["percentiles"]] \
+        == [50.0, 99.0]
+
+
+def test_handler_unavailable_json_carries_no_dist(monkeypatch):
+    """The unavailable JSON degrade path is unchanged (no sweep rows to carry a
+    distribution)."""
+    args = gv.build_parser().parse_args(
+        ["vad-gap-peak-sweep", "rec.wav", "--show-rate-dist", "--json"]
+    )
+    out = []
+    gv.cmd_vad_gap_peak_sweep(args, log=out.append,
+                              segmenter=_make_segmenter(_multi_band()),
+                              availability=_avail_false)
+    payload = json.loads(out[0])
+    assert payload["available"] is False
+    assert "sweep" not in payload
