@@ -12,6 +12,7 @@ Usage:
     gv vad recording.wav --json # machine-readable segmentation (SileroResult.to_dict shape)
     gv vad-gaps recording.wav  # report the silence gaps BETWEEN speech regions (tune --min-silence-ms)
     gv vad-gaps recording.wav --json # machine-readable gap stats + per-gap list
+    gv vad-gap-hist recording.wav --bin-width-s 0.5  # histogram the silence-gap durations (see the distribution shape)
     gv vad-gap-sweep recording.wav --thresholds 0.3,0.5,0.7,0.9  # sweep N gates, tabulate how the min gap moves
     gv vad-gap-grid recording.wav --thresholds 0.3,0.5,0.7 --min-silences 400,800  # gate × hangover gap grid
     gv vad-diff recording.wav --threshold-a 0.5 --threshold-b 0.7  # compare two P(speech) gates
@@ -1774,6 +1775,190 @@ def render_vad_gaps_csv(result):
     return buf.getvalue().rstrip("\r\n")
 
 
+def vad_gap_histogram(result, *, bin_width_s=0.5):
+    """Bucket the inter-segment silence gaps into a fixed-width histogram (iter-336).
+
+    The min/mean/max aggregates :func:`vad_silence_gaps` reports collapse the
+    silence distribution to three numbers; they cannot tell a *bimodal* pause
+    pattern (a cluster of short within-turn pauses plus a cluster of long
+    between-turn pauses) from a uniform spread with the same min/max. That shape
+    is exactly what an operator tuning the end-of-turn hangover
+    (``--min-silence-ms`` / the live ``chat.vad.silence_duration``) needs: a
+    clear valley between a short-pause mode and a long-pause mode is the safe
+    place to set the hangover, and a histogram shows that valley where the
+    aggregates hide it. This is the distribution-shape complement of
+    :func:`vad_silence_gaps`.
+
+    Pure: takes any object exposing the ``SileroResult`` shape and a positive
+    ``bin_width_s`` and returns a plain ``dict`` — it anchors to
+    :func:`vad_silence_gaps` for the gap list + aggregates (so the totals always
+    agree with ``gv vad-gaps``) and adds a ``bins`` list. Bins are half-open
+    ``[lo, hi)`` intervals of width ``bin_width_s`` starting at ``0.0``; a gap of
+    exactly ``g`` falls in bin ``floor(g / bin_width_s)`` (a gap on a boundary
+    goes to the UPPER bin, standard half-open convention), and the bin span
+    covers from ``0`` up to and including the max gap. Each bin records its
+    ``lo_s`` / ``hi_s`` (rounded to 3 places, matching the sibling gap surfaces)
+    and integer ``count``; the counts sum to ``num_gaps``. A result with fewer
+    than 2 segments has no gaps, so ``bins`` is empty (no distribution to shape)
+    and the aggregates are ``None``, the same distinction the other gap surfaces
+    make. Raises :class:`ValueError` on a non-positive / NaN ``bin_width_s``.
+    """
+    if not (bin_width_s > 0):  # also rejects NaN (NaN > 0 is False)
+        raise ValueError(f"bin_width_s must be positive, got {bin_width_s!r}")
+    d = vad_silence_gaps(result)
+    gaps = d["gaps"]
+    bins = []
+    if gaps:
+        # Number of bins spans 0 up to and including the max gap. floor(max/bw)
+        # is the index of the bin the max gap lands in; +1 makes it a count.
+        n_bins = int(d["max_gap_s"] / bin_width_s) + 1
+        counts = [0] * n_bins
+        for gap in gaps:
+            idx = int(gap / bin_width_s)
+            # Clamp defensively: floating-point can nudge a boundary gap one bin
+            # past the top (e.g. 1.5 / 0.5 == 2.9999...), which would index out.
+            if idx >= n_bins:
+                idx = n_bins - 1
+            counts[idx] += 1
+        for i, count in enumerate(counts):
+            bins.append(
+                {
+                    "lo_s": round(i * bin_width_s, 3),
+                    "hi_s": round((i + 1) * bin_width_s, 3),
+                    "count": count,
+                }
+            )
+    return {
+        "num_segments": d["num_segments"],
+        "num_gaps": d["num_gaps"],
+        "bin_width_s": bin_width_s,
+        "min_gap_s": d["min_gap_s"],
+        "max_gap_s": d["max_gap_s"],
+        "mean_gap_s": d["mean_gap_s"],
+        "total_silence_s": d["total_silence_s"],
+        "bins": bins,
+    }
+
+
+def render_vad_gap_histogram(result, *, bin_width_s=0.5):
+    """Render the silence-gap histogram as plain-text report lines (iter-336).
+
+    The human-readable face of :func:`vad_gap_histogram`, the distribution-shape
+    twin of :func:`render_vad_gaps`. ``result`` of ``None`` (segmenter
+    unavailable) yields the shared install hint. A result with fewer than 2
+    segments has no gaps, so it prints the same short explanatory line
+    :func:`render_vad_gaps` uses (no distribution to shape). Otherwise it prints
+    the aggregate header (min/mean/max, total silence — naming the actionable
+    ``--min-silence-ms`` knob on the min-gap line) then one line per bin: the
+    half-open ``[lo, hi)`` range, the count, and an ASCII bar scaled to the
+    busiest bin so the distribution shape (and any valley between a short-pause
+    and a long-pause mode) is visible at a glance. Pure: returns a list of
+    strings (no I/O, no ANSI).
+    """
+    if result is None:
+        return [
+            "silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        ]
+    h = vad_gap_histogram(result, bin_width_s=bin_width_s)
+    lines = [
+        f"silero VAD gap histogram — {result.name}",
+        f"  segments:     {h['num_segments']}",
+        f"  gaps:         {h['num_gaps']} (pauses between consecutive speech regions)",
+        f"  bin width:    {bin_width_s:.3f}s",
+    ]
+    if h["num_gaps"] == 0:
+        lines.append("  (fewer than 2 segments — no inter-segment pause to measure)")
+        return lines
+    lines.append(
+        f"  min gap:      {h['min_gap_s']:.3f}s "
+        "(shortest real pause — keep --min-silence-ms below this to avoid "
+        "merging turns)"
+    )
+    lines.append(f"  mean gap:     {h['mean_gap_s']:.3f}s")
+    lines.append(f"  max gap:      {h['max_gap_s']:.3f}s")
+    lines.append(f"  total silence:{h['total_silence_s']:8.3f}s")
+    # Scale the ASCII bar to the busiest bin so the tallest is a fixed width.
+    max_count = max(b["count"] for b in h["bins"])
+    bar_width = 40
+    for b in h["bins"]:
+        filled = (
+            0 if max_count == 0 else round(b["count"] / max_count * bar_width)
+        )
+        bar = "#" * filled
+        lines.append(
+            f"  [{b['lo_s']:6.3f}, {b['hi_s']:6.3f})  {b['count']:>4}  {bar}"
+        )
+    return lines
+
+
+def render_vad_gap_histogram_json(result, *, bin_width_s=0.5):
+    """Render the silence-gap histogram as a JSON string (iter-336).
+
+    Machine-readable twin of :func:`render_vad_gap_histogram`, mirroring the
+    degrade-to-``{"available": false}`` contract the other VAD JSON renderers
+    use. Carries the aggregate stats plus the ``bin_width_s`` and a ``bins`` list
+    of ``{lo_s, hi_s, count}`` objects (empty for a <2-segment result, the same
+    JSON spelling of "no distribution" the other gap surfaces use). Pure: built
+    from :func:`vad_gap_histogram`, so it works on any ``SileroResult``-shaped
+    object.
+    """
+    if result is None:
+        return json.dumps(
+            {
+                "available": False,
+                "hint": (
+                    "install 'silero-vad' (pulls torch + torchaudio) to enable "
+                    "offline neural segmentation"
+                ),
+            },
+            indent=2,
+        )
+    h = vad_gap_histogram(result, bin_width_s=bin_width_s)
+    payload = {
+        "available": True,
+        "name": result.name,
+        "num_segments": h["num_segments"],
+        "num_gaps": h["num_gaps"],
+        "bin_width_s": h["bin_width_s"],
+        "min_gap_s": h["min_gap_s"],
+        "max_gap_s": h["max_gap_s"],
+        "mean_gap_s": h["mean_gap_s"],
+        "total_silence_s": h["total_silence_s"],
+        "bins": h["bins"],
+    }
+    return json.dumps(payload, indent=2)
+
+
+def render_vad_gap_histogram_csv(result, *, bin_width_s=0.5):
+    """Render the silence-gap histogram as a per-bin CSV table (iter-336).
+
+    The spreadsheet/plot-friendly twin of :func:`render_vad_gap_histogram` /
+    :func:`render_vad_gap_histogram_json`, completing the human / ``--json`` /
+    ``--csv`` trio every VAD-analysis surface carries. The natural CSV unit is
+    one row per bin: ``bin_index,lo_s,hi_s,count`` — the shape a plotter wants
+    (count-vs-bin, a bar chart) and a spreadsheet wants (one bin per line). The
+    aggregate stats are derivable from the per-gap data so they are NOT
+    duplicated into the table, matching :func:`render_vad_gaps_csv`'s reasoning.
+    A result with fewer than 2 segments yields the header alone (a valid
+    empty-bodied table). ``result`` of ``None`` (segmenter unavailable) yields a
+    single ``# silero VAD unavailable: ...`` comment line. Pure: built with the
+    stdlib :mod:`csv` writer, trailing terminator stripped.
+    """
+    if result is None:
+        return (
+            "# silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        )
+    h = vad_gap_histogram(result, bin_width_s=bin_width_s)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["bin_index", "lo_s", "hi_s", "count"])
+    for i, b in enumerate(h["bins"], start=1):
+        writer.writerow([i, b["lo_s"], b["hi_s"], b["count"]])
+    return buf.getvalue().rstrip("\r\n")
+
+
 def vad_gap_sweep(values, results, *, axis="threshold"):
     """Pair each swept-axis value with its inter-segment silence-gap summary.
 
@@ -3521,6 +3706,64 @@ def cmd_vad_gaps(args, *, log=print, segmenter=None, availability=None):
             log(line)
 
 
+def cmd_vad_gap_histogram(args, *, log=print, segmenter=None, availability=None):
+    """Segment one WAV offline and report the inter-segment silence-gap HISTOGRAM.
+
+    iter-336's distribution-shape complement of :func:`cmd_vad_gaps`. Where
+    ``gv vad-gaps`` reports the min/mean/max gap aggregates, ``gv vad-gap-hist
+    recording.wav`` buckets the pauses into fixed-width bins (``--bin-width-s``)
+    so the operator can SEE the distribution shape — a bimodal pattern (a
+    short-pause mode plus a long-pause mode with a valley between) is the signal
+    that there is a safe place to set the end-of-turn hangover
+    (``--min-silence-ms`` / the live ``chat.vad.silence_duration``), and that
+    shape is invisible in the three aggregate numbers alone.
+
+    Same injected-dependency contract as :func:`cmd_vad_gaps`: ``segmenter`` /
+    ``availability`` default to the real :mod:`vad.silero` functions, imported
+    lazily so the parser stays torch-free. The segmenter knobs are shared with
+    ``gv vad`` so the gaps are measured against the same segmentation. ``--csv``
+    is mutually exclusive with ``--json``; when ``silero-vad`` is absent the
+    handler prints the install hint and returns, never crashing.
+    """
+    if segmenter is None or availability is None:
+        from vad.silero import segment_recording, silero_available
+
+        segmenter = segment_recording if segmenter is None else segmenter
+        availability = silero_available if availability is None else availability
+
+    as_json = getattr(args, "json", False)
+    as_csv = getattr(args, "csv", False)
+    bin_width_s = args.bin_width_s
+
+    if not availability():
+        if as_json:
+            log(render_vad_gap_histogram_json(None, bin_width_s=bin_width_s))
+        elif as_csv:
+            log(render_vad_gap_histogram_csv(None, bin_width_s=bin_width_s))
+        else:
+            for line in render_vad_gap_histogram(None, bin_width_s=bin_width_s):
+                log(line)
+        return
+
+    from vad.silero import SileroParams
+
+    params = SileroParams(
+        threshold=args.threshold,
+        min_speech_ms=args.min_speech_ms,
+        min_silence_ms=args.min_silence_ms,
+        speech_pad_ms=args.speech_pad_ms,
+        max_speech_s=args.max_speech_s,
+    )
+    result = segmenter(args.wav, params=params)
+    if as_json:
+        log(render_vad_gap_histogram_json(result, bin_width_s=bin_width_s))
+    elif as_csv:
+        log(render_vad_gap_histogram_csv(result, bin_width_s=bin_width_s))
+    else:
+        for line in render_vad_gap_histogram(result, bin_width_s=bin_width_s):
+            log(line)
+
+
 def cmd_vad_gap_sweep(args, *, log=print, segmenter=None, availability=None):
     """Segment one WAV across a swept knob and tabulate the SILENCE-gap distribution.
 
@@ -4226,6 +4469,7 @@ DEFAULT_HANDLERS = {
     "calibrate-base-wpm": cmd_calibrate_base_wpm,
     "vad": cmd_vad,
     "vad-gaps": cmd_vad_gaps,
+    "vad-gap-hist": cmd_vad_gap_histogram,
     "vad-gap-sweep": cmd_vad_gap_sweep,
     "vad-diff": cmd_vad_diff,
     "vad-gap-diff": cmd_vad_gap_diff,
@@ -4640,6 +4884,82 @@ def build_parser():
         help="Emit a flat index,after_segment,after_segment_end_s,gap_s CSV "
         "table (one row per gap) for spreadsheets/plots; mutually exclusive "
         "with --json",
+    )
+
+    # gv vad-gap-hist — segment one WAV and HISTOGRAM the inter-segment silence
+    # gaps into fixed-width bins (iter-336). The distribution-shape complement of
+    # vad-gaps: where vad-gaps reports the min/mean/max aggregates, vad-gap-hist
+    # shows the full pause-length distribution, so a bimodal pattern (short
+    # within-turn pauses + long between-turn pauses, with a valley between) is
+    # visible — that valley is the safe place to set the end-of-turn hangover
+    # (--min-silence-ms). Shares all segmenter knobs with `gv vad`.
+    vad_gap_hist = sub.add_parser(
+        "vad-gap-hist",
+        help="Offline Silero VAD — segment a WAV and histogram the silence gaps "
+        "between speech regions into fixed-width bins (see the pause-length "
+        "distribution shape, not just min/mean/max)",
+    )
+    vad_gap_hist.add_argument(
+        "wav",
+        help="Path to a 16-bit PCM WAV file to segment",
+    )
+    vad_gap_hist.add_argument(
+        "--bin-width-s",
+        type=positive_float_type,
+        default=0.5,
+        dest="bin_width_s",
+        help="Histogram bin width in seconds (default: 0.5)",
+    )
+    vad_gap_hist.add_argument(
+        "--threshold",
+        type=unit_interval_type,
+        default=vad_threshold_default,
+        help=f"P(speech) gate in [0, 1] (default: {vad_threshold_default})",
+    )
+    vad_gap_hist.add_argument(
+        "--min-speech-ms",
+        type=nonneg_float_type,
+        default=vad_min_speech_default,
+        dest="min_speech_ms",
+        help="Drop speech regions shorter than this, in ms "
+        f"(default: {vad_min_speech_default})",
+    )
+    vad_gap_hist.add_argument(
+        "--min-silence-ms",
+        type=nonneg_float_type,
+        default=vad_min_silence_default,
+        dest="min_silence_ms",
+        help="Trailing silence before a region ends, in ms — matches the "
+        f"pipecat stop_secs=0.8 live default (default: {vad_min_silence_default})",
+    )
+    vad_gap_hist.add_argument(
+        "--speech-pad-ms",
+        type=nonneg_float_type,
+        default=vad_speech_pad_default,
+        dest="speech_pad_ms",
+        help="Symmetric padding added to each region, in ms "
+        f"(default: {vad_speech_pad_default})",
+    )
+    vad_gap_hist.add_argument(
+        "--max-speech-s",
+        type=max_speech_type,
+        default=vad_max_speech_default,
+        dest="max_speech_s",
+        help="Force-split regions longer than this, in seconds; 'inf'/'none' "
+        "never splits (default: inf)",
+    )
+    vad_gap_hist_fmt = vad_gap_hist.add_mutually_exclusive_group()
+    vad_gap_hist_fmt.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON (aggregate stats + per-bin list) "
+        "instead of the human-readable report",
+    )
+    vad_gap_hist_fmt.add_argument(
+        "--csv",
+        action="store_true",
+        help="Emit a flat bin_index,lo_s,hi_s,count CSV table (one row per bin) "
+        "for spreadsheets/plots; mutually exclusive with --json",
     )
 
     # gv vad-gap-sweep — segment one WAV across a swept knob and tabulate the

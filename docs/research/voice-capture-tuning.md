@@ -140,6 +140,37 @@ alone. Same degrade-to-install-hint contract as `gv vad` when `silero-vad` is
 absent. `tests/unit/test_gv_vad_gaps.py` covers the core, the three renderers,
 and the handler without torch.
 
+### `gv vad-gap-hist` — the pause-length distribution shape (iter-336)
+
+`gv vad-gaps` collapses the silence distribution to three numbers (min/mean/max)
+— but those cannot tell a **bimodal** pause pattern (a cluster of short
+within-turn pauses plus a cluster of long between-turn pauses) from a uniform
+spread with the same min/max. `gv vad-gap-hist` shows the shape: it buckets the
+gaps into fixed-width bins (`--bin-width-s`, default `0.5s`) and prints a count
+per bin. When the histogram is bimodal, the **valley** between the short-pause
+mode and the long-pause mode is the safe place to set the end-of-turn hangover
+(`--min-silence-ms` / the live `chat.vad.silence_duration`) — short pauses fall
+below it (turns stay together) and real turn-ends fall above it.
+
+```
+gv vad-gap-hist recording.wav                   # 0.5s bins + ASCII bars
+gv vad-gap-hist recording.wav --bin-width-s 0.25 # finer bins
+gv vad-gap-hist recording.wav --threshold 0.7   # histogram under a stricter gate
+gv vad-gap-hist recording.wav --json            # aggregate stats + per-bin list
+gv vad-gap-hist recording.wav --csv             # one row per bin for a spreadsheet
+```
+
+It shares all the segmenter knobs with `gv vad` (so the gaps are measured
+against the same segmentation) and carries the full human / `--json` / `--csv`
+trio. The pure core `vad_gap_histogram` anchors to `vad_silence_gaps` for the
+gap list and aggregates (so the totals always agree with `gv vad-gaps`); bins are
+half-open `[lo, hi)` intervals starting at `0.0`, and the per-bin counts sum to
+the gap count. A recording with fewer than 2 segments has no inter-segment pause:
+the human report says so, the JSON emits an empty `bins` list, and the CSV emits
+the header alone. Same degrade-to-install-hint contract as `gv vad` when
+`silero-vad` is absent. `tests/unit/test_gv_vad_gap_histogram.py` covers the
+core, the three renderers, and the handler without torch.
+
 ### `gv vad-gap-sweep` — how the shortest pause moves (iter-330)
 
 `gv vad-gaps` reports the silence-gap distribution at **one** knob setting; `gv

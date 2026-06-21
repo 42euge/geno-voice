@@ -47,6 +47,7 @@ MKDOCS = ROOT / "mkdocs.yml"
 VAD_SUBCOMMANDS = (
     "vad",
     "vad-gaps",
+    "vad-gap-hist",
     "vad-gap-sweep",
     "vad-diff",
     "vad-gap-diff",
