@@ -30891,3 +30891,78 @@ re-run on main post-merge (4473 passed, ~46s).
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-337 — gv vad-gap-hist end-to-end integration test over the real corpus
+
+- **Date:** 2026-06-20
+- **Branch:** iter-337-vad-gap-hist-integration (ff-merged to main, worktree removed)
+- **Commit:** eef2325
+
+**Why.** iter-336's next-item #1: "An integration test for `gv vad-gap-hist`
+over the real corpus. The analogue of the iter-329/331/333/335 gap-family
+integration laps." iter-336 shipped the histogram surface with full UNIT
+coverage but drives only an injected stub segmenter. This lap adds the
+integration test that drives the REAL Silero engine, completing the silence-gap
+family's end-to-end coverage across all five axes: point (`vad-gaps`, iter-329
+integration), sweep (`vad-gap-sweep`, iter-331), grid (`vad-gap-grid`,
+iter-333), diff (`vad-gap-diff`, iter-335), and now histogram (`vad-gap-hist`,
+this lap).
+
+**What it pins.** `tests/integration/test_gv_vad_gap_histogram_cli.py` (new, +13
+tests), modeled on the sibling `test_gv_vad_gap_diff_cli.py` (iter-335) with the
+same skip contract (skips when the uncommitted recordings or silero-vad + torch
+are absent):
+- **THE GATE** — the 31s continuous recording (which energy-VAD cannot split)
+  must yield ≥2 segments and ≥1 inter-segment gap at the baseline 0.5 gate, so
+  there is a distribution to bucket (≥1 non-empty bin).
+- **The anchoring property** — the histogram's gap count and aggregates equal an
+  independent `gv vad-gaps --json` run segmented at the same gate, proving it
+  buckets the SAME segmentation a standalone `gv vad-gaps` produces, not a
+  re-derived one.
+- **Bin counts sum to `num_gaps`** across three bin widths (0.25/0.5/1.0) — every
+  gap bucketed exactly once, none dropped or double-counted.
+- **Every gap lands in its indexed bin** — re-derive the per-bin counts from the
+  raw `gap_s` values (`floor(gap / bin_width_s)`, with the same defensive float
+  clamp the implementation uses) and require `lo_s <= gap < hi_s` for the chosen
+  bin; the derived counts must equal the reported counts.
+- **min/max land in first/last non-empty bins** — the histogram's extremes agree
+  with the aggregate min/max gaps.
+- **CSV matches JSON** — same bin count, per-bin ranges, and counts across the
+  two machine-readable surfaces.
+- **The human report** carries the title, the actionable `--min-silence-ms` knob
+  hint, the `bin width:` line, and ≥1 ASCII bar (a `#`).
+- **Per-recording:** every corpus WAV emits a well-formed human histogram and a
+  parseable JSON payload with `num_gaps == num_segments - 1` (or 0/empty bins for
+  a single region), bin counts summing to `num_gaps`, and contiguous half-open
+  `[lo, hi)` bins of the requested width.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4473 passed**
+(unchanged; the new test lives under `tests/integration/`, outside the unit
+GATE), run in the feature worktree before ff-merge AND re-run on main
+post-merge (4473 passed, ~35s).
+- Integration: the new module was verified **13/13 passed** against the REAL
+  Silero engine + recording corpus in the worktree (by temporarily symlinking
+  the host recordings in, then removing the symlink before commit), in ~10s.
+  Collects cleanly (8 tests, skip-gated) when recordings are absent.
+
+**Next planned items:**
+1. **[gv CLI] The silence-gap family is now COMPLETE end to end across all five
+   axes** — point/sweep/grid/diff/histogram each have full unit + real-corpus
+   integration coverage. A natural lower-effort next: a human-table golden-output
+   assertion for one of these surfaces (the tests assert structure + substrings,
+   not the full rendered block — e.g. pin the exact aligned `gv vad-gap-hist` bar
+   block over a fixed stub segmentation, asserting bar scaling to the busiest
+   bin).
+2. **[gv CLI] A genuinely new gap-family surface** if the golden-output item
+   feels too small: e.g. a `gv vad-gap-percentiles` (p50/p90/p99 of the pause
+   distribution) — distinct from min/mean/max by being robust to outliers, or a
+   cumulative-distribution view of where the hangover threshold cuts.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~31 leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
