@@ -32344,3 +32344,82 @@ re-run on main post-merge (4877 passed, ~42s).
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    ~31 leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-355 — gv vad-gap-peak `--min-rate` — drop bands cheaper than a floor
+
+- **Date:** 2026-06-21
+- **Branch:** iter-355-peak-minrate (ff-merged to main, worktree removed)
+- **Commit:** 1959452
+
+**Why.** The standing next-item #1 from iter-354: "a `--min-rate` floor so the
+ranked list drops bands cheaper than a threshold (only the bands worth worrying
+about)." A genuine new behaviour on the existing iter-350/354 verdict surface —
+not an 18th chat-metrics clone (the family is declared complete, iter-328) and
+not another `*-sweep` clone. It pairs naturally with iter-354's `--top-n`: "give
+me the up-to-N steepest bands, but only those costing at least X." It answers the
+question the ranked list raises ("which of these bands actually matter?") by
+letting the operator set a cost floor below which a band isn't worth naming.
+
+**What it is.** iter-350's `gv vad-gap-peak` names the single steepest cost band;
+iter-354's `--top-n N` ranks the N steepest. `--min-rate X` is a FLOOR applied
+BEFORE the `top_n` truncation: bands whose `rate_per_100ms` is strictly below `X`
+are dropped from the ranking. The default `0.0` keeps every non-empty band (a
+band's rate is `> 0` exactly when it merges at least one pause), so it is
+byte-for-byte the iter-354 behaviour on all three faces. When the floor filters
+out EVERY band there is no peak to name: `peak_found` `False`, scalar `peak_*`
+`None`, `peaks` empty — the same "no structure to name" spelling the all-valley
+case uses. The applied floor is echoed as `min_rate`.
+
+**What landed in `examples/gv.py` (+85 net lines).**
+- `vad_gap_peak(result, *, cuts_ms, top_n=1, min_rate=0.0)` — the ranking
+  generator now also requires `rate_per_100ms >= min_rate`; raises `ValueError`
+  on `min_rate < 0` (a negative floor is nonsensical — every rate is
+  non-negative); surfaces the applied `min_rate` in the result dict. `min_rate=0.0`
+  keeps every non-empty band (the rate-`> 0` filter already excludes valleys).
+- `render_vad_gap_peak` / `_json` / `_csv` thread `min_rate` through. Human: a
+  `rate floor:` line when `min_rate > 0`, plus a floor-specific no-peak message
+  ("no cost peak meets the rate floor … lower --min-rate"); `min_rate=0.0` is the
+  unchanged face. JSON: adds a `min_rate` key (default `0.0`). CSV: SAME six
+  columns — the floor only changes WHICH bands rank, not the schema; an
+  all-filtered range emits the legacy single `peak_found=False` blank row (same
+  as the all-valley case), so the clean column union with the single-peak CSV is
+  preserved.
+- `cmd_vad_gap_peak` reads `args.min_rate` (getattr fallback to `0.0` for older
+  callers) and passes it to all three renderers; new `--min-rate` subparser arg
+  (`nonneg_float_type`, default `0.0`).
+
+**Tests.** `tests/unit/test_gv_vad_gap_peak.py` (+18, 82 → 100): parser
+default/accept/reject-bad (negative/nan/non-number); core default-keeps-every-
+non-empty-band (`==` the iter-354 result), drops-cheaper-bands, inclusive
+boundary (a band exactly AT the floor is kept), all-filtered → no peak,
+composes-with-`top_n`, negative-`min_rate`-raises; human zero-unchanged + note +
+filtered-ranking + no-peak-meets-floor; json echoed+filters + default-present;
+csv filters-rows-with-columns-unchanged + all-filtered-blank-row; handler
+threads-through + getattr-fallback-to-`0.0`-when-absent.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4895 passed**
+(4877 prior + 18 net new), run in the feature worktree before ff-merge AND
+re-run on main post-merge (4895 passed, ~52s).
+- Integration: not run this lap (pure string-formatting/arithmetic over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..354 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] vad-gap-peak `--min-rate`/`--top-n` companions** — a JSON/CSV
+   `rank` column making the ordering explicit in the machine faces (the human
+   face already numbers `#k`), or a `--min-rate` expressed as a PERCENTILE of the
+   observed band rates instead of an absolute number (so the floor adapts to the
+   recording's cost scale).
+2. **[gv CLI] vad-gap-recommend-sweep companions** — let the sweep accept a swept
+   SEGMENTER knob (e.g. how short/balanced/long + the confidence grade shift as
+   `--min-speech-ms` varies), the way `vad-gap-sweep` tracks a swept
+   `--min-silence-ms`.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~31 leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
