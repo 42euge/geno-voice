@@ -1105,3 +1105,152 @@ def test_cmd_sort_by_unavailable_json_names_key():
     )
     payload = json.loads("\n".join(lines))
     assert payload["available"] is False
+
+
+# ---- iter-380: --top-n count cap -----------------------------------------
+
+
+def test_truncate_knob_rows_none_is_identity_copy():
+    rows = [{"grade": "strong"}, {"grade": "weak"}]
+    out = gv._truncate_knob_rows(rows, None)
+    assert out == rows
+    assert out is not rows  # a copy, never the source list
+
+
+def test_truncate_knob_rows_keeps_first_n():
+    rows = [{"k": 1}, {"k": 2}, {"k": 3}, {"k": 4}]
+    out = gv._truncate_knob_rows(rows, 2)
+    assert out == [{"k": 1}, {"k": 2}]
+    assert out is not rows
+
+
+def test_truncate_knob_rows_n_larger_than_len_keeps_all():
+    rows = [{"k": 1}, {"k": 2}]
+    out = gv._truncate_knob_rows(rows, 10)
+    assert out == rows
+    assert out is not rows
+
+
+def test_render_human_top_n_default_unchanged():
+    res = [_weak(), _bimodal(), _no_valley()]
+    default = gv.render_vad_gap_recommend_knob_sweep(
+        [0.1, 0.5, 0.9], res, name="rec.wav"
+    )
+    explicit = gv.render_vad_gap_recommend_knob_sweep(
+        [0.1, 0.5, 0.9], res, name="rec.wav", top_n=None
+    )
+    assert default == explicit
+
+
+def test_render_human_top_n_keeps_first_after_sort():
+    # sort by grade DESC then keep top 1 → only the strong row's body line.
+    res = [_weak(), _bimodal(), _no_valley()]
+    lines = gv.render_vad_gap_recommend_knob_sweep(
+        [0.1, 0.5, 0.9], res, name="rec.wav", sort_by="grade", top_n=1
+    )
+    body = lines[2:]
+    assert len(body) == 1
+    assert "strong" in body[0]
+
+
+def test_render_json_top_n_default_no_key():
+    text = gv.render_vad_gap_recommend_knob_sweep_json(
+        [0.3, 0.7], [_bimodal(), _no_valley()], name="rec.wav"
+    )
+    payload = json.loads(text)
+    assert "top_n" not in payload
+
+
+def test_render_json_top_n_names_key_and_truncates_after_sort():
+    text = gv.render_vad_gap_recommend_knob_sweep_json(
+        [0.1, 0.5, 0.9], [_weak(), _bimodal(), _no_valley()], name="rec.wav",
+        sort_by="grade", top_n=2,
+    )
+    payload = json.loads(text)
+    assert payload["top_n"] == 2
+    # grade DESC then keep 2: strong, weak (none dropped by the cap).
+    assert [r["grade"] for r in payload["sweep"]] == ["strong", "weak"]
+
+
+def test_render_json_top_n_composes_with_min_grade_sort_and_bias():
+    text = gv.render_vad_gap_recommend_knob_sweep_json(
+        [0.1, 0.5, 0.9], [_weak(), _bimodal(), _no_valley()], name="rec.wav",
+        biases=["short", "long"], min_grade="weak", sort_by="grade", top_n=1,
+    )
+    payload = json.loads(text)
+    assert payload["min_grade"] == "weak"
+    assert payload["sort_by"] == "grade"
+    assert payload["top_n"] == 1
+    assert payload["biases"] == ["short", "long"]
+    # weak floor keeps strong+weak; grade DESC tops with strong; top_n=1 keeps it.
+    assert [r["grade"] for r in payload["sweep"]] == ["strong"]
+
+
+def test_render_csv_top_n_truncates_rows_header_unchanged():
+    text = gv.render_vad_gap_recommend_knob_sweep_csv(
+        [0.1, 0.5, 0.9], [_weak(), _bimodal(), _no_valley()], name="rec.wav",
+        sort_by="grade", top_n=1,
+    )
+    rows = list(csv.reader(io.StringIO(text)))
+    assert rows[0][0] == "threshold"  # header unchanged
+    assert rows[0][7] == "grade"
+    assert len(rows) == 2  # header + one data row
+    assert rows[1][7] == "strong"
+
+
+def test_cmd_top_n_human_path():
+    lines = _run_handler(
+        [_weak(), _bimodal(), _no_valley()],
+        argv_extra=["--thresholds", "0.1,0.5,0.9", "--sort-by", "grade",
+                    "--top-n", "1"],
+    )
+    body = lines[2:]
+    assert len(body) == 1
+    assert "strong" in body[0]
+
+
+def test_cmd_top_n_json_names_key():
+    lines = _run_handler(
+        [_weak(), _bimodal(), _no_valley()],
+        argv_extra=["--thresholds", "0.1,0.5,0.9", "--json", "--sort-by", "grade",
+                    "--top-n", "2"],
+    )
+    payload = json.loads("\n".join(lines))
+    assert payload["top_n"] == 2
+    assert [r["grade"] for r in payload["sweep"]] == ["strong", "weak"]
+
+
+def test_cmd_top_n_default_keeps_all_rows():
+    lines = _run_handler(
+        [_bimodal(), _no_valley()],
+        argv_extra=["--thresholds", "0.3,0.9", "--json"],
+    )
+    payload = json.loads("\n".join(lines))
+    assert "top_n" not in payload
+    assert len(payload["sweep"]) == 2
+
+
+def test_cmd_invalid_top_n_rejected():
+    # zero and negative counts are rejected at the parser (positive_int_type).
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-gap-recommend-knob-sweep", "rec.wav", "--top-n", "0"]
+        )
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-gap-recommend-knob-sweep", "rec.wav", "--top-n", "-1"]
+        )
+
+
+def test_cmd_top_n_unavailable_json_names_key():
+    # The unavailable branch still threads top_n through (graceful degrade).
+    lines: List[str] = []
+    args = gv.build_parser().parse_args(
+        ["vad-gap-recommend-knob-sweep", "rec.wav", "--json", "--top-n", "3"]
+    )
+    gv.cmd_vad_gap_recommend_knob_sweep(
+        args, log=lines.append, segmenter=lambda *a, **k: None,
+        availability=lambda: False,
+    )
+    payload = json.loads("\n".join(lines))
+    assert payload["available"] is False

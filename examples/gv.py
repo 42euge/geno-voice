@@ -3775,6 +3775,26 @@ def _sort_knob_rows(rows, sort_by):
     return list(rows)
 
 
+def _truncate_knob_rows(rows, top_n):
+    """Keep only the first ``top_n`` knob-sweep rows (iter-380), most-useful first.
+
+    The count companion of :func:`_filter_knob_rows_by_grade` (a THRESHOLD) and
+    :func:`_sort_knob_rows` (an ORDERING). Where ``--min-grade`` keeps every row at
+    or above a confidence floor (an unknown number of rows), ``--top-n`` keeps a
+    FIXED COUNT — "show me the N most trustworthy knob settings" — so it composes
+    naturally with ``sort_by`` and is applied AFTER it: the N kept rows are the N
+    that sorted to the top. With ``top_n`` ``None`` (no cap requested) returns the
+    rows unchanged (a copy, so a sweep with no ``--top-n`` is byte-identical to the
+    pre-cap output). A ``top_n`` larger than the row count keeps every row (slicing
+    is saturating, never raises). Pure: never mutates the source list. The caller
+    guarantees ``top_n >= 1`` via :func:`positive_int_type` at the parser, so a cap
+    never silently empties the table.
+    """
+    if top_n is None:
+        return list(rows)
+    return list(rows)[:top_n]
+
+
 def vad_gap_recommend_sweep(result):
     """Emit the short/balanced/long recommendations side by side (iter-352).
 
@@ -4153,7 +4173,7 @@ def _knob_sweep_bias_ms(row, bias):
 
 def render_vad_gap_recommend_knob_sweep(
     values, results, *, name, axis="threshold", biases=GAP_RECOMMEND_BIAS_ORDER,
-    min_grade=None, sort_by=None,
+    min_grade=None, sort_by=None, top_n=None,
 ):
     """Render a recommend knob sweep as a plain-text table (iter-372).
 
@@ -4188,17 +4208,26 @@ def render_vad_gap_recommend_knob_sweep(
     reorders only the rows that survived the filter. The default ``None`` keeps the
     swept-value order (byte-identical to the pre-sort render). Distinct from the
     filters: sorting keeps every row, it only reorders.
+
+    ``top_n`` (iter-380) keeps only the first ``top_n`` rows AFTER the ``sort_by``
+    ordering, so ``--sort-by grade --top-n 3`` shows the THREE most-trustworthy knob
+    settings. A count-based companion of ``min_grade`` (a threshold): where the floor
+    keeps an unknown number of rows, ``top_n`` keeps a fixed count. The default
+    ``None`` keeps every kept row.
     """
     if any(r is None for r in results):
         return [
             "silero VAD unavailable: install 'silero-vad' (pulls torch + "
             "torchaudio) to enable offline neural segmentation"
         ]
-    rows = _sort_knob_rows(
-        _filter_knob_rows_by_grade(
-            vad_gap_recommend_knob_sweep(values, results, axis=axis), min_grade
+    rows = _truncate_knob_rows(
+        _sort_knob_rows(
+            _filter_knob_rows_by_grade(
+                vad_gap_recommend_knob_sweep(values, results, axis=axis), min_grade
+            ),
+            sort_by,
         ),
-        sort_by,
+        top_n,
     )
     label = _SWEEP_AXIS_LABEL.get(axis, axis)
     lines = [
@@ -4221,7 +4250,7 @@ def render_vad_gap_recommend_knob_sweep(
 
 def render_vad_gap_recommend_knob_sweep_json(
     values, results, *, name, axis="threshold", biases=GAP_RECOMMEND_BIAS_ORDER,
-    min_grade=None, sort_by=None,
+    min_grade=None, sort_by=None, top_n=None,
 ):
     """Render a recommend knob sweep as a JSON string (iter-372).
 
@@ -4256,6 +4285,12 @@ def render_vad_gap_recommend_knob_sweep_json(
     the ``sweep`` list is no longer in swept-value order. The default ``None`` keeps
     the swept-value order (unchanged payload). It composes with both ``biases`` and
     ``min_grade``.
+
+    ``top_n`` (iter-380) keeps only the first ``top_n`` ``sweep`` rows AFTER the
+    ``sort_by`` ordering. When a cap is set the payload also carries a top-level
+    ``top_n`` key naming it, so a consumer knows the list was truncated (and the rows
+    are the N best under the active ordering). The default ``None`` keeps every kept
+    row (unchanged payload). Composes with ``biases`` / ``min_grade`` / ``sort_by``.
     """
     if any(r is None for r in results):
         return json.dumps(
@@ -4268,11 +4303,14 @@ def render_vad_gap_recommend_knob_sweep_json(
             },
             indent=2,
         )
-    rows = _sort_knob_rows(
-        _filter_knob_rows_by_grade(
-            vad_gap_recommend_knob_sweep(values, results, axis=axis), min_grade
+    rows = _truncate_knob_rows(
+        _sort_knob_rows(
+            _filter_knob_rows_by_grade(
+                vad_gap_recommend_knob_sweep(values, results, axis=axis), min_grade
+            ),
+            sort_by,
         ),
-        sort_by,
+        top_n,
     )
     biases = list(biases)
     payload = {
@@ -4284,6 +4322,8 @@ def render_vad_gap_recommend_knob_sweep_json(
         payload["min_grade"] = min_grade
     if sort_by is not None:
         payload["sort_by"] = sort_by
+    if top_n is not None:
+        payload["top_n"] = top_n
     if list(biases) != list(GAP_RECOMMEND_BIAS_ORDER):
         payload["biases"] = biases
         rows = [_knob_filtered_biases(r, biases) for r in rows]
@@ -4293,7 +4333,7 @@ def render_vad_gap_recommend_knob_sweep_json(
 
 def render_vad_gap_recommend_knob_sweep_csv(
     values, results, *, name, axis="threshold", biases=GAP_RECOMMEND_BIAS_ORDER,
-    min_grade=None, sort_by=None,
+    min_grade=None, sort_by=None, top_n=None,
 ):
     """Render a recommend knob sweep as CSV text (no trailing newline) (iter-372).
 
@@ -4332,6 +4372,12 @@ def render_vad_gap_recommend_knob_sweep_csv(
     ``min_grade`` filter. The default ``None`` keeps the swept-value order. The
     header and column set are unchanged, so a sorted run still unions cleanly with an
     unsorted one — only the row order differs.
+
+    ``top_n`` (iter-380) keeps only the first ``top_n`` data rows AFTER the
+    ``sort_by`` ordering. The header and column set are unchanged, so a capped run
+    still unions cleanly with an uncapped one — only the row count differs (and a
+    header-only CSV stays valid when the cap meets an empty body). The default
+    ``None`` keeps every kept row.
     """
     if any(r is None for r in results):
         return (
@@ -4352,11 +4398,14 @@ def render_vad_gap_recommend_knob_sweep_csv(
             "separation_ratio",
         ]
     )
-    rows = _sort_knob_rows(
-        _filter_knob_rows_by_grade(
-            vad_gap_recommend_knob_sweep(values, results, axis=axis), min_grade
+    rows = _truncate_knob_rows(
+        _sort_knob_rows(
+            _filter_knob_rows_by_grade(
+                vad_gap_recommend_knob_sweep(values, results, axis=axis), min_grade
+            ),
+            sort_by,
         ),
-        sort_by,
+        top_n,
     )
     for row in rows:
         if row["num_gaps"] > 0:
@@ -8258,20 +8307,24 @@ def cmd_vad_gap_recommend_knob_sweep(args, *, log=print, segmenter=None, availab
     # iter-378 --sort-by ordering: reorder the kept rows (grade DESC / spread ASC)
     # so the most-useful region reads first; default None keeps swept-value order.
     sort_by = getattr(args, "sort_by", None)
+    # iter-380 --top-n count cap: keep only the first N rows AFTER --sort-by, so
+    # "--sort-by grade --top-n 3" shows the 3 most-trustworthy settings; default
+    # None keeps every kept row.
+    top_n = getattr(args, "top_n", None)
 
     if not availability():
         if as_json:
             log(render_vad_gap_recommend_knob_sweep_json(
                 [], [None], name=args.wav, axis=axis, biases=biases,
-                min_grade=min_grade, sort_by=sort_by))
+                min_grade=min_grade, sort_by=sort_by, top_n=top_n))
         elif as_csv:
             log(render_vad_gap_recommend_knob_sweep_csv(
                 [], [None], name=args.wav, axis=axis, biases=biases,
-                min_grade=min_grade, sort_by=sort_by))
+                min_grade=min_grade, sort_by=sort_by, top_n=top_n))
         else:
             for line in render_vad_gap_recommend_knob_sweep(
                 [], [None], name=args.wav, axis=axis, biases=biases,
-                min_grade=min_grade, sort_by=sort_by):
+                min_grade=min_grade, sort_by=sort_by, top_n=top_n):
                 log(line)
         return
 
@@ -8301,15 +8354,15 @@ def cmd_vad_gap_recommend_knob_sweep(args, *, log=print, segmenter=None, availab
     if as_json:
         log(render_vad_gap_recommend_knob_sweep_json(
             values, results, name=name, axis=axis, biases=biases,
-            min_grade=min_grade, sort_by=sort_by))
+            min_grade=min_grade, sort_by=sort_by, top_n=top_n))
     elif as_csv:
         log(render_vad_gap_recommend_knob_sweep_csv(
             values, results, name=name, axis=axis, biases=biases,
-            min_grade=min_grade, sort_by=sort_by))
+            min_grade=min_grade, sort_by=sort_by, top_n=top_n))
     else:
         for line in render_vad_gap_recommend_knob_sweep(
             values, results, name=name, axis=axis, biases=biases,
-            min_grade=min_grade, sort_by=sort_by):
+            min_grade=min_grade, sort_by=sort_by, top_n=top_n):
             log(line)
 
 
@@ -10876,6 +10929,16 @@ def build_parser():
         "'grade' = most-trustworthy first (confidence descending), 'spread' = "
         "most-decisive first (short..long spread ascending); applied after "
         "--min-grade (default: keep swept-value order)",
+    )
+    vad_gap_rec_knob_sweep.add_argument(
+        "--top-n",
+        type=positive_int_type,
+        default=None,
+        dest="top_n",
+        help="Keep only the first N swept rows AFTER --sort-by, e.g. "
+        "'--sort-by grade --top-n 3' shows the 3 most-trustworthy knob settings; "
+        "a count (>=1), distinct from --min-grade's threshold (default: keep all "
+        "kept rows)",
     )
     vad_gap_rec_knob_sweep_fmt = vad_gap_rec_knob_sweep.add_mutually_exclusive_group()
     vad_gap_rec_knob_sweep_fmt.add_argument(
