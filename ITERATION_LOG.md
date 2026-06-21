@@ -32101,3 +32101,93 @@ on main post-merge (4804 passed, ~31s).
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    ~31 leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-352 — gv vad-gap-recommend-sweep — all three bias recommendations side by side
+
+- **Date:** 2026-06-21
+- **Branch:** iter-352-bias-sweep (ff-merged to main, worktree removed)
+- **Commit:** 010d94b
+
+**Why.** The standing next-item #1 from iter-351: "a `vad-gap-recommend`
+bias-sweep (emit the short/balanced/long recommendations side by side in one
+table, so the operator sees the whole spread of defensible numbers at once)."
+This is a genuine new surface built ON the iter-351 `--bias` knob, not an 18th
+chat-metrics clone — it answers the question the single-bias command raises
+("which bias should I pick?") by showing all three at once.
+
+**What it is.** iter-351's `gv vad-gap-recommend --bias {short,balanced,long}`
+names ONE defensible end-of-turn hangover sitting somewhere in the valley between
+the short within-turn pauses and the long between-turn pauses. The sweep names
+ALL THREE side by side — plus the short→long spread — so the operator sees the
+whole range of defensible numbers in one shot, without re-running the command per
+bias. It is the `vad-gap-recommend` analogue of how `gv vad-gap-sweep` shows a
+whole `--min-silence-ms` sweep instead of one `gv vad-gaps` snapshot.
+
+The valley is the EMPTY band the largest-gap (1-D Jenks) split finds, so every
+interior point splits the pauses identically: `split_found` / `below` /
+`at_or_above` / the valley endpoints are INVARIANT across biases — only the named
+number shifts. The sweep therefore reports those shared fields ONCE at the top
+level and a compact per-bias row carrying just the shifting `recommended_ms` /
+`recommended_s`. New `spread_ms` / `spread_s` fields name the short→long width —
+how much the bias choice moves the number (the same width iter-348's confidence
+surface grades the quality of).
+
+**What landed in `examples/gv.py` (+354 lines).**
+- `GAP_RECOMMEND_BIAS_ORDER` (`short`/`balanced`/`long`) — the monotone
+  shortest-to-longest reading order; recommended number is non-decreasing across
+  it.
+- `vad_gap_recommend_sweep(result)` — one `vad_gap_recommend` call per bias, so
+  the aggregates, valley, and merge accounting agree EXACTLY with
+  `gv vad-gap-recommend` at each bias. A <2-segment result yields `None` per-bias
+  recommendations and `None` spread (the same "no distribution" spelling the
+  sibling gap surfaces use).
+- `render_vad_gap_recommend_sweep` / `_json` / `_csv` — the human / `--json` /
+  `--csv` trio. Human reports the shared valley + merge effect once, then one
+  line per bias, then the spread. JSON carries the shared fields + a `biases`
+  list + spread. CSV is one row PER bias with the SAME columns as
+  `gv vad-gap-recommend --csv` (so the rows union cleanly with the single-bias
+  surface).
+- `cmd_vad_gap_recommend_sweep` — same injected `segmenter`/`availability`
+  contract as `cmd_vad_gap_recommend`; degrades to the install hint when
+  `silero-vad` is absent, never crashing.
+- Registered in `DEFAULT_HANDLERS` and as the `vad-gap-recommend-sweep` subparser
+  (shares all `gv vad` segmenter knobs; `--json`/`--csv` mutually exclusive; no
+  `--bias` flag since the sweep covers all three).
+
+**Tests.** `tests/unit/test_gv_vad_gap_recommend_sweep.py` (35 new): core (bias
+order constant, per-bias agreement with the single surface, monotone numbers,
+shared-field agreement with the balanced single surface, merge-accounting
+invariance across biases, spread = long−short, no-gaps / zero-segment / no-valley
+empties); all three renderers (human golden with-valley + no-valley + no-gaps +
+unavailable, json shape / unavailable / no-gaps / core-agreement, csv shape /
+golden / header-only / unavailable / column-match-with-single-surface); the
+parser (registration, no `--bias`, `--json`/`--csv` exclusivity, shared knobs);
+the handler (human / json / csv, unavailable x3, params-from-knobs). Updated the
+`test_gv_cli` handler-map golden to include the new `vad-gap-recommend-sweep`
+entry.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4839 passed**
+(4804 prior + 35 new), run in the feature worktree before ff-merge AND re-run on
+main post-merge (4839 passed, ~38s).
+- Integration: not run this lap (pure string-formatting/arithmetic over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..351 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] vad-gap-recommend-sweep companions** — let the sweep accept a
+   swept SEGMENTER knob (e.g. how the short/balanced/long recommendations shift
+   as `--min-speech-ms` varies), the way `vad-gap-sweep` tracks a swept
+   `--min-silence-ms`; or fold the iter-348 confidence grade into each sweep row
+   so the operator sees not just the spread but how trustworthy it is.
+2. **[gv CLI] vad-gap-peak companions** — a `vad-gap-peak`-sweep/grid (how the
+   costliest band shifts vs a swept segmenter knob), or a `--top-n` flag naming
+   the N steepest bands instead of just the single peak.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~31 leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
