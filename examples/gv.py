@@ -183,6 +183,32 @@ def unit_interval_list_type(raw):
     return [unit_interval_type(tok) for tok in tokens]
 
 
+def percentile_type(raw):
+    """Argparse ``type`` for a single percentile in the range ``(0, 100]``.
+
+    The scalar twin of :func:`percentile_list_type`, modelled on
+    :func:`unit_interval_type`. Used by ``gv vad-gap-peak --min-rate-pct``
+    (iter-357), which derives a rate floor from a percentile of the observed
+    band rates instead of an absolute number. A percentile must be a number in
+    the OPEN-AT-zero, CLOSED-at-100 range ``(0, 100]`` (``0`` would name the
+    trivial minimum — keep every band, already the default; ``>100`` is
+    meaningless), not NaN. Pure and side-effect-free for direct unit testing;
+    raises :class:`argparse.ArgumentTypeError` on a non-number, NaN, or
+    out-of-range value.
+    """
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(f"percentile must be a number, got {raw!r}")
+    if value != value:  # NaN is unordered.
+        raise argparse.ArgumentTypeError("percentile must be a number, got nan")
+    if not (0.0 < value <= 100.0):
+        raise argparse.ArgumentTypeError(
+            f"percentile must be in (0, 100], got {value}"
+        )
+    return value
+
+
 def percentile_list_type(raw):
     """Argparse ``type`` for ``gv vad-gap-percentiles --percentiles``: a list.
 
@@ -206,22 +232,7 @@ def percentile_list_type(raw):
         raise argparse.ArgumentTypeError(
             f"percentiles must be a non-empty comma-separated list, got {raw!r}"
         )
-    out = []
-    for tok in tokens:
-        try:
-            value = float(tok)
-        except (TypeError, ValueError):
-            raise argparse.ArgumentTypeError(
-                f"percentile must be a number, got {tok!r}"
-            )
-        if value != value:  # NaN is unordered.
-            raise argparse.ArgumentTypeError("percentile must be a number, got nan")
-        if not (0.0 < value <= 100.0):
-            raise argparse.ArgumentTypeError(
-                f"percentile must be in (0, 100], got {value}"
-            )
-        out.append(value)
-    return out
+    return [percentile_type(tok) for tok in tokens]
 
 
 def nonneg_float_list_type(raw):
@@ -1877,6 +1888,27 @@ def render_vad_gaps_csv(result):
 DEFAULT_GAP_PERCENTILES = (50.0, 90.0, 99.0)
 
 
+def _percentile_of_sorted(sorted_values, p):
+    """Linear-interpolated percentile ``p`` of an already-SORTED, non-empty list.
+
+    The shared primitive behind :func:`vad_gap_percentiles` (iter-338) and
+    iter-357's ``gv vad-gap-peak --min-rate-pct`` (the percentile-derived rate
+    floor). Uses the numpy default ``"linear"`` / R-7 convention: for ``n``
+    samples and percentile ``p`` the fractional rank is ``(p / 100) * (n - 1)``
+    and the value interpolates between the samples at the floor and ceil of that
+    rank. A single sample yields that sample for every percentile. The caller is
+    responsible for sorting and for the empty-list / range / NaN guards (kept out
+    of this hot primitive so it stays a pure two-line interpolation). Returns the
+    raw (unrounded) value — the caller rounds to its own convention.
+    """
+    n = len(sorted_values)
+    rank = (p / 100.0) * (n - 1)
+    lo = int(rank)
+    hi = min(lo + 1, n - 1)
+    frac = rank - lo
+    return sorted_values[lo] + frac * (sorted_values[hi] - sorted_values[lo])
+
+
 def vad_gap_percentiles(result, *, percentiles=DEFAULT_GAP_PERCENTILES):
     """Compute robust order statistics of the inter-segment silence gaps (iter-338).
 
@@ -1917,16 +1949,10 @@ def vad_gap_percentiles(result, *, percentiles=DEFAULT_GAP_PERCENTILES):
     gaps = sorted(d["gaps"])
     out = []
     if gaps:
-        n = len(gaps)
         for p in pcts:
-            # Fractional rank into the sorted gaps; linear interpolation between
-            # the two bracketing samples (the numpy "linear" / R-7 convention).
-            rank = (p / 100.0) * (n - 1)
-            lo = int(rank)
-            hi = min(lo + 1, n - 1)
-            frac = rank - lo
-            value = gaps[lo] + frac * (gaps[hi] - gaps[lo])
-            out.append({"p": p, "value_s": round(value, 3)})
+            # Linear interpolation between the two bracketing samples (the numpy
+            # "linear" / R-7 convention), shared with the iter-357 rate-floor.
+            out.append({"p": p, "value_s": round(_percentile_of_sorted(gaps, p), 3)})
     return {
         "num_segments": d["num_segments"],
         "num_gaps": d["num_gaps"],
@@ -2508,8 +2534,10 @@ def render_vad_gap_cost_csv(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS):
     return buf.getvalue().rstrip("\r\n")
 
 
-def vad_gap_peak(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1, min_rate=0.0):
-    """Name the COSTLIEST band(s) of the merge cost curve — the densest pause cluster (iter-350; ``top_n`` iter-354; ``min_rate`` iter-355).
+def vad_gap_peak(
+    result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1, min_rate=0.0, min_rate_pct=None
+):
+    """Name the COSTLIEST band(s) of the merge cost curve — the densest pause cluster (iter-350; ``top_n`` iter-354; ``min_rate`` iter-355; ``min_rate_pct`` iter-357).
 
     The verdict companion of iter-349's :func:`vad_gap_cost`. The cost curve gives
     the marginal rate per +100 ms of hangover for every band between consecutive
@@ -2564,6 +2592,27 @@ def vad_gap_peak(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1, min_rate=0
     echoed as ``min_rate``. Must be ``>= 0`` (raises :class:`ValueError`
     otherwise); a negative floor is nonsensical (every rate is non-negative).
 
+    ``min_rate_pct`` (iter-357) is an ADAPTIVE alternative to the absolute
+    ``min_rate``: instead of "drop bands below 0.08 per +100 ms", it says "drop
+    bands below the Pth percentile of the OBSERVED non-empty band rates". An
+    absolute floor must be re-tuned per recording — a quiet conversation and a
+    rapid-fire one have wholly different rate scales — whereas a percentile floor
+    adapts to the recording's own cost distribution: ``--min-rate-pct 75`` always
+    names the top quartile of cost peaks, whatever the absolute numbers. The
+    percentile is computed (linear / R-7 interpolation, the same convention as
+    :func:`vad_gap_percentiles`) over the rates of the non-empty bands only —
+    empty valleys are not cost peaks and would skew the distribution toward zero.
+    The interpolated rate becomes the effective floor and is surfaced as
+    ``effective_min_rate`` (also set when only the absolute ``min_rate`` is in
+    play, where it simply equals ``min_rate``). ``min_rate_pct`` must be in
+    ``(0, 100]`` (raises :class:`ValueError` otherwise) and is mutually exclusive
+    with a positive ``min_rate`` (raises :class:`ValueError` if both are given) —
+    an absolute floor and a percentile-derived floor are two ways to set the same
+    knob. The default ``None`` leaves the absolute-``min_rate`` behaviour
+    byte-for-byte unchanged. When there are no non-empty bands the percentile has
+    nothing to rank over, so the effective floor is ``0.0`` and the result is the
+    usual all-valley no-peak verdict.
+
     Pure: anchors to :func:`vad_gap_cost` for the bands + aggregates (so the totals
     and per-band numbers always agree with ``gv vad-gaps`` / ``gv vad-gap-cost``)
     and adds the peak fields. A result with fewer than 2 segments has no gaps, so
@@ -2578,6 +2627,21 @@ def vad_gap_peak(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1, min_rate=0
         raise ValueError(f"top_n must be >= 1, got {top_n}")
     if min_rate < 0:
         raise ValueError(f"min_rate must be >= 0, got {min_rate}")
+    if min_rate_pct is not None:
+        if min_rate_pct != min_rate_pct:  # NaN is unordered.
+            raise ValueError("min_rate_pct must be a number, got nan")
+        if not (0.0 < min_rate_pct <= 100.0):
+            raise ValueError(
+                f"min_rate_pct must be in (0, 100], got {min_rate_pct}"
+            )
+        if min_rate > 0:
+            # An absolute floor and a percentile-derived floor set the SAME knob
+            # two different ways — accepting both would be ambiguous.
+            raise ValueError(
+                "min_rate and min_rate_pct are mutually exclusive (both set "
+                f"the rate floor): got min_rate={min_rate}, "
+                f"min_rate_pct={min_rate_pct}"
+            )
     c = vad_gap_cost(result, cuts_ms=cuts_ms)
     bands = c["bands"]
     peak = {
@@ -2590,6 +2654,8 @@ def vad_gap_peak(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1, min_rate=0
         "num_bands": len(bands),
         "top_n": top_n,
         "min_rate": min_rate,
+        "min_rate_pct": min_rate_pct,
+        "effective_min_rate": min_rate,
         "peak_found": False,
         "peak_from_ms": None,
         "peak_to_ms": None,
@@ -2602,15 +2668,38 @@ def vad_gap_peak(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1, min_rate=0
     }
     if not bands:
         return peak
+    # iter-357: when a percentile floor is requested, the effective absolute floor
+    # is the Pth percentile of the OBSERVED non-empty band rates — so the cutoff
+    # adapts to this recording's own cost scale instead of needing a per-recording
+    # absolute number. Empty valleys (rate 0) are not cost peaks and would skew the
+    # distribution toward zero, so they are excluded from the percentile sample. No
+    # non-empty band means nothing to rank over: the floor stays 0.0 and the
+    # all-valley no-peak verdict falls out below. Rounded to 3 places to match the
+    # band rates it is compared against (which vad_gap_cost already rounds to 3).
+    effective_min_rate = min_rate
+    if min_rate_pct is not None:
+        nonempty_rates = sorted(
+            b["rate_per_100ms"] for b in bands if b["rate_per_100ms"] > 0
+        )
+        if nonempty_rates:
+            effective_min_rate = round(
+                _percentile_of_sorted(nonempty_rates, min_rate_pct), 3
+            )
+        peak["effective_min_rate"] = effective_min_rate
     # Rank the cost bands by descending marginal merge rate; only non-empty bands
-    # (rate > 0) are cost peaks, and iter-355's min_rate floor further drops any
-    # band cheaper than the threshold (min_rate=0.0 keeps every non-empty band, so
-    # the default is unchanged — a non-empty band always has rate > 0 >= 0).
+    # (rate > 0) are cost peaks, and iter-355's min_rate floor (or iter-357's
+    # percentile-derived effective_min_rate) further drops any band cheaper than
+    # the threshold (effective_min_rate=0.0 keeps every non-empty band, so the
+    # default is unchanged — a non-empty band always has rate > 0 >= 0).
     # Python's sort is stable, so sorting the bands — already in ascending-cut
     # order — by -rate keeps the EARLIER band first on a tie (earliest-tie,
     # matching vad_gap_recommend's widest-jump rule).
     ranked = sorted(
-        (b for b in bands if b["rate_per_100ms"] > 0 and b["rate_per_100ms"] >= min_rate),
+        (
+            b
+            for b in bands
+            if b["rate_per_100ms"] > 0 and b["rate_per_100ms"] >= effective_min_rate
+        ),
         key=lambda b: -b["rate_per_100ms"],
     )
     if not ranked:
@@ -2650,8 +2739,10 @@ def vad_gap_peak(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1, min_rate=0
     return peak
 
 
-def render_vad_gap_peak(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1, min_rate=0.0):
-    """Render the costliest-band verdict as plain-text report lines (iter-350; ``top_n`` iter-354; ``min_rate`` iter-355).
+def render_vad_gap_peak(
+    result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1, min_rate=0.0, min_rate_pct=None
+):
+    """Render the costliest-band verdict as plain-text report lines (iter-350; ``top_n`` iter-354; ``min_rate`` iter-355; ``min_rate_pct`` iter-357).
 
     The human-readable face of :func:`vad_gap_peak`, the verdict twin of
     :func:`render_vad_gap_cost`. ``result`` of ``None`` (segmenter unavailable)
@@ -2668,15 +2759,21 @@ def render_vad_gap_peak(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1, min
     first on a tie). ``top_n == 1`` is byte-for-byte the original single-peak
     block. With ``min_rate > 0`` (iter-355) it prints a ``rate floor`` note and
     drops any band cheaper than the floor; if the floor filters out every band it
-    says so. ``min_rate == 0.0`` is unchanged. Pure: returns a list of strings (no
-    I/O, no ANSI).
+    says so. ``min_rate == 0.0`` is unchanged. With ``min_rate_pct`` (iter-357)
+    the floor note instead names the requested percentile and the effective rate
+    it resolved to over the observed band rates. Pure: returns a list of strings
+    (no I/O, no ANSI).
     """
     if result is None:
         return [
             "silero VAD unavailable: install 'silero-vad' (pulls torch + "
             "torchaudio) to enable offline neural segmentation"
         ]
-    p = vad_gap_peak(result, cuts_ms=cuts_ms, top_n=top_n, min_rate=min_rate)
+    p = vad_gap_peak(
+        result, cuts_ms=cuts_ms, top_n=top_n, min_rate=min_rate, min_rate_pct=min_rate_pct
+    )
+    eff = p["effective_min_rate"]
+    floor_active = min_rate_pct is not None or min_rate > 0
     lines = [
         f"silero VAD gap cost peak — {result.name}",
         f"  segments:     {p['num_segments']}",
@@ -2689,7 +2786,16 @@ def render_vad_gap_peak(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1, min
     lines.append(f"  mean gap:     {p['mean_gap_s']:.3f}s")
     lines.append(f"  max gap:      {p['max_gap_s']:.3f}s")
     lines.append(f"  total silence:{p['total_silence_s']:8.3f}s")
-    if min_rate > 0:
+    if min_rate_pct is not None:
+        # iter-357: a percentile-derived floor — name the requested percentile and
+        # the absolute rate it resolved to over this recording's observed band
+        # rates, so the operator sees both the adaptive knob and its concrete cut.
+        lines.append(
+            f"  rate floor:   p{_format_percentile_label(min_rate_pct)} of observed "
+            f"band rates = {eff:.3f} per +100ms (only bands at or above this are "
+            "named) (iter-357)"
+        )
+    elif min_rate > 0:
         # iter-355: note the active rate floor so the operator knows the ranking
         # below already excludes bands cheaper than this. Only emitted when a
         # floor is set, so the default (min_rate=0.0) face is unchanged.
@@ -2702,11 +2808,11 @@ def render_vad_gap_peak(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1, min
             lines.append(
                 "  (need at least 2 distinct cuts to form a cost band — none to show)"
             )
-        elif min_rate > 0:
+        elif floor_active:
             lines.append(
                 "  (no cost peak meets the rate floor — every band is either an "
-                "empty valley or cheaper than the floor; lower --min-rate to name "
-                "the shallower clusters)"
+                "empty valley or cheaper than the floor; lower --min-rate/"
+                "--min-rate-pct to name the shallower clusters)"
             )
         else:
             lines.append(
@@ -2748,8 +2854,10 @@ def render_vad_gap_peak(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1, min
     return lines
 
 
-def render_vad_gap_peak_json(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1, min_rate=0.0):
-    """Render the costliest-band verdict as a JSON string (iter-350; ``top_n`` iter-354; ``min_rate`` iter-355).
+def render_vad_gap_peak_json(
+    result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1, min_rate=0.0, min_rate_pct=None
+):
+    """Render the costliest-band verdict as a JSON string (iter-350; ``top_n`` iter-354; ``min_rate`` iter-355; ``min_rate_pct`` iter-357).
 
     Machine-readable twin of :func:`render_vad_gap_peak`, mirroring the
     degrade-to-``{"available": false}`` contract the other VAD JSON renderers use.
@@ -2767,7 +2875,11 @@ def render_vad_gap_peak_json(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1
     ``top_n=1`` payload is a strict superset of the iter-350 shape. iter-355 adds
     ``min_rate`` (the applied rate floor; bands cheaper than it are excluded from
     ``peaks``), defaulting to ``0.0`` (every non-empty band kept — the iter-354
-    payload). Pure: built from :func:`vad_gap_peak`, so it works on any
+    payload). iter-357 adds ``min_rate_pct`` (the requested percentile floor, or
+    ``null`` when an absolute / no floor is used) and ``effective_min_rate`` (the
+    absolute rate the floor resolved to — equal to ``min_rate`` when no percentile
+    is given), so a machine consumer can read the concrete cutoff regardless of
+    which knob set it. Pure: built from :func:`vad_gap_peak`, so it works on any
     ``SileroResult``-shaped object.
     """
     if result is None:
@@ -2781,7 +2893,9 @@ def render_vad_gap_peak_json(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1
             },
             indent=2,
         )
-    p = vad_gap_peak(result, cuts_ms=cuts_ms, top_n=top_n, min_rate=min_rate)
+    p = vad_gap_peak(
+        result, cuts_ms=cuts_ms, top_n=top_n, min_rate=min_rate, min_rate_pct=min_rate_pct
+    )
     payload = {
         "available": True,
         "name": result.name,
@@ -2794,6 +2908,8 @@ def render_vad_gap_peak_json(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1
         "num_bands": p["num_bands"],
         "top_n": p["top_n"],
         "min_rate": p["min_rate"],
+        "min_rate_pct": p["min_rate_pct"],
+        "effective_min_rate": p["effective_min_rate"],
         "peak_found": p["peak_found"],
         "peak_from_ms": p["peak_from_ms"],
         "peak_to_ms": p["peak_to_ms"],
@@ -2807,8 +2923,10 @@ def render_vad_gap_peak_json(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1
     return json.dumps(payload, indent=2)
 
 
-def render_vad_gap_peak_csv(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1, min_rate=0.0):
-    """Render the costliest-band verdict as a CSV table (iter-350; ``top_n`` iter-354; ``min_rate`` iter-355).
+def render_vad_gap_peak_csv(
+    result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1, min_rate=0.0, min_rate_pct=None
+):
+    """Render the costliest-band verdict as a CSV table (iter-350; ``top_n`` iter-354; ``min_rate`` iter-355; ``min_rate_pct`` iter-357).
 
     The spreadsheet-friendly twin of :func:`render_vad_gap_peak` /
     :func:`render_vad_gap_peak_json`, completing the human / ``--json`` / ``--csv``
@@ -2832,15 +2950,19 @@ def render_vad_gap_peak_csv(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1,
     no-peak ``peak_found=False`` row. iter-355's ``min_rate`` floor simply changes
     which bands are ranked (the columns are unchanged); when the floor leaves no
     peak but bands exist, the single ``rank``-blank ``peak_found=False`` blank row
-    is emitted (same as the all-valley case). Pure: built with the stdlib
-    :mod:`csv` writer, trailing terminator stripped.
+    is emitted (same as the all-valley case). iter-357's ``min_rate_pct``
+    likewise only changes which bands rank — the column schema is unchanged, so
+    the percentile and absolute floors yield CSVs with an identical shape. Pure:
+    built with the stdlib :mod:`csv` writer, trailing terminator stripped.
     """
     if result is None:
         return (
             "# silero VAD unavailable: install 'silero-vad' (pulls torch + "
             "torchaudio) to enable offline neural segmentation"
         )
-    p = vad_gap_peak(result, cuts_ms=cuts_ms, top_n=top_n, min_rate=min_rate)
+    p = vad_gap_peak(
+        result, cuts_ms=cuts_ms, top_n=top_n, min_rate=min_rate, min_rate_pct=min_rate_pct
+    )
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(
@@ -6018,14 +6140,16 @@ def cmd_vad_gap_peak(args, *, log=print, segmenter=None, availability=None):
     cuts_ms = args.cuts_ms
     top_n = getattr(args, "top_n", 1)
     min_rate = getattr(args, "min_rate", 0.0)
+    min_rate_pct = getattr(args, "min_rate_pct", None)
+    kw = dict(cuts_ms=cuts_ms, top_n=top_n, min_rate=min_rate, min_rate_pct=min_rate_pct)
 
     if not availability():
         if as_json:
-            log(render_vad_gap_peak_json(None, cuts_ms=cuts_ms, top_n=top_n, min_rate=min_rate))
+            log(render_vad_gap_peak_json(None, **kw))
         elif as_csv:
-            log(render_vad_gap_peak_csv(None, cuts_ms=cuts_ms, top_n=top_n, min_rate=min_rate))
+            log(render_vad_gap_peak_csv(None, **kw))
         else:
-            for line in render_vad_gap_peak(None, cuts_ms=cuts_ms, top_n=top_n, min_rate=min_rate):
+            for line in render_vad_gap_peak(None, **kw):
                 log(line)
         return
 
@@ -6040,11 +6164,11 @@ def cmd_vad_gap_peak(args, *, log=print, segmenter=None, availability=None):
     )
     result = segmenter(args.wav, params=params)
     if as_json:
-        log(render_vad_gap_peak_json(result, cuts_ms=cuts_ms, top_n=top_n, min_rate=min_rate))
+        log(render_vad_gap_peak_json(result, **kw))
     elif as_csv:
-        log(render_vad_gap_peak_csv(result, cuts_ms=cuts_ms, top_n=top_n, min_rate=min_rate))
+        log(render_vad_gap_peak_csv(result, **kw))
     else:
-        for line in render_vad_gap_peak(result, cuts_ms=cuts_ms, top_n=top_n, min_rate=min_rate):
+        for line in render_vad_gap_peak(result, **kw):
             log(line)
 
 
@@ -7502,15 +7626,31 @@ def build_parser():
         "(ranked by descending rate, earliest band first on a tie; only "
         "non-empty bands count, so fewer than N may appear). Default: 1",
     )
-    vad_gap_peak.add_argument(
+    # The rate floor can be set two ways — an ABSOLUTE rate (--min-rate, iter-355)
+    # or a PERCENTILE of the observed band rates (--min-rate-pct, iter-357, which
+    # adapts to the recording's own cost scale). They set the same knob, so they
+    # are mutually exclusive (the core also raises ValueError if both are given).
+    vad_gap_peak_floor = vad_gap_peak.add_mutually_exclusive_group()
+    vad_gap_peak_floor.add_argument(
         "--min-rate",
         type=nonneg_float_type,
         default=0.0,
         dest="min_rate",
-        help="Drop cost bands cheaper than this marginal rate (pauses merged per "
-        "+100ms of hangover) before ranking — only the bands worth worrying "
-        "about are named. Pairs with --top-n. Default: 0.0 (keep every "
-        "non-empty band)",
+        help="Drop cost bands cheaper than this ABSOLUTE marginal rate (pauses "
+        "merged per +100ms of hangover) before ranking — only the bands worth "
+        "worrying about are named. Pairs with --top-n; mutually exclusive with "
+        "--min-rate-pct. Default: 0.0 (keep every non-empty band)",
+    )
+    vad_gap_peak_floor.add_argument(
+        "--min-rate-pct",
+        type=percentile_type,
+        default=None,
+        dest="min_rate_pct",
+        help="Drop cost bands cheaper than the Pth PERCENTILE of the observed "
+        "non-empty band rates before ranking — an adaptive floor that scales to "
+        "this recording's cost distribution (e.g. 75 names the top quartile of "
+        "cost peaks). In (0, 100]; mutually exclusive with --min-rate. Default: "
+        "unset (use --min-rate)",
     )
     vad_gap_peak.add_argument(
         "--threshold",

@@ -1306,3 +1306,271 @@ def test_render_csv_rank_column_matches_json_rank():
     csv_ranks = [int(r[0]) for r in rows[1:]]
     json_ranks = [pk["rank"] for pk in payload["peaks"]]
     assert csv_ranks == json_ranks == [1, 2]
+
+
+# ---- iter-357: --min-rate-pct percentile-derived rate floor -------------
+#
+# vad_gap_peak(... min_rate_pct=P) derives the rate floor from the Pth
+# percentile of the OBSERVED non-empty band rates (linear / R-7 interpolation,
+# the same convention as vad_gap_percentiles) instead of an absolute number —
+# so the cutoff adapts to the recording's own cost scale. The canonical
+# fixture's two non-empty band rates are 0.1 (#1, 500-2500ms) and 0.067 (#2,
+# 3500-5000ms); sorted that is [0.067, 0.1]. p50 of that pair interpolates to
+# 0.084 (keeps only 0.1); p100 -> 0.1 (keeps only 0.1); p1 -> ~0.067 (keeps
+# both). The applied percentile and the resolved absolute floor are surfaced
+# as min_rate_pct / effective_min_rate. It is mutually exclusive with a
+# positive --min-rate (both set the same knob). min_rate_pct=None is the
+# iter-355 behaviour, byte-for-byte.
+
+
+def _canon():
+    return (
+        _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18)),
+        [500.0, 2500.0, 3500.0, 5000.0],
+    )
+
+
+# ---- percentile_type scalar validator (shared with --min-rate-pct) ------
+
+
+def test_percentile_type_accepts_in_range():
+    assert gv.percentile_type("50") == pytest.approx(50.0)
+    assert gv.percentile_type("0.5") == pytest.approx(0.5)
+    assert gv.percentile_type("100") == pytest.approx(100.0)
+
+
+def test_percentile_type_rejects_out_of_range_and_nan():
+    for bad in ["0", "-5", "100.1", "nan", "x"]:
+        with pytest.raises(Exception):
+            gv.percentile_type(bad)
+
+
+def test_percentile_list_type_still_works_via_scalar():
+    # The list validator now delegates to the scalar; spot-check it is intact.
+    assert gv.percentile_list_type("50,90,99") == [50.0, 90.0, 99.0]
+    with pytest.raises(Exception):
+        gv.percentile_list_type("50,0,90")  # 0 is out of (0, 100]
+
+
+# ---- parser: --min-rate-pct ---------------------------------------------
+
+
+def test_parser_min_rate_pct_default_is_none():
+    parser = gv.build_parser()
+    args = parser.parse_args(["vad-gap-peak", "rec.wav"])
+    assert args.min_rate_pct is None
+
+
+def test_parser_accepts_min_rate_pct():
+    parser = gv.build_parser()
+    args = parser.parse_args(["vad-gap-peak", "rec.wav", "--min-rate-pct", "75"])
+    assert args.min_rate_pct == pytest.approx(75.0)
+
+
+def test_parser_rejects_bad_min_rate_pct():
+    parser = gv.build_parser()
+    for bad in ["0", "-5", "100.1", "nan", "x"]:
+        with pytest.raises(SystemExit):
+            parser.parse_args(["vad-gap-peak", "rec.wav", "--min-rate-pct", bad])
+
+
+def test_parser_min_rate_and_min_rate_pct_mutually_exclusive():
+    parser = gv.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            ["vad-gap-peak", "rec.wav", "--min-rate", "0.05", "--min-rate-pct", "50"]
+        )
+
+
+# ---- pure core: percentile floor ----------------------------------------
+
+
+def test_core_min_rate_pct_default_none_is_iter355_behaviour():
+    res, cuts = _canon()
+    default = gv.vad_gap_peak(res, cuts_ms=cuts, top_n=5)
+    explicit = gv.vad_gap_peak(res, cuts_ms=cuts, top_n=5, min_rate_pct=None)
+    assert default == explicit
+    assert explicit["min_rate_pct"] is None
+    # effective_min_rate equals the absolute floor when no percentile is used.
+    assert explicit["effective_min_rate"] == 0.0
+    assert len(explicit["peaks"]) == 2
+
+
+def test_core_min_rate_pct_derives_effective_floor():
+    res, cuts = _canon()
+    p = gv.vad_gap_peak(res, cuts_ms=cuts, top_n=5, min_rate_pct=50)
+    # p50 of the observed rates [0.067, 0.1] interpolates to 0.084.
+    assert p["min_rate_pct"] == pytest.approx(50.0)
+    assert p["effective_min_rate"] == pytest.approx(0.084)
+    # Only the 0.1 band clears the 0.084 floor.
+    assert [pk["rate_per_100ms"] for pk in p["peaks"]] == [0.1]
+
+
+def test_core_min_rate_pct_low_keeps_all_bands():
+    res, cuts = _canon()
+    p = gv.vad_gap_peak(res, cuts_ms=cuts, top_n=5, min_rate_pct=1)
+    # p1 ~= the minimum observed rate (0.067), so both non-empty bands survive.
+    assert p["effective_min_rate"] == pytest.approx(0.067)
+    assert [pk["rate_per_100ms"] for pk in p["peaks"]] == [0.1, 0.067]
+
+
+def test_core_min_rate_pct_hundred_keeps_only_steepest():
+    res, cuts = _canon()
+    p = gv.vad_gap_peak(res, cuts_ms=cuts, top_n=5, min_rate_pct=100)
+    # p100 is the max observed rate (0.1) -> only the steepest band clears it.
+    assert p["effective_min_rate"] == pytest.approx(0.1)
+    assert [pk["rate_per_100ms"] for pk in p["peaks"]] == [0.1]
+
+
+def test_core_min_rate_pct_composes_with_top_n():
+    res, cuts = _canon()
+    p = gv.vad_gap_peak(res, cuts_ms=cuts, top_n=1, min_rate_pct=1)
+    # The floor keeps both, but top_n=1 truncates to the single steepest.
+    assert len(p["peaks"]) == 1
+    assert p["peaks"][0]["rate_per_100ms"] == pytest.approx(0.1)
+
+
+def test_core_min_rate_pct_all_valley_no_peak_floor_zero():
+    # No non-empty band -> nothing to rank the percentile over; effective floor
+    # stays 0.0 and the all-valley no-peak verdict falls out.
+    res = _result((0, 1), (5, 6))  # one gap of 4.0s, outside all bands
+    p = gv.vad_gap_peak(res, cuts_ms=[1000.0, 2000.0, 3000.0], min_rate_pct=50)
+    assert p["num_bands"] == 2
+    assert p["peak_found"] is False
+    assert p["effective_min_rate"] == 0.0
+    assert p["peaks"] == []
+
+
+def test_core_min_rate_pct_mutually_exclusive_with_min_rate():
+    res, cuts = _canon()
+    with pytest.raises(ValueError):
+        gv.vad_gap_peak(res, cuts_ms=cuts, min_rate=0.05, min_rate_pct=50)
+
+
+def test_core_min_rate_pct_out_of_range_raises():
+    res, cuts = _canon()
+    for bad in [0, -5, 100.1]:
+        with pytest.raises(ValueError):
+            gv.vad_gap_peak(res, cuts_ms=cuts, min_rate_pct=bad)
+
+
+def test_core_min_rate_pct_nan_raises():
+    res, cuts = _canon()
+    with pytest.raises(ValueError):
+        gv.vad_gap_peak(res, cuts_ms=cuts, min_rate_pct=float("nan"))
+
+
+def test_core_min_rate_pct_zero_min_rate_is_allowed():
+    # A percentile floor with min_rate at its 0.0 default is NOT a conflict
+    # (only a POSITIVE absolute floor conflicts with the percentile).
+    res, cuts = _canon()
+    p = gv.vad_gap_peak(res, cuts_ms=cuts, top_n=5, min_rate=0.0, min_rate_pct=50)
+    assert p["effective_min_rate"] == pytest.approx(0.084)
+
+
+# ---- human renderer ------------------------------------------------------
+
+
+def test_render_human_min_rate_pct_names_percentile_and_effective():
+    res, cuts = _canon()
+    lines = gv.render_vad_gap_peak(res, cuts_ms=cuts, top_n=5, min_rate_pct=50)
+    floor = [ln for ln in lines if "rate floor:" in ln]
+    assert len(floor) == 1
+    # Names both the requested percentile and the resolved absolute rate.
+    assert "p50" in floor[0]
+    assert "0.084" in floor[0]
+    assert "(iter-357)" in floor[0]
+    # Only the steepest band is named after the floor.
+    assert any("#1:" in ln for ln in lines)
+    assert not any("#2:" in ln for ln in lines)
+
+
+def test_render_human_min_rate_pct_no_peak_meets_floor():
+    # p100 leaves only the steepest; push top_n down won't drop it, so build a
+    # case where the floor exceeds every band: an all-valley range.
+    res = _result((0, 1), (5, 6))
+    lines = gv.render_vad_gap_peak(
+        res, cuts_ms=[1000.0, 2000.0, 3000.0], min_rate_pct=50
+    )
+    # All-valley: the generic no-peak (no cost peak — every band is an empty
+    # valley) message fires, since the floor resolved to 0.0 with no rates.
+    assert any("no cost peak" in ln for ln in lines)
+
+
+def test_render_human_min_rate_pct_label_compact():
+    # _format_percentile_label drops the trailing .0 (p75 not p75.0).
+    res, cuts = _canon()
+    lines = gv.render_vad_gap_peak(res, cuts_ms=cuts, top_n=5, min_rate_pct=75)
+    assert any("p75 " in ln for ln in lines)
+    assert not any("p75.0" in ln for ln in lines)
+
+
+# ---- JSON renderer -------------------------------------------------------
+
+
+def test_render_json_min_rate_pct_echoed_and_effective():
+    res, cuts = _canon()
+    payload = json.loads(
+        gv.render_vad_gap_peak_json(res, cuts_ms=cuts, top_n=5, min_rate_pct=50)
+    )
+    assert payload["min_rate_pct"] == pytest.approx(50.0)
+    assert payload["effective_min_rate"] == pytest.approx(0.084)
+    assert len(payload["peaks"]) == 1
+
+
+def test_render_json_min_rate_pct_default_null_and_effective_equals_min_rate():
+    res, cuts = _canon()
+    payload = json.loads(gv.render_vad_gap_peak_json(res, cuts_ms=cuts))
+    assert payload["min_rate_pct"] is None
+    # With no percentile, effective_min_rate just mirrors the absolute floor.
+    assert payload["effective_min_rate"] == payload["min_rate"] == 0.0
+
+
+# ---- CSV renderer (schema unchanged) ------------------------------------
+
+
+def test_render_csv_min_rate_pct_columns_unchanged():
+    res, cuts = _canon()
+    pct = list(
+        csv.reader(
+            io.StringIO(
+                gv.render_vad_gap_peak_csv(res, cuts_ms=cuts, top_n=5, min_rate_pct=50)
+            )
+        )
+    )
+    single = list(csv.reader(io.StringIO(gv.render_vad_gap_peak_csv(res, cuts_ms=cuts))))
+    # Same seven-column schema as every other peak CSV; one ranked row survives.
+    assert pct[0] == single[0]
+    assert len(pct) == 2
+    assert pct[1] == ["1", "True", "500", "2500", "2000", "2", "0.1"]
+
+
+# ---- handler threads --min-rate-pct through -----------------------------
+
+
+def test_handler_min_rate_pct_threads_through_json():
+    res, cuts = _canon()
+    lines = _run(
+        _args(cuts_ms=cuts, top_n=5, min_rate_pct=50, json=True),
+        segmenter=lambda w, *, params: res,
+        availability=lambda: True,
+    )
+    payload = json.loads("\n".join(lines))
+    assert payload["min_rate_pct"] == pytest.approx(50.0)
+    assert payload["effective_min_rate"] == pytest.approx(0.084)
+    assert len(payload["peaks"]) == 1
+
+
+def test_handler_min_rate_pct_defaults_to_none_when_absent():
+    # Older callers without a min_rate_pct attr fall back to None (getattr).
+    res, cuts = _canon()
+    args = _args(cuts_ms=cuts, top_n=5, json=True)
+    assert not hasattr(args, "min_rate_pct")
+    lines = _run(
+        args,
+        segmenter=lambda w, *, params: res,
+        availability=lambda: True,
+    )
+    payload = json.loads("\n".join(lines))
+    assert payload["min_rate_pct"] is None
+    assert len(payload["peaks"]) == 2
