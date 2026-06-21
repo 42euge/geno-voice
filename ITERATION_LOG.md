@@ -33421,3 +33421,97 @@ re-verified on main post-merge (`test_gv_vad_gap_peak_grid.py` + `test_gv_cli.py
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    leftover per-iter worktrees. A future lap could `git worktree prune` the merged
    ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-368 — gv vad-gap-peak-sweep carries per-row top-N ranking
+
+- **Date:** 2026-06-21
+- **Branch:** iter-368-peak-sweep-topn (ff-merged to main, worktree removed)
+- **Commit:** 6c2b827
+
+**Why.** The standing next-item #1 from iter-367 asked to extend the cost-peak
+sweep (and grid) to track the `--top-n` ranking ("how the N steepest bands
+reorder vs the knob(s)") — "the other half of the iter-354 single-shot knobs not
+yet on the sweep/grid." The distribution view is now complete across single-shot /
+sweep / grid (iter-358 / 366 / 367); top-n was the remaining single-shot knob to
+lift. This lap does the 1-D SWEEP, following the iter-364→365 / iter-366→367
+cadence (sweep this lap, grid next). A genuinely new behaviour on the existing
+surface — not an 18th chat-metrics clone (family complete, iter-328) and not a
+brand-new subcommand.
+
+**What it is.** Where iter-364 tabulated only the single steepest band per swept
+value, iter-368 also carries — per row — the iter-354 ranking of the N steepest
+cost bands (descending rate, earliest band first on a tie, each with a 1-based
+`rank`). The single-shot `gv vad-gap-peak --top-n` names the N steepest bands for
+ONE knob setting; the sweep version shows how that whole ranking REORDERS as a
+segmenter knob tightens. Reading down the table an operator sees not just whether
+the single steepest band moves but how the full ranking reshapes — a knob change
+that swaps which cluster is #1 vs #2 (without moving the headline
+`peak_rate_per_100ms` much) is invisible to the scalar columns but obvious in the
+ranked list. The ranking agrees EXACTLY with `gv vad-gap-peak --top-n` at the
+matching value.
+
+**What landed in `examples/gv.py` (+120 incl. parser/handler; +241 test lines).**
+- `vad_gap_peak_sweep` gains a `top_n=1` kwarg threaded into `vad_gap_peak`, and
+  each row now carries a `peaks` list (up to `top_n` ranked band objects). A
+  no-peak row (single segment, or an all-valley range with no non-empty bands)
+  carries an empty `peaks` list. The scalar `peak_*` fields still echo the single
+  steepest band (`peaks[0]`), so the default `top_n=1` row is a strict superset of
+  the iter-364/366 shape.
+- `render_vad_gap_peak_sweep` gains `top_n=1`: with `top_n > 1` it appends an
+  indented numbered ranked sub-block under EACH row (or a "(no cost peak)" note
+  for a no-peak row). The ranking block and the `show_rate_dist` block are
+  independent — both may appear under a row, the ranking first. The default
+  `top_n=1` leaves the human table byte-for-byte unchanged.
+- `render_vad_gap_peak_sweep_json` ALWAYS carries `peaks` per row (no flag, like
+  the single-shot `render_vad_gap_peak_json`) and echoes the requested count once
+  as a top-level `top_n` key.
+- `render_vad_gap_peak_sweep_csv` is UNCHANGED — the flat nine-column
+  per-swept-value verdict-row schema has no clean place for a nested ranking, so
+  it keeps echoing the single steepest band, exactly the iter-366 `band_rate_dist`
+  stance. The CSV renderer only reads scalar columns, so the new core key never
+  reaches it.
+- `cmd_vad_gap_peak_sweep` reads `--top-n` and threads it: human gets the ranked
+  sub-block, JSON gets `peaks` + `top_n`, CSV unchanged. One new argparse arg on
+  the `vad-gap-peak-sweep` subparser mirrors the single-shot `--top-n`
+  (`positive_int_type`, default 1).
+
+**Tests.** `tests/unit/test_gv_vad_gap_peak_sweep.py` (+21 net, 53 → 74): core row
+carries peaks / default `top_n=1` single entry mirroring scalars / `top_n` ranks
+steepest first / caps at available bands / matches single-shot `vad_gap_peak
+--top-n` / empty for no-peak + single-segment rows; human default omits the
+ranking / `top_n` appends one block per row / no-peak "(no cost peak)" note /
+ranking + rate-dist both appear (ranking first); JSON always carries `peaks` +
+top-level `top_n` (default and custom); CSV schema unchanged (no `peaks`/`rank`
+column, exact nine-column header pinned); parser `top_n` default / custom /
+rejects 0; handler end-to-end (top-n human, default no-ranking, top-n → JSON,
+top-n → CSV schema unchanged). The pre-existing pinned exact-dict core test
+(`test_core_basic_two_value_threshold_sweep`) gained the new `peaks` key for both
+the peak row and the no-peak row. The `_multi_band` fixture (4 segments / 3
+distinct-band gaps, rates 0.5/0.25/0.125) gives the ranking a meaningful spread.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5124 passed**
+(5103 prior + 21 net new), run in the feature worktree before ff-merge AND
+re-verified on main post-merge (`test_gv_vad_gap_peak_sweep.py` +
+`test_gv_cli.py` → 167 passed).
+- Integration: not run this lap (pure string-formatting/arithmetic over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..367 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] vad-gap-peak-grid --top-n** — apply this same per-cell top-N ranking
+   to the 2-D `vad-gap-peak-grid` (iter-365), completing the top-N view across the
+   single-shot / sweep / grid trio (mirrors the iter-366→367 sweep→grid cadence).
+   The distribution view is already complete across all three (iter-358/366/367).
+2. **[gv CLI] vad-gap-recommend-sweep companions** — let the sweep accept a swept
+   SEGMENTER knob (e.g. how short/balanced/long + the confidence grade shift as
+   `--min-speech-ms` varies), the way `vad-gap-sweep` tracks a swept
+   `--min-silence-ms`.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   leftover per-iter worktrees. A future lap could `git worktree prune` the merged
+   ones. NOTE: this lap correctly removed its own worktree.
