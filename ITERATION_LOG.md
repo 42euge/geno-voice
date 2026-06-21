@@ -32502,3 +32502,87 @@ on main post-merge (4903 passed, ~40s).
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    ~31 leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-357 — gv vad-gap-peak `--min-rate-pct` — adaptive percentile rate floor
+
+- **Date:** 2026-06-21
+- **Branch:** iter-357-peak-minratepct (ff-merged to main, worktree removed)
+- **Commit:** a67c92e
+
+**Why.** The standing next-item #1 from iter-356: "a `--min-rate` expressed as a
+PERCENTILE of the observed band rates instead of an absolute number (so the floor
+adapts to the recording's cost scale)." A genuine new behaviour on the existing
+iter-350/354/355/356 verdict surface — not an 18th chat-metrics clone (the family
+is declared complete, iter-328) and not another `*-sweep` clone.
+
+**What it is.** iter-355's `--min-rate` is an ABSOLUTE floor ("drop bands below
+0.08 per +100ms") that must be re-tuned per recording — a quiet conversation and a
+rapid-fire one have wholly different rate scales. `--min-rate-pct P` is the
+ADAPTIVE twin: it drops bands below the Pth percentile of the OBSERVED non-empty
+band rates, so the cutoff scales to the recording's own cost distribution.
+`--min-rate-pct 75` always names the top quartile of cost peaks, whatever the
+absolute numbers. The percentile is computed by linear / R-7 interpolation (the
+same convention as iter-338's `vad_gap_percentiles`) over the rates of the
+non-empty bands only — empty valleys are not cost peaks and would skew the sample
+toward zero. The interpolated rate becomes the effective floor, surfaced as
+`effective_min_rate` (also set, equal to `min_rate`, when only the absolute floor
+is in play). `min_rate_pct` must be in `(0, 100]` and is mutually exclusive with a
+positive `min_rate` (both set the same knob) — enforced at the parser
+(`add_mutually_exclusive_group`) AND in the core (`ValueError`). The default
+`None` leaves the iter-355 absolute-floor behaviour byte-for-byte unchanged.
+
+**What landed in `examples/gv.py` (+200 net lines incl. tests in the diff stat).**
+- `percentile_type` — a scalar `(0, 100]` argparse validator (the scalar twin of
+  `percentile_list_type`, modelled on `unit_interval_type`). `percentile_list_type`
+  refactored to delegate to it (no behaviour change — the list test still passes).
+- `_percentile_of_sorted` — the linear/R-7 interpolation primitive extracted from
+  `vad_gap_percentiles` and shared with the new rate floor (so the two agree).
+- `vad_gap_peak(... min_rate_pct=None)` — validates the percentile, rejects the
+  `min_rate`/`min_rate_pct` conflict, derives `effective_min_rate` from the
+  non-empty band rates, and filters on it. New `min_rate_pct` + `effective_min_rate`
+  keys. All-valley / no-bands → effective floor stays `0.0`, usual no-peak verdict.
+- `render_vad_gap_peak` / `_json` / `_csv` thread `min_rate_pct` through. Human:
+  the rate-floor note names the percentile (`pNN`) AND the resolved absolute rate;
+  the no-peak message names `--min-rate/--min-rate-pct`. JSON: adds `min_rate_pct`
+  + `effective_min_rate`. CSV: schema UNCHANGED (the floor only changes which
+  bands rank), so percentile and absolute floors yield identically-shaped tables.
+- `cmd_vad_gap_peak` reads `args.min_rate_pct` (getattr fallback `None`) and
+  threads it through all three renderers via a shared `kw` dict; new
+  `--min-rate-pct` subparser arg in a mutually-exclusive group with `--min-rate`.
+
+**Tests.** `tests/unit/test_gv_vad_gap_peak.py` (+25 net, 108 → 133):
+`percentile_type` accept/reject + `percentile_list_type` still works; parser
+default-`None` / accept / reject-bad / mutual-exclusion-with-`--min-rate`; core
+default-`None`==iter355, derives-effective-floor (p50 of `[0.067, 0.1]` = 0.084),
+low-keeps-all, hundred-keeps-steepest, composes-with-`top_n`,
+all-valley-floor-`0.0`, mutually-exclusive-raises, out-of-range/nan raises,
+zero-`min_rate`-allowed; human names-percentile+effective / no-peak /
+compact-label; json echoed+effective / default-null-effective-equals-`min_rate`;
+csv columns-unchanged; handler threads-through + getattr-fallback-to-`None`.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4928 passed**
+(4903 prior + 25 net new), run in the feature worktree before ff-merge AND re-run
+on main post-merge (4928 passed, ~52s).
+- Integration: not run this lap (pure string-formatting/arithmetic over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..356 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] vad-gap-peak companions** — a `vad-gap-peak`-sweep tracking how the
+   costliest band(s) shift vs a swept segmenter knob (e.g. `--min-speech-ms`), or
+   surfacing the FULL observed-band-rate distribution (the percentiles
+   `--min-rate-pct` reads against) so the operator can see where their chosen P
+   lands before committing to it.
+2. **[gv CLI] vad-gap-recommend-sweep companions** — let the sweep accept a swept
+   SEGMENTER knob (e.g. how short/balanced/long + the confidence grade shift as
+   `--min-speech-ms` varies), the way `vad-gap-sweep` tracks a swept
+   `--min-silence-ms`.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~31 leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
