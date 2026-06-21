@@ -34332,3 +34332,100 @@ re-verified on main post-merge (`test_gv_vad_gap_recommend_knob_sweep.py` +
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    ~30 leftover per-iter worktrees. A future lap could `git worktree prune` /
    remove the merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-377 — gv vad-gap-recommend-knob-grid --min-grade confidence-grade cell filter
+
+- **Date:** 2026-06-21
+- **Branch:** iter-377-grid-min-grade (ff-merged to main, worktree removed)
+- **Commit:** 108aca0
+
+**Why.** The standing next-item #1 from iter-376 asked to "extend `--min-grade`
+to the 2-D knob-grid": iter-376 added the `--min-grade` confidence-grade ROW
+filter to the 1-D `vad-gap-recommend-knob-sweep`; the 2-D
+`vad-gap-recommend-knob-grid` (iter-373) tabulates the same grade per CELL but
+had no grade filter. iter-374 had already extended the `--bias` COLUMN filter
+from sweep to grid; this lap is the symmetric move for the grade ROW filter, so
+the recommend-knob family is now feature-complete on BOTH filters across BOTH
+the 1-D and 2-D surfaces. A genuinely new operator-facing gate on the existing
+gv CLI, not an 18th chat-metrics clone (family complete, iter-328).
+
+**What it is.** `gv vad-gap-recommend-knob-grid recording.wav` tabulates the
+short/balanced/long recommended `--min-silence-ms` spread plus the iter-348
+confidence grade at every cell of the (gate × column knob) cartesian product.
+The new `--min-grade` flag drops every cell whose confidence grade is below a
+chosen floor (`weak`/`moderate`/`strong`), leaving only the REGION of the plane
+where the recommendation is worth acting on. This is the grid analogue of the
+iter-376 sweep `--min-grade` — the 2-D twin reading down a plane instead of a
+single knob.
+
+**Design — render-only filter; core stays complete (mirrors iter-374/376).**
+The core `vad_gap_recommend_knob_grid` is untouched: it remains the
+always-every-cell, testable primitive. The filter lives purely in the three
+render functions and REUSES the iter-376 primitives wholesale — no new helpers
+were needed:
+- `gap_confidence_grade_type` — argparse type; accepts a single
+  `weak`/`moderate`/`strong` case-insensitively, rejects `none`/empty/unknown
+  (`"none"` is the ABSENCE of a valley, not a trust floor).
+- `_grade_meets_min` — inclusive floor over the total order
+  strong > moderate > weak > none > ungraded(None); None floor passes
+  everything; unknown grades rank below all (defensive).
+- `_filter_knob_rows_by_grade` — non-mutating row/cell filter (None floor is
+  identity, returns a copy). Cells carry a `grade` key exactly like sweep rows,
+  so the same primitive applies unchanged.
+
+**What landed in `examples/gv.py` (+76/-7).**
+- All three grid renderers (`render_vad_gap_recommend_knob_grid` / `_json` /
+  `_csv`) gained a `min_grade=None` kwarg. Human: filters cells; a fully-filtered
+  grid emits a single "(no grid cell reaches confidence grade '<g>' or better)"
+  note (grid wording vs the sweep's "no swept value"). JSON: filters the `grid`
+  list and adds a top-level `min_grade` key when set (empty grid stays a valid
+  payload); composes with the iter-374 `--bias` column filter. CSV: header
+  emitted unconditionally so a fully-filtered run is a valid header-only CSV that
+  unions cleanly with an unfiltered run; `grade` is column index 8 (vs 7 in the
+  sweep — the grid leads with two axis columns).
+- `cmd_vad_gap_recommend_knob_grid` resolves
+  `min_grade = getattr(args, "min_grade", None)` and threads it through every
+  render call (incl. the unavailable branch).
+- Added `--min-grade` to the grid parser (after `--bias`, before the
+  `--json`/`--csv` format mutex), mirroring the sweep registration.
+
+**Tests (tests/unit, +16 net — test_gv_vad_gap_recommend_knob_grid.py 50→66).**
+human default==explicit-None / drops cells below floor / empty-note / drops
+ungraded; JSON default-no-key / filters+names-floor / empty-grid-valid /
+composes with `--bias`; CSV header-always (grade at col 8) / drops cells;
+handler human/json/csv min-grade paths / default-keeps-all /
+invalid-grade-rejected-at-parser / unavailable threads through. (The shared
+grade-type / `_grade_meets_min` / `_filter_knob_rows_by_grade` primitives are
+already exercised in the sweep test file; the grid tests verify the wiring,
+not the primitives.)
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5351 passed**
+(5335 prior + 16 net new), run in the feature worktree before ff-merge AND
+re-verified on main post-merge (`test_gv_vad_gap_recommend_knob_grid.py` +
+`test_gv_cli.py` → 156 passed).
+- Integration: not run this lap (pure string-formatting/arithmetic over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..376 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] recommend-knob family is now feature-complete on filters.**
+   `--bias` COLUMN filter (sweep iter-374, grid iter-374, single-shot iter-375)
+   AND `--min-grade` ROW filter (sweep iter-376, grid this lap) now span every
+   multi-bias / multi-cell recommend surface. No further filter-symmetry laps
+   remain on this family. A natural NEW recommend-side direction: a `--sort-by`
+   that orders the sweep/grid rows by grade or spread (so the operator sees the
+   most-trustworthy region first) rather than by swept value — distinct from a
+   filter (keeps every row, reorders) and not yet built anywhere.
+2. **[gv CLI] single-shot `vad-gap-recommend-sweep` has no `--min-grade`** — it
+   names short/balanced/long for ONE segmentation (one confidence grade for the
+   whole table), so a grade ROW filter is degenerate there (all-or-nothing). Not
+   worth a lap; noting it so a future lap doesn't mistake it for a gap.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~30 leftover per-iter worktrees. A future lap could `git worktree prune` /
+   remove the merged ones. NOTE: this lap correctly removed its own worktree.
