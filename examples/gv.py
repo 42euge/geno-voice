@@ -2831,7 +2831,7 @@ def render_vad_gap_peak(
     show_rate_dist=False,
     rate_pcts=DEFAULT_BAND_RATE_PCTS,
 ):
-    """Render the costliest-band verdict as plain-text report lines (iter-350; ``top_n`` iter-354; ``min_rate`` iter-355; ``min_rate_pct`` iter-357; ``show_rate_dist`` iter-358).
+    """Render the costliest-band verdict as plain-text report lines (iter-350; ``top_n`` iter-354; ``min_rate`` iter-355; ``min_rate_pct`` iter-357; ``show_rate_dist`` iter-358; floor-mark iter-360).
 
     The human-readable face of :func:`vad_gap_peak`, the verdict twin of
     :func:`render_vad_gap_cost`. ``result`` of ``None`` (segmenter unavailable)
@@ -2855,7 +2855,11 @@ def render_vad_gap_peak(
     (count / min / mean / max + the ``rate_pcts`` percentiles) — the sample
     ``--min-rate-pct`` reads against, so the operator sees where a chosen
     percentile floor would land. The default ``False`` leaves the verdict face
-    byte-for-byte unchanged. Pure: returns a list of strings (no I/O, no ANSI).
+    byte-for-byte unchanged. When ``show_rate_dist`` AND ``min_rate_pct`` are both
+    set and the floor's percentile is one of the displayed ``rate_pcts`` quantiles,
+    that pNN row is marked with ``<-- --min-rate-pct floor`` (iter-360) so the
+    operator sees the cutoff in context; an unlisted floor percentile leaves every
+    row unmarked. Pure: returns a list of strings (no I/O, no ANSI).
     """
     if result is None:
         return [
@@ -2920,10 +2924,20 @@ def render_vad_gap_peak(
                 "(iter-358)"
             )
             for entry in dist["percentiles"]:
-                lines.append(
+                line = (
                     f"    p{_format_percentile_label(entry['p'])}: "
                     f"{entry['rate']:.3f} per +100ms"
                 )
+                # iter-360: when an adaptive percentile floor is active AND its
+                # percentile is one of the displayed quantiles, mark that line so
+                # the operator sees the cutoff IN CONTEXT — exactly which pNN row
+                # the --min-rate-pct floor lands on, and thus which bands above it
+                # survive. Only the matching row is marked; an unlisted floor
+                # percentile (e.g. --min-rate-pct 80 with default p50/75/90/99)
+                # leaves every row unmarked, so add it to --rate-pcts to see it.
+                if min_rate_pct is not None and entry["p"] == min_rate_pct:
+                    line += "  <-- --min-rate-pct floor (iter-360)"
+                lines.append(line)
     if not p["peak_found"]:
         if p["num_bands"] == 0:
             lines.append(

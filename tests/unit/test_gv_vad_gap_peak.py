@@ -1731,6 +1731,91 @@ def test_render_human_show_rate_dist_custom_pcts():
     assert "p25:" in pct_lines[0]
 
 
+# ---- renderer: iter-360 floor-mark in the rate-dist block ---------------
+
+
+def test_render_human_floor_mark_marks_matching_percentile_row():
+    # When --min-rate-pct's percentile is one of the displayed quantiles, that
+    # pNN row carries the floor marker; the others do not.
+    res, cuts = _canon()
+    lines = gv.render_vad_gap_peak(
+        res, cuts_ms=cuts, show_rate_dist=True, min_rate_pct=75
+    )
+    pct_lines = [ln for ln in lines if ln.strip().startswith("p")]
+    marked = [ln for ln in pct_lines if "--min-rate-pct floor" in ln]
+    assert len(marked) == 1
+    assert "p75:" in marked[0]
+    assert "(iter-360)" in marked[0]
+    # No other percentile row is marked.
+    assert all("p75:" in ln for ln in marked)
+    assert not any(
+        "--min-rate-pct floor" in ln
+        for ln in pct_lines
+        if "p75:" not in ln
+    )
+
+
+def test_render_human_floor_mark_absent_when_floor_pct_not_listed():
+    # --min-rate-pct 80 is not among the default p50/75/90/99 rows, so no row is
+    # marked (the docstring tells the operator to add it to --rate-pcts).
+    res, cuts = _canon()
+    lines = gv.render_vad_gap_peak(
+        res, cuts_ms=cuts, show_rate_dist=True, min_rate_pct=80
+    )
+    assert not any("--min-rate-pct floor" in ln for ln in lines)
+
+
+def test_render_human_floor_mark_absent_without_min_rate_pct():
+    # show_rate_dist alone (no percentile floor) never marks a row.
+    res, cuts = _canon()
+    lines = gv.render_vad_gap_peak(res, cuts_ms=cuts, show_rate_dist=True)
+    assert not any("--min-rate-pct floor" in ln for ln in lines)
+
+
+def test_render_human_floor_mark_with_custom_rate_pcts():
+    # A custom --rate-pcts list that includes the floor percentile marks it.
+    res, cuts = _canon()
+    lines = gv.render_vad_gap_peak(
+        res,
+        cuts_ms=cuts,
+        show_rate_dist=True,
+        min_rate_pct=80,
+        rate_pcts=[80.0],
+    )
+    pct_lines = [ln for ln in lines if ln.strip().startswith("p")]
+    assert len(pct_lines) == 1
+    assert "p80:" in pct_lines[0]
+    assert "--min-rate-pct floor" in pct_lines[0]
+
+
+def test_render_human_floor_mark_absent_with_absolute_min_rate():
+    # The marker is keyed to min_rate_pct only — an absolute --min-rate floor
+    # leaves every percentile row unmarked.
+    res, cuts = _canon()
+    lines = gv.render_vad_gap_peak(
+        res, cuts_ms=cuts, show_rate_dist=True, min_rate=0.05
+    )
+    assert not any("--min-rate-pct floor" in ln for ln in lines)
+
+
+def test_handler_floor_mark_threads_through_human():
+    # End-to-end: the handler passes show_rate_dist + min_rate_pct so the marked
+    # row appears in the human face.
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    lines = _run(
+        _args(
+            cuts_ms=[500.0, 2500.0, 3500.0, 5000.0],
+            show_rate_dist=True,
+            min_rate_pct=75,
+        ),
+        segmenter=lambda w, *, params: res,
+        availability=lambda: True,
+    )
+    marked = [ln for ln in lines if "--min-rate-pct floor" in ln]
+    assert len(marked) == 1
+    assert "p75:" in marked[0]
+
+
 # ---- renderer: JSON always carries band_rate_dist -----------------------
 
 
