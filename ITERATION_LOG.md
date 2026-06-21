@@ -30723,3 +30723,73 @@ re-run on main post-merge (4441 passed, ~45s).
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-335 — gv vad-gap-diff end-to-end integration test over the real corpus
+
+- **Date:** 2026-06-20
+- **Branch:** iter-335-vad-gap-diff-integration (ff-merged to main, worktree removed)
+- **Commit:** 9a94ef3
+
+**Why.** iter-334's next-item #1: "An integration test for `gv vad-gap-diff`
+over the real corpus. This lap shipped the surface with full UNIT coverage but
+drives only an injected stub segmenter." This lap adds the integration test that
+drives the REAL Silero engine, completing the silence-gap family's end-to-end
+coverage across all four axes: point (`vad-gaps`, iter-329 integration), sweep
+(`vad-gap-sweep`, iter-331 integration), grid (`vad-gap-grid`, iter-333
+integration), and now diff (`vad-gap-diff`, this lap).
+
+**What it pins.** `tests/integration/test_gv_vad_gap_diff_cli.py` (new, +13
+tests), modeled on the sibling `test_gv_vad_gap_sweep_cli.py` (iter-331) with
+the same skip contract (skips when the uncommitted recordings or silero-vad +
+torch are absent):
+- **THE GATE** — the 31s continuous recording (which energy-VAD cannot split)
+  must yield ≥2 segments and ≥1 inter-segment gap at the baseline 0.5 gate, so
+  the min-gap floor is measurable.
+- **The anchoring property** (the diff-side mirror of the sweep's): each side's
+  gap aggregates equal an independent `gv vad-gaps --json` run segmented at that
+  side's exact gate — proving the diff differences the same per-gate
+  segmentation a standalone `gv vad-gaps` produces, not a re-derived one.
+- **The delta property:** every reported delta equals the difference of the two
+  standalone gap reports (b minus a), with a `null` delta whenever either side
+  has no pause to difference.
+- **Per-side aggregate self-consistency** (min ≤ mean ≤ max, total ≈ mean ×
+  count) for each side with ≥1 gap.
+- **CSV byte-identical** to a two-value `gv vad-gap-sweep --csv` over the same
+  pair (the iter-313 contract, here on a real segmentation — a diff IS the
+  two-point degenerate of a sweep), plus CSV-matches-JSON.
+- **The min-gap monotonicity trend:** a stricter gate (0.3 → 0.7) never SHORTENS
+  the shortest surviving pause (the diff-side echo of the sweep's min-gap-rises
+  trend), skipped when a side has no pause.
+- **Per-recording:** every corpus WAV emits a well-formed human diff (title +
+  `--min-silence-ms` knob hint) and a parseable JSON payload with each side's
+  gap count one fewer than its segment count (or zero for a single region).
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4441 passed**
+(unchanged; the new test lives under `tests/integration/`, outside the unit
+GATE), run in the feature worktree before ff-merge AND re-run on main
+post-merge (4441 passed, ~37s).
+- Integration: the new module was verified **13/13 passed** against the REAL
+  Silero engine + recording corpus in the worktree (by temporarily symlinking
+  the host recordings in, then removing the symlink before commit), in ~18s.
+  Collects cleanly (8 tests, skip-gated) when recordings are absent.
+
+**Next planned items:**
+1. **[gv CLI] The silence-gap family is now COMPLETE end to end across all four
+   axes** — point/sweep/grid/diff each have full unit + real-corpus integration
+   coverage. A natural lower-effort next: a human-table golden-output assertion
+   for one of these surfaces (the tests assert structure + substrings, not the
+   full rendered table — e.g. pin the exact aligned `gv vad-gap-diff` human
+   block over a fixed stub segmentation).
+2. **[gv CLI] A genuinely new gap-family surface** if the golden-output item
+   feels too small: e.g. a `gv vad-gap-hist` (histogram of gap durations across
+   one segmentation) — distinct from the min/mean/max aggregates by showing the
+   full pause-length distribution shape.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
