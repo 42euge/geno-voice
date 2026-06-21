@@ -31409,3 +31409,69 @@ on main post-merge (4532 passed, ~32s).
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-344 — gv vad-gap-sweep human-table golden-output assertion
+
+- **Date:** 2026-06-20
+- **Branch:** iter-344-gap-sweep-golden (ff-merged to main, worktree removed)
+- **Commit:** 53c4157
+
+**Why.** iter-343's next-item #1: "Two gap human surfaces remain un-pinned —
+percentiles (iter-340), histogram (iter-341), diff (iter-342), and grid
+(iter-343) are now byte-pinned; only point (`gv vad-gaps`) and sweep
+(`gv vad-gap-sweep`) still assert structure + substrings. The `gv vad-gap-sweep`
+1-D table is the natural next target (it shares the `{:>11}`/`%g` axis-value
+machinery the grid golden just exercised), after which the gap-surface golden
+family is complete." The existing `test_render_human_header_and_rows` for the
+sweep asserts STRUCTURE + substrings (`"min_gap"` in the header, `"1.000"`
+appears *somewhere*, the last line has a `-`) but never freezes the EXACT
+rendered block. So a silent regression in the `{:>9}` axis-value column, the
+`{:>8}` segment / `{:>4}` gap count fields, the `{:>7.3f}` / `{:>8.3f}` gap
+columns, the two-space gutters, or the `-` dash placement on the <2-segment row
+would slip past every one of them.
+
+**What it pins.** `tests/unit/test_gv_vad_gap_sweep.py` gains two golden tests
+(+50 lines, 34 → 36 tests in the module) comparing the full
+`render_vad_gap_sweep` line list verbatim against a literal expected list:
+- **`test_render_human_golden_threshold_sweep`** — `_three` vs `_single` over
+  `[0.3, 0.9]`. Freezes the header row (`  threshold  segments  gaps  min_gap
+  mean_gap   max_gap`), the numeric 3-segment row (`0.30 … 1.000 1.500 2.000`),
+  and the <2-segment dash row (`0.90 … - - -`) byte for byte. A follow-up offset
+  assertion proves the `min_gap` dash placeholder right-aligns to the SAME right
+  edge as the numeric `min_gap` value above it (the `{:>7}` / `{:>7.3f}` fields
+  share a width) — a dash-width regression would break this even if header and
+  numeric row stayed correct.
+- **`test_render_human_golden_seconds_axis_value_spelling`** — routes the swept
+  value through `axis="max_speech_s"` so it goes through
+  `_format_sweep_axis_value`'s `%g` branch, pinning that `5.0` renders compactly
+  as `5` (not `5.000` or `5.0`) while `12.5` keeps its fraction, both
+  right-aligned in the `{:>9}` field, plus the `max_speech` header-label switch.
+  The pre-existing `test_render_human_axis_label_for_min_silence` only checked
+  the label substring, never the rendered value spelling.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4534 passed**
+(4532 prior + 2 net new), run in the feature worktree before ff-merge AND re-run
+on main post-merge (4534 passed, ~34s).
+- Integration: not run this lap (pure string-formatting golden over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-340/341/342/343 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] One gap human surface remains un-pinned** — percentiles
+   (iter-340), histogram (iter-341), diff (iter-342), grid (iter-343), and sweep
+   (iter-344) are now byte-pinned; only point (`gv vad-gaps`) still asserts
+   structure + substrings. Byte-pinning `render_vad_gaps` completes the
+   gap-surface golden family (six surfaces total).
+2. **[gv CLI] A genuinely new analysis surface** — a cumulative-distribution /
+   CDF view of where a candidate `--min-silence-ms` cut would fall (what
+   fraction of pauses it would merge), turning the percentile table into a
+   direct "this hangover merges X% of your pauses" answer.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
