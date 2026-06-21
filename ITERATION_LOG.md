@@ -34237,3 +34237,98 @@ re-verified on main post-merge (`test_gv_vad_gap_recommend_sweep.py` +
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    ~30 leftover per-iter worktrees. A future lap could `git worktree prune` /
    remove the merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-376 — gv vad-gap-recommend-knob-sweep --min-grade confidence-grade row filter
+
+- **Date:** 2026-06-21
+- **Branch:** iter-376-min-grade (ff-merged to main, worktree removed)
+- **Commit:** 7245b9d
+
+**Why.** The standing next-item #1 carried across iter-373/374/375 asked for a
+recommend-side confidence-grade THRESHOLD: "a `--min-grade` ... that drops
+cells/rows below a grade (e.g. `--min-grade moderate`) so an operator sees only
+the trustworthy region of the sweep/grid." iter-374 added the `--bias` COLUMN
+filter and iter-375 closed the single-shot column-filter symmetry; the grade
+ROW filter was the remaining recommend-side knob. A genuinely new operator-facing
+gate on the existing gv CLI, not an 18th chat-metrics clone (family complete,
+iter-328).
+
+**What it is.** `gv vad-gap-recommend-knob-sweep recording.wav` tabulates the
+short/balanced/long recommended `--min-silence-ms` spread plus the iter-348
+confidence grade at every swept segmenter value. The new `--min-grade` flag
+drops every swept row whose confidence grade is below a chosen floor
+(`weak`/`moderate`/`strong`), leaving only the region of the knob where the
+recommendation is worth acting on. This is the recommend-side analogue of the
+iter-374 `--bias` filter — that one narrows COLUMNS, this narrows ROWS.
+
+**Design — render-only filter; core stays complete (mirrors iter-374).** The
+core `vad_gap_recommend_knob_sweep` is untouched: it remains the always-every-row,
+testable primitive. The filter lives purely in the three render functions, so a
+consumer of the core data is unaffected. The iter-348 grades form a total order
+strong > moderate > weak > none, with an ungraded (<2-segment) row below all of
+them. `--min-grade` accepts ONLY the three NUMERIC grades — "none" is the ABSENCE
+of a valley, not a trust floor you can filter to, so it (and the empty string)
+is rejected at the parser. Rows graded "none" or ungraded sit below every
+threshold and are always dropped when a floor is set.
+
+**What landed in `examples/gv.py` (+158/-12).**
+- `_GAP_CONFIDENCE_GRADE_RANK` / `GAP_CONFIDENCE_GRADE_CHOICES` — the grade total
+  order and the three valid thresholds.
+- `gap_confidence_grade_type(raw)` — argparse type: case-insensitive single grade,
+  rejects "none"/empty/unknown (the grade analogue of
+  `gap_recommend_bias_list_type`).
+- `_grade_meets_min(grade, min_grade)` — inclusive floor comparison over the rank;
+  None floor passes everything; unknown grade ranks below all (defensive).
+- `_filter_knob_rows_by_grade(rows, min_grade)` — non-mutating row filter; None
+  floor is identity (returns a copy).
+- All three renderers gained a `min_grade=None` kwarg. Human: filters rows; a
+  fully-filtered sweep emits a single "(no swept value reaches confidence grade
+  '<g>' or better)" note. JSON: filters the `sweep` list and adds a top-level
+  `min_grade` key when set (the empty sweep stays a valid payload). CSV: header
+  emitted unconditionally so a fully-filtered run is still a valid header-only CSV
+  that unions cleanly with an unfiltered run.
+- `cmd_vad_gap_recommend_knob_sweep` resolves
+  `min_grade = getattr(args, "min_grade", None)` and threads it through every
+  render call (incl. the unavailable branch).
+- Added `--min-grade` to the parser (after `--bias`, before the --json/--csv
+  format mutex).
+
+**Tests (tests/unit, +25 net — test_gv_vad_gap_recommend_knob_sweep.py 47→72).**
+grade-type accepts the three numeric grades case-insensitively / rejects
+none+empty+unknown; `_grade_meets_min` total order incl. inclusive floor /
+None-floor-passes-all / unknown-ranks-below; `_filter_knob_rows_by_grade`
+default-identity-copy / drops-below-floor; human default==explicit-None / drops
+rows / empty-note / drops ungraded; JSON default-no-key / filters+names-floor /
+empty-sweep-valid / composes with --bias; CSV header-always / drops rows; handler
+human/json/csv min-grade paths / default-keeps-all / invalid-grade-rejected-at-parser
+/ unavailable threads through.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5335 passed**
+(5312 prior + 23 net new), run in the feature worktree before ff-merge AND
+re-verified on main post-merge (`test_gv_vad_gap_recommend_knob_sweep.py` +
+`test_gv_cli.py` → 165 passed).
+- Integration: not run this lap (pure string-formatting/arithmetic over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..375 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] `--min-grade` row filter — extend to the 2-D knob-grid.** This lap
+   added `--min-grade` to the 1-D `vad-gap-recommend-knob-sweep`. The 2-D
+   `vad-gap-recommend-knob-grid` (iter-373) tabulates the same grade per CELL; a
+   future lap could drop cells below a grade there too (the grid analogue, like
+   iter-374 extended `--bias` from sweep to grid). The reusable
+   `gap_confidence_grade_type` / `_grade_meets_min` / `_filter_knob_rows_by_grade`
+   primitives are already in place — only the grid renderers need the kwarg.
+2. **[gv CLI] recommend-knob family is now feature-complete on filters** — `--bias`
+   COLUMN filter (sweep iter-374, grid iter-374, single-shot iter-375) and
+   `--min-grade` ROW filter (sweep, this lap). Only the grid `--min-grade` (#1)
+   remains for full symmetry.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~30 leftover per-iter worktrees. A future lap could `git worktree prune` /
+   remove the merged ones. NOTE: this lap correctly removed its own worktree.
