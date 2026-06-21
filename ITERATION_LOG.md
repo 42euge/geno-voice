@@ -32819,3 +32819,78 @@ on main post-merge (4968 passed, ~56s).
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-361 — gv vad-gap-peak `--json` carries a `floor_percentile_listed` flag
+
+- **Date:** 2026-06-21
+- **Branch:** iter-361-peak-floorlisted (ff-merged to main, worktree removed)
+- **Commit:** a1cf9df
+
+**Why.** The standing next-item #1 from iter-360 offered a JSON-face
+alternative to the human floor-marker: "have the JSON face carry an explicit
+`floor_percentile_listed` / matched-percentile flag so machine consumers can
+replicate the iter-360 human marker without re-deriving it from `rate_pcts`." A
+genuine new behaviour on the existing iter-350/354..360 verdict surface — not an
+18th chat-metrics clone (family declared complete, iter-328) and not another
+`*-sweep` clone.
+
+**What it is.** iter-360 marks the `band_rate_dist` percentile row whose
+quantile equals the active `--min-rate-pct` floor with
+`<-- --min-rate-pct floor (iter-360)` in the HUMAN face, so an operator sees the
+cutoff in context. A machine consumer of the JSON face had to re-derive that
+relationship itself — compare `min_rate_pct` against every entry in
+`band_rate_dist.percentiles`. This lap surfaces it directly as a top-level
+boolean so the JSON consumer gets the marker turnkey.
+
+**What landed in `examples/gv.py` (+22 / −2, plus +110 test lines).**
+- `render_vad_gap_peak_json` now adds a top-level `floor_percentile_listed`:
+  `True` iff an adaptive `min_rate_pct` floor is active AND its percentile is one
+  of the displayed `band_rate_dist` quantiles (exactly when the human renderer
+  would mark a `pNN` row), `False` otherwise — no percentile floor, an absolute
+  `--min-rate` floor (not a percentile), the floor percentile not among
+  `rate_pcts`, or an all-valley result whose `band_rate_dist.percentiles` list is
+  empty (no row to match).
+- Derived purely from the same two inputs the human marker uses (`min_rate_pct` +
+  the core's `band_rate_dist`), so the two faces never disagree. A dedicated test
+  asserts the JSON flag equals the human-marker presence for both a listed (p75)
+  and an unlisted (p80) floor.
+- Scope is the JSON face ONLY: the core `vad_gap_peak`, the human renderer, and
+  the CSV renderer (seven-column verdict-row schema, no distribution columns) are
+  untouched. The degrade-to-`{"available": false}` payload carries NO
+  `floor_percentile_listed` key (no analysis ran), matching the contract the
+  other keys follow.
+- Docstring + the iter-tag in the one-line summary updated.
+
+**Tests.** `tests/unit/test_gv_vad_gap_peak.py` (+9 net, 173 → 182):
+listed-true for a floor in the default pcts / listed-false for a floor not in
+pcts / listed-true with a custom `--rate-pcts` that includes the floor / false
+without `min_rate_pct` / false with an absolute `min_rate` / false for an
+all-valley result / agreement with the iter-360 human marker for p75 and p80 /
+key absent in the unavailable payload / handler threads it through the JSON face
+end-to-end.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4977 passed**
+(4968 prior + 9 net new), run in the feature worktree before ff-merge AND
+re-verified on main post-merge (`test_gv_vad_gap_peak.py` → 182 passed).
+- Integration: not run this lap (pure string-formatting/arithmetic over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..360 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] vad-gap-peak companions** — a `vad-gap-peak`-sweep tracking how the
+   costliest band(s) / band-rate distribution shift vs a swept segmenter knob
+   (e.g. `--min-speech-ms`); OR mirror the iter-361 JSON flag onto the CSV face
+   (an extra column flagging the floor row) if a spreadsheet consumer needs it.
+2. **[gv CLI] vad-gap-recommend-sweep companions** — let the sweep accept a swept
+   SEGMENTER knob (e.g. how short/balanced/long + the confidence grade shift as
+   `--min-speech-ms` varies), the way `vad-gap-sweep` tracks a swept
+   `--min-silence-ms`.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
