@@ -31141,3 +31141,66 @@ post-merge (4524 passed, ~41s).
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    ~31 leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-340 — gv vad-gap-percentiles human-table golden-output assertion
+
+- **Date:** 2026-06-20
+- **Branch:** iter-340-gap-percentiles-golden (ff-merged to main, worktree removed)
+- **Commit:** 0e9237b
+
+**Why.** iter-339's next-item #1: "A human-table golden-output assertion for one
+gap surface — the tests assert structure + substrings, not the full rendered
+block — e.g. pin the exact aligned `gv vad-gap-percentiles` `pNN` block over a
+fixed stub segmentation, asserting the median knob-hint suffix placement and
+column alignment." The existing `test_render_human_*` tests assert STRUCTURE (a
+p50 line exists, `--min-silence-ms` appears *somewhere*, p90/p99 substrings are
+present) but never freeze the EXACT rendered lines. So a silent regression in
+column alignment, label spelling, or suffix placement — a column drifting by a
+space, the median knob-hint migrating onto the p90 line, `%g` losing its compact
+`50`-not-`50.0` spelling — would slip through every one of them. This lap closes
+that, the lowest-effort of the iter-339 next items, leaving the
+percentiles surface as the first gap axis with a byte-for-byte human golden.
+
+**What it pins.** `tests/unit/test_gv_vad_gap_percentiles.py` gains two
+golden tests (+58 lines, 51 → 53 tests in the module) that compare the full
+`render_vad_gap_percentiles` line list verbatim against a literal expected list:
+- **`test_render_human_golden_default_percentiles`** — the default 50/90/99
+  request over a stub segmentation whose sorted gaps are `[1.0, 2.0, 4.0]`. p50
+  lands on `gaps[1]` exactly (`2.000`) via the R-7 fractional rank; p90/p99
+  interpolate up toward the `4.000` max. Freezes the aggregate header column
+  (min/mean/max and the right-aligned `total silence:   7.000s`), the
+  `{label:<5}` + `{value:7.3f}` `pNN` alignment, and the **median-only**
+  knob-hint suffix `(typical pause — keep --min-silence-ms below this to avoid
+  merging turns)`.
+- **`test_render_human_golden_fractional_label_alignment`** — a custom
+  `[25.0, 99.5]` request. `p99.5` is the widest label the `{label:<5}` field is
+  sized around (it consumes the pad exactly), so it verifies the value column
+  still lines up with the shorter `p25` row and confirms NO knob-hint suffix
+  appears when no median is requested. A follow-up index assertion proves both
+  `value_s` columns start at the same character offset.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4526 passed**
+(4524 prior + 2 net new), run in the feature worktree before ff-merge AND re-run
+on main post-merge (4526 passed, ~29s).
+- Integration: not run this lap (pure string-formatting golden over an injected
+  stub `_Result`; no torch import, no audio I/O — mirrors the iter-338 unit lap).
+
+**Next planned items:**
+1. **[gv CLI] Extend the golden-output pinning to the sibling gap surfaces** —
+   the percentiles human report is now byte-pinned; the other five gap axes
+   (point/sweep/grid/diff/histogram) still assert only structure + substrings.
+   A small follow-up could add the same verbatim golden to one of them (e.g. the
+   `gv vad-gap-hist` aligned bar block, where column drift is most visible).
+2. **[gv CLI] A genuinely new analysis surface** — a cumulative-distribution /
+   CDF view of where a candidate `--min-silence-ms` cut would fall (what fraction
+   of pauses it would merge), turning the percentile table into a direct "this
+   hangover merges X% of your pauses" answer.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~31 leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
