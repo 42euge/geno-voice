@@ -14,6 +14,7 @@ Usage:
     gv vad-gaps recording.wav --json # machine-readable gap stats + per-gap list
     gv vad-gap-percentiles recording.wav --percentiles 50,90,99  # robust pause percentiles (outlier-proof vs min/mean/max)
     gv vad-gap-cdf recording.wav --cuts-ms 200,400,800,1600  # merge-CDF — what fraction of pauses each --min-silence-ms cut would merge
+    gv vad-gap-cost recording.wav --cuts-ms 200,400,800,1600  # merge cost curve — marginal pauses merged per +100ms (derivative of the CDF; zero-rate bands are valleys)
     gv vad-gap-recommend recording.wav  # verdict — recommends a --min-silence-ms in the valley between short/long pauses
     gv vad-gap-confidence recording.wav  # grade how trustworthy the recommendation is (strong/moderate/weak by valley dominance)
     gv vad-gap-hist recording.wav --bin-width-s 0.5  # histogram the silence-gap durations (see the distribution shape)
@@ -2246,6 +2247,240 @@ def render_vad_gap_cdf_csv(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS):
                 entry["cut_s"],
                 entry["merged"],
                 entry["merge_fraction"],
+            ]
+        )
+    return buf.getvalue().rstrip("\r\n")
+
+
+def vad_gap_cost(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS):
+    """Compute the silence-gap MERGE COST CURVE — the derivative of the CDF (iter-349).
+
+    iter-346's :func:`vad_gap_cdf` reports the empirical CDF: at candidate
+    hangover cut ``c``, what FRACTION of the inter-segment pauses are shorter than
+    ``c`` (and so would MERGE). That is the *cumulative* picture. This surface is
+    its DERIVATIVE: between two consecutive cuts, how many ADDITIONAL pauses get
+    swallowed, and at what rate per +100 ms of hangover? Where the CDF answers
+    "how much have I merged by cut ``c``?", the cost curve answers "what does the
+    NEXT +100 ms of hangover cost me in merged turns?" — the marginal view an
+    operator tuning ``--min-silence-ms`` (the live ``chat.vad.silence_duration``)
+    actually reasons in.
+
+    The key reading: a band with a HIGH rate sits inside a cluster of pauses
+    (every extra millisecond of hangover swallows more real turn boundaries — an
+    expensive place to raise the hangover); a band with rate ZERO is an EMPTY band
+    in the distribution — a valley where raising the hangover costs nothing. That
+    zero-cost valley is exactly where :func:`vad_gap_recommend` points, so the
+    cost curve and the recommendation agree by construction: the recommended
+    hangover sits in the flattest (cheapest) band.
+
+    The cost is taken between consecutive cuts, so the cuts are SORTED and
+    DE-DUPLICATED here (unlike :func:`vad_gap_cdf`, which preserves the operator's
+    column order — a derivative needs a monotone axis). ``N`` distinct cuts yield
+    ``N - 1`` bands. Each band records its ``from_ms`` / ``to_ms`` endpoints (and
+    ``from_s`` / ``to_s``), ``width_ms``, the ``merged_added`` count (pauses with
+    ``from_s <= gap < to_s``), the ``merged_cumulative`` count at the band top
+    (which equals exactly what :func:`vad_gap_cdf` reports at ``to_ms``, so the
+    two surfaces agree), and ``rate_per_100ms`` (``merged_added / width_ms * 100``
+    — additional pauses merged per +100 ms of hangover). The merge rule follows
+    the segmenter's own convention: a pause STRICTLY ``< cut`` is too short to end
+    a turn and merges, ``>= cut`` is kept.
+
+    Pure: anchors to :func:`vad_silence_gaps` for the gap list + aggregates (so
+    the totals always agree with ``gv vad-gaps``) and adds a ``bands`` list. A
+    result with fewer than 2 segments has no gaps, so ``bands`` is empty (no
+    distribution to differentiate) and the aggregates are ``None`` — the same
+    distinction the other gap surfaces make. A single distinct cut forms no band,
+    so ``bands`` is empty (a degenerate axis, the same "nothing to show" spelling
+    a <2-segment result uses). ``from_s`` / ``to_s`` round to 3 places and
+    ``rate_per_100ms`` to 3, matching the sibling gap surfaces. Raises
+    :class:`ValueError` if ``cuts_ms`` is empty or any entry is negative / NaN.
+    """
+    cuts = list(cuts_ms)
+    if not cuts:
+        raise ValueError("cuts_ms must be a non-empty sequence")
+    for c in cuts:
+        if c != c:  # NaN is unordered.
+            raise ValueError("cut must be a number, got nan")
+        if c < 0:
+            raise ValueError(f"cut must be >= 0, got {c}")
+    d = vad_silence_gaps(result)
+    gaps = d["gaps"]
+    n_gaps = d["num_gaps"]
+    bands = []
+    if gaps:
+        # A derivative needs a monotone, de-duplicated axis (vad_gap_cdf keeps the
+        # operator's column order; the cost between consecutive cuts does not).
+        ordered = sorted(set(cuts))
+        for prev, cur in zip(ordered, ordered[1:]):
+            lo_s = prev / 1000.0
+            hi_s = cur / 1000.0
+            # Cumulative-at-top equals vad_gap_cdf's merged count at this cut, so
+            # the two surfaces agree; the band's marginal cost is the difference.
+            merged_lo = sum(1 for g in gaps if g < lo_s)
+            merged_hi = sum(1 for g in gaps if g < hi_s)
+            added = merged_hi - merged_lo
+            width_ms = cur - prev
+            bands.append(
+                {
+                    "from_ms": prev,
+                    "to_ms": cur,
+                    "from_s": round(lo_s, 3),
+                    "to_s": round(hi_s, 3),
+                    "width_ms": width_ms,
+                    "merged_added": added,
+                    "merged_cumulative": merged_hi,
+                    "rate_per_100ms": round(added / width_ms * 100.0, 3),
+                }
+            )
+    return {
+        "num_segments": d["num_segments"],
+        "num_gaps": n_gaps,
+        "min_gap_s": d["min_gap_s"],
+        "max_gap_s": d["max_gap_s"],
+        "mean_gap_s": d["mean_gap_s"],
+        "total_silence_s": d["total_silence_s"],
+        "bands": bands,
+    }
+
+
+def render_vad_gap_cost(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS):
+    """Render the silence-gap merge cost curve as plain-text report lines (iter-349).
+
+    The human-readable face of :func:`vad_gap_cost`, the derivative twin of
+    :func:`render_vad_gap_cdf`. ``result`` of ``None`` (segmenter unavailable)
+    yields the shared install hint. A result with fewer than 2 segments has no
+    gaps, so it prints the same short explanatory line :func:`render_vad_gaps`
+    uses (no distribution to differentiate). Otherwise it prints the aggregate
+    header (min/mean/max, total silence — naming the actionable
+    ``--min-silence-ms`` knob on the min-gap line) then a small table: one row per
+    band between consecutive cuts giving the band's ms range, its width, the
+    additional pauses it merges, and the marginal rate per +100 ms. A zero-rate
+    band is a valley (raising the hangover there costs nothing — where
+    ``gv vad-gap-recommend`` points). Pure: returns a list of strings (no I/O, no
+    ANSI).
+    """
+    if result is None:
+        return [
+            "silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        ]
+    c = vad_gap_cost(result, cuts_ms=cuts_ms)
+    lines = [
+        f"silero VAD gap merge cost curve — {result.name}",
+        f"  segments:     {c['num_segments']}",
+        f"  gaps:         {c['num_gaps']} (pauses between consecutive speech regions)",
+    ]
+    if c["num_gaps"] == 0:
+        lines.append("  (fewer than 2 segments — no inter-segment pause to measure)")
+        return lines
+    lines.append(
+        f"  min gap:      {c['min_gap_s']:.3f}s "
+        "(shortest real pause — keep --min-silence-ms below this to avoid "
+        "merging turns)"
+    )
+    lines.append(f"  mean gap:     {c['mean_gap_s']:.3f}s")
+    lines.append(f"  max gap:      {c['max_gap_s']:.3f}s")
+    lines.append(f"  total silence:{c['total_silence_s']:8.3f}s")
+    if not c["bands"]:
+        lines.append(
+            "  (need at least 2 distinct cuts to form a cost band — none to show)"
+        )
+        return lines
+    lines.append("  band (ms)        width   merged   per +100ms")
+    for b in c["bands"]:
+        lo = _format_cut_label(b["from_ms"])
+        hi = _format_cut_label(b["to_ms"])
+        band_col = f"{lo}-{hi}"
+        width_col = f"{_format_cut_label(b['width_ms'])}ms"
+        merged_col = f"+{b['merged_added']}"
+        lines.append(
+            f"  {band_col:<14}  {width_col:>6}  {merged_col:>6}  "
+            f"{b['rate_per_100ms']:>9.3f}"
+        )
+    return lines
+
+
+def render_vad_gap_cost_json(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS):
+    """Render the silence-gap merge cost curve as a JSON string (iter-349).
+
+    Machine-readable twin of :func:`render_vad_gap_cost`, mirroring the
+    degrade-to-``{"available": false}`` contract the other VAD JSON renderers
+    use. Carries the aggregate stats plus a ``bands`` list of
+    ``{from_ms, to_ms, from_s, to_s, width_ms, merged_added, merged_cumulative,
+    rate_per_100ms}`` objects (empty for a <2-segment result or a single distinct
+    cut, the same JSON spelling of "no distribution" the other gap surfaces use).
+    Pure: built from :func:`vad_gap_cost`, so it works on any
+    ``SileroResult``-shaped object.
+    """
+    if result is None:
+        return json.dumps(
+            {
+                "available": False,
+                "hint": (
+                    "install 'silero-vad' (pulls torch + torchaudio) to enable "
+                    "offline neural segmentation"
+                ),
+            },
+            indent=2,
+        )
+    c = vad_gap_cost(result, cuts_ms=cuts_ms)
+    payload = {
+        "available": True,
+        "name": result.name,
+        "num_segments": c["num_segments"],
+        "num_gaps": c["num_gaps"],
+        "min_gap_s": c["min_gap_s"],
+        "max_gap_s": c["max_gap_s"],
+        "mean_gap_s": c["mean_gap_s"],
+        "total_silence_s": c["total_silence_s"],
+        "bands": c["bands"],
+    }
+    return json.dumps(payload, indent=2)
+
+
+def render_vad_gap_cost_csv(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS):
+    """Render the silence-gap merge cost curve as a per-band CSV table (iter-349).
+
+    The spreadsheet/plot-friendly twin of :func:`render_vad_gap_cost` /
+    :func:`render_vad_gap_cost_json`, completing the human / ``--json`` / ``--csv``
+    trio every VAD-analysis surface carries. The natural CSV unit is one row per
+    band: ``from_ms,to_ms,width_ms,merged_added,merged_cumulative,rate_per_100ms``
+    — the shape a plotter wants (the derivative curve, marginal merge-rate vs
+    hangover) and a spreadsheet wants (one band per line). The aggregate stats and
+    derivable ``from_s`` / ``to_s`` columns are NOT duplicated into the table,
+    matching :func:`render_vad_gap_cdf_csv`'s reasoning. A result with fewer than 2
+    segments — or a single distinct cut — yields the header alone (a valid
+    empty-bodied table). ``result`` of ``None`` (segmenter unavailable) yields a
+    single ``# silero VAD unavailable: ...`` comment line. Pure: built with the
+    stdlib :mod:`csv` writer, trailing terminator stripped.
+    """
+    if result is None:
+        return (
+            "# silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        )
+    c = vad_gap_cost(result, cuts_ms=cuts_ms)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(
+        [
+            "from_ms",
+            "to_ms",
+            "width_ms",
+            "merged_added",
+            "merged_cumulative",
+            "rate_per_100ms",
+        ]
+    )
+    for b in c["bands"]:
+        writer.writerow(
+            [
+                _format_cut_label(b["from_ms"]),
+                _format_cut_label(b["to_ms"]),
+                _format_cut_label(b["width_ms"]),
+                b["merged_added"],
+                b["merged_cumulative"],
+                b["rate_per_100ms"],
             ]
         )
     return buf.getvalue().rstrip("\r\n")
@@ -4933,6 +5168,66 @@ def cmd_vad_gap_confidence(args, *, log=print, segmenter=None, availability=None
             log(line)
 
 
+def cmd_vad_gap_cost(args, *, log=print, segmenter=None, availability=None):
+    """Segment one WAV offline and report the silence-gap MERGE COST CURVE.
+
+    iter-349's derivative complement of :func:`cmd_vad_gap_cdf`. Where
+    ``gv vad-gap-cdf`` reports the cumulative empirical CDF (at cut ``c``, what
+    fraction of pauses have merged), ``gv vad-gap-cost recording.wav`` reports its
+    DERIVATIVE — between consecutive ``--cuts-ms`` values, how many ADDITIONAL
+    pauses get swallowed and at what rate per +100 ms of hangover. A high-rate
+    band sits inside a pause cluster (expensive to raise the hangover there); a
+    zero-rate band is an empty valley where raising the hangover costs nothing —
+    exactly where ``gv vad-gap-recommend`` points. It is the marginal "what does
+    the next +100 ms cost me?" view an operator tuning ``--min-silence-ms`` (the
+    live ``chat.vad.silence_duration``) reasons in.
+
+    Same injected-dependency contract as :func:`cmd_vad_gap_cdf`: ``segmenter`` /
+    ``availability`` default to the real :mod:`vad.silero` functions, imported
+    lazily so the parser stays torch-free. The segmenter knobs are shared with
+    ``gv vad`` so the gaps are measured against the same segmentation. ``--csv``
+    is mutually exclusive with ``--json``; when ``silero-vad`` is absent the
+    handler prints the install hint and returns, never crashing.
+    """
+    if segmenter is None or availability is None:
+        from vad.silero import segment_recording, silero_available
+
+        segmenter = segment_recording if segmenter is None else segmenter
+        availability = silero_available if availability is None else availability
+
+    as_json = getattr(args, "json", False)
+    as_csv = getattr(args, "csv", False)
+    cuts_ms = args.cuts_ms
+
+    if not availability():
+        if as_json:
+            log(render_vad_gap_cost_json(None, cuts_ms=cuts_ms))
+        elif as_csv:
+            log(render_vad_gap_cost_csv(None, cuts_ms=cuts_ms))
+        else:
+            for line in render_vad_gap_cost(None, cuts_ms=cuts_ms):
+                log(line)
+        return
+
+    from vad.silero import SileroParams
+
+    params = SileroParams(
+        threshold=args.threshold,
+        min_speech_ms=args.min_speech_ms,
+        min_silence_ms=args.min_silence_ms,
+        speech_pad_ms=args.speech_pad_ms,
+        max_speech_s=args.max_speech_s,
+    )
+    result = segmenter(args.wav, params=params)
+    if as_json:
+        log(render_vad_gap_cost_json(result, cuts_ms=cuts_ms))
+    elif as_csv:
+        log(render_vad_gap_cost_csv(result, cuts_ms=cuts_ms))
+    else:
+        for line in render_vad_gap_cost(result, cuts_ms=cuts_ms):
+            log(line)
+
+
 def cmd_vad_gap_histogram(args, *, log=print, segmenter=None, availability=None):
     """Segment one WAV offline and report the inter-segment silence-gap HISTOGRAM.
 
@@ -5700,6 +5995,7 @@ DEFAULT_HANDLERS = {
     "vad-gap-cdf": cmd_vad_gap_cdf,
     "vad-gap-recommend": cmd_vad_gap_recommend,
     "vad-gap-confidence": cmd_vad_gap_confidence,
+    "vad-gap-cost": cmd_vad_gap_cost,
     "vad-gap-hist": cmd_vad_gap_histogram,
     "vad-gap-sweep": cmd_vad_gap_sweep,
     "vad-diff": cmd_vad_diff,
@@ -6268,6 +6564,85 @@ def build_parser():
         action="store_true",
         help="Emit a flat cut_ms,cut_s,merged,merge_fraction CSV table (one row "
         "per cut) for spreadsheets/plots; mutually exclusive with --json",
+    )
+
+    # gv vad-gap-cost — segment one WAV and report the merge COST CURVE (iter-349).
+    # The DERIVATIVE of vad-gap-cdf: where the CDF gives the cumulative fraction of
+    # pauses merged by each cut, the cost curve gives the marginal view — between
+    # consecutive --cuts-ms values, how many ADDITIONAL pauses merge and at what
+    # rate per +100 ms of hangover. A zero-rate band is an empty valley (raising
+    # the hangover there costs nothing — where vad-gap-recommend points); a
+    # high-rate band sits inside a pause cluster. Shares all segmenter knobs.
+    vad_gap_cost = sub.add_parser(
+        "vad-gap-cost",
+        help="Offline Silero VAD — segment a WAV and report the merge cost curve "
+        "(the derivative of vad-gap-cdf): how many additional pauses each band "
+        "between --cuts-ms merges, and the rate per +100 ms of hangover",
+    )
+    vad_gap_cost.add_argument(
+        "wav",
+        help="Path to a 16-bit PCM WAV file to segment",
+    )
+    vad_gap_cost.add_argument(
+        "--cuts-ms",
+        type=cut_ms_list_type,
+        default=list(DEFAULT_GAP_CDF_CUTS_MS),
+        dest="cuts_ms",
+        help="Comma-separated candidate hangover cuts in ms defining the cost "
+        "bands, e.g. '200,400,800,1600' (sorted + de-duplicated; default: "
+        "200,400,800,1600)",
+    )
+    vad_gap_cost.add_argument(
+        "--threshold",
+        type=unit_interval_type,
+        default=vad_threshold_default,
+        help=f"P(speech) gate in [0, 1] (default: {vad_threshold_default})",
+    )
+    vad_gap_cost.add_argument(
+        "--min-speech-ms",
+        type=nonneg_float_type,
+        default=vad_min_speech_default,
+        dest="min_speech_ms",
+        help="Drop speech regions shorter than this, in ms "
+        f"(default: {vad_min_speech_default})",
+    )
+    vad_gap_cost.add_argument(
+        "--min-silence-ms",
+        type=nonneg_float_type,
+        default=vad_min_silence_default,
+        dest="min_silence_ms",
+        help="Trailing silence before a region ends, in ms — matches the "
+        f"pipecat stop_secs=0.8 live default (default: {vad_min_silence_default})",
+    )
+    vad_gap_cost.add_argument(
+        "--speech-pad-ms",
+        type=nonneg_float_type,
+        default=vad_speech_pad_default,
+        dest="speech_pad_ms",
+        help="Symmetric padding added to each region, in ms "
+        f"(default: {vad_speech_pad_default})",
+    )
+    vad_gap_cost.add_argument(
+        "--max-speech-s",
+        type=max_speech_type,
+        default=vad_max_speech_default,
+        dest="max_speech_s",
+        help="Force-split regions longer than this, in seconds; 'inf'/'none' "
+        "never splits (default: inf)",
+    )
+    vad_gap_cost_fmt = vad_gap_cost.add_mutually_exclusive_group()
+    vad_gap_cost_fmt.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON (aggregate stats + per-band marginal "
+        "merge counts and rates) instead of the human-readable report",
+    )
+    vad_gap_cost_fmt.add_argument(
+        "--csv",
+        action="store_true",
+        help="Emit a flat from_ms,to_ms,width_ms,merged_added,merged_cumulative,"
+        "rate_per_100ms CSV table (one row per band) for spreadsheets/plots; "
+        "mutually exclusive with --json",
     )
 
     # gv vad-gap-recommend — segment one WAV and RECOMMEND an end-of-turn hangover
