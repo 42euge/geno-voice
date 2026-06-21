@@ -34616,3 +34616,93 @@ re-verified on main post-merge (`test_gv_vad_gap_recommend_knob_grid.py` +
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    ~30 leftover per-iter worktrees. A future lap could `git worktree prune` /
    remove the merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-380 — gv vad-gap-recommend-knob-sweep --top-n count cap
+
+- **Date:** 2026-06-21
+- **Branch:** iter-380-top-n (ff-merged to main, worktree removed)
+- **Commit:** d0142bb
+
+**Why.** The standing next-item #1 from iter-379 asked for "a `--top-N` that keeps
+only the first N rows/cells AFTER sorting (a filter that composes with the
+ordering — 'show me the 3 most trustworthy knob settings'), distinct from
+`--min-grade` (threshold, not count). Add to the sweep first, then the grid." The
+recommend-knob family is feature-complete on FILTERS (`--bias` column iter-374/375,
+`--min-grade` row iter-376/377) AND ORDERING (`--sort-by` iter-378/379). A COUNT cap
+is the genuinely new operator-facing knob: where `--min-grade` keeps an unknown
+number of rows at/above a confidence floor (a threshold), `--top-n` keeps a FIXED
+COUNT. Following the iter-376/378 cadence (add to the 1-D sweep first, extend to the
+2-D grid next), this lap lands `--top-n` on the 1-D `vad-gap-recommend-knob-sweep`.
+Not an 18th chat-metrics clone (family complete, iter-328).
+
+**What it is.** `gv vad-gap-recommend-knob-sweep recording.wav --sort-by grade
+--top-n 3` keeps only the first 3 swept rows AFTER the `--sort-by` ordering — i.e.
+the THREE most-trustworthy knob settings. With `--sort-by spread` it shows the N
+most-decisive (tightest-spread) settings. Composes with `--min-grade` (floor first,
+then sort, then cap) and `--bias` (column subset). The default keeps every kept row
+(byte-identical to the pre-cap output).
+
+**Design — render-only truncation, applied LAST in the filter→sort→cap chain
+(mirrors iter-376/378).** The core `vad_gap_recommend_knob_sweep` is untouched: it
+stays the always-by-swept-value primitive carrying every row. One new piece lands
+next to the iter-376 grade filter and the iter-378 sort:
+- `_truncate_knob_rows(rows, top_n)` — non-mutating count cap. `top_n=None` is an
+  identity copy (default sweep byte-identical to pre-cap); a count returns
+  `rows[:top_n]` (saturating slice — a count larger than the row total keeps every
+  row, never raises). Applied AFTER `_sort_knob_rows` so the N kept rows are the N
+  that sorted to the top. The parser reuses the existing `positive_int_type`
+  (iter-354), so the count is guaranteed `>= 1` and a cap never silently empties
+  the table — no new argparse type needed (contrast iter-376/378 which each added
+  a new type; this lap reuses one).
+
+**What landed in `examples/gv.py` (+105/-21 incl. parser/handler).**
+- All three sweep renderers (`render_vad_gap_recommend_knob_sweep` / `_json` /
+  `_csv`) gained a `top_n=None` kwarg, applied AFTER the `sort_by` ordering. Human:
+  emits only the first N body rows. JSON: adds a top-level `top_n` key when set
+  (composes with `biases` / `min_grade` / `sort_by`). CSV: header + column set
+  unchanged so a capped run still unions cleanly with an uncapped one — only the
+  row count differs.
+- `cmd_vad_gap_recommend_knob_sweep` resolves `top_n = getattr(args, "top_n", None)`
+  and threads it through every render call (incl. the unavailable branch).
+- Added `--top-n` to the sweep parser (after `--sort-by`, before the --json/--csv
+  format mutex), typed `positive_int_type`.
+
+**Tests (tests/unit, +14 net — test_gv_vad_gap_recommend_knob_sweep.py 90→104).**
+`_truncate_knob_rows` None-identity-copy / keeps-first-N / N-larger-than-len-keeps-all;
+human default==explicit-None / keeps-first-after-sort; JSON default-no-key /
+names-key+truncates-after-sort / composes with min_grade+sort+bias; CSV truncates
+rows + header unchanged; handler top-n human/json paths / default-keeps-all /
+invalid-rejected (0 and -1) at parser / unavailable threads through.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5395 passed**
+(5381 prior + 14 net new), run in the feature worktree before ff-merge AND
+re-verified on main post-merge (`test_gv_vad_gap_recommend_knob_sweep.py` +
+`test_gv_cli.py` → 197 passed).
+- Integration: not run this lap (pure string-formatting/arithmetic/slicing over
+  injected stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..379 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] `--top-n` count cap — extend to the 2-D knob-grid.** This lap added
+   `--top-n` to the 1-D `vad-gap-recommend-knob-sweep`. The 2-D
+   `vad-gap-recommend-knob-grid` (iter-373) tabulates the same grade + spread per
+   CELL and already has `--sort-by` (iter-379); a future lap could cap its cells
+   too (the grid analogue, exactly as iter-377/379 extended `--min-grade`/`--sort-by`
+   from sweep to grid). The reusable `_truncate_knob_rows` primitive is already in
+   place — only the grid renderers need the `top_n` kwarg.
+2. **[gv CLI] recommend-knob family after the grid `--top-n`.** Once #1 lands, the
+   family spans `--bias` (column filter), `--min-grade` (row threshold filter),
+   `--sort-by` (ordering), and `--top-n` (count cap) across both the 1-D and 2-D
+   surfaces — feature-complete on filters, ordering, AND count. A further direction
+   could be a `--summary` that names the SINGLE best knob setting (top_n=1 +
+   one-line verdict) rather than a table, or moving on from the recommend-knob
+   family entirely toward a genuinely new gv surface.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~30 leftover per-iter worktrees. A future lap could `git worktree prune` /
+   remove the merged ones. NOTE: this lap correctly removed its own worktree.
