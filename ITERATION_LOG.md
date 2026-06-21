@@ -34144,3 +34144,96 @@ re-verified on main post-merge (`test_gv_vad_gap_recommend_knob_sweep.py` +
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    ~30 leftover per-iter worktrees. A future lap could `git worktree prune` /
    remove the merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-375 — gv vad-gap-recommend-sweep --bias column filter (single-shot twin of iter-374)
+
+- **Date:** 2026-06-21
+- **Branch:** iter-375-recommend-sweep-bias (ff-merged to main, worktree removed)
+- **Commit:** 6197305
+
+**Why.** The standing next-item #1 from iter-374 asked: "recommend-knob
+`--bias` filter — single-shot companions. The 1-D bias-only
+`vad-gap-recommend-sweep` (iter-352) names all three biases for ONE
+segmentation; it has no column filter. A future lap could extend `--bias`
+there too for symmetry." iter-374 added `--bias` to the 1-D knob sweep
+(iter-372) and the 2-D knob grid (iter-373); the single-shot bias sweep —
+which names short/balanced/long for ONE segmentation — was the remaining
+recommend-side surface without the filter. This lap closes that symmetry gap.
+A genuinely new operator-facing knob on the existing gv CLI, not an 18th
+chat-metrics clone (family complete, iter-328).
+
+**What it is.** `gv vad-gap-recommend-sweep recording.wav` names ALL THREE
+defensible end-of-turn hangovers (short/balanced/long) side by side for a
+single segmentation, plus the short→long spread and the iter-348 confidence
+grade. The new `--bias` flag narrows the per-bias output to a chosen subset
+(e.g. `--bias short` or `--bias short,long`) while ALWAYS keeping the spread +
+confidence — both are properties of the VALLEY, not of which bias is named, so
+they are invariant under the filter. Serves the common case where the operator
+wants only one or two of the three numbers but still cares about whether the
+underlying split is trustworthy.
+
+**Design — filter is render-only; core stays complete.** The core
+`vad_gap_recommend_sweep` is left untouched: it remains the always-all-three,
+testable primitive carrying the full `biases` list. The filter lives purely in
+the three render functions, reusing the iter-374 `gap_recommend_bias_list_type`
+argparse type (canonical short..balanced..long order regardless of typed order,
+dedup, reject empty/unknown). Defaults are byte-identical to the pre-filter
+output.
+
+**What landed in `examples/gv.py` (+72/-13 incl. parser/handler).**
+- `render_vad_gap_recommend_sweep` / `_json` / `_csv` each gained a
+  `biases=GAP_RECOMMEND_BIAS_ORDER` kwarg. Human: per-bias recommendation
+  lines are filtered; the spread + confidence + effect lines always print
+  (default == explicit-triad, verified). JSON: the nested `biases` list is
+  narrowed; a strict subset ALSO adds a top-level `biases_shown` strings key —
+  the single-shot `biases` key already holds the per-bias DICTS, so the names
+  go in a distinct key (unlike the iter-374 knob sweep, whose top-level
+  `biases` IS itself the names list). The default payload has no `biases_shown`
+  key and the full triad. CSV: the one-row-per-bias table drops rows for
+  unselected biases (the natural single-shot analogue of the knob-sweep CSV
+  narrowing its bias COLUMNS); header + canonical row order unchanged, so it
+  still unions cleanly with `gv vad-gap-recommend --csv`.
+- `cmd_vad_gap_recommend_sweep` resolves
+  `biases = getattr(args, "bias", None) or GAP_RECOMMEND_BIAS_ORDER` and
+  threads it through every render call (incl. the unavailable branch).
+- Added the `--bias` argument to the parser (after `--max-speech-s`, before
+  the `--json`/`--csv` format mutex), mirroring the knob-sweep/grid
+  registration.
+
+**Tests (tests/unit, +15 net).** Inverted the obsolete
+`test_parser_sweep_has_no_bias_flag` into three parser tests (accepts subset /
+canonicalizes typed order / rejects unknown). Added a `--bias` filter section:
+human default==explicit-triad / subset filters rows / single bias / no-gaps
+unaffected; JSON default-no-`biases_shown` / subset narrows-and-names + valley
+kept; CSV default==triad / subset drops rows / no-gaps header-only; handler
+human / json / csv bias paths + bias=None defaults to triad.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5312 passed**
+(5297 prior + 15 net new), run in the feature worktree before ff-merge AND
+re-verified on main post-merge (`test_gv_vad_gap_recommend_sweep.py` +
+`test_gv_cli.py` → 154 passed).
+- Integration: not run this lap (pure string-formatting/arithmetic over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..374 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] recommend-knob-grid / -sweep confidence-grade FILTER.** The
+   recommend-knob family now spans single (iter-347), confidence (iter-348),
+   bias-sweep (iter-352), knob-sweep (iter-372), knob-grid (iter-373), and the
+   `--bias` column filter across knob-sweep + knob-grid (iter-374) + single-shot
+   sweep (this lap). A natural next recommend-side knob is a confidence-grade
+   THRESHOLD that drops cells/rows below a grade (e.g. `--min-grade moderate`)
+   so an operator sees only the trustworthy region of the sweep/grid.
+2. **[gv CLI] vad-gap-recommend (single, iter-347) `--bias` is already a single
+   value, not a filter** — the bias filter family is now complete across every
+   MULTI-bias recommend surface (single-shot sweep, knob-sweep, knob-grid). No
+   further `--bias` filter laps remain; prefer the grade-threshold project (#1).
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~30 leftover per-iter worktrees. A future lap could `git worktree prune` /
+   remove the merged ones. NOTE: this lap correctly removed its own worktree.
