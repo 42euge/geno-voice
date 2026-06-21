@@ -78,6 +78,12 @@ def _single():
     return _result((0.0, 6.0))
 
 
+# A 2-segment result with a single 3.0s inter-segment gap (used by the 2×2
+# golden so each grid cell exercises a distinct gap-count shape).
+def _two():
+    return _result((0.0, 1.0), (4.0, 5.0))
+
+
 # ---- parser: registration & defaults -----------------------------------
 
 
@@ -249,6 +255,82 @@ def test_render_human_unavailable():
     lines = gv.render_vad_gap_grid([], [], [None], name="rec.wav")
     assert len(lines) == 1
     assert lines[0].startswith("silero VAD unavailable")
+
+
+def test_render_human_golden_full_matrix():
+    """Byte-for-byte golden of a 2×2 threshold × min_silence grid.
+
+    iter-340/341/342 pinned percentiles / histogram / diff verbatim; the grid
+    is the next-most-alignment-sensitive surface because it is a 2-D table —
+    column drift compounds across BOTH rows and columns. The other gap human
+    reports (percentiles, histogram, diff) are golden-pinned, but the grid's
+    `test_render_human_header_and_rows` only asserts structure + substrings
+    ("threshold" appears, "1.000" appears *somewhere*, the last line has a
+    "-"), so a silent regression in the two `{:>11}` swept-value columns, the
+    `{:>8}`/`{:>4}` count fields, the `{:>7.3f}`/`{:>8.3f}` gap columns, the
+    two-space gutters, or the row-major cell ordering would slip through.
+
+    The four cells are deliberately distinct gap shapes: 2 gaps (_three), 1 gap
+    (_two), 2 gaps again (row-major proves order — the second row repeats the
+    first column's segmentations under the higher gate), and the <2-segment
+    dash cell (_single). Results are supplied in row-major order: (0.30, 200),
+    (0.30, 400), (0.90, 200), (0.90, 400).
+    """
+    lines = gv.render_vad_gap_grid(
+        [0.3, 0.9],
+        [200.0, 400.0],
+        [_three(), _two(), _three(), _single()],
+        name="rec.wav",
+    )
+    assert lines == [
+        "silero VAD gap grid — rec.wav (threshold × min_silence)",
+        "    threshold  min_silence  segments  gaps  "
+        "min_gap  mean_gap   max_gap",
+        "         0.30          200         3     2    "
+        "1.000     1.500     2.000",
+        "         0.30          400         2     1    "
+        "3.000     3.000     3.000",
+        "         0.90          200         3     2    "
+        "1.000     1.500     2.000",
+        "         0.90          400         1     0        "
+        "-         -         -",
+    ]
+    # The dash cell's min_gap placeholder lines up with the numeric cells'
+    # min_gap column above: both the right-justified `1.000` value and the `-`
+    # placeholder end at the same character offset as the `min_gap` header
+    # label (the `{:>7.3f}` / `{:>7}` fields share a width).
+    min_gap_end = lines[1].index("min_gap") + len("min_gap")
+    assert lines[2].index("1.000") + len("1.000") == min_gap_end
+    assert lines[5].index("-") + len("-") == min_gap_end
+
+
+def test_render_human_golden_seconds_column_axis():
+    """Byte-for-byte golden exercising the `%g` seconds column-axis format.
+
+    The default `min_silence` column is a millisecond knob (`{:.0f}` → bare
+    `200`); switching `col_axis` to a seconds axis (`max_speech_s`) routes the
+    column through `_format_sweep_axis_value`'s `%g` branch, so `5.0` renders as
+    a compact `5` (not `5.000`) and `12.5` keeps its fractional part. This pins
+    that the header label switches to `max_speech` AND the `%g` value spelling,
+    which `test_render_human_col_axis_label_for_min_speech` only checks for the
+    label substring, never the rendered value column.
+    """
+    lines = gv.render_vad_gap_grid(
+        [0.5],
+        [5.0, 12.5],
+        [_three(), _single()],
+        name="rec.wav",
+        col_axis="max_speech_s",
+    )
+    assert lines == [
+        "silero VAD gap grid — rec.wav (threshold × max_speech)",
+        "    threshold   max_speech  segments  gaps  "
+        "min_gap  mean_gap   max_gap",
+        "         0.50            5         3     2    "
+        "1.000     1.500     2.000",
+        "         0.50         12.5         1     0        "
+        "-         -         -",
+    ]
 
 
 # ---- renderer: render_vad_gap_grid_json ---------------------------------
