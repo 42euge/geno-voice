@@ -236,6 +236,81 @@ def test_render_human_unavailable():
         assert "silero VAD unavailable" in lines[0]
 
 
+# ---- human renderer: byte-for-byte golden (iter-342) --------------------
+#
+# The tests above assert STRUCTURE + substrings ("a min gap line exists",
+# "--min-silence-ms appears somewhere", "+2.000s is present"). They never freeze
+# the EXACT rendered block, so a silent regression in the aligned label column
+# (every value starts at character offset 16 — "threshold A:" padded with 2
+# trailing spaces all the way down to "total silence:" with none), the
+# `A → B (Δ)` arrow/paren spacing, the `_signed` int sign vs the `_signed_float3`
+# 3-place gap sign, or the median knob-hint suffix placement would slip past
+# them. These two goldens pin the full line list verbatim — the gap-diff
+# analogue of the iter-340 (percentiles) and iter-341 (histogram) human goldens,
+# extending byte-pinning to the two-segmentation delta table (iter-341 next #1:
+# "the gv vad-gap-diff two-segmentation delta table … next-most-alignment-
+# sensitive target").
+
+
+def test_render_human_golden_both_sides_present():
+    """Full verbatim block for a both-sides-present diff (_three vs _two).
+
+    Pins the aligned label column, the `A → B (Δ)` layout, the int `_signed`
+    count deltas vs the 3-place `_signed_float3` gap deltas (including a
+    `(0.000s)` zero-delta that keeps NO `+`), and the median-row knob-hint
+    suffix — all in one frozen list.
+    """
+    lines = gv.render_vad_gap_diff(_three(), _two(), label_a=0.5, label_b=0.7)
+    assert lines == [
+        "silero VAD gap diff — rec.wav",
+        "  threshold A:  0.50",
+        "  threshold B:  0.70",
+        "  segments:     3 → 2 (-1)",
+        "  gaps:         2 → 1 (-1)",
+        "  min gap:      1.000s → 3.000s (+2.000s) — keep --min-silence-ms "
+        "below this to avoid merging turns",
+        "  mean gap:     1.500s → 3.000s (+1.500s)",
+        "  max gap:      2.000s → 3.000s (+1.000s)",
+        "  total silence:3.000s → 3.000s (0.000s)",
+    ]
+    # Every value column starts at the same character offset (16): the label
+    # field is right-padded so "3.000s" / "1.000s" / the "0.50" threshold all
+    # begin at the same column regardless of label length.
+    for ln, token in (
+        (lines[1], "0.50"),
+        (lines[3], "3 → 2"),
+        (lines[4], "2 → 1"),
+        (lines[5], "1.000s"),
+        (lines[6], "1.500s"),
+        (lines[7], "2.000s"),
+        (lines[8], "3.000s"),
+    ):
+        assert ln.index(token) == 16, ln
+
+
+def test_render_human_golden_missing_pause():
+    """Full verbatim block when side B has no inter-segment pause.
+
+    Pins the `-` value placeholder and the `n/a` delta (distinct from a
+    `0.000s` change) on the three gap-aggregate rows, while total silence — a
+    real `0.000s` for a single-segment side, not a missing pause — still
+    differences to `(-3.000s)`. Complements the all-present golden above.
+    """
+    lines = gv.render_vad_gap_diff(_three(), _single(), label_a=0.5, label_b=0.9)
+    assert lines == [
+        "silero VAD gap diff — rec.wav",
+        "  threshold A:  0.50",
+        "  threshold B:  0.90",
+        "  segments:     3 → 1 (-2)",
+        "  gaps:         2 → 0 (-2)",
+        "  min gap:      1.000s → - (n/a) — keep --min-silence-ms "
+        "below this to avoid merging turns",
+        "  mean gap:     1.500s → - (n/a)",
+        "  max gap:      2.000s → - (n/a)",
+        "  total silence:3.000s → 0.000s (-3.000s)",
+    ]
+
+
 # ---- json renderer ------------------------------------------------------
 
 
