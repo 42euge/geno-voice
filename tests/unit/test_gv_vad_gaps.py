@@ -231,6 +231,75 @@ def test_render_vad_gaps_unavailable():
     assert "silero-vad" in lines[0]
 
 
+# ---- human renderer: byte-for-byte golden (iter-345) ---------------------
+#
+# The substring tests above (and the iter-328 originals) prove the report
+# CONTAINS the right phrases, but never freeze the EXACT rendered block. So a
+# silent regression in the label-column padding (the hand-tuned trailing spaces
+# after "segments:" / "gaps:" / "min gap:" / "total silence:"), the
+# `{:8.3f}` total-silence field, the per-gap `[{i:>2}]` index padding, the
+# `{:6.3f}s` gap column, or the `(ends {end:.2f}s)` suffix would slip past every
+# one of them. These two goldens close that gap — the SIXTH and final VAD-gap
+# human surface to be byte-pinned (after percentiles iter-340, histogram
+# iter-341, diff iter-342, grid iter-343, sweep iter-344), completing the
+# gap-surface golden family.
+
+
+def test_render_human_golden_multi_gap_block():
+    # Three segments -> two gaps of distinct sizes (2.0s then 0.5s), so the
+    # min/mean/max are all different and the per-gap rows carry distinct values.
+    lines = gv.render_vad_gaps(_result((0.0, 1.0), (3.0, 4.0), (4.5, 5.0)))
+    assert lines == [
+        "silero VAD silence gaps — rec.wav",
+        "  segments:     3",
+        "  gaps:         2 (pauses between consecutive speech regions)",
+        "  min gap:      0.500s (shortest real pause — keep --min-silence-ms "
+        "below this to avoid merging turns)",
+        "  mean gap:     1.250s",
+        "  max gap:      2.000s",
+        "  total silence:   2.500s",
+        "  [ 1]  2.000s  after seg 1 (ends 1.00s)",
+        "  [ 2]  0.500s  after seg 2 (ends 4.00s)",
+    ]
+
+
+def test_render_human_golden_single_segment_block():
+    # The <2-segment branch: stats header is present but truncates at the
+    # explanatory line, WITHOUT the min-gap knob advice (no pause to tune).
+    lines = gv.render_vad_gaps(_result((0.0, 1.0)))
+    assert lines == [
+        "silero VAD silence gaps — rec.wav",
+        "  segments:     1",
+        "  gaps:         0 (pauses between consecutive speech regions)",
+        "  (fewer than 2 segments — no inter-segment pause to measure)",
+    ]
+
+
+def test_render_human_golden_double_digit_index_alignment():
+    # 11 segments -> 10 gaps forces the per-gap index past one digit, pinning
+    # that `[{i:>2}]` right-aligns "[ 9]" against "[10]" (a width regression
+    # would misalign the bracket column), and that the `{:8.3f}` total-silence
+    # field widens cleanly from "   2.500s" to "  10.000s".
+    pairs = [(i * 1.5, i * 1.5 + 0.5) for i in range(11)]
+    lines = gv.render_vad_gaps(_result(*pairs))
+    assert lines[:7] == [
+        "silero VAD silence gaps — rec.wav",
+        "  segments:     11",
+        "  gaps:         10 (pauses between consecutive speech regions)",
+        "  min gap:      1.000s (shortest real pause — keep --min-silence-ms "
+        "below this to avoid merging turns)",
+        "  mean gap:     1.000s",
+        "  max gap:      1.000s",
+        "  total silence:  10.000s",
+    ]
+    # The single-digit row and the two-digit row share the same bracket width:
+    # "[ 9]" and "[10]" both end at the same character offset.
+    assert lines[7] == "  [ 1]  1.000s  after seg 1 (ends 0.50s)"
+    assert lines[15] == "  [ 9]  1.000s  after seg 9 (ends 12.50s)"
+    assert lines[16] == "  [10]  1.000s  after seg 10 (ends 14.00s)"
+    assert lines[15].index("]") == lines[16].index("]")
+
+
 # ---- JSON renderer -------------------------------------------------------
 
 
