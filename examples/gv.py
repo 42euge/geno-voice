@@ -3778,6 +3778,242 @@ def render_vad_gap_recommend_sweep_csv(result):
     return buf.getvalue().rstrip("\r\n")
 
 
+def vad_gap_recommend_knob_sweep(values, results, *, axis="threshold"):
+    """Pair each swept-SEGMENTER-knob value with its full bias spread + confidence (iter-372).
+
+    The knob-sweep companion of iter-352's :func:`vad_gap_recommend_sweep`. Where
+    that surface sweeps the BIAS (short/balanced/long) over ONE segmentation, this
+    surface sweeps a SEGMENTER knob (the gate ``threshold`` or one of the ms /
+    seconds region knobs) and reports, at each swept value, the WHOLE bias spread
+    AND the iter-348 confidence grade. It is to ``vad-gap-recommend-sweep`` what
+    ``vad-gap-sweep`` is to ``vad-gaps``: the same per-value structure, tabulated
+    across a knob axis instead of computed for one segmentation.
+
+    The headline is two-dimensional. First, how the three recommended
+    ``--min-silence-ms`` numbers MOVE as the knob tightens: a stricter
+    ``--threshold`` or a longer ``--min-speech-ms`` floor gates out marginal
+    speech, merges adjacent regions, and reshapes the pause distribution, so the
+    valley the recommendation sits in — and the short/balanced/long numbers that
+    bracket it — drift with the knob. Second, and more telling, how the CONFIDENCE
+    GRADE moves: the same reshaping can turn a smear of similar pauses (weak) into
+    a clean bimodal split (strong) or vice versa, so an operator sees not just
+    which hangover to pick but at which knob setting the recommendation becomes
+    TRUSTWORTHY in the first place.
+
+    Pure: takes the parallel ``values`` list (one per swept-axis point) and
+    ``results`` list (each a ``SileroResult``-shaped object segmented at the
+    matching value) and returns a list of rows ``{axis, "num_segments",
+    "num_gaps", "split_found", "biases", "spread_ms", "spread_s", "grade",
+    "dominance", "separation_ratio"}``. Each row is built by anchoring to
+    :func:`vad_gap_recommend_sweep` over that value's segmentation, so the per-row
+    bias spread, valley accounting, and grade agree EXACTLY with
+    ``gv vad-gap-recommend-sweep`` (and ``gv vad-gap-confidence``) at the matching
+    value. The bias / spread / grade fields are ``None`` for a row whose
+    segmentation has <2 segments (no pause to recommend over), exactly the "no
+    distribution" spelling the sibling gap surfaces use. The row's swept-axis key
+    IS ``axis`` (default ``"threshold"``). No I/O, no torch import, so it is
+    testable in isolation. Raises :class:`ValueError` if the two lists differ in
+    length.
+    """
+    if len(values) != len(results):
+        raise ValueError(
+            f"values ({len(values)}) and results ({len(results)}) "
+            "must be the same length"
+        )
+    rows = []
+    for v, r in zip(values, results):
+        s = vad_gap_recommend_sweep(r)
+        rows.append(
+            {
+                axis: v,
+                "num_segments": s["num_segments"],
+                "num_gaps": s["num_gaps"],
+                "split_found": s["split_found"],
+                # The whole short/balanced/long spread at THIS swept value (the
+                # iter-352 per-bias rows). recommended_ms / recommended_s are
+                # None when num_gaps == 0.
+                "biases": s["biases"],
+                "spread_ms": s["spread_ms"],
+                "spread_s": s["spread_s"],
+                # The iter-348 confidence grade at THIS swept value — the genuinely
+                # new signal vs vad-gap-recommend-sweep: it shows at WHICH knob
+                # setting the recommendation becomes trustworthy. Invariant across
+                # biases (a valley property), so reported once per row.
+                "grade": s["grade"],
+                "dominance": s["dominance"],
+                "separation_ratio": s["separation_ratio"],
+            }
+        )
+    return rows
+
+
+def _knob_sweep_bias_ms(row, bias):
+    """Pull one bias's recommended_ms out of a knob-sweep row, or ``None``.
+
+    The per-bias rows live in ``row["biases"]`` (one entry per
+    :data:`GAP_RECOMMEND_BIAS_ORDER` value); a <2-segment row's entries carry
+    ``recommended_ms`` ``None``. Shared by the human / CSV renderers so the two
+    agree on the column extraction.
+    """
+    for b in row["biases"]:
+        if b["bias"] == bias:
+            return b["recommended_ms"]
+    return None
+
+
+def render_vad_gap_recommend_knob_sweep(values, results, *, name, axis="threshold"):
+    """Render a recommend knob sweep as a plain-text table (iter-372).
+
+    The human-readable twin of :func:`render_vad_gap_recommend_knob_sweep_json`.
+    ``name`` is the WAV being swept; ``axis`` names the swept SEGMENTER dimension
+    (sets the column label via :data:`_SWEEP_AXIS_LABEL`). Any ``None`` in
+    ``results`` (segmenter unavailable) yields the shared install hint. Pure:
+    returns a list of strings. Each row prints the swept value, the segment count,
+    the gap count, the three recommended ``--min-silence-ms`` numbers
+    (short/balanced/long), the short→long spread, and the confidence grade; a row
+    with <2 segments has no pause to recommend over and prints ``-`` in the
+    recommendation columns. Reading down the ``confidence`` column an operator sees
+    at WHICH knob setting the recommendation becomes trustworthy — the genuinely
+    new signal vs the bias-only ``gv vad-gap-recommend-sweep``.
+    """
+    if any(r is None for r in results):
+        return [
+            "silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        ]
+    rows = vad_gap_recommend_knob_sweep(values, results, axis=axis)
+    label = _SWEEP_AXIS_LABEL.get(axis, axis)
+    lines = [
+        f"silero VAD recommended-hangover knob sweep — {name}",
+        f"  {label:>9}  segments  gaps    short  balanced      long    spread  confidence",
+    ]
+    for row in rows:
+        if row["num_gaps"] == 0:
+            rec_cols = (
+                f"{'-':>5}  {'-':>8}  {'-':>8}  {'-':>6}  {'-':>10}"
+            )
+        else:
+            short = _format_cut_label(_knob_sweep_bias_ms(row, "short"))
+            balanced = _format_cut_label(_knob_sweep_bias_ms(row, "balanced"))
+            long = _format_cut_label(_knob_sweep_bias_ms(row, "long"))
+            spread = _format_cut_label(row["spread_ms"])
+            # grade is "none" (no valley) or strong/moderate/weak — never None for
+            # a num_gaps > 0 row (vad_gap_confidence returns "none", not None).
+            rec_cols = (
+                f"{short:>5}  {balanced:>8}  {long:>8}  {spread:>6}  {row['grade']:>10}"
+            )
+        lines.append(
+            f"  {_format_sweep_axis_value(axis, row[axis]):>9}  "
+            f"{row['num_segments']:>8}  {row['num_gaps']:>4}  {rec_cols}"
+        )
+    return lines
+
+
+def render_vad_gap_recommend_knob_sweep_json(values, results, *, name, axis="threshold"):
+    """Render a recommend knob sweep as a JSON string (iter-372).
+
+    Machine-readable twin of :func:`render_vad_gap_recommend_knob_sweep`, so the
+    sweep can feed a plotting/tuning script. The payload carries the swept
+    ``axis`` name (the rows are keyed by that same name) and a ``sweep`` list of
+    per-value rows, each with ``num_segments`` / ``num_gaps`` / ``split_found`` /
+    the per-bias ``biases`` list / ``spread_ms`` / ``spread_s`` / ``grade`` /
+    ``dominance`` / ``separation_ratio`` (the recommendation + confidence fields
+    ``null`` for a <2-segment row). Any ``None`` in ``results`` →
+    ``{"available": false}`` + install hint, mirroring the sibling sweep JSON
+    renderers. Pure: returns a single JSON string.
+    """
+    if any(r is None for r in results):
+        return json.dumps(
+            {
+                "available": False,
+                "hint": (
+                    "install 'silero-vad' (pulls torch + torchaudio) to enable "
+                    "offline neural segmentation"
+                ),
+            },
+            indent=2,
+        )
+    rows = vad_gap_recommend_knob_sweep(values, results, axis=axis)
+    payload = {
+        "available": True,
+        "name": name,
+        "axis": axis,
+        "sweep": rows,
+    }
+    return json.dumps(payload, indent=2)
+
+
+def render_vad_gap_recommend_knob_sweep_csv(values, results, *, name, axis="threshold"):
+    """Render a recommend knob sweep as CSV text (no trailing newline) (iter-372).
+
+    The spreadsheet/plot-friendly twin of
+    :func:`render_vad_gap_recommend_knob_sweep_json`. Where JSON nests the per-bias
+    rows under each value's ``biases`` key, CSV flattens to ONE ROW PER SWEPT VALUE
+    with the three bias recommendations as columns:
+    ``<axis>,num_segments,num_gaps,short_ms,balanced_ms,long_ms,spread_ms,grade,
+    dominance,separation_ratio`` — so a reader sees how the whole spread AND the
+    confidence move down a single table. (Contrast ``gv vad-gap-recommend-sweep
+    --csv``, which is one row per bias for a SINGLE segmentation; here the sweep
+    axis is the segmenter knob, so the value is the row key and the biases become
+    columns.) The first column header is the swept ``axis`` name so the grid is
+    self-describing. ``name`` is accepted for signature parity but is not part of
+    the tabular body (a CSV is a pure data grid), matching the sibling sweep CSVs.
+    A <2-segment row emits empty cells in the recommendation columns (the CSV
+    spelling of JSON ``null`` / the human table's ``-``). Any ``None`` in
+    ``results`` (segmenter unavailable) yields a single ``# silero VAD
+    unavailable: ...`` comment line. Pure: built with the stdlib :mod:`csv`
+    writer, trailing terminator stripped.
+    """
+    if any(r is None for r in results):
+        return (
+            "# silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        )
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(
+        [
+            axis,
+            "num_segments",
+            "num_gaps",
+            "short_ms",
+            "balanced_ms",
+            "long_ms",
+            "spread_ms",
+            "grade",
+            "dominance",
+            "separation_ratio",
+        ]
+    )
+    for row in vad_gap_recommend_knob_sweep(values, results, axis=axis):
+        if row["num_gaps"] > 0:
+            short = _format_cut_label(_knob_sweep_bias_ms(row, "short"))
+            balanced = _format_cut_label(_knob_sweep_bias_ms(row, "balanced"))
+            long = _format_cut_label(_knob_sweep_bias_ms(row, "long"))
+            spread = _format_cut_label(row["spread_ms"])
+            dominance = "" if row["dominance"] is None else row["dominance"]
+            sep = "" if row["separation_ratio"] is None else row["separation_ratio"]
+            grade = row["grade"]
+        else:
+            # <2 segments — nothing to recommend; empty cells (CSV null spelling).
+            short = balanced = long = spread = grade = dominance = sep = ""
+        writer.writerow(
+            [
+                row[axis],
+                row["num_segments"],
+                row["num_gaps"],
+                short,
+                balanced,
+                long,
+                spread,
+                grade,
+                dominance,
+                sep,
+            ]
+        )
+    return buf.getvalue().rstrip("\r\n")
+
+
 # Dominance thresholds grading how clean the recommendation's valley is. The
 # dominance is the fraction of the total gap SPREAD (max_gap - min_gap) taken up
 # by the single widest jump (the valley). A clean bimodal distribution puts most
@@ -7218,6 +7454,111 @@ def cmd_vad_gap_recommend_sweep(args, *, log=print, segmenter=None, availability
             log(line)
 
 
+def cmd_vad_gap_recommend_knob_sweep(args, *, log=print, segmenter=None, availability=None):
+    """Segment one WAV across a swept SEGMENTER knob and tabulate the bias spread + confidence.
+
+    iter-372's knob-sweep companion of :func:`cmd_vad_gap_recommend_sweep`. Where
+    ``gv vad-gap-recommend-sweep recording.wav`` sweeps the BIAS
+    (short/balanced/long) over ONE segmentation, ``gv vad-gap-recommend-knob-sweep
+    recording.wav --thresholds ...`` sweeps a SEGMENTER knob and reports, at each
+    swept value, the WHOLE bias spread AND the iter-348 confidence grade. It is to
+    ``vad-gap-recommend-sweep`` what ``vad-gap-sweep`` is to ``vad-gaps``: the same
+    per-value structure tabulated across a knob axis instead of computed for one
+    segmentation. The genuinely new signal vs the bias-only sweep is the
+    ``confidence`` column — an operator sees not just which hangover to pick but at
+    which knob setting the recommendation becomes TRUSTWORTHY.
+
+    Shares the iter-256 five-axis sweep machinery of :func:`cmd_vad_gap_sweep`: the
+    default axis is the P(speech) gate (``--thresholds``); ``--min-silences`` /
+    ``--min-speeches`` / ``--speech-pads`` / ``--max-speeches`` switch the swept
+    dimension to the hangover / minimum-speech floor / region padding /
+    force-split ceiling (seconds), the gate then held at the scalar
+    ``--threshold``. The five axes are mutually exclusive; exactly one knob varies
+    per run, every non-swept knob is shared across all runs.
+
+    Same injected-dependency contract as :func:`cmd_vad_gap_sweep`: ``segmenter`` /
+    ``availability`` default to the real :mod:`vad.silero` functions, imported
+    lazily so the parser stays torch-free. ``--csv`` is mutually exclusive with
+    ``--json``; when ``silero-vad`` is absent the handler prints the install hint
+    and returns, never crashing.
+    """
+    if segmenter is None or availability is None:
+        from vad.silero import segment_recording, silero_available
+
+        segmenter = segment_recording if segmenter is None else segmenter
+        availability = silero_available if availability is None else availability
+
+    as_json = getattr(args, "json", False)
+    as_csv = getattr(args, "csv", False)
+
+    # Pick the swept axis, mirroring cmd_vad_gap_sweep: --min-silences sweeps the
+    # hangover, --min-speeches the minimum-speech floor, --speech-pads the region
+    # padding, --max-speeches the force-split ceiling (seconds) — all with the
+    # gate held at scalar --threshold; otherwise sweep --thresholds (the default)
+    # with the other knobs held at their scalars. The parser guarantees at most
+    # one of the five is set.
+    min_silences = getattr(args, "min_silences", None)
+    min_speeches = getattr(args, "min_speeches", None)
+    speech_pads = getattr(args, "speech_pads", None)
+    max_speeches = getattr(args, "max_speeches", None)
+    if min_silences is not None:
+        axis = "min_silence_ms"
+        values = min_silences
+    elif min_speeches is not None:
+        axis = "min_speech_ms"
+        values = min_speeches
+    elif speech_pads is not None:
+        axis = "speech_pad_ms"
+        values = speech_pads
+    elif max_speeches is not None:
+        axis = "max_speech_s"
+        values = max_speeches
+    else:
+        axis = "threshold"
+        values = args.thresholds
+
+    if not availability():
+        if as_json:
+            log(render_vad_gap_recommend_knob_sweep_json([], [None], name=args.wav, axis=axis))
+        elif as_csv:
+            log(render_vad_gap_recommend_knob_sweep_csv([], [None], name=args.wav, axis=axis))
+        else:
+            for line in render_vad_gap_recommend_knob_sweep([], [None], name=args.wav, axis=axis):
+                log(line)
+        return
+
+    from vad.silero import SileroParams
+
+    def _seg(value):
+        # The swept axis takes ``value``; every other dimension is held at its
+        # scalar knob. Every non-swept knob is shared across all runs.
+        threshold = value if axis == "threshold" else args.threshold
+        min_silence_ms = value if axis == "min_silence_ms" else args.min_silence_ms
+        min_speech_ms = value if axis == "min_speech_ms" else args.min_speech_ms
+        speech_pad_ms = value if axis == "speech_pad_ms" else args.speech_pad_ms
+        max_speech_s = value if axis == "max_speech_s" else args.max_speech_s
+        params = SileroParams(
+            threshold=threshold,
+            min_speech_ms=min_speech_ms,
+            min_silence_ms=min_silence_ms,
+            speech_pad_ms=speech_pad_ms,
+            max_speech_s=max_speech_s,
+        )
+        return segmenter(args.wav, params=params)
+
+    results = [_seg(v) for v in values]
+    # Use the segmenter's own name (basename) so the sweep matches `gv vad`'s
+    # report; fall back to the raw path only if the sweep is empty.
+    name = results[0].name if results else args.wav
+    if as_json:
+        log(render_vad_gap_recommend_knob_sweep_json(values, results, name=name, axis=axis))
+    elif as_csv:
+        log(render_vad_gap_recommend_knob_sweep_csv(values, results, name=name, axis=axis))
+    else:
+        for line in render_vad_gap_recommend_knob_sweep(values, results, name=name, axis=axis):
+            log(line)
+
+
 def cmd_vad_gap_confidence(args, *, log=print, segmenter=None, availability=None):
     """Segment one WAV offline and GRADE the recommended-hangover confidence.
 
@@ -8533,6 +8874,7 @@ DEFAULT_HANDLERS = {
     "vad-gap-cdf": cmd_vad_gap_cdf,
     "vad-gap-recommend": cmd_vad_gap_recommend,
     "vad-gap-recommend-sweep": cmd_vad_gap_recommend_sweep,
+    "vad-gap-recommend-knob-sweep": cmd_vad_gap_recommend_knob_sweep,
     "vad-gap-confidence": cmd_vad_gap_confidence,
     "vad-gap-cost": cmd_vad_gap_cost,
     "vad-gap-peak": cmd_vad_gap_peak,
@@ -9472,6 +9814,135 @@ def build_parser():
         action="store_true",
         help="Emit a three-row (one per bias) bias,recommended_ms,recommended_s,"
         "split_found,below,at_or_above,num_gaps CSV; mutually exclusive with --json",
+    )
+
+    # gv vad-gap-recommend-knob-sweep — segment one WAV across a swept SEGMENTER
+    # knob and tabulate the whole bias spread + confidence grade at each value
+    # (iter-372). The knob-sweep companion of vad-gap-recommend-sweep: where that
+    # sweeps the BIAS over ONE segmentation, this sweeps a segmenter knob (gate or
+    # ms/seconds region knobs) and reports the short/balanced/long numbers AND the
+    # iter-348 confidence grade per value — so an operator sees not just which
+    # hangover to pick but at WHICH knob setting the recommendation becomes
+    # trustworthy. Shares vad-gap-sweep's five-axis machinery.
+    vad_gap_rec_knob_sweep = sub.add_parser(
+        "vad-gap-recommend-knob-sweep",
+        help="Offline Silero VAD — segment a WAV across a swept segmenter knob "
+        "(--thresholds gate, --min-silences hangover, --min-speeches floor, "
+        "--speech-pads region padding, or --max-speeches force-split ceiling) and "
+        "tabulate the short/balanced/long recommended --min-silence-ms AND the "
+        "confidence grade at each value (watch where the recommendation becomes "
+        "trustworthy as the knob moves)",
+    )
+    vad_gap_rec_knob_sweep.add_argument(
+        "wav",
+        help="Path to a 16-bit PCM WAV file to segment at each swept value",
+    )
+    # The swept axis: --thresholds (default) OR one of the four ms/seconds knobs,
+    # never more than one — same shape as vad-gap-sweep's axis mutex.
+    vad_gap_rec_knob_sweep_axis = vad_gap_rec_knob_sweep.add_mutually_exclusive_group()
+    vad_gap_rec_knob_sweep_axis.add_argument(
+        "--thresholds",
+        type=unit_interval_list_type,
+        default=[0.3, 0.5, 0.7, 0.9],
+        help="Comma-separated P(speech) gates in [0, 1] to sweep "
+        "(default: 0.3,0.5,0.7,0.9; mutually exclusive with the ms/seconds axes)",
+    )
+    vad_gap_rec_knob_sweep_axis.add_argument(
+        "--min-silences",
+        type=nonneg_float_list_type,
+        default=None,
+        dest="min_silences",
+        help="Comma-separated trailing-silence hangovers in ms to sweep "
+        "instead of the gate (e.g. 400,600,800,1000); the gate is held at the "
+        "scalar --threshold (mutually exclusive with the other axes)",
+    )
+    vad_gap_rec_knob_sweep_axis.add_argument(
+        "--min-speeches",
+        type=nonneg_float_list_type,
+        default=None,
+        dest="min_speeches",
+        help="Comma-separated minimum-speech floors in ms to sweep instead of "
+        "the gate (e.g. 50,100,200,400); the gate is held at the scalar "
+        "--threshold (mutually exclusive with the other axes)",
+    )
+    vad_gap_rec_knob_sweep_axis.add_argument(
+        "--speech-pads",
+        type=nonneg_float_list_type,
+        default=None,
+        dest="speech_pads",
+        help="Comma-separated symmetric region paddings in ms to sweep instead "
+        "of the gate (e.g. 0,20,40,60); the gate is held at the scalar "
+        "--threshold (mutually exclusive with the other axes)",
+    )
+    vad_gap_rec_knob_sweep_axis.add_argument(
+        "--max-speeches",
+        type=max_speech_list_type,
+        default=None,
+        dest="max_speeches",
+        help="Comma-separated force-split ceilings in SECONDS to sweep instead "
+        "of the gate (e.g. 5,10,20,inf); 'inf'/'none'/'off' anchors the no-cap "
+        "baseline; the gate is held at the scalar --threshold (mutually "
+        "exclusive with the other axes)",
+    )
+    vad_gap_rec_knob_sweep.add_argument(
+        "--threshold",
+        type=unit_interval_type,
+        default=vad_threshold_default,
+        help="Scalar P(speech) gate held fixed when sweeping --min-silences, "
+        "--min-speeches, --speech-pads, or --max-speeches, in [0, 1]; ignored "
+        "when sweeping --thresholds "
+        f"(default: {vad_threshold_default})",
+    )
+    vad_gap_rec_knob_sweep.add_argument(
+        "--min-speech-ms",
+        type=nonneg_float_type,
+        default=vad_min_speech_default,
+        dest="min_speech_ms",
+        help="Drop speech regions shorter than this, in ms — shared by all "
+        "runs when sweeping --thresholds; ignored when sweeping --min-speeches "
+        f"(default: {vad_min_speech_default})",
+    )
+    vad_gap_rec_knob_sweep.add_argument(
+        "--min-silence-ms",
+        type=nonneg_float_type,
+        default=vad_min_silence_default,
+        dest="min_silence_ms",
+        help="Trailing silence before a region ends, in ms — shared by all "
+        "runs when sweeping --thresholds; ignored when sweeping --min-silences "
+        f"(default: {vad_min_silence_default})",
+    )
+    vad_gap_rec_knob_sweep.add_argument(
+        "--speech-pad-ms",
+        type=nonneg_float_type,
+        default=vad_speech_pad_default,
+        dest="speech_pad_ms",
+        help="Symmetric padding added to each region, in ms — shared by all "
+        "runs when sweeping --thresholds; ignored when sweeping --speech-pads "
+        f"(default: {vad_speech_pad_default})",
+    )
+    vad_gap_rec_knob_sweep.add_argument(
+        "--max-speech-s",
+        type=max_speech_type,
+        default=vad_max_speech_default,
+        dest="max_speech_s",
+        help="Force-split regions longer than this, in seconds — shared by "
+        "all runs when sweeping --thresholds; ignored when sweeping "
+        "--max-speeches; 'inf'/'none' never splits (default: inf)",
+    )
+    vad_gap_rec_knob_sweep_fmt = vad_gap_rec_knob_sweep.add_mutually_exclusive_group()
+    vad_gap_rec_knob_sweep_fmt.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON (per-value rows: bias spread + "
+        "confidence) instead of the human-readable table",
+    )
+    vad_gap_rec_knob_sweep_fmt.add_argument(
+        "--csv",
+        action="store_true",
+        help="Emit a flat <axis>,num_segments,num_gaps,short_ms,balanced_ms,"
+        "long_ms,spread_ms,grade,dominance,separation_ratio CSV table for "
+        "spreadsheets/plots (one row per swept value; mutually exclusive "
+        "with --json)",
     )
 
     # gv vad-gap-confidence — segment one WAV and GRADE how trustworthy the

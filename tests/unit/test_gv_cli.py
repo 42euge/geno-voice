@@ -400,6 +400,7 @@ def test_dispatch_default_handlers_are_the_real_cmds():
         "vad-gap-cdf": gv.cmd_vad_gap_cdf,
         "vad-gap-recommend": gv.cmd_vad_gap_recommend,
         "vad-gap-recommend-sweep": gv.cmd_vad_gap_recommend_sweep,
+        "vad-gap-recommend-knob-sweep": gv.cmd_vad_gap_recommend_knob_sweep,
         "vad-gap-confidence": gv.cmd_vad_gap_confidence,
         "vad-gap-cost": gv.cmd_vad_gap_cost,
         "vad-gap-peak": gv.cmd_vad_gap_peak,
