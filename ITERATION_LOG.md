@@ -32586,3 +32586,90 @@ on main post-merge (4928 passed, ~52s).
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    ~31 leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-358 — gv vad-gap-peak `--show-rate-dist` — observed band-rate distribution
+
+- **Date:** 2026-06-21
+- **Branch:** iter-358-peak-ratedist (ff-merged to main, worktree removed)
+- **Commit:** c69c94d
+
+**Why.** The standing next-item #1 from iter-357: "surfacing the FULL observed-
+band-rate distribution (the percentiles `--min-rate-pct` reads against) so the
+operator can see where their chosen P lands before committing to it." A genuine
+new behaviour on the existing iter-350/354..357 verdict surface — not an 18th
+chat-metrics clone (the family is declared complete, iter-328) and not another
+`*-sweep` clone. iter-357's `--min-rate-pct P` derives a rate floor from the Pth
+percentile of the observed non-empty band rates, but the operator had no way to
+SEE that distribution — they had to guess where a chosen P would land. This lap
+exposes it.
+
+**What it is.** `vad_gap_peak` now always carries a `band_rate_dist` summary of
+the OBSERVED non-empty band rates: `count` / `min` / `mean` / `max` plus a
+`percentiles` list over `rate_pcts` (default p50/p75/p90/p99). It is the exact
+sample `--min-rate-pct` interpolates against (same `_percentile_of_sorted` / R-7
+convention), so the p75 rate printed here equals the floor `--min-rate-pct 75`
+would apply — a tested invariant
+(`test_core_band_rate_dist_p_matches_min_rate_pct_floor`). The distribution is
+computed over ALL non-empty bands regardless of the active floor, so it shows the
+full picture INCLUDING the bands a floor drops; it is purely descriptive and never
+changes which band is named. When every band is an empty valley it reports
+`count` 0 with `None` aggregates and an empty percentile list — the same "no
+distribution to summarise" spelling the sibling gap surfaces use.
+
+**What landed in `examples/gv.py` (+180 / −14 incl. tests in the diff stat).**
+- `DEFAULT_BAND_RATE_PCTS = (50.0, 75.0, 90.0, 99.0)` — the quartile-leaning
+  default percentile set (vs `DEFAULT_GAP_PERCENTILES` which summarises the
+  SILENCE distribution; this summarises the RATE distribution).
+- `_band_rate_distribution(bands, percentiles)` — the pure core. Excludes empty
+  valleys (rate 0) — exactly the sample `--min-rate-pct` ranks over — and reuses
+  `_percentile_of_sorted` (shared with `vad_gap_percentiles` and the iter-357
+  floor, so the printed pNN equals the floor). All rates round to 3 places.
+- `vad_gap_peak(... rate_pcts=DEFAULT_BAND_RATE_PCTS)` — always carries
+  `band_rate_dist`, computed before any floor is applied (full distribution).
+- `render_vad_gap_peak(... show_rate_dist=False, rate_pcts=...)` — shows the
+  block (header: count + min/mean/max; one indented `pNN: rate` line per
+  percentile) behind the new flag; default off so the verdict face is
+  byte-for-byte unchanged. All-valley → a single "no non-empty bands" note.
+- `render_vad_gap_peak_json(... rate_pcts=...)` — always carries `band_rate_dist`
+  (machine consumers filter freely; the flag gates only the human face).
+- `render_vad_gap_peak_csv` — UNCHANGED. The seven-column verdict-row schema has
+  no place for an N-row distribution, and prior laps protected that column union.
+- `cmd_vad_gap_peak` — reads `args.show_rate_dist` (getattr fallback `False`) and
+  threads it to the human renderer only via a `human_kw` dict; new
+  `--show-rate-dist` store_true subparser arg.
+
+**Tests.** `tests/unit/test_gv_vad_gap_peak.py` (+25 net, 133 → 158): helper
+basic/empty/single-band/custom-pcts-in-order; core carries-dist /
+full-distribution-ignores-floor / **p75-matches-`--min-rate-pct`-floor invariant**
+/ all-valley-empty / no-bands-empty / custom `rate_pcts`; human default-omits /
+show-block / all-valley-note / custom-pcts; json always-carries / matches-core /
+present-for-all-valley / custom-pcts; csv schema-unchanged-no-dist-columns; parser
+default-`False` / accepts-flag; handler threads-to-human / default-omits /
+json-always-carries-without-flag / getattr-fallback-`False`.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4953 passed**
+(4928 prior + 25 net new), run in the feature worktree before ff-merge AND re-run
+on main post-merge (4953 passed, ~52s).
+- Integration: not run this lap (pure string-formatting/arithmetic over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..357 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] vad-gap-peak companions** — a `vad-gap-peak`-sweep tracking how the
+   costliest band(s) / band-rate distribution shift vs a swept segmenter knob
+   (e.g. `--min-speech-ms`), or letting `--show-rate-dist` accept a custom
+   `--rate-pcts` list at the CLI (the core already accepts `rate_pcts`; only the
+   parser arg is missing) so an operator can ask for arbitrary quantiles.
+2. **[gv CLI] vad-gap-recommend-sweep companions** — let the sweep accept a swept
+   SEGMENTER knob (e.g. how short/balanced/long + the confidence grade shift as
+   `--min-speech-ms` varies), the way `vad-gap-sweep` tracks a swept
+   `--min-silence-ms`.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~31 leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
