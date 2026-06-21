@@ -347,6 +347,64 @@ def test_render_human_custom_percentile_labels():
     assert "p99.5" in text  # fractional percentile keeps its decimals
 
 
+# ---- renderer: human golden output (iter-340) ---------------------------
+#
+# The shape tests above assert structure + substrings (a p50 line exists, the
+# knob is named *somewhere*). They do NOT pin the EXACT rendered block, so a
+# silent alignment/label/suffix regression — a column drifting by a space, the
+# median knob-hint moving onto p90, ``%g`` losing its compact spelling — would
+# slip through every one of them. These two goldens freeze the byte-for-byte
+# report for two fixed stub segmentations, so the human face of the surface
+# can only change deliberately (the analogue of iter-339's next-item #1: "pin
+# the exact aligned ``gv vad-gap-percentiles`` ``pNN`` block").
+
+
+def test_render_human_golden_default_percentiles():
+    # Gaps (sorted): [1.0, 2.0, 4.0]; n=3 so the R-7 ranks land p50 -> gaps[1]
+    # exactly (2.000), p90/p99 interpolate up toward the 4.000 max. Pins the
+    # aggregate header column, the ``pNN`` value alignment (``{label:<5}`` +
+    # ``{value:7.3f}``), and the median-only knob-hint suffix placement.
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11))
+    lines = gv.render_vad_gap_percentiles(res)
+    assert lines == [
+        "silero VAD gap percentiles — rec.wav",
+        "  segments:     4",
+        "  gaps:         3 (pauses between consecutive speech regions)",
+        "  min gap:      1.000s",
+        "  mean gap:     2.333s",
+        "  max gap:      4.000s",
+        "  total silence:   7.000s",
+        "  p50     2.000s  (typical pause — keep --min-silence-ms below this "
+        "to avoid merging turns)",
+        "  p90     3.600s",
+        "  p99     3.960s",
+    ]
+
+
+def test_render_human_golden_fractional_label_alignment():
+    # A 5-char label (``p99.5``) is the widest the ``{label:<5}`` field is
+    # designed around: it consumes the pad exactly, so its value column must
+    # still line up with the shorter ``p25`` row above it. No median requested,
+    # so NO knob-hint suffix appears on any line.
+    res = _result((0, 1), (2, 3), (5, 6))
+    lines = gv.render_vad_gap_percentiles(res, percentiles=[25.0, 99.5])
+    assert lines == [
+        "silero VAD gap percentiles — rec.wav",
+        "  segments:     3",
+        "  gaps:         2 (pauses between consecutive speech regions)",
+        "  min gap:      1.000s",
+        "  mean gap:     1.500s",
+        "  max gap:      2.000s",
+        "  total silence:   3.000s",
+        "  p25     1.250s",
+        "  p99.5   1.995s",
+    ]
+    # The value columns align: both ``value_s`` numbers start at the same offset.
+    p25_line = next(ln for ln in lines if ln.lstrip().startswith("p25"))
+    p995_line = next(ln for ln in lines if ln.lstrip().startswith("p99.5"))
+    assert p25_line.index("1.250") == p995_line.index("1.995")
+
+
 # ---- renderer: JSON -----------------------------------------------------
 
 
