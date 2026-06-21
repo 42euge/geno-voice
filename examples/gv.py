@@ -2508,8 +2508,8 @@ def render_vad_gap_cost_csv(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS):
     return buf.getvalue().rstrip("\r\n")
 
 
-def vad_gap_peak(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1):
-    """Name the COSTLIEST band(s) of the merge cost curve — the densest pause cluster (iter-350; ``top_n`` iter-354).
+def vad_gap_peak(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1, min_rate=0.0):
+    """Name the COSTLIEST band(s) of the merge cost curve — the densest pause cluster (iter-350; ``top_n`` iter-354; ``min_rate`` iter-355).
 
     The verdict companion of iter-349's :func:`vad_gap_cost`. The cost curve gives
     the marginal rate per +100 ms of hangover for every band between consecutive
@@ -2547,6 +2547,20 @@ def vad_gap_peak(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1):
     and the default ``top_n=1`` behaviour are byte-for-byte unchanged. ``top_n``
     must be ``>= 1`` (raises :class:`ValueError` otherwise).
 
+    ``min_rate`` (iter-355) is a rate FLOOR: bands whose ``rate_per_100ms`` is
+    strictly below it are dropped from the ranking before ``top_n`` truncation,
+    so the named list holds only the bands worth worrying about — the ones at
+    least ``min_rate`` pauses-merged per +100 ms of hangover. It pairs naturally
+    with ``--top-n``: "give me the up-to-N steepest bands, but only those
+    costing at least X". The default ``0.0`` keeps every non-empty band (a band's
+    rate is ``> 0`` exactly when it merges at least one pause), so it is
+    byte-for-byte the iter-354 behaviour. When the floor filters out EVERY band
+    (none meets it) there is no peak to name: ``peak_found`` is ``False``, the
+    scalar ``peak_*`` fields are ``None`` and ``peaks`` is empty — the same "no
+    structure to name" spelling the all-valley case uses. The applied floor is
+    echoed as ``min_rate``. Must be ``>= 0`` (raises :class:`ValueError`
+    otherwise); a negative floor is nonsensical (every rate is non-negative).
+
     Pure: anchors to :func:`vad_gap_cost` for the bands + aggregates (so the totals
     and per-band numbers always agree with ``gv vad-gaps`` / ``gv vad-gap-cost``)
     and adds the peak fields. A result with fewer than 2 segments has no gaps, so
@@ -2559,6 +2573,8 @@ def vad_gap_peak(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1):
     """
     if top_n < 1:
         raise ValueError(f"top_n must be >= 1, got {top_n}")
+    if min_rate < 0:
+        raise ValueError(f"min_rate must be >= 0, got {min_rate}")
     c = vad_gap_cost(result, cuts_ms=cuts_ms)
     bands = c["bands"]
     peak = {
@@ -2570,6 +2586,7 @@ def vad_gap_peak(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1):
         "total_silence_s": c["total_silence_s"],
         "num_bands": len(bands),
         "top_n": top_n,
+        "min_rate": min_rate,
         "peak_found": False,
         "peak_from_ms": None,
         "peak_to_ms": None,
@@ -2583,16 +2600,20 @@ def vad_gap_peak(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1):
     if not bands:
         return peak
     # Rank the cost bands by descending marginal merge rate; only non-empty bands
-    # (rate > 0) are cost peaks. Python's sort is stable, so sorting the bands —
-    # already in ascending-cut order — by -rate keeps the EARLIER band first on a
-    # tie (earliest-tie, matching vad_gap_recommend's widest-jump rule).
+    # (rate > 0) are cost peaks, and iter-355's min_rate floor further drops any
+    # band cheaper than the threshold (min_rate=0.0 keeps every non-empty band, so
+    # the default is unchanged — a non-empty band always has rate > 0 >= 0).
+    # Python's sort is stable, so sorting the bands — already in ascending-cut
+    # order — by -rate keeps the EARLIER band first on a tie (earliest-tie,
+    # matching vad_gap_recommend's widest-jump rule).
     ranked = sorted(
-        (b for b in bands if b["rate_per_100ms"] > 0),
+        (b for b in bands if b["rate_per_100ms"] > 0 and b["rate_per_100ms"] >= min_rate),
         key=lambda b: -b["rate_per_100ms"],
     )
     if not ranked:
-        # Every band is an empty valley — no pause cluster in the scanned range, so
-        # there is no costliest band to name (mirrors split_found=False).
+        # Every band is an empty valley, or the min_rate floor filtered them all
+        # out — no cost peak worth naming in the scanned range (mirrors
+        # split_found=False).
         return peak
     peaks = [
         {
@@ -2621,8 +2642,8 @@ def vad_gap_peak(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1):
     return peak
 
 
-def render_vad_gap_peak(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1):
-    """Render the costliest-band verdict as plain-text report lines (iter-350; ``top_n`` iter-354).
+def render_vad_gap_peak(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1, min_rate=0.0):
+    """Render the costliest-band verdict as plain-text report lines (iter-350; ``top_n`` iter-354; ``min_rate`` iter-355).
 
     The human-readable face of :func:`vad_gap_peak`, the verdict twin of
     :func:`render_vad_gap_cost`. ``result`` of ``None`` (segmenter unavailable)
@@ -2637,14 +2658,17 @@ def render_vad_gap_peak(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1):
     With ``top_n > 1`` (iter-354) it ranks the N steepest bands, printing one
     numbered ``#k costliest band`` line per peak (descending rate, earliest band
     first on a tie). ``top_n == 1`` is byte-for-byte the original single-peak
-    block. Pure: returns a list of strings (no I/O, no ANSI).
+    block. With ``min_rate > 0`` (iter-355) it prints a ``rate floor`` note and
+    drops any band cheaper than the floor; if the floor filters out every band it
+    says so. ``min_rate == 0.0`` is unchanged. Pure: returns a list of strings (no
+    I/O, no ANSI).
     """
     if result is None:
         return [
             "silero VAD unavailable: install 'silero-vad' (pulls torch + "
             "torchaudio) to enable offline neural segmentation"
         ]
-    p = vad_gap_peak(result, cuts_ms=cuts_ms, top_n=top_n)
+    p = vad_gap_peak(result, cuts_ms=cuts_ms, top_n=top_n, min_rate=min_rate)
     lines = [
         f"silero VAD gap cost peak — {result.name}",
         f"  segments:     {p['num_segments']}",
@@ -2657,10 +2681,24 @@ def render_vad_gap_peak(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1):
     lines.append(f"  mean gap:     {p['mean_gap_s']:.3f}s")
     lines.append(f"  max gap:      {p['max_gap_s']:.3f}s")
     lines.append(f"  total silence:{p['total_silence_s']:8.3f}s")
+    if min_rate > 0:
+        # iter-355: note the active rate floor so the operator knows the ranking
+        # below already excludes bands cheaper than this. Only emitted when a
+        # floor is set, so the default (min_rate=0.0) face is unchanged.
+        lines.append(
+            f"  rate floor:   {min_rate:.3f} per +100ms (only bands at or above "
+            "this are named) (iter-355)"
+        )
     if not p["peak_found"]:
         if p["num_bands"] == 0:
             lines.append(
                 "  (need at least 2 distinct cuts to form a cost band — none to show)"
+            )
+        elif min_rate > 0:
+            lines.append(
+                "  (no cost peak meets the rate floor — every band is either an "
+                "empty valley or cheaper than the floor; lower --min-rate to name "
+                "the shallower clusters)"
             )
         else:
             lines.append(
@@ -2702,8 +2740,8 @@ def render_vad_gap_peak(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1):
     return lines
 
 
-def render_vad_gap_peak_json(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1):
-    """Render the costliest-band verdict as a JSON string (iter-350; ``top_n`` iter-354).
+def render_vad_gap_peak_json(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1, min_rate=0.0):
+    """Render the costliest-band verdict as a JSON string (iter-350; ``top_n`` iter-354; ``min_rate`` iter-355).
 
     Machine-readable twin of :func:`render_vad_gap_peak`, mirroring the
     degrade-to-``{"available": false}`` contract the other VAD JSON renderers use.
@@ -2717,8 +2755,11 @@ def render_vad_gap_peak_json(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1
     iter-354 adds ``top_n`` (the requested count) and a ``peaks`` list of up to
     ``top_n`` ranked band objects (descending rate, earliest first on a tie). The
     scalar ``peak_*`` fields are unchanged and echo ``peaks[0]``, so a default
-    ``top_n=1`` payload is a strict superset of the iter-350 shape. Pure: built
-    from :func:`vad_gap_peak`, so it works on any ``SileroResult``-shaped object.
+    ``top_n=1`` payload is a strict superset of the iter-350 shape. iter-355 adds
+    ``min_rate`` (the applied rate floor; bands cheaper than it are excluded from
+    ``peaks``), defaulting to ``0.0`` (every non-empty band kept — the iter-354
+    payload). Pure: built from :func:`vad_gap_peak`, so it works on any
+    ``SileroResult``-shaped object.
     """
     if result is None:
         return json.dumps(
@@ -2731,7 +2772,7 @@ def render_vad_gap_peak_json(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1
             },
             indent=2,
         )
-    p = vad_gap_peak(result, cuts_ms=cuts_ms, top_n=top_n)
+    p = vad_gap_peak(result, cuts_ms=cuts_ms, top_n=top_n, min_rate=min_rate)
     payload = {
         "available": True,
         "name": result.name,
@@ -2743,6 +2784,7 @@ def render_vad_gap_peak_json(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1
         "total_silence_s": p["total_silence_s"],
         "num_bands": p["num_bands"],
         "top_n": p["top_n"],
+        "min_rate": p["min_rate"],
         "peak_found": p["peak_found"],
         "peak_from_ms": p["peak_from_ms"],
         "peak_to_ms": p["peak_to_ms"],
@@ -2756,8 +2798,8 @@ def render_vad_gap_peak_json(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1
     return json.dumps(payload, indent=2)
 
 
-def render_vad_gap_peak_csv(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1):
-    """Render the costliest-band verdict as a CSV table (iter-350; ``top_n`` iter-354).
+def render_vad_gap_peak_csv(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1, min_rate=0.0):
+    """Render the costliest-band verdict as a CSV table (iter-350; ``top_n`` iter-354; ``min_rate`` iter-355).
 
     The spreadsheet-friendly twin of :func:`render_vad_gap_peak` /
     :func:`render_vad_gap_peak_json`, completing the human / ``--json`` / ``--csv``
@@ -2775,15 +2817,19 @@ def render_vad_gap_peak_csv(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1)
     iter-354's ``top_n`` keeps the SAME six columns and emits one row PER ranked
     peak (descending rate, earliest first on a tie) — the row order IS the rank,
     so no extra column is needed and the rows union cleanly with the single-peak
-    CSV. ``top_n == 1`` is byte-for-byte the original one-row table. Pure: built
-    with the stdlib :mod:`csv` writer, trailing terminator stripped.
+    CSV. ``top_n == 1`` is byte-for-byte the original one-row table. iter-355's
+    ``min_rate`` floor simply changes which bands are ranked (the columns are
+    unchanged); when the floor leaves no peak but bands exist, the legacy single
+    ``peak_found=False`` blank row is emitted (same as the all-valley case).
+    ``min_rate == 0.0`` is unchanged. Pure: built with the stdlib :mod:`csv`
+    writer, trailing terminator stripped.
     """
     if result is None:
         return (
             "# silero VAD unavailable: install 'silero-vad' (pulls torch + "
             "torchaudio) to enable offline neural segmentation"
         )
-    p = vad_gap_peak(result, cuts_ms=cuts_ms, top_n=top_n)
+    p = vad_gap_peak(result, cuts_ms=cuts_ms, top_n=top_n, min_rate=min_rate)
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(
@@ -5957,14 +6003,15 @@ def cmd_vad_gap_peak(args, *, log=print, segmenter=None, availability=None):
     as_csv = getattr(args, "csv", False)
     cuts_ms = args.cuts_ms
     top_n = getattr(args, "top_n", 1)
+    min_rate = getattr(args, "min_rate", 0.0)
 
     if not availability():
         if as_json:
-            log(render_vad_gap_peak_json(None, cuts_ms=cuts_ms, top_n=top_n))
+            log(render_vad_gap_peak_json(None, cuts_ms=cuts_ms, top_n=top_n, min_rate=min_rate))
         elif as_csv:
-            log(render_vad_gap_peak_csv(None, cuts_ms=cuts_ms, top_n=top_n))
+            log(render_vad_gap_peak_csv(None, cuts_ms=cuts_ms, top_n=top_n, min_rate=min_rate))
         else:
-            for line in render_vad_gap_peak(None, cuts_ms=cuts_ms, top_n=top_n):
+            for line in render_vad_gap_peak(None, cuts_ms=cuts_ms, top_n=top_n, min_rate=min_rate):
                 log(line)
         return
 
@@ -5979,11 +6026,11 @@ def cmd_vad_gap_peak(args, *, log=print, segmenter=None, availability=None):
     )
     result = segmenter(args.wav, params=params)
     if as_json:
-        log(render_vad_gap_peak_json(result, cuts_ms=cuts_ms, top_n=top_n))
+        log(render_vad_gap_peak_json(result, cuts_ms=cuts_ms, top_n=top_n, min_rate=min_rate))
     elif as_csv:
-        log(render_vad_gap_peak_csv(result, cuts_ms=cuts_ms, top_n=top_n))
+        log(render_vad_gap_peak_csv(result, cuts_ms=cuts_ms, top_n=top_n, min_rate=min_rate))
     else:
-        for line in render_vad_gap_peak(result, cuts_ms=cuts_ms, top_n=top_n):
+        for line in render_vad_gap_peak(result, cuts_ms=cuts_ms, top_n=top_n, min_rate=min_rate):
             log(line)
 
 
@@ -7440,6 +7487,16 @@ def build_parser():
         help="Name the N steepest cost bands instead of just the single peak "
         "(ranked by descending rate, earliest band first on a tie; only "
         "non-empty bands count, so fewer than N may appear). Default: 1",
+    )
+    vad_gap_peak.add_argument(
+        "--min-rate",
+        type=nonneg_float_type,
+        default=0.0,
+        dest="min_rate",
+        help="Drop cost bands cheaper than this marginal rate (pauses merged per "
+        "+100ms of hangover) before ranking — only the bands worth worrying "
+        "about are named. Pairs with --top-n. Default: 0.0 (keep every "
+        "non-empty band)",
     )
     vad_gap_peak.add_argument(
         "--threshold",

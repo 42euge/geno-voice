@@ -1018,3 +1018,198 @@ def test_handler_top_n_defaults_to_one_when_absent():
     payload = json.loads("\n".join(lines))
     assert payload["top_n"] == 1
     assert len(payload["peaks"]) == 1
+
+
+# ---- iter-355: --min-rate floor -----------------------------------------
+#
+# vad_gap_peak(... min_rate=X) drops cost bands whose rate_per_100ms is
+# strictly below X BEFORE top_n truncation, so the ranked list holds only the
+# bands worth worrying about. min_rate=0.0 keeps every non-empty band (the
+# iter-354 behaviour, byte-for-byte). The canonical fixture below produces two
+# non-empty bands: 500-2500ms @ 0.100 (#1) and 3500-5000ms @ 0.067 (#2), plus
+# one empty valley at 2500-3500ms.
+
+
+def test_parser_min_rate_default_is_zero():
+    parser = gv.build_parser()
+    args = parser.parse_args(["vad-gap-peak", "rec.wav"])
+    assert args.min_rate == 0.0
+
+
+def test_parser_accepts_min_rate():
+    parser = gv.build_parser()
+    args = parser.parse_args(["vad-gap-peak", "rec.wav", "--min-rate", "0.08"])
+    assert args.min_rate == pytest.approx(0.08)
+
+
+def test_parser_rejects_bad_min_rate():
+    parser = gv.build_parser()
+    for bad in ["-0.1", "nan", "x"]:
+        with pytest.raises(SystemExit):
+            parser.parse_args(["vad-gap-peak", "rec.wav", "--min-rate", bad])
+
+
+def test_core_min_rate_default_keeps_every_non_empty_band():
+    # min_rate=0.0 is byte-for-byte the iter-354 result.
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    cuts = [500.0, 2500.0, 3500.0, 5000.0]
+    default = gv.vad_gap_peak(res, cuts_ms=cuts, top_n=5)
+    explicit = gv.vad_gap_peak(res, cuts_ms=cuts, top_n=5, min_rate=0.0)
+    assert default == explicit
+    assert explicit["min_rate"] == 0.0
+    assert len(explicit["peaks"]) == 2
+
+
+def test_core_min_rate_drops_cheaper_bands():
+    # Floor of 0.08 drops the 0.067 band, keeping only the 0.100 peak.
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    p = gv.vad_gap_peak(
+        res, cuts_ms=[500.0, 2500.0, 3500.0, 5000.0], top_n=5, min_rate=0.08
+    )
+    assert p["min_rate"] == pytest.approx(0.08)
+    assert len(p["peaks"]) == 1
+    assert p["peaks"][0]["from_ms"] == 500.0
+    assert p["peaks"][0]["rate_per_100ms"] == pytest.approx(0.1)
+    # The scalar peak_* fields still echo peaks[0].
+    assert p["peak_from_ms"] == 500.0
+    assert p["peak_found"] is True
+
+
+def test_core_min_rate_boundary_is_inclusive():
+    # A band exactly AT the floor is kept (>= floor, not strictly above).
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    p = gv.vad_gap_peak(
+        res, cuts_ms=[500.0, 2500.0, 3500.0, 5000.0], top_n=5, min_rate=0.067
+    )
+    rates = [pk["rate_per_100ms"] for pk in p["peaks"]]
+    assert pytest.approx(0.067) in rates
+    assert len(p["peaks"]) == 2
+
+
+def test_core_min_rate_filters_all_bands():
+    # A floor above every band's rate leaves nothing to name — same "no
+    # structure" spelling as the all-valley case.
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    p = gv.vad_gap_peak(
+        res, cuts_ms=[500.0, 2500.0, 3500.0, 5000.0], top_n=5, min_rate=0.5
+    )
+    assert p["peak_found"] is False
+    assert p["peaks"] == []
+    assert p["peak_from_ms"] is None
+    # num_bands still reflects the scanned bands (the floor only affects ranking).
+    assert p["num_bands"] == 3
+
+
+def test_core_min_rate_composes_with_top_n():
+    # Floor keeps both bands; top_n=1 then truncates to the steepest.
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    p = gv.vad_gap_peak(
+        res, cuts_ms=[500.0, 2500.0, 3500.0, 5000.0], top_n=1, min_rate=0.05
+    )
+    assert len(p["peaks"]) == 1
+    assert p["peaks"][0]["rate_per_100ms"] == pytest.approx(0.1)
+
+
+def test_core_min_rate_negative_raises():
+    res = _result((0, 1), (2, 3), (5, 6))
+    with pytest.raises(ValueError):
+        gv.vad_gap_peak(res, min_rate=-0.1)
+
+
+def test_render_human_min_rate_zero_is_unchanged():
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    cuts = [500.0, 2500.0, 3500.0, 5000.0]
+    base = gv.render_vad_gap_peak(res, cuts_ms=cuts, top_n=3)
+    explicit = gv.render_vad_gap_peak(res, cuts_ms=cuts, top_n=3, min_rate=0.0)
+    assert base == explicit
+    assert not any("rate floor" in ln for ln in base)
+
+
+def test_render_human_min_rate_note_and_filtered_ranking():
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    lines = gv.render_vad_gap_peak(
+        res, cuts_ms=[500.0, 2500.0, 3500.0, 5000.0], top_n=5, min_rate=0.08
+    )
+    assert any("rate floor:" in ln and "0.080" in ln for ln in lines)
+    # Only the 0.100 band survives the floor.
+    assert any("#1:" in ln for ln in lines)
+    assert not any("#2:" in ln for ln in lines)
+
+
+def test_render_human_min_rate_no_peak_meets_floor():
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    lines = gv.render_vad_gap_peak(
+        res, cuts_ms=[500.0, 2500.0, 3500.0, 5000.0], top_n=5, min_rate=0.5
+    )
+    assert any("rate floor:" in ln for ln in lines)
+    assert any("no cost peak meets the rate floor" in ln for ln in lines)
+    assert not any("costliest band" in ln for ln in lines)
+
+
+def test_render_json_min_rate_echoed_and_filters():
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    payload = json.loads(
+        gv.render_vad_gap_peak_json(
+            res, cuts_ms=[500.0, 2500.0, 3500.0, 5000.0], top_n=5, min_rate=0.08
+        )
+    )
+    assert payload["min_rate"] == pytest.approx(0.08)
+    assert len(payload["peaks"]) == 1
+    assert payload["peaks"][0]["from_ms"] == 500.0
+
+
+def test_render_json_min_rate_default_present():
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    payload = json.loads(
+        gv.render_vad_gap_peak_json(res, cuts_ms=[500.0, 2500.0, 3500.0, 5000.0])
+    )
+    assert payload["min_rate"] == 0.0
+
+
+def test_render_csv_min_rate_filters_rows_columns_unchanged():
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    cuts = [500.0, 2500.0, 3500.0, 5000.0]
+    text = gv.render_vad_gap_peak_csv(res, cuts_ms=cuts, top_n=5, min_rate=0.08)
+    rows = list(csv.reader(io.StringIO(text)))
+    # Same six columns as the single-peak surface; one ranked row survives.
+    single = list(csv.reader(io.StringIO(gv.render_vad_gap_peak_csv(res, cuts_ms=cuts))))
+    assert rows[0] == single[0]
+    assert len(rows) == 2
+    assert rows[1] == ["True", "500", "2500", "2000", "2", "0.1"]
+
+
+def test_render_csv_min_rate_all_filtered_blank_row():
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    text = gv.render_vad_gap_peak_csv(
+        res, cuts_ms=[500.0, 2500.0, 3500.0, 5000.0], top_n=5, min_rate=0.5
+    )
+    rows = list(csv.reader(io.StringIO(text)))
+    assert len(rows) == 2
+    assert rows[1] == ["False", "", "", "", "", ""]
+
+
+def test_handler_min_rate_threads_through_json():
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    lines = _run(
+        _args(cuts_ms=[500.0, 2500.0, 3500.0, 5000.0], top_n=5, min_rate=0.08, json=True),
+        segmenter=lambda w, *, params: res,
+        availability=lambda: True,
+    )
+    payload = json.loads("\n".join(lines))
+    assert payload["min_rate"] == pytest.approx(0.08)
+    assert len(payload["peaks"]) == 1
+
+
+def test_handler_min_rate_defaults_to_zero_when_absent():
+    # Older callers without a min_rate attr fall back to 0.0 (getattr default).
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    args = _args(cuts_ms=[500.0, 2500.0, 3500.0, 5000.0], top_n=5, json=True)
+    assert not hasattr(args, "min_rate")
+    lines = _run(
+        args,
+        segmenter=lambda w, *, params: res,
+        availability=lambda: True,
+    )
+    payload = json.loads("\n".join(lines))
+    assert payload["min_rate"] == 0.0
+    assert len(payload["peaks"]) == 2
