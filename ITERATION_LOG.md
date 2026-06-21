@@ -32191,3 +32191,79 @@ main post-merge (4839 passed, ~38s).
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    ~31 leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-353 — gv vad-gap-recommend-sweep — fold in the iter-348 confidence grade
+
+- **Date:** 2026-06-21
+- **Branch:** iter-353-sweep-confidence (ff-merged to main, worktree removed)
+- **Commit:** 107ab90
+
+**Why.** The standing next-item #1 from iter-352: "fold the iter-348 confidence
+grade into each sweep row so the operator sees not just the spread but how
+trustworthy it is." A genuine improvement on the existing surface, not an 18th
+chat-metrics clone (the family is declared complete, iter-328): it answers the
+question the bias sweep raises ("which of the three should I pick?") with a prior
+one — "is the underlying valley even trustworthy?". A weak grade tells the
+operator the whole short→long spread is a guess BEFORE they pick a bias from it.
+
+**What it is.** iter-352's `gv vad-gap-recommend-sweep` names the
+short/balanced/long recommendations side by side plus the short→long spread.
+iter-348's `gv vad-gap-confidence` grades how dominant the recommendation's
+valley is (strong/moderate/weak/none). This lap merges the second INTO the first:
+the grade is a property of the VALLEY, not of where in it the recommended number
+sits — so, exactly like `split_found` / `below` / `at_or_above` / the valley
+endpoints, it is INVARIANT across biases and is reported ONCE in the shared
+block, never per-bias.
+
+**What landed in `examples/gv.py` (+48 net lines).**
+- `vad_gap_recommend_sweep(result)` now also calls `vad_gap_confidence(result)`
+  once and surfaces `grade` / `dominance` / `separation_ratio` in the shared
+  top-level block (alongside the existing invariant fields). They agree
+  field-for-field with `gv vad-gap-confidence`. All three are `None` for a
+  <2-segment result (no gaps) and `grade` is `"none"` with `None` measures for a
+  no-valley result — the same spelling the confidence surface uses.
+- `render_vad_gap_recommend_sweep` gains a `confidence:` line (grade + dominance
+  % + separation, or a no-valley note) and the matching `suggestion:` line reused
+  from `_gap_confidence_summary`, placed between the existing `spread:` and
+  `effect:` lines.
+- `render_vad_gap_recommend_sweep_json` gains `grade` / `dominance` /
+  `separation_ratio` keys.
+- `render_vad_gap_recommend_sweep_csv` left UNCHANGED on purpose: the grade is a
+  single shared scalar; folding it into the per-bias rows would duplicate it 3×
+  and break the clean column union with `gv vad-gap-recommend --csv`. The grade
+  stays on the human / `--json` faces (and on `gv vad-gap-confidence --csv`).
+  Docstring updated to record this decision.
+
+**Tests.** `tests/unit/test_gv_vad_gap_recommend_sweep.py` (+11 net, 45 → 56):
+core grade fields present / agree with `vad_gap_confidence` / strong on clean
+bimodal / none on no-valley / null on no-gaps / grade lives in the shared block
+not per-bias; human `confidence:` + `suggestion:` lines (strong path and
+no-valley `none` path with the conservative-fallback text); json carries the
+three fields and nulls them on no-gaps; csv omits the grade columns (union
+preserved). Updated the with-valley human golden to include the two new lines.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4850 passed**
+(4839 prior + 11 net new), run in the feature worktree before ff-merge AND
+re-run on main post-merge (4850 passed, ~31s).
+- Integration: not run this lap (pure string-formatting/arithmetic over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..352 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] vad-gap-recommend-sweep companions** — let the sweep accept a swept
+   SEGMENTER knob (e.g. how the short/balanced/long recommendations + grade shift
+   as `--min-speech-ms` varies), the way `vad-gap-sweep` tracks a swept
+   `--min-silence-ms`. The confidence grade folded in this lap makes such a sweep
+   doubly useful (watch BOTH the numbers and their trustworthiness move).
+2. **[gv CLI] vad-gap-peak companions** — a `vad-gap-peak`-sweep/grid (how the
+   costliest band shifts vs a swept segmenter knob), or a `--top-n` flag naming
+   the N steepest bands instead of just the single peak.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~31 leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
