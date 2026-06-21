@@ -32015,3 +32015,89 @@ main post-merge (4787 passed, ~45s).
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    ~30 leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-351 — gv vad-gap-recommend --bias — slide the recommended hangover within the valley
+
+- **Date:** 2026-06-21
+- **Branch:** iter-351-gap-bias (ff-merged to main, worktree removed)
+- **Commit:** 9400181
+
+**Why.** The standing next-item #2 across iter-347..350: "a `--strict`/`--lenient`
+knob biasing the recommendation toward the short or long side of the valley." Both
+the chat-metrics "family is complete, prefer a genuinely new signal" note
+(iter-328) and the family-clone fatigue across iter-340..350 steer toward a
+genuine behavioural improvement over an 18th near-clone surface. This is that:
+a real new knob on an existing verdict, not a new surface.
+
+**What it is.** iter-347's `gv vad-gap-recommend` always names the MIDPOINT of the
+valley between the short within-turn pause cluster and the long between-turn pause
+cluster. But the right hangover is a judgement call — snappy end-of-turn detection
+wants a SMALLER number (risk: clipping a slow talker); tolerating mid-sentence
+pauses wants a LARGER number (cost: end-of-turn latency). `--bias
+{short,balanced,long}` lets the operator slide the recommendation toward either
+end WITHOUT leaving the valley.
+
+The valley is the EMPTY band the largest-gap (1-D Jenks) split finds, so every
+interior point splits the pauses identically: `short` (0.25 across the valley),
+`balanced` (0.5, the midpoint), and `long` (0.75 across) all merge the SAME short
+cluster and keep the SAME long cluster. The `below`/`at_or_above` merge accounting
+is therefore INVARIANT across biases — only the named number shifts. `balanced`
+(0.5) reproduces the original `(best_lo + best_hi) / 2` midpoint EXACTLY, so the
+default behaviour is byte-for-byte unchanged. In the no-valley fallback (one pause,
+or all pauses equal) the fraction scales the shortest pause (`min_gap * frac`,
+frac < 1), so every real pause is still kept regardless of bias — bias only nudges
+how far below.
+
+**What landed in `examples/gv.py` (+~90 net lines).**
+- `GAP_RECOMMEND_BIAS_FRACTIONS` (`short`/`balanced`/`long` -> 0.25/0.5/0.75) and
+  `DEFAULT_GAP_RECOMMEND_BIAS` (`"balanced"`) — the single source of truth shared
+  by the core, the parser `choices`, and the handler `getattr` fallback.
+- `vad_gap_recommend(result, *, bias=...)` — interpolates `best_lo + frac*width`
+  across the valley (balanced == the legacy midpoint), echoes the chosen bias in a
+  new `bias` field, raises `ValueError` on an unknown bias.
+- The human / `--json` / `--csv` renderers thread `bias` through: human annotates
+  the recommended line `[bias: <choice>]`, JSON carries a `bias` field, CSV
+  prepends a `bias` column so a sweep across biases is self-describing per row.
+- `cmd_vad_gap_recommend` reads `args.bias` (getattr fallback to balanced for
+  older callers) and passes it to the renderers; new `--bias` subparser arg with
+  choices short/balanced/long.
+- `vad_gap_confidence` is unaffected — it grades the valley's QUALITY (independent
+  of where in the valley the number sits), so it keeps calling
+  `vad_gap_recommend` with the default balanced.
+
+**Tests.** `tests/unit/test_gv_vad_gap_recommend.py` (+20 net): parser
+default/each-choice/reject-unknown; the fraction table + default constant;
+balanced==legacy-midpoint and default-arg equality; monotone
+short<balanced<long; strictly-inside-valley for every bias; merge-accounting
+invariance across biases; no-valley fallback scaling (every pause kept); core
+`ValueError` on unknown bias; bias echoed even for no-gaps; human/json/csv carry
+bias (with computed numbers 650/1550 ms); unavailable paths accept the bias kwarg;
+handler pass-through and getattr-fallback-to-balanced. Updated the two human
+goldens (`[bias: balanced]` suffix) and three CSV-shape tests (`bias` column
+prepended).
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4804 passed**
+(4787 prior + 17 net new), run in the feature worktree before ff-merge AND re-run
+on main post-merge (4804 passed, ~31s).
+- Integration: not run this lap (pure string-formatting/arithmetic over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..350 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] vad-gap-recommend `--bias` companions** — a `vad-gap-recommend`
+   bias-sweep (emit the short/balanced/long recommendations side by side in one
+   table, so the operator sees the whole spread of defensible numbers at once),
+   or extend `vad-gap-confidence` to report the recommendation's sensitivity to
+   bias (how wide the short..long spread is relative to the valley).
+2. **[gv CLI] vad-gap-peak companions** — a `vad-gap-peak`-sweep/grid (how the
+   costliest band shifts vs a swept segmenter knob), or a `--top-n` flag naming
+   the N steepest bands instead of just the single peak.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~31 leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
