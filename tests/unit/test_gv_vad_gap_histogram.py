@@ -262,6 +262,80 @@ def test_render_human_bar_scales_to_busiest_bin():
     assert max(bars) == 40  # bar_width
 
 
+# ---- renderer: human golden (byte-for-byte) -----------------------------
+#
+# The test_render_human_* tests above assert STRUCTURE + substrings (a bar line
+# count, a "#" appears, the --min-silence-ms knob is named somewhere) but never
+# freeze the EXACT rendered block. So a silent regression in the aggregate
+# header column, the half-open ``[lo, hi)`` range formatting (``{:6.3f}``), the
+# right-aligned count field (``{:>4}``), the two-space gutters around the bar,
+# or the bar-scaling arithmetic would slip through every one of them. These two
+# goldens pin the byte-for-byte report for two fixed stub segmentations, so the
+# human face of the histogram can only change deliberately — the iter-341
+# extension of iter-340's percentiles golden to its busiest-drift sibling
+# surface (the gv vad-gap-hist aligned bar block, where column drift is most
+# visible). The percentiles golden froze the ``pNN`` column; this freezes the
+# bar column.
+
+
+def test_render_human_golden_full_width_bars():
+    # Gaps (sorted): [1.0, 2.0, 4.0] at bin width 1.0 → five [lo, hi) bins
+    # spanning 0..5, each occupied bin holding exactly one gap. With max_count==1
+    # every occupied bin draws the full 40-char bar and the two empty bins draw
+    # none. Pins the aggregate header (the min-gap knob-hint line, the
+    # right-aligned ``total silence:   7.000s``), the ``[{:6.3f}, {:6.3f})``
+    # range column, the ``{:>4}`` count field, and the full-width bar.
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11))
+    lines = gv.render_vad_gap_histogram(res, bin_width_s=1.0)
+    bar = "#" * 40
+    assert lines == [
+        "silero VAD gap histogram — rec.wav",
+        "  segments:     4",
+        "  gaps:         3 (pauses between consecutive speech regions)",
+        "  bin width:    1.000s",
+        "  min gap:      1.000s (shortest real pause — keep --min-silence-ms "
+        "below this to avoid merging turns)",
+        "  mean gap:     2.333s",
+        "  max gap:      4.000s",
+        "  total silence:   7.000s",
+        "  [ 0.000,  1.000)     0  ",
+        f"  [ 1.000,  2.000)     1  {bar}",
+        f"  [ 2.000,  3.000)     1  {bar}",
+        "  [ 3.000,  4.000)     0  ",
+        f"  [ 4.000,  5.000)     1  {bar}",
+    ]
+
+
+def test_render_human_golden_partial_bar_scaling():
+    # Bimodal: three short gaps (0.2s each) cluster in the first 0.5s bin, one
+    # long 2.0s gap sits alone in the top bin. The busiest bin (count 3) draws
+    # the full 40-char bar; the lone gap scales to round(1/3 * 40) == 13 chars,
+    # pinning the bar-scaling arithmetic itself (not just "a bar exists").
+    res = _result((0, 1), (1.2, 2), (2.2, 3), (3.2, 4), (6.0, 7))
+    lines = gv.render_vad_gap_histogram(res, bin_width_s=0.5)
+    assert lines == [
+        "silero VAD gap histogram — rec.wav",
+        "  segments:     5",
+        "  gaps:         4 (pauses between consecutive speech regions)",
+        "  bin width:    0.500s",
+        "  min gap:      0.200s (shortest real pause — keep --min-silence-ms "
+        "below this to avoid merging turns)",
+        "  mean gap:     0.650s",
+        "  max gap:      2.000s",
+        "  total silence:   2.600s",
+        "  [ 0.000,  0.500)     3  " + "#" * 40,
+        "  [ 0.500,  1.000)     0  ",
+        "  [ 1.000,  1.500)     0  ",
+        "  [ 1.500,  2.000)     0  ",
+        "  [ 2.000,  2.500)     1  " + "#" * 13,
+    ]
+    # The bar column starts at the same offset on the full and partial rows,
+    # proving the range+count prefix is fixed-width regardless of bar length.
+    busiest = next(ln for ln in lines if ln.endswith("#" * 40))
+    partial = next(ln for ln in lines if ln.endswith("#" * 13))
+    assert busiest.index("#") == partial.index("#")
+
+
 # ---- renderers: json ----------------------------------------------------
 
 
