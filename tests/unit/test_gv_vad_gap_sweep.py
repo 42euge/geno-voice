@@ -223,6 +223,56 @@ def test_render_human_axis_label_for_min_silence():
     assert "min_silence" in lines[1]
 
 
+def test_render_human_golden_threshold_sweep():
+    """Freeze the EXACT rendered 1-D threshold-sweep table, byte for byte.
+
+    The pre-existing ``test_render_human_header_and_rows`` asserts STRUCTURE +
+    substrings (``"min_gap"`` is in the header, ``"1.000"`` appears somewhere,
+    the last line has a ``-``) but never pins the whole block. A silent
+    regression in the ``{:>9}`` axis column, the ``{:>8}`` segment / ``{:>4}``
+    gap count fields, the ``{:>7.3f}`` / ``{:>8.3f}`` gap columns, the
+    two-space gutters, or the ``-`` dash placement on the <2-segment row would
+    slip past every substring check. This freezes all of it — the fifth gap
+    axis after percentiles (iter-340), histogram (iter-341), diff (iter-342),
+    and grid (iter-343).
+    """
+    lines = gv.render_vad_gap_sweep([0.3, 0.9], [_three(), _single()],
+                                    name="rec.wav")
+    assert lines == [
+        "silero VAD gap sweep — rec.wav",
+        "  threshold  segments  gaps  min_gap  mean_gap   max_gap",
+        "       0.30         3     2    1.000     1.500     2.000",
+        "       0.90         1     0        -         -         -",
+    ]
+    # The min_gap dash placeholder right-aligns to the SAME right edge as the
+    # numeric `min_gap` value above it (both fill a `{:>7}`/`{:>7.3f}` field):
+    # a regression in the dash width would break this even if the header and
+    # numeric row stayed correct.
+    numeric, dashes = lines[2], lines[3]
+    assert numeric.index("1.000") + len("1.000") - 1 == dashes.index("-")
+    assert dashes.endswith("-         -         -")
+
+
+def test_render_human_golden_seconds_axis_value_spelling():
+    """Pin the ``%g`` seconds-axis value spelling in the swept-value column.
+
+    Routing ``col``... ``axis`` through ``max_speech_s`` sends the swept value
+    through ``_format_sweep_axis_value``'s ``%g`` branch: ``5.0`` must render
+    compactly as ``5`` (not ``5.000`` or ``5.0``) while ``12.5`` keeps its
+    fraction, both right-aligned in the ``{:>9}`` field. The pre-existing
+    ``test_render_human_axis_label_for_min_silence`` only checks the label
+    substring, never the rendered value spelling.
+    """
+    lines = gv.render_vad_gap_sweep([5.0, 12.5], [_three(), _three()],
+                                    name="rec.wav", axis="max_speech_s")
+    assert lines == [
+        "silero VAD gap sweep — rec.wav",
+        "  max_speech  segments  gaps  min_gap  mean_gap   max_gap",
+        "          5         3     2    1.000     1.500     2.000",
+        "       12.5         3     2    1.000     1.500     2.000",
+    ]
+
+
 def test_render_human_unavailable():
     lines = gv.render_vad_gap_sweep([], [None], name="rec.wav")
     assert len(lines) == 1
