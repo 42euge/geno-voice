@@ -3006,6 +3006,231 @@ def render_vad_gap_recommend_csv(result, *, bias=DEFAULT_GAP_RECOMMEND_BIAS):
     return buf.getvalue().rstrip("\r\n")
 
 
+# Bias order for the bias-sweep surface (iter-352): short..balanced..long, the
+# natural shortest-to-longest hangover reading. The recommended number is
+# monotone non-decreasing across this order (short <= balanced <= long), so a
+# reader scanning top-to-bottom sees the spread widen toward longer hangovers.
+GAP_RECOMMEND_BIAS_ORDER = ("short", "balanced", "long")
+
+
+def vad_gap_recommend_sweep(result):
+    """Emit the short/balanced/long recommendations side by side (iter-352).
+
+    The natural companion of iter-351's ``--bias`` knob. ``gv vad-gap-recommend
+    --bias {short,balanced,long}`` names ONE defensible hangover; this surface
+    names ALL THREE at once, so the operator sees the whole spread of defensible
+    numbers without re-running the command per bias. It is the
+    ``vad-gap-recommend`` analogue of how ``gv vad-gap-sweep`` shows a whole
+    ``--min-silence-ms`` sweep instead of one ``gv vad-gaps`` snapshot.
+
+    The valley is the EMPTY band the largest-gap split finds, so every interior
+    point splits the pauses identically — ``split_found`` / ``below`` /
+    ``at_or_above`` / the valley endpoints are INVARIANT across biases (only the
+    named number shifts). This surface therefore reports those shared fields
+    ONCE at the top level and a compact per-bias row carrying just the shifting
+    ``recommended_ms`` / ``recommended_s``. The ``spread_ms`` / ``spread_s``
+    fields name the short..long gap — how much the choice of bias moves the
+    number, the same width iter-348's confidence surface grades the quality of.
+
+    Pure: built from :func:`vad_gap_recommend` (one call per bias), so the
+    aggregates, valley, and merge accounting agree EXACTLY with
+    ``gv vad-gap-recommend`` at each bias. A result with fewer than 2 segments
+    has no gaps (nothing to recommend): the per-bias ``recommended_ms`` /
+    ``recommended_s`` are ``None`` and ``spread`` is ``None``, the same "no
+    distribution" spelling the sibling gap surfaces use.
+    """
+    rows = [vad_gap_recommend(result, bias=b) for b in GAP_RECOMMEND_BIAS_ORDER]
+    base = rows[0]
+    out = {
+        "num_segments": base["num_segments"],
+        "num_gaps": base["num_gaps"],
+        "min_gap_s": base["min_gap_s"],
+        "max_gap_s": base["max_gap_s"],
+        "mean_gap_s": base["mean_gap_s"],
+        "total_silence_s": base["total_silence_s"],
+        # Valley + merge accounting are invariant across biases; report once.
+        "split_found": base["split_found"],
+        "below": base["below"],
+        "at_or_above": base["at_or_above"],
+        "gap_below_s": base["gap_below_s"],
+        "gap_above_s": base["gap_above_s"],
+        "valley_width_s": base["valley_width_s"],
+        "biases": [
+            {
+                "bias": r["bias"],
+                "recommended_ms": r["recommended_ms"],
+                "recommended_s": r["recommended_s"],
+            }
+            for r in rows
+        ],
+        "spread_ms": None,
+        "spread_s": None,
+    }
+    if base["num_gaps"] > 0:
+        lo = rows[0]["recommended_s"]
+        hi = rows[-1]["recommended_s"]
+        out["spread_s"] = round(hi - lo, 3)
+        out["spread_ms"] = round((hi - lo) * 1000.0, 1)
+    return out
+
+
+def render_vad_gap_recommend_sweep(result):
+    """Render the bias sweep as plain-text report lines (iter-352).
+
+    The human-readable face of :func:`vad_gap_recommend_sweep`. ``result`` of
+    ``None`` (segmenter unavailable) yields the shared install hint. A result
+    with fewer than 2 segments prints the same short explanatory line the other
+    gap surfaces use (nothing to recommend). Otherwise it prints the aggregate
+    header, the shared valley + merge effect (invariant across biases, so stated
+    once), then one line per bias naming its recommended ``--min-silence-ms``,
+    and finally the short..long spread. Pure: returns a list of strings.
+    """
+    if result is None:
+        return [
+            "silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        ]
+    s = vad_gap_recommend_sweep(result)
+    lines = [
+        f"silero VAD recommended-hangover bias sweep — {result.name}",
+        f"  segments:     {s['num_segments']}",
+        f"  gaps:         {s['num_gaps']} (pauses between consecutive speech regions)",
+    ]
+    if s["num_gaps"] == 0:
+        lines.append("  (fewer than 2 segments — no inter-segment pause to measure)")
+        return lines
+    lines.append(f"  min gap:      {s['min_gap_s']:.3f}s")
+    lines.append(f"  mean gap:     {s['mean_gap_s']:.3f}s")
+    lines.append(f"  max gap:      {s['max_gap_s']:.3f}s")
+    lines.append(f"  total silence:{s['total_silence_s']:8.3f}s")
+    if s["split_found"]:
+        lines.append(
+            f"  valley:       between {s['gap_below_s']:.3f}s (top of short "
+            f"pauses) and {s['gap_above_s']:.3f}s (bottom of long pauses), "
+            f"width {s['valley_width_s']:.3f}s"
+        )
+    else:
+        lines.append(
+            "  (no valley — pauses don't separate into short/long clusters; "
+            "recommending just below the shortest pause so every pause is kept)"
+        )
+    lines.append("  recommended --min-silence-ms by bias:")
+    for row in s["biases"]:
+        label = _format_cut_label(row["recommended_ms"])
+        lines.append(
+            f"    {row['bias']:<8} {label} ({row['recommended_s']:.3f}s)"
+        )
+    spread_label = _format_cut_label(s["spread_ms"])
+    lines.append(
+        f"  spread:       {spread_label}ms ({s['spread_s']:.3f}s) "
+        "short→long (how much the bias choice moves the number)"
+    )
+    lines.append(
+        f"  effect:       merges {s['below']}/{s['num_gaps']} within-turn "
+        f"pauses, keeps {s['at_or_above']}/{s['num_gaps']} as turn boundaries "
+        "(invariant across biases, iter-352)"
+    )
+    return lines
+
+
+def render_vad_gap_recommend_sweep_json(result):
+    """Render the bias sweep as a JSON string (iter-352).
+
+    Machine-readable twin of :func:`render_vad_gap_recommend_sweep`, mirroring
+    the degrade-to-``{"available": false}`` contract the other VAD JSON renderers
+    use. Carries the aggregate stats, the shared valley + merge accounting
+    (invariant across biases), the per-bias ``biases`` list (each with
+    ``bias`` / ``recommended_ms`` / ``recommended_s``), and the short..long
+    ``spread_ms`` / ``spread_s``. The recommendation fields are ``null`` for a
+    <2-segment result (nothing to recommend). Pure: built from
+    :func:`vad_gap_recommend_sweep`.
+    """
+    if result is None:
+        return json.dumps(
+            {
+                "available": False,
+                "hint": (
+                    "install 'silero-vad' (pulls torch + torchaudio) to enable "
+                    "offline neural segmentation"
+                ),
+            },
+            indent=2,
+        )
+    s = vad_gap_recommend_sweep(result)
+    payload = {
+        "available": True,
+        "name": result.name,
+        "num_segments": s["num_segments"],
+        "num_gaps": s["num_gaps"],
+        "min_gap_s": s["min_gap_s"],
+        "max_gap_s": s["max_gap_s"],
+        "mean_gap_s": s["mean_gap_s"],
+        "total_silence_s": s["total_silence_s"],
+        "split_found": s["split_found"],
+        "below": s["below"],
+        "at_or_above": s["at_or_above"],
+        "gap_below_s": s["gap_below_s"],
+        "gap_above_s": s["gap_above_s"],
+        "valley_width_s": s["valley_width_s"],
+        "biases": s["biases"],
+        "spread_ms": s["spread_ms"],
+        "spread_s": s["spread_s"],
+    }
+    return json.dumps(payload, indent=2)
+
+
+def render_vad_gap_recommend_sweep_csv(result):
+    """Render the bias sweep as a CSV table (iter-352).
+
+    The spreadsheet-friendly twin of :func:`render_vad_gap_recommend_sweep` /
+    :func:`render_vad_gap_recommend_sweep_json`, completing the human / ``--json``
+    / ``--csv`` trio. Unlike the single-row ``gv vad-gap-recommend --csv``, the
+    sweep is naturally one row PER bias:
+    ``bias,recommended_ms,recommended_s,split_found,below,at_or_above,num_gaps``
+    — the same columns as ``gv vad-gap-recommend --csv``, but three rows so a
+    reader sees the whole spread at once (and the per-bias rows union cleanly
+    with the single-bias surface's output). The shared valley endpoints and
+    spread are NOT duplicated into every row, matching the single-bias surface's
+    reasoning. A result with fewer than 2 segments yields the header alone (a
+    valid empty-bodied table). ``result`` of ``None`` yields a single
+    ``# silero VAD unavailable: ...`` comment line. Pure: built with the stdlib
+    :mod:`csv` writer, trailing terminator stripped.
+    """
+    if result is None:
+        return (
+            "# silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        )
+    s = vad_gap_recommend_sweep(result)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(
+        [
+            "bias",
+            "recommended_ms",
+            "recommended_s",
+            "split_found",
+            "below",
+            "at_or_above",
+            "num_gaps",
+        ]
+    )
+    if s["num_gaps"] > 0:
+        for row in s["biases"]:
+            writer.writerow(
+                [
+                    row["bias"],
+                    _format_cut_label(row["recommended_ms"]),
+                    row["recommended_s"],
+                    s["split_found"],
+                    s["below"],
+                    s["at_or_above"],
+                    s["num_gaps"],
+                ]
+            )
+    return buf.getvalue().rstrip("\r\n")
+
+
 # Dominance thresholds grading how clean the recommendation's valley is. The
 # dominance is the fraction of the total gap SPREAD (max_gap - min_gap) taken up
 # by the single widest jump (the valley). A clean bimodal distribution puts most
@@ -5393,6 +5618,63 @@ def cmd_vad_gap_recommend(args, *, log=print, segmenter=None, availability=None)
             log(line)
 
 
+def cmd_vad_gap_recommend_sweep(args, *, log=print, segmenter=None, availability=None):
+    """Segment one WAV offline and SWEEP the recommended hangover across biases.
+
+    iter-352's companion of :func:`cmd_vad_gap_recommend`. Where
+    ``gv vad-gap-recommend --bias {short,balanced,long}`` names ONE defensible
+    end-of-turn hangover, ``gv vad-gap-recommend-sweep recording.wav`` names ALL
+    THREE side by side, so the operator sees the whole spread of defensible
+    numbers — and the short→long width of that spread — in one shot, without
+    re-running the command per bias. The valley + merge accounting are invariant
+    across biases, so they are reported once.
+
+    Same injected-dependency contract as :func:`cmd_vad_gap_recommend`:
+    ``segmenter`` / ``availability`` default to the real :mod:`vad.silero`
+    functions, imported lazily so the parser stays torch-free. The segmenter
+    knobs are shared with ``gv vad`` so the gaps are measured against the same
+    segmentation. ``--csv`` is mutually exclusive with ``--json``; when
+    ``silero-vad`` is absent the handler prints the install hint and returns,
+    never crashing.
+    """
+    if segmenter is None or availability is None:
+        from vad.silero import segment_recording, silero_available
+
+        segmenter = segment_recording if segmenter is None else segmenter
+        availability = silero_available if availability is None else availability
+
+    as_json = getattr(args, "json", False)
+    as_csv = getattr(args, "csv", False)
+
+    if not availability():
+        if as_json:
+            log(render_vad_gap_recommend_sweep_json(None))
+        elif as_csv:
+            log(render_vad_gap_recommend_sweep_csv(None))
+        else:
+            for line in render_vad_gap_recommend_sweep(None):
+                log(line)
+        return
+
+    from vad.silero import SileroParams
+
+    params = SileroParams(
+        threshold=args.threshold,
+        min_speech_ms=args.min_speech_ms,
+        min_silence_ms=args.min_silence_ms,
+        speech_pad_ms=args.speech_pad_ms,
+        max_speech_s=args.max_speech_s,
+    )
+    result = segmenter(args.wav, params=params)
+    if as_json:
+        log(render_vad_gap_recommend_sweep_json(result))
+    elif as_csv:
+        log(render_vad_gap_recommend_sweep_csv(result))
+    else:
+        for line in render_vad_gap_recommend_sweep(result):
+            log(line)
+
+
 def cmd_vad_gap_confidence(args, *, log=print, segmenter=None, availability=None):
     """Segment one WAV offline and GRADE the recommended-hangover confidence.
 
@@ -6337,6 +6619,7 @@ DEFAULT_HANDLERS = {
     "vad-gap-percentiles": cmd_vad_gap_percentiles,
     "vad-gap-cdf": cmd_vad_gap_cdf,
     "vad-gap-recommend": cmd_vad_gap_recommend,
+    "vad-gap-recommend-sweep": cmd_vad_gap_recommend_sweep,
     "vad-gap-confidence": cmd_vad_gap_confidence,
     "vad-gap-cost": cmd_vad_gap_cost,
     "vad-gap-peak": cmd_vad_gap_peak,
@@ -7147,6 +7430,77 @@ def build_parser():
         action="store_true",
         help="Emit a one-row bias,recommended_ms,recommended_s,split_found,below,"
         "at_or_above,num_gaps CSV summary; mutually exclusive with --json",
+    )
+
+    # gv vad-gap-recommend-sweep — segment one WAV and SWEEP the recommended
+    # hangover across all three biases at once (iter-352). The companion of
+    # iter-351's `--bias` knob: where `gv vad-gap-recommend --bias X` names ONE
+    # defensible number, this names short/balanced/long side by side plus the
+    # short→long spread, so the operator sees the whole range of defensible
+    # numbers in one shot. The valley + merge accounting are invariant across
+    # biases (only the named number shifts), so they are reported once. Shares
+    # all `gv vad` segmenter knobs.
+    vad_gap_rec_sweep = sub.add_parser(
+        "vad-gap-recommend-sweep",
+        help="Offline Silero VAD — segment a WAV and sweep the recommended "
+        "end-of-turn --min-silence-ms across all three biases (short/balanced/"
+        "long) side by side, with the short→long spread (the whole range of "
+        "defensible numbers at once)",
+    )
+    vad_gap_rec_sweep.add_argument(
+        "wav",
+        help="Path to a 16-bit PCM WAV file to segment",
+    )
+    vad_gap_rec_sweep.add_argument(
+        "--threshold",
+        type=unit_interval_type,
+        default=vad_threshold_default,
+        help=f"P(speech) gate in [0, 1] (default: {vad_threshold_default})",
+    )
+    vad_gap_rec_sweep.add_argument(
+        "--min-speech-ms",
+        type=nonneg_float_type,
+        default=vad_min_speech_default,
+        dest="min_speech_ms",
+        help="Drop speech regions shorter than this, in ms "
+        f"(default: {vad_min_speech_default})",
+    )
+    vad_gap_rec_sweep.add_argument(
+        "--min-silence-ms",
+        type=nonneg_float_type,
+        default=vad_min_silence_default,
+        dest="min_silence_ms",
+        help="Trailing silence before a region ends, in ms — matches the "
+        f"pipecat stop_secs=0.8 live default (default: {vad_min_silence_default})",
+    )
+    vad_gap_rec_sweep.add_argument(
+        "--speech-pad-ms",
+        type=nonneg_float_type,
+        default=vad_speech_pad_default,
+        dest="speech_pad_ms",
+        help="Symmetric padding added to each region, in ms "
+        f"(default: {vad_speech_pad_default})",
+    )
+    vad_gap_rec_sweep.add_argument(
+        "--max-speech-s",
+        type=max_speech_type,
+        default=vad_max_speech_default,
+        dest="max_speech_s",
+        help="Force-split regions longer than this, in seconds; 'inf'/'none' "
+        "never splits (default: inf)",
+    )
+    vad_gap_rec_sweep_fmt = vad_gap_rec_sweep.add_mutually_exclusive_group()
+    vad_gap_rec_sweep_fmt.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON (aggregate stats + shared valley + "
+        "per-bias recommendations + spread) instead of the human-readable sweep",
+    )
+    vad_gap_rec_sweep_fmt.add_argument(
+        "--csv",
+        action="store_true",
+        help="Emit a three-row (one per bias) bias,recommended_ms,recommended_s,"
+        "split_found,below,at_or_above,num_gaps CSV; mutually exclusive with --json",
     )
 
     # gv vad-gap-confidence — segment one WAV and GRADE how trustworthy the
