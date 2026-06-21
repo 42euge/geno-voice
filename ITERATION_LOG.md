@@ -31057,3 +31057,87 @@ re-run on main post-merge (4524 passed, ~32s).
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-339 — gv vad-gap-percentiles end-to-end integration test over the real corpus
+
+- **Date:** 2026-06-20
+- **Branch:** iter-339-vad-gap-percentiles-integration (ff-merged to main, worktree removed)
+- **Commit:** 74aa64c
+
+**Why.** iter-338's next-item #1: "An integration test for `gv
+vad-gap-percentiles` over the real corpus — the analogue of the
+iter-329/331/333/335/337 gap-family integration laps." iter-338 added the
+percentiles surface with full unit coverage (51 tests, injected-stub segmenter)
+but no real-engine integration. The other five gap-family axes
+(point/sweep/grid/diff/histogram) each carry a real-corpus integration module
+that runs the actual Silero segmenter over `fixtures/recordings/` and pins the
+family's anchoring property; percentiles was the only axis still missing one.
+This lap closes that gap, so the silence-gap family now has end-to-end
+real-engine coverage across ALL SIX axes.
+
+**What it pins.** `tests/integration/test_gv_vad_gap_percentiles_cli.py` (new,
++13 tests), modeled on the sibling `test_gv_vad_gap_histogram_cli.py` (iter-337)
+with the same skip contract (skips when the uncommitted recordings or
+silero-vad + torch are absent):
+- **THE GATE** — the 31s continuous recording (which energy-VAD cannot split)
+  must yield ≥2 segments and ≥1 inter-segment gap at the baseline 0.5 gate, so
+  there is a distribution to summarise (a non-empty `percentiles` list); the
+  default 50/90/99 percentiles are reported in order.
+- **The anchoring property** — the percentiles surface's gap count and
+  aggregates (`num_segments`/`num_gaps`/`min`/`mean`/`max`/`total_silence`)
+  equal an independent `gv vad-gaps --json` run segmented at the same gate,
+  proving it summarises the SAME segmentation a standalone `gv vad-gaps`
+  produces, not a re-derived one.
+- **Monotonic + bounded** — over a 6-percentile request the values are
+  non-decreasing in p and every value lies within `[min_gap_s, max_gap_s]` — the
+  percentiles are order statistics of the very gaps the aggregates summarise.
+- **p100 == max_gap_s** exactly — the top of the empirical CDF is the longest
+  pause.
+- **Median robustness** — THE headline property: comparing two real
+  segmentations of the same clip at adjacent gates (0.3 vs 0.5), p50 moves no
+  more than the max does (the whole reason percentiles exist alongside
+  min/mean/max). Guarded to skip when the two gates produce the same max
+  (robustness vacuous) or <2 gaps in either run.
+- **CSV matches JSON** — same row count and per-percentile `value_s` across the
+  two machine-readable surfaces (comparing numerically since the CSV label is
+  `50` not `50.0`).
+- **The human report** carries the title (`gap percentiles`), the recording
+  name, the actionable `--min-silence-ms` knob hint, and a `pNN` line per
+  requested percentile.
+- **Per-recording:** every corpus WAV emits a well-formed human report and a
+  parseable JSON payload with `num_gaps == num_segments - 1` and monotonic,
+  bounded values (or empty `percentiles` + `None` aggregates for a single
+  region).
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4524 passed**
+(unchanged; the new test lives under `tests/integration/`, outside the unit
+GATE), run in the feature worktree before ff-merge AND re-run on main
+post-merge (4524 passed, ~41s).
+- Integration: the new module was verified **13/13 passed** against the REAL
+  Silero engine + recording corpus in the worktree (by temporarily symlinking
+  the host recordings in, then removing the symlink before commit), in ~10s, and
+  re-run on main post-merge (13 passed). Collects cleanly (8 tests, skip-gated)
+  when recordings are absent.
+
+**Next planned items:**
+1. **[gv CLI] The silence-gap family now has full unit + real-corpus integration
+   coverage across all six axes** (point/sweep/grid/diff/histogram/percentiles).
+   A natural lower-effort next: a human-table golden-output assertion for one of
+   these surfaces (the tests assert structure + substrings, not the full rendered
+   block — e.g. pin the exact aligned `gv vad-gap-percentiles` `pNN` block over a
+   fixed stub segmentation, asserting the median knob-hint suffix placement and
+   column alignment).
+2. **[gv CLI] A genuinely new analysis surface** if golden-output feels too
+   small: e.g. a cumulative-distribution / CDF view of where a candidate
+   `--min-silence-ms` cut would fall (what fraction of pauses it would merge),
+   turning the percentile table into a direct "this hangover merges X% of your
+   pauses" answer.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~31 leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
