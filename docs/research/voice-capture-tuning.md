@@ -203,6 +203,42 @@ applies. `cmd_vad_diff` reuses the iter-233 injected-dependency seams;
 `tests/unit/test_gv_vad.py`, and `tests/integration/test_gv_vad_cli.py` proves
 the diff equals two independent `gv vad --json` runs over the real corpus.
 
+### `gv vad-gap-diff` — how the silence gaps shift between two gates (iter-334)
+
+`gv vad-diff` reports how the *speech* (segment count, speech-seconds) shifts
+between two gates; `gv vad-gap-diff` is its gap-side twin — it reports how the
+inter-segment **silence-gap distribution** shifts. It is to `gv vad-gaps` what
+`gv vad-diff` is to `gv vad`, and the two-point degenerate of
+`gv vad-gap-sweep`: it runs the segmenter twice over one WAV (once per
+threshold, all other knobs shared) and reports the signed min/mean/max gap and
+total-silence delta:
+
+```
+gv vad-gap-diff recording.wav                                    # 0.5 vs 0.7 (defaults)
+gv vad-gap-diff recording.wav --threshold-a 0.3 --threshold-b 0.9  # wider gate spread
+gv vad-gap-diff recording.wav --json                             # machine-readable delta
+gv vad-gap-diff recording.wav --csv                              # flat CSV for plots
+```
+
+The headline is the **min-gap** row: the shortest real pause is the floor above
+which raising the end-of-turn hangover (`--min-silence-ms` / the live
+`chat.vad.silence_duration`) starts merging two genuine turns into one, so the
+min-gap transition tells you whether a stricter gate buys merge headroom. The
+human report names the file, both thresholds, and the `A → B (Δ)` transitions
+for segments, gaps, and min/mean/max/total gap, e.g.
+`min gap: 1.000s → 3.000s (+2.000s)`. A side with fewer than 2 segments has no
+pause to summarise, so that side prints `-` and the delta prints `n/a` (a
+missing pause cannot be differenced — distinct from a `0.000s` change). The
+`--json` payload carries `threshold_a`/`threshold_b`, both sides, and the signed
+deltas (`null` where a side had no pause). The `--csv` surface emits the same
+flat `threshold,num_segments,num_gaps,min_gap_s,mean_gap_s,max_gap_s,
+total_silence_s` schema as a two-value `gv vad-gap-sweep --csv`, so the two are
+byte-identical over the same pair — the same contract `gv vad-diff --csv` holds
+with `gv vad-sweep --csv`. The same degrade-to-`{"available": false}` contract
+applies. `cmd_vad_gap_diff` reuses the injected-dependency seams; `vad_gap_delta`
+is the pure delta core, tested without torch in
+`tests/unit/test_gv_vad_gap_diff.py`.
+
 ### `gv vad-sweep` — tabulate N values of one knob (iter-236)
 
 `gv vad-diff` compares the P(speech) gate at exactly two points; `gv vad-sweep`

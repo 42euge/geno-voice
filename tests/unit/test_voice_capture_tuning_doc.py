@@ -49,6 +49,7 @@ VAD_SUBCOMMANDS = (
     "vad-gaps",
     "vad-gap-sweep",
     "vad-diff",
+    "vad-gap-diff",
     "vad-sweep",
     "vad-grid",
     "vad-gap-grid",
