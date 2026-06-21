@@ -34429,3 +34429,101 @@ re-verified on main post-merge (`test_gv_vad_gap_recommend_knob_grid.py` +
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    ~30 leftover per-iter worktrees. A future lap could `git worktree prune` /
    remove the merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-378 — gv vad-gap-recommend-knob-sweep --sort-by grade/spread ordering
+
+- **Date:** 2026-06-21
+- **Branch:** iter-378-sort-by (ff-merged to main, worktree removed)
+- **Commit:** c693d07
+
+**Why.** The standing next-item #1 from iter-377 asked for "a natural NEW
+recommend-side direction: a `--sort-by` that orders the sweep/grid rows by grade
+or spread (so the operator sees the most-trustworthy region first) rather than by
+swept value — distinct from a filter (keeps every row, reorders) and not yet built
+anywhere." The recommend-knob family is feature-complete on FILTERS (`--bias`
+column filter iter-374/375, `--min-grade` row filter iter-376/377); an ORDERING is
+the genuinely new operator-facing knob. Following the iter-376/377 cadence (add to
+the 1-D sweep first, extend to the 2-D grid next), this lap lands `--sort-by` on
+the 1-D `vad-gap-recommend-knob-sweep`. Not an 18th chat-metrics clone (family
+complete, iter-328).
+
+**What it is.** `gv vad-gap-recommend-knob-sweep recording.wav --sort-by grade`
+reorders the swept rows so the most-useful region of the knob reads first instead
+of by swept value:
+- `grade` — confidence grade DESCENDING (strong → moderate → weak → none →
+  ungraded), so the trustworthy knob settings float to the top.
+- `spread` — short→long `spread_ms` ASCENDING (tightest first), so the knob
+  settings whose three biases agree most — the least bias-sensitive, most decisive
+  recommendations — come first.
+Both orderings are STABLE (rows tying on the key keep their original swept-value
+order, so a sorted sweep is a deterministic permutation of the unsorted one) and
+place rows with no recommendation (`None` spread / ungraded, <2 segments) LAST
+under either key.
+
+**Design — render-only ordering; core stays the by-swept-value primitive
+(mirrors iter-374/376/377).** The core `vad_gap_recommend_knob_sweep` is untouched:
+it remains the always-by-swept-value, testable primitive carrying every row in
+swept order. Three new pieces land next to the iter-376 grade primitives:
+- `GAP_RECOMMEND_SORT_CHOICES` — the two valid sort keys (`grade`, `spread`).
+- `gap_recommend_sort_type(raw)` — argparse type: case-insensitive single key,
+  rejects empty/unknown (the ordering analogue of `gap_confidence_grade_type`).
+- `_sort_knob_rows(rows, sort_by)` — non-mutating stable reorder; `None` is an
+  identity copy (default sweep byte-identical to pre-sort); unknown key keeps order
+  (defensive — a future key never silently scrambles the table). `grade` sorts on
+  the negated `_GAP_CONFIDENCE_GRADE_RANK` (reuses the iter-376 total order);
+  `spread` sorts on `(spread_ms is None, spread_ms)` so a `None` spread sorts after
+  every numeric one.
+
+**What landed in `examples/gv.py` (+149/-15 incl. parser/handler).**
+- All three sweep renderers (`render_vad_gap_recommend_knob_sweep` / `_json` /
+  `_csv`) gained a `sort_by=None` kwarg, applied AFTER the `min_grade` filter so
+  only surviving rows are reordered. Human: reorders the body rows. JSON: adds a
+  top-level `sort_by` key when set (composes with both `biases` and `min_grade`).
+  CSV: header + column set unchanged so a sorted run still unions cleanly with an
+  unsorted one — only the row order differs.
+- `cmd_vad_gap_recommend_knob_sweep` resolves
+  `sort_by = getattr(args, "sort_by", None)` and threads it through every render
+  call (incl. the unavailable branch).
+- Added `--sort-by` to the parser (after `--min-grade`, before the --json/--csv
+  format mutex).
+
+**Tests (tests/unit, +25 net — test_gv_vad_gap_recommend_knob_sweep.py 65→90).**
+sort-type accepts the two keys case-insensitively / rejects empty+unknown;
+`_sort_knob_rows` None-identity-copy / grade-DESC-stable / spread-ASC-none-last-stable
+/ unknown-key-keeps-order; human default==explicit-None / grade-strong-first; JSON
+default-no-key / grade-names-key+reorders / spread-ascending / composes with
+min_grade+bias; CSV reorders rows + header unchanged; handler grade/spread paths /
+default-keeps-swept-order / invalid-rejected-at-parser / unavailable threads
+through. (Added a `_weak` fixture — many near-uniform pauses, dominance < 0.25 — to
+exercise the strong > weak > none grade ordering.)
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5369 passed**, run
+in the feature worktree before ff-merge AND re-verified on main post-merge
+(`test_gv_vad_gap_recommend_knob_sweep.py` + `test_gv_cli.py` → 183 passed).
+- Integration: not run this lap (pure string-formatting/arithmetic over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..377 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] `--sort-by` ordering — extend to the 2-D knob-grid.** This lap added
+   `--sort-by {grade,spread}` to the 1-D `vad-gap-recommend-knob-sweep`. The 2-D
+   `vad-gap-recommend-knob-grid` (iter-373) tabulates the same grade + spread per
+   CELL; a future lap could reorder its cells by grade/spread too (the grid
+   analogue, exactly as iter-377 extended `--min-grade` from sweep to grid). The
+   reusable `gap_recommend_sort_type` / `_sort_knob_rows` primitives are already in
+   place — only the grid renderers need the `sort_by` kwarg.
+2. **[gv CLI] recommend-knob family after the grid `--sort-by`.** Once #1 lands,
+   the family spans `--bias` (column filter), `--min-grade` (row filter), and
+   `--sort-by` (ordering) across both the 1-D and 2-D surfaces. A further direction
+   could be a `--top-N` that keeps only the first N rows AFTER sorting (a filter
+   that composes with the ordering — "show me the 3 most trustworthy knob
+   settings"), distinct from `--min-grade` (threshold, not count).
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~30 leftover per-iter worktrees. A future lap could `git worktree prune` /
+   remove the merged ones. NOTE: this lap correctly removed its own worktree.
