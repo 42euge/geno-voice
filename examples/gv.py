@@ -3701,7 +3701,7 @@ def vad_gap_recommend_sweep(result):
     return out
 
 
-def render_vad_gap_recommend_sweep(result):
+def render_vad_gap_recommend_sweep(result, *, biases=GAP_RECOMMEND_BIAS_ORDER):
     """Render the bias sweep as plain-text report lines (iter-352).
 
     The human-readable face of :func:`vad_gap_recommend_sweep`. ``result`` of
@@ -3711,12 +3711,21 @@ def render_vad_gap_recommend_sweep(result):
     header, the shared valley + merge effect (invariant across biases, so stated
     once), then one line per bias naming its recommended ``--min-silence-ms``,
     and finally the short..long spread. Pure: returns a list of strings.
+
+    iter-375's ``--bias`` filter (the single-shot twin of the iter-374 knob
+    sweep / grid filter): ``biases`` narrows the per-bias lines to a chosen
+    subset of short/balanced/long. The spread and confidence are properties of
+    the VALLEY, not of which bias is named, so they are ALWAYS shown — only the
+    per-bias recommendation lines are filtered. The spread is the short..long
+    width of the FULL distribution (iter-352 semantics), independent of which
+    columns are displayed. With the default (all three) the output is unchanged.
     """
     if result is None:
         return [
             "silero VAD unavailable: install 'silero-vad' (pulls torch + "
             "torchaudio) to enable offline neural segmentation"
         ]
+    selected = set(biases)
     s = vad_gap_recommend_sweep(result)
     lines = [
         f"silero VAD recommended-hangover bias sweep — {result.name}",
@@ -3743,6 +3752,8 @@ def render_vad_gap_recommend_sweep(result):
         )
     lines.append("  recommended --min-silence-ms by bias:")
     for row in s["biases"]:
+        if row["bias"] not in selected:
+            continue
         label = _format_cut_label(row["recommended_ms"])
         lines.append(
             f"    {row['bias']:<8} {label} ({row['recommended_s']:.3f}s)"
@@ -3776,7 +3787,7 @@ def render_vad_gap_recommend_sweep(result):
     return lines
 
 
-def render_vad_gap_recommend_sweep_json(result):
+def render_vad_gap_recommend_sweep_json(result, *, biases=GAP_RECOMMEND_BIAS_ORDER):
     """Render the bias sweep as a JSON string (iter-352).
 
     Machine-readable twin of :func:`render_vad_gap_recommend_sweep`, mirroring
@@ -3787,6 +3798,17 @@ def render_vad_gap_recommend_sweep_json(result):
     ``spread_ms`` / ``spread_s``. The recommendation fields are ``null`` for a
     <2-segment result (nothing to recommend). Pure: built from
     :func:`vad_gap_recommend_sweep`.
+
+    iter-375's ``--bias`` filter narrows the nested ``biases`` list to the
+    selected subset (canonical short..balanced..long order). The DEFAULT (all
+    three) payload is byte-identical to the pre-filter output: the full nested
+    triad, no extra key. A strict subset narrows the nested list AND adds a
+    top-level ``biases_shown`` strings key naming the kept columns (the
+    single-shot ``biases`` key already holds the per-bias dicts, so — unlike the
+    iter-374 knob sweep, whose top-level ``biases`` is itself the names list —
+    the names go in a distinct ``biases_shown`` key here). The spread +
+    confidence are valley properties (invariant across biases), so they are
+    ALWAYS carried in full.
     """
     if result is None:
         return json.dumps(
@@ -3800,6 +3822,7 @@ def render_vad_gap_recommend_sweep_json(result):
             indent=2,
         )
     s = vad_gap_recommend_sweep(result)
+    selected = set(biases)
     payload = {
         "available": True,
         "name": result.name,
@@ -3818,14 +3841,18 @@ def render_vad_gap_recommend_sweep_json(result):
         "grade": s["grade"],
         "dominance": s["dominance"],
         "separation_ratio": s["separation_ratio"],
-        "biases": s["biases"],
+        "biases": [b for b in s["biases"] if b["bias"] in selected],
         "spread_ms": s["spread_ms"],
         "spread_s": s["spread_s"],
     }
+    if list(biases) != list(GAP_RECOMMEND_BIAS_ORDER):
+        # Name the kept columns at the top level only for a strict subset, so the
+        # default payload is byte-identical to the pre-filter output.
+        payload = {**payload, "biases_shown": list(biases)}
     return json.dumps(payload, indent=2)
 
 
-def render_vad_gap_recommend_sweep_csv(result):
+def render_vad_gap_recommend_sweep_csv(result, *, biases=GAP_RECOMMEND_BIAS_ORDER):
     """Render the bias sweep as a CSV table (iter-352).
 
     The spreadsheet-friendly twin of :func:`render_vad_gap_recommend_sweep` /
@@ -3845,6 +3872,13 @@ def render_vad_gap_recommend_sweep_csv(result):
     segments yields the header alone (a valid empty-bodied table). ``result`` of
     ``None`` yields a single ``# silero VAD unavailable: ...`` comment line.
     Pure: built with the stdlib :mod:`csv` writer, trailing terminator stripped.
+
+    iter-375's ``--bias`` filter drops the rows for unselected biases (the CSV is
+    one row PER bias, so a subset is fewer rows — the natural analogue of the
+    knob-sweep CSV narrowing its bias COLUMNS). The header is unchanged and the
+    rows stay in canonical short..balanced..long order, so the filtered output
+    still unions cleanly with ``gv vad-gap-recommend --csv``. The default (all
+    three) is byte-identical to the pre-filter output.
     """
     if result is None:
         return (
@@ -3852,6 +3886,7 @@ def render_vad_gap_recommend_sweep_csv(result):
             "torchaudio) to enable offline neural segmentation"
         )
     s = vad_gap_recommend_sweep(result)
+    selected = set(biases)
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(
@@ -3867,6 +3902,8 @@ def render_vad_gap_recommend_sweep_csv(result):
     )
     if s["num_gaps"] > 0:
         for row in s["biases"]:
+            if row["bias"] not in selected:
+                continue
             writer.writerow(
                 [
                     row["bias"],
@@ -7805,6 +7842,11 @@ def cmd_vad_gap_recommend_sweep(args, *, log=print, segmenter=None, availability
     segmentation. ``--csv`` is mutually exclusive with ``--json``; when
     ``silero-vad`` is absent the handler prints the install hint and returns,
     never crashing.
+
+    iter-375's ``--bias`` filter narrows the per-bias output to a chosen subset
+    of short/balanced/long (the single-shot twin of the iter-374 knob-sweep /
+    grid column filter) while always keeping the invariant spread + confidence;
+    it defaults to the full triad, so the unfiltered output is unchanged.
     """
     if segmenter is None or availability is None:
         from vad.silero import segment_recording, silero_available
@@ -7814,14 +7856,15 @@ def cmd_vad_gap_recommend_sweep(args, *, log=print, segmenter=None, availability
 
     as_json = getattr(args, "json", False)
     as_csv = getattr(args, "csv", False)
+    biases = getattr(args, "bias", None) or GAP_RECOMMEND_BIAS_ORDER
 
     if not availability():
         if as_json:
-            log(render_vad_gap_recommend_sweep_json(None))
+            log(render_vad_gap_recommend_sweep_json(None, biases=biases))
         elif as_csv:
-            log(render_vad_gap_recommend_sweep_csv(None))
+            log(render_vad_gap_recommend_sweep_csv(None, biases=biases))
         else:
-            for line in render_vad_gap_recommend_sweep(None):
+            for line in render_vad_gap_recommend_sweep(None, biases=biases):
                 log(line)
         return
 
@@ -7836,11 +7879,11 @@ def cmd_vad_gap_recommend_sweep(args, *, log=print, segmenter=None, availability
     )
     result = segmenter(args.wav, params=params)
     if as_json:
-        log(render_vad_gap_recommend_sweep_json(result))
+        log(render_vad_gap_recommend_sweep_json(result, biases=biases))
     elif as_csv:
-        log(render_vad_gap_recommend_sweep_csv(result))
+        log(render_vad_gap_recommend_sweep_csv(result, biases=biases))
     else:
-        for line in render_vad_gap_recommend_sweep(result):
+        for line in render_vad_gap_recommend_sweep(result, biases=biases):
             log(line)
 
 
@@ -10342,6 +10385,15 @@ def build_parser():
         dest="max_speech_s",
         help="Force-split regions longer than this, in seconds; 'inf'/'none' "
         "never splits (default: inf)",
+    )
+    vad_gap_rec_sweep.add_argument(
+        "--bias",
+        type=gap_recommend_bias_list_type,
+        default=None,
+        help="Comma-separated subset of short/balanced/long to show as the "
+        "recommendation rows (e.g. 'short' or 'short,long'); narrows the table "
+        "to the biases you care about while always keeping the spread + "
+        "confidence (default: all three, in short..balanced..long order)",
     )
     vad_gap_rec_sweep_fmt = vad_gap_rec_sweep.add_mutually_exclusive_group()
     vad_gap_rec_sweep_fmt.add_argument(

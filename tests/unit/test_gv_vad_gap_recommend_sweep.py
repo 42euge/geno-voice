@@ -427,11 +427,32 @@ def test_parser_registers_sweep_subcommand():
     assert args.wav == "rec.wav"
 
 
-def test_parser_sweep_has_no_bias_flag():
-    # The sweep covers all biases, so it has no --bias knob.
+def test_parser_sweep_bias_flag_accepts_subset():
+    # iter-375: the sweep gained a --bias column filter (the single-shot twin of
+    # the iter-374 knob-sweep / grid filter). Bare invocation leaves it unset
+    # (None → handler defaults to all three).
+    parser = gv.build_parser()
+    args = parser.parse_args(["vad-gap-recommend-sweep", "rec.wav"])
+    assert args.bias is None
+    args = parser.parse_args(
+        ["vad-gap-recommend-sweep", "rec.wav", "--bias", "short,long"]
+    )
+    assert args.bias == ["short", "long"]
+
+
+def test_parser_sweep_bias_canonicalizes_typed_order():
+    # Typed order is irrelevant — the canonical short..balanced..long order holds.
+    parser = gv.build_parser()
+    args = parser.parse_args(
+        ["vad-gap-recommend-sweep", "rec.wav", "--bias", "long,short"]
+    )
+    assert args.bias == ["short", "long"]
+
+
+def test_parser_sweep_bias_rejects_unknown():
     parser = gv.build_parser()
     with pytest.raises(SystemExit):
-        parser.parse_args(["vad-gap-recommend-sweep", "rec.wav", "--bias", "short"])
+        parser.parse_args(["vad-gap-recommend-sweep", "rec.wav", "--bias", "tiny"])
 
 
 def test_parser_sweep_json_csv_mutually_exclusive():
@@ -580,3 +601,139 @@ def test_handler_builds_params_from_knobs():
     assert captured["min_silence_ms"] == 400.0
     assert captured["speech_pad_ms"] == 10.0
     assert captured["max_speech_s"] == 5.0
+
+
+# ---- iter-375: --bias column filter -------------------------------------
+
+
+def test_human_default_equals_explicit_triad():
+    # Passing the full triad explicitly must be byte-identical to the default.
+    res = _bimodal()
+    default = gv.render_vad_gap_recommend_sweep(res)
+    explicit = gv.render_vad_gap_recommend_sweep(
+        res, biases=["short", "balanced", "long"]
+    )
+    assert default == explicit
+
+
+def test_human_bias_subset_filters_rows():
+    res = _bimodal()
+    lines = gv.render_vad_gap_recommend_sweep(res, biases=["short", "long"])
+    # The two named biases appear as recommendation rows; balanced is dropped.
+    rec = [ln for ln in lines if ln.startswith("    ")]
+    assert any(ln.strip().startswith("short ") for ln in rec)
+    assert any(ln.strip().startswith("long ") for ln in rec)
+    assert not any(ln.strip().startswith("balanced") for ln in rec)
+    # Spread + confidence are valley properties — always kept.
+    assert any(ln.startswith("  spread:") for ln in lines)
+    assert any(ln.startswith("  confidence:") for ln in lines)
+
+
+def test_human_single_bias():
+    res = _bimodal()
+    lines = gv.render_vad_gap_recommend_sweep(res, biases=["balanced"])
+    rec = [ln for ln in lines if ln.startswith("    ")]
+    assert len(rec) == 1
+    assert rec[0].strip().startswith("balanced")
+
+
+def test_human_bias_subset_no_gaps_unaffected():
+    # A <2-segment result has no per-bias rows regardless of the filter.
+    lines = gv.render_vad_gap_recommend_sweep(_result((0, 1)), biases=["short"])
+    assert any("fewer than 2 segments" in ln for ln in lines)
+
+
+def test_json_default_has_no_top_level_biases_shown():
+    # The default payload is byte-identical to the pre-filter output.
+    res = _bimodal()
+    default = gv.render_vad_gap_recommend_sweep_json(res)
+    explicit = gv.render_vad_gap_recommend_sweep_json(
+        res, biases=["short", "balanced", "long"]
+    )
+    assert default == explicit
+    payload = json.loads(default)
+    assert "biases_shown" not in payload
+    assert len(payload["biases"]) == 3
+
+
+def test_json_bias_subset_narrows_and_names():
+    res = _bimodal()
+    payload = json.loads(
+        gv.render_vad_gap_recommend_sweep_json(res, biases=["short", "long"])
+    )
+    assert payload["biases_shown"] == ["short", "long"]
+    assert [b["bias"] for b in payload["biases"]] == ["short", "long"]
+    # Valley/confidence carried in full.
+    assert payload["spread_ms"] is not None
+    assert payload["grade"] == "strong"
+
+
+def test_csv_default_equals_explicit_triad():
+    res = _bimodal()
+    default = gv.render_vad_gap_recommend_sweep_csv(res)
+    explicit = gv.render_vad_gap_recommend_sweep_csv(
+        res, biases=["short", "balanced", "long"]
+    )
+    assert default == explicit
+
+
+def test_csv_bias_subset_drops_rows():
+    res = _bimodal()
+    text = gv.render_vad_gap_recommend_sweep_csv(res, biases=["short", "long"])
+    rows = list(csv.reader(io.StringIO(text)))
+    # Header unchanged; one row per kept bias, in canonical order.
+    assert rows[0][0] == "bias"
+    assert [r[0] for r in rows[1:]] == ["short", "long"]
+
+
+def test_csv_bias_subset_no_gaps_header_only():
+    text = gv.render_vad_gap_recommend_sweep_csv(_result((0, 1)), biases=["short"])
+    rows = list(csv.reader(io.StringIO(text)))
+    assert len(rows) == 1  # header only
+
+
+def test_handler_bias_human():
+    res = _bimodal()
+    lines = _run(
+        _args(bias=["short", "long"]),
+        segmenter=lambda w, *, params: res,
+        availability=lambda: True,
+    )
+    rec = [ln for ln in lines if ln.startswith("    ")]
+    assert [ln.split()[0] for ln in rec] == ["short", "long"]
+
+
+def test_handler_bias_json():
+    res = _bimodal()
+    lines = _run(
+        _args(json=True, bias=["balanced"]),
+        segmenter=lambda w, *, params: res,
+        availability=lambda: True,
+    )
+    payload = json.loads("\n".join(lines))
+    assert payload["biases_shown"] == ["balanced"]
+    assert [b["bias"] for b in payload["biases"]] == ["balanced"]
+
+
+def test_handler_bias_csv():
+    res = _bimodal()
+    lines = _run(
+        _args(csv=True, bias=["short", "long"]),
+        segmenter=lambda w, *, params: res,
+        availability=lambda: True,
+    )
+    rows = list(csv.reader(io.StringIO("\n".join(lines))))
+    assert [r[0] for r in rows[1:]] == ["short", "long"]
+
+
+def test_handler_bias_none_defaults_to_triad():
+    # bias=None (default) → all three, byte-identical to no --bias.
+    res = _bimodal()
+    lines = _run(
+        _args(json=True, bias=None),
+        segmenter=lambda w, *, params: res,
+        availability=lambda: True,
+    )
+    payload = json.loads("\n".join(lines))
+    assert "biases_shown" not in payload
+    assert len(payload["biases"]) == 3
