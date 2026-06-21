@@ -12,6 +12,7 @@ Usage:
     gv vad recording.wav --json # machine-readable segmentation (SileroResult.to_dict shape)
     gv vad-gaps recording.wav  # report the silence gaps BETWEEN speech regions (tune --min-silence-ms)
     gv vad-gaps recording.wav --json # machine-readable gap stats + per-gap list
+    gv vad-gap-percentiles recording.wav --percentiles 50,90,99  # robust pause percentiles (outlier-proof vs min/mean/max)
     gv vad-gap-hist recording.wav --bin-width-s 0.5  # histogram the silence-gap durations (see the distribution shape)
     gv vad-gap-sweep recording.wav --thresholds 0.3,0.5,0.7,0.9  # sweep N gates, tabulate how the min gap moves
     gv vad-gap-grid recording.wav --thresholds 0.3,0.5,0.7 --min-silences 400,800  # gate × hangover gap grid
@@ -175,6 +176,47 @@ def unit_interval_list_type(raw):
             f"thresholds must be a non-empty comma-separated list, got {raw!r}"
         )
     return [unit_interval_type(tok) for tok in tokens]
+
+
+def percentile_list_type(raw):
+    """Argparse ``type`` for ``gv vad-gap-percentiles --percentiles``: a list.
+
+    iter-338's ``gv vad-gap-percentiles`` reports robust order statistics of the
+    inter-segment silence distribution (p50/p90/p99 by default) — unlike the
+    min/mean/max ``gv vad-gaps`` reports, a percentile is unmoved by a single
+    outlier pause, so it is the stable signal for choosing the end-of-turn
+    hangover. This parses a comma-separated list (e.g. ``"50,90,99"``) into
+    ``[50.0, 90.0, 99.0]`` at the parser. Each token must be a number in the
+    OPEN-AT-zero, CLOSED-at-100 range ``(0, 100]`` (0 would be the trivial
+    minimum, already covered by ``gv vad-gaps``; >100 is meaningless), not NaN.
+    Duplicates and unsorted input are preserved as given (the operator may want
+    a specific column order). Rejects an empty list. Pure and side-effect-free
+    for direct unit testing — the percentile twin of
+    :func:`unit_interval_list_type`.
+    """
+    if not isinstance(raw, str):
+        raise argparse.ArgumentTypeError(f"percentiles must be a string, got {raw!r}")
+    tokens = [t.strip() for t in raw.split(",") if t.strip()]
+    if not tokens:
+        raise argparse.ArgumentTypeError(
+            f"percentiles must be a non-empty comma-separated list, got {raw!r}"
+        )
+    out = []
+    for tok in tokens:
+        try:
+            value = float(tok)
+        except (TypeError, ValueError):
+            raise argparse.ArgumentTypeError(
+                f"percentile must be a number, got {tok!r}"
+            )
+        if value != value:  # NaN is unordered.
+            raise argparse.ArgumentTypeError("percentile must be a number, got nan")
+        if not (0.0 < value <= 100.0):
+            raise argparse.ArgumentTypeError(
+                f"percentile must be in (0, 100], got {value}"
+            )
+        out.append(value)
+    return out
 
 
 def nonneg_float_list_type(raw):
@@ -1772,6 +1814,195 @@ def render_vad_gaps_csv(result):
         zip(d["gaps"], d["after_segment"], d["after_segment_end_s"]), start=1
     ):
         writer.writerow([i, after, end, gap])
+    return buf.getvalue().rstrip("\r\n")
+
+
+# Default percentiles for the gap-percentile surface: the median (the typical
+# pause), p90 (a high-but-not-extreme pause), and p99 (near the longest). A
+# percentile is unmoved by a single outlier the way min/mean/max are not, so it
+# is the stable signal for choosing the end-of-turn hangover.
+DEFAULT_GAP_PERCENTILES = (50.0, 90.0, 99.0)
+
+
+def vad_gap_percentiles(result, *, percentiles=DEFAULT_GAP_PERCENTILES):
+    """Compute robust order statistics of the inter-segment silence gaps (iter-338).
+
+    The min/mean/max aggregates :func:`vad_silence_gaps` reports are each
+    fragile to a single outlier pause: one unusually long between-paragraph
+    silence drags the max (and the mean) up, hiding where the bulk of the pauses
+    actually sit. A percentile is robust — p50 is the typical pause, p90 a
+    high-but-not-extreme pause, p99 near the longest — so the percentile spread
+    is the stable signal an operator reads to choose the end-of-turn hangover
+    (``--min-silence-ms`` / the live ``chat.vad.silence_duration``): set the
+    hangover comfortably below p50 to never merge a typical turn, and read p90 /
+    p99 to know how much of the long tail you are willing to wait through. This
+    is the order-statistic complement of :func:`vad_silence_gaps`.
+
+    Pure: anchors to :func:`vad_silence_gaps` for the gap list + aggregates (so
+    the totals always agree with ``gv vad-gaps``) and adds a ``percentiles``
+    list of ``{p, value_s}`` objects, one per requested percentile in the order
+    given. Each value is computed by linear interpolation between the two
+    closest ranks of the SORTED gaps (numpy's default ``"linear"`` method): for
+    ``n`` gaps and percentile ``p``, the fractional rank is
+    ``(p / 100) * (n - 1)`` and the value interpolates between the gaps at the
+    floor and ceil of that rank. Values round to 3 places, matching the sibling
+    gap surfaces. A single gap yields that gap for every percentile. A result
+    with fewer than 2 segments has no gaps, so ``percentiles`` is empty (no
+    distribution to summarise) and the aggregates are ``None`` — the same
+    distinction the other gap surfaces make. Raises :class:`ValueError` if
+    ``percentiles`` is empty or any entry is not in ``(0, 100]`` / is NaN.
+    """
+    pcts = list(percentiles)
+    if not pcts:
+        raise ValueError("percentiles must be a non-empty sequence")
+    for p in pcts:
+        if p != p:  # NaN is unordered.
+            raise ValueError("percentile must be a number, got nan")
+        if not (0.0 < p <= 100.0):
+            raise ValueError(f"percentile must be in (0, 100], got {p}")
+    d = vad_silence_gaps(result)
+    gaps = sorted(d["gaps"])
+    out = []
+    if gaps:
+        n = len(gaps)
+        for p in pcts:
+            # Fractional rank into the sorted gaps; linear interpolation between
+            # the two bracketing samples (the numpy "linear" / R-7 convention).
+            rank = (p / 100.0) * (n - 1)
+            lo = int(rank)
+            hi = min(lo + 1, n - 1)
+            frac = rank - lo
+            value = gaps[lo] + frac * (gaps[hi] - gaps[lo])
+            out.append({"p": p, "value_s": round(value, 3)})
+    return {
+        "num_segments": d["num_segments"],
+        "num_gaps": d["num_gaps"],
+        "min_gap_s": d["min_gap_s"],
+        "max_gap_s": d["max_gap_s"],
+        "mean_gap_s": d["mean_gap_s"],
+        "total_silence_s": d["total_silence_s"],
+        "percentiles": out,
+    }
+
+
+def _format_percentile_label(p):
+    """Render a percentile number compactly: ``50`` not ``50.0``, ``99.5`` kept.
+
+    The default percentiles (50/90/99) and most operator inputs are whole
+    numbers, so a ``p50`` label reads better than ``p50.0``; a fractional
+    percentile (``99.5``) keeps its decimals. Pure helper shared by the human
+    and CSV renderers so the two agree on the label spelling.
+    """
+    return f"{p:g}"
+
+
+def render_vad_gap_percentiles(result, *, percentiles=DEFAULT_GAP_PERCENTILES):
+    """Render the silence-gap percentiles as plain-text report lines (iter-338).
+
+    The human-readable face of :func:`vad_gap_percentiles`, the order-statistic
+    twin of :func:`render_vad_gaps`. ``result`` of ``None`` (segmenter
+    unavailable) yields the shared install hint. A result with fewer than 2
+    segments has no gaps, so it prints the same short explanatory line
+    :func:`render_vad_gaps` uses (no distribution to summarise). Otherwise it
+    prints the aggregate header (min/mean/max, total silence) then one line per
+    requested percentile (``pNN: value`` aligned), naming the actionable
+    ``--min-silence-ms`` knob on the median line — set the hangover below the
+    median to never merge a typical turn. Pure: returns a list of strings (no
+    I/O, no ANSI).
+    """
+    if result is None:
+        return [
+            "silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        ]
+    s = vad_gap_percentiles(result, percentiles=percentiles)
+    lines = [
+        f"silero VAD gap percentiles — {result.name}",
+        f"  segments:     {s['num_segments']}",
+        f"  gaps:         {s['num_gaps']} (pauses between consecutive speech regions)",
+    ]
+    if s["num_gaps"] == 0:
+        lines.append("  (fewer than 2 segments — no inter-segment pause to measure)")
+        return lines
+    lines.append(f"  min gap:      {s['min_gap_s']:.3f}s")
+    lines.append(f"  mean gap:     {s['mean_gap_s']:.3f}s")
+    lines.append(f"  max gap:      {s['max_gap_s']:.3f}s")
+    lines.append(f"  total silence:{s['total_silence_s']:8.3f}s")
+    for entry in s["percentiles"]:
+        label = f"p{_format_percentile_label(entry['p'])}"
+        suffix = (
+            "  (typical pause — keep --min-silence-ms below this to avoid "
+            "merging turns)"
+            if entry["p"] == 50.0
+            else ""
+        )
+        lines.append(f"  {label:<5} {entry['value_s']:7.3f}s{suffix}")
+    return lines
+
+
+def render_vad_gap_percentiles_json(result, *, percentiles=DEFAULT_GAP_PERCENTILES):
+    """Render the silence-gap percentiles as a JSON string (iter-338).
+
+    Machine-readable twin of :func:`render_vad_gap_percentiles`, mirroring the
+    degrade-to-``{"available": false}`` contract the other VAD JSON renderers
+    use. Carries the aggregate stats plus a ``percentiles`` list of
+    ``{p, value_s}`` objects (empty for a <2-segment result, the same JSON
+    spelling of "no distribution" the other gap surfaces use). Pure: built from
+    :func:`vad_gap_percentiles`, so it works on any ``SileroResult``-shaped
+    object.
+    """
+    if result is None:
+        return json.dumps(
+            {
+                "available": False,
+                "hint": (
+                    "install 'silero-vad' (pulls torch + torchaudio) to enable "
+                    "offline neural segmentation"
+                ),
+            },
+            indent=2,
+        )
+    s = vad_gap_percentiles(result, percentiles=percentiles)
+    payload = {
+        "available": True,
+        "name": result.name,
+        "num_segments": s["num_segments"],
+        "num_gaps": s["num_gaps"],
+        "min_gap_s": s["min_gap_s"],
+        "max_gap_s": s["max_gap_s"],
+        "mean_gap_s": s["mean_gap_s"],
+        "total_silence_s": s["total_silence_s"],
+        "percentiles": s["percentiles"],
+    }
+    return json.dumps(payload, indent=2)
+
+
+def render_vad_gap_percentiles_csv(result, *, percentiles=DEFAULT_GAP_PERCENTILES):
+    """Render the silence-gap percentiles as a per-percentile CSV table (iter-338).
+
+    The spreadsheet/plot-friendly twin of :func:`render_vad_gap_percentiles` /
+    :func:`render_vad_gap_percentiles_json`, completing the human / ``--json`` /
+    ``--csv`` trio every VAD-analysis surface carries. The natural CSV unit is
+    one row per requested percentile: ``percentile,value_s`` — the shape a
+    plotter wants (an empirical CDF) and a spreadsheet wants (one percentile per
+    line). The aggregate stats are derivable from the per-gap data so they are
+    NOT duplicated into the table, matching :func:`render_vad_gaps_csv`'s
+    reasoning. A result with fewer than 2 segments yields the header alone (a
+    valid empty-bodied table). ``result`` of ``None`` (segmenter unavailable)
+    yields a single ``# silero VAD unavailable: ...`` comment line. Pure: built
+    with the stdlib :mod:`csv` writer, trailing terminator stripped.
+    """
+    if result is None:
+        return (
+            "# silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        )
+    s = vad_gap_percentiles(result, percentiles=percentiles)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["percentile", "value_s"])
+    for entry in s["percentiles"]:
+        writer.writerow([_format_percentile_label(entry["p"]), entry["value_s"]])
     return buf.getvalue().rstrip("\r\n")
 
 
@@ -3706,6 +3937,64 @@ def cmd_vad_gaps(args, *, log=print, segmenter=None, availability=None):
             log(line)
 
 
+def cmd_vad_gap_percentiles(args, *, log=print, segmenter=None, availability=None):
+    """Segment one WAV offline and report the inter-segment silence-gap PERCENTILES.
+
+    iter-338's order-statistic complement of :func:`cmd_vad_gaps`. Where ``gv
+    vad-gaps`` reports min/mean/max — each fragile to a single outlier pause —
+    ``gv vad-gap-percentiles recording.wav`` reports robust percentiles
+    (p50/p90/p99 by default, ``--percentiles`` to choose) of the pause
+    distribution. The median is the typical pause; set the end-of-turn hangover
+    (``--min-silence-ms`` / the live ``chat.vad.silence_duration``) comfortably
+    below it to never merge a typical turn, and read p90 / p99 to size the long
+    tail you are willing to wait through.
+
+    Same injected-dependency contract as :func:`cmd_vad_gaps`: ``segmenter`` /
+    ``availability`` default to the real :mod:`vad.silero` functions, imported
+    lazily so the parser stays torch-free. The segmenter knobs are shared with
+    ``gv vad`` so the gaps are measured against the same segmentation. ``--csv``
+    is mutually exclusive with ``--json``; when ``silero-vad`` is absent the
+    handler prints the install hint and returns, never crashing.
+    """
+    if segmenter is None or availability is None:
+        from vad.silero import segment_recording, silero_available
+
+        segmenter = segment_recording if segmenter is None else segmenter
+        availability = silero_available if availability is None else availability
+
+    as_json = getattr(args, "json", False)
+    as_csv = getattr(args, "csv", False)
+    percentiles = args.percentiles
+
+    if not availability():
+        if as_json:
+            log(render_vad_gap_percentiles_json(None, percentiles=percentiles))
+        elif as_csv:
+            log(render_vad_gap_percentiles_csv(None, percentiles=percentiles))
+        else:
+            for line in render_vad_gap_percentiles(None, percentiles=percentiles):
+                log(line)
+        return
+
+    from vad.silero import SileroParams
+
+    params = SileroParams(
+        threshold=args.threshold,
+        min_speech_ms=args.min_speech_ms,
+        min_silence_ms=args.min_silence_ms,
+        speech_pad_ms=args.speech_pad_ms,
+        max_speech_s=args.max_speech_s,
+    )
+    result = segmenter(args.wav, params=params)
+    if as_json:
+        log(render_vad_gap_percentiles_json(result, percentiles=percentiles))
+    elif as_csv:
+        log(render_vad_gap_percentiles_csv(result, percentiles=percentiles))
+    else:
+        for line in render_vad_gap_percentiles(result, percentiles=percentiles):
+            log(line)
+
+
 def cmd_vad_gap_histogram(args, *, log=print, segmenter=None, availability=None):
     """Segment one WAV offline and report the inter-segment silence-gap HISTOGRAM.
 
@@ -4469,6 +4758,7 @@ DEFAULT_HANDLERS = {
     "calibrate-base-wpm": cmd_calibrate_base_wpm,
     "vad": cmd_vad,
     "vad-gaps": cmd_vad_gaps,
+    "vad-gap-percentiles": cmd_vad_gap_percentiles,
     "vad-gap-hist": cmd_vad_gap_histogram,
     "vad-gap-sweep": cmd_vad_gap_sweep,
     "vad-diff": cmd_vad_diff,
@@ -4884,6 +5174,82 @@ def build_parser():
         help="Emit a flat index,after_segment,after_segment_end_s,gap_s CSV "
         "table (one row per gap) for spreadsheets/plots; mutually exclusive "
         "with --json",
+    )
+
+    # gv vad-gap-percentiles — segment one WAV and report ROBUST percentiles of
+    # the inter-segment silence gaps (iter-338). The order-statistic complement
+    # of vad-gaps: where vad-gaps reports min/mean/max (each fragile to a single
+    # outlier pause), vad-gap-percentiles reports p50/p90/p99 (--percentiles to
+    # choose) — the median is the typical pause, so set the end-of-turn hangover
+    # (--min-silence-ms) below it to never merge a typical turn. Shares all
+    # segmenter knobs with `gv vad`.
+    vad_gap_pct = sub.add_parser(
+        "vad-gap-percentiles",
+        help="Offline Silero VAD — segment a WAV and report robust percentiles "
+        "(p50/p90/p99) of the silence gaps between speech regions "
+        "(outlier-robust pause stats, unlike min/mean/max)",
+    )
+    vad_gap_pct.add_argument(
+        "wav",
+        help="Path to a 16-bit PCM WAV file to segment",
+    )
+    vad_gap_pct.add_argument(
+        "--percentiles",
+        type=percentile_list_type,
+        default=list(DEFAULT_GAP_PERCENTILES),
+        help="Comma-separated percentiles in (0, 100] to report, e.g. "
+        "'50,90,99' (default: 50,90,99)",
+    )
+    vad_gap_pct.add_argument(
+        "--threshold",
+        type=unit_interval_type,
+        default=vad_threshold_default,
+        help=f"P(speech) gate in [0, 1] (default: {vad_threshold_default})",
+    )
+    vad_gap_pct.add_argument(
+        "--min-speech-ms",
+        type=nonneg_float_type,
+        default=vad_min_speech_default,
+        dest="min_speech_ms",
+        help="Drop speech regions shorter than this, in ms "
+        f"(default: {vad_min_speech_default})",
+    )
+    vad_gap_pct.add_argument(
+        "--min-silence-ms",
+        type=nonneg_float_type,
+        default=vad_min_silence_default,
+        dest="min_silence_ms",
+        help="Trailing silence before a region ends, in ms — matches the "
+        f"pipecat stop_secs=0.8 live default (default: {vad_min_silence_default})",
+    )
+    vad_gap_pct.add_argument(
+        "--speech-pad-ms",
+        type=nonneg_float_type,
+        default=vad_speech_pad_default,
+        dest="speech_pad_ms",
+        help="Symmetric padding added to each region, in ms "
+        f"(default: {vad_speech_pad_default})",
+    )
+    vad_gap_pct.add_argument(
+        "--max-speech-s",
+        type=max_speech_type,
+        default=vad_max_speech_default,
+        dest="max_speech_s",
+        help="Force-split regions longer than this, in seconds; 'inf'/'none' "
+        "never splits (default: inf)",
+    )
+    vad_gap_pct_fmt = vad_gap_pct.add_mutually_exclusive_group()
+    vad_gap_pct_fmt.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON (aggregate stats + per-percentile "
+        "list) instead of the human-readable report",
+    )
+    vad_gap_pct_fmt.add_argument(
+        "--csv",
+        action="store_true",
+        help="Emit a flat percentile,value_s CSV table (one row per percentile) "
+        "for spreadsheets/plots; mutually exclusive with --json",
     )
 
     # gv vad-gap-hist — segment one WAV and HISTOGRAM the inter-segment silence

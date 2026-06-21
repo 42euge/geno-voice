@@ -140,6 +140,38 @@ alone. Same degrade-to-install-hint contract as `gv vad` when `silero-vad` is
 absent. `tests/unit/test_gv_vad_gaps.py` covers the core, the three renderers,
 and the handler without torch.
 
+### `gv vad-gap-percentiles` — robust pause percentiles (iter-338)
+
+`gv vad-gaps` reports min/mean/max — but each is fragile to a single outlier
+pause: one unusually long between-paragraph silence drags the max (and the mean)
+up, hiding where the bulk of the pauses actually sit. `gv vad-gap-percentiles`
+reports **percentiles** (`--percentiles`, default `50,90,99`) of the pause
+distribution instead, and a percentile is unmoved by a lone outlier. The
+**median** (p50) is the typical pause — set the end-of-turn hangover
+(`--min-silence-ms` / the live `chat.vad.silence_duration`) comfortably below it
+to never merge a typical turn — and p90 / p99 size the long tail you are willing
+to wait through.
+
+```
+gv vad-gap-percentiles recording.wav                       # p50/p90/p99 + aggregates
+gv vad-gap-percentiles recording.wav --percentiles 25,50,75,95 # custom percentiles
+gv vad-gap-percentiles recording.wav --threshold 0.7       # percentiles under a stricter gate
+gv vad-gap-percentiles recording.wav --json                # aggregate stats + per-percentile list
+gv vad-gap-percentiles recording.wav --csv                 # one row per percentile for a spreadsheet
+```
+
+It shares all the segmenter knobs with `gv vad` (so the gaps are measured
+against the same segmentation) and carries the full human / `--json` / `--csv`
+trio. The pure core `vad_gap_percentiles` anchors to `vad_silence_gaps` for the
+gap list and aggregates (so the totals always agree with `gv vad-gaps`), then
+computes each percentile by linear interpolation between the two closest ranks of
+the sorted gaps (numpy's default `"linear"` / R-7 convention). A recording with
+fewer than 2 segments has no inter-segment pause: the human report says so, the
+JSON emits an empty `percentiles` list, and the CSV emits the header alone. Same
+degrade-to-install-hint contract as `gv vad` when `silero-vad` is absent.
+`tests/unit/test_gv_vad_gap_percentiles.py` covers the core, the three renderers,
+and the handler without torch.
+
 ### `gv vad-gap-hist` — the pause-length distribution shape (iter-336)
 
 `gv vad-gaps` collapses the silence distribution to three numbers (min/mean/max)
