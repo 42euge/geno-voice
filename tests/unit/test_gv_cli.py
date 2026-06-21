@@ -411,6 +411,7 @@ def test_dispatch_default_handlers_are_the_real_cmds():
         "vad-sweep": gv.cmd_vad_sweep,
         "vad-grid": gv.cmd_vad_grid,
         "vad-gap-grid": gv.cmd_vad_gap_grid,
+        "vad-gap-peak-grid": gv.cmd_vad_gap_peak_grid,
     }
 
 

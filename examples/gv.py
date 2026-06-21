@@ -4624,6 +4624,281 @@ def render_vad_gap_peak_sweep_csv(values, results, *, name, cuts_ms=DEFAULT_GAP_
     return buf.getvalue().rstrip("\r\n")
 
 
+def vad_gap_peak_grid(
+    row_values,
+    col_values,
+    results,
+    *,
+    cuts_ms=DEFAULT_GAP_CDF_CUTS_MS,
+    row_axis="threshold",
+    col_axis="min_silence_ms",
+):
+    """Pair each (row, col) axis-value cell with its COSTLIEST cost-curve band (iter-365).
+
+    The 2-D analogue of :func:`vad_gap_peak_sweep`, and the peak-side twin of
+    :func:`vad_gap_grid`. Where :func:`vad_gap_grid` tabulates the silence-gap
+    distribution (min/mean/max gap) across the cartesian product of TWO knobs,
+    this surface tabulates the iter-350 cost PEAK per cell — for each (row, col)
+    pair it runs :func:`vad_gap_peak` (single peak, ``top_n=1``) over that cell's
+    segmentation and records the steepest band: its ms range, the pauses it
+    merges, and its marginal rate per +100 ms of hangover. ``vad-gap-grid`` is to
+    ``vad-gap-sweep`` what this is to ``vad-gap-peak-sweep``: same row-major
+    flattening, but the headline column is now ``peak_rate_per_100ms`` (the cost
+    of pushing the hangover through the densest pause cluster) read across two
+    knobs at once instead of one 1-D peak sweep at a time. Where the gap grid
+    watches the cheapest pause floor move in two dimensions, this watches the
+    costliest cluster move — the cell where NOT to push the hangover through.
+
+    ``results`` is the flattened cell list in ROW-MAJOR order (row 0's whole row
+    of columns first, then row 1's, …), length
+    ``len(row_values) * len(col_values)`` — exactly the order
+    :func:`vad_segmentation_grid` / :func:`vad_gap_grid` consume. ``cuts_ms`` (the
+    candidate hangover cuts defining the cost bands) is shared across every cell
+    so the bands are scanned on the same axis everywhere.
+
+    Pure: returns a flat list of cell dicts ``{row_axis, col_axis,
+    "num_segments", "num_gaps", "peak_found", "peak_from_ms", "peak_to_ms",
+    "peak_width_ms", "peak_merged_added", "peak_rate_per_100ms"}`` in that same
+    row-major order. The peak fields are ``None`` / ``False`` for a cell whose
+    segmentation names no cost peak (a <2-segment result with no gaps, or an
+    all-valley range with no pause cluster), exactly the "no structure to name"
+    spelling :func:`vad_gap_peak` returns and :func:`vad_gap_peak_sweep` carries
+    per row. No I/O, no torch import, so it is testable in isolation. Raises
+    :class:`ValueError` if ``results`` length differs from the row×col product
+    (or if ``cuts_ms`` is empty / negative, delegated to :func:`vad_gap_peak`).
+    """
+    expected = len(row_values) * len(col_values)
+    if len(results) != expected:
+        raise ValueError(
+            f"results ({len(results)}) must equal row_values × col_values "
+            f"({len(row_values)} × {len(col_values)} = {expected})"
+        )
+    cells = []
+    i = 0
+    for rv in row_values:
+        for cv in col_values:
+            r = results[i]
+            i += 1
+            p = vad_gap_peak(r, cuts_ms=cuts_ms)
+            cells.append(
+                {
+                    row_axis: rv,
+                    col_axis: cv,
+                    "num_segments": p["num_segments"],
+                    "num_gaps": p["num_gaps"],
+                    "peak_found": p["peak_found"],
+                    "peak_from_ms": p["peak_from_ms"],
+                    "peak_to_ms": p["peak_to_ms"],
+                    "peak_width_ms": p["peak_width_ms"],
+                    "peak_merged_added": p["peak_merged_added"],
+                    "peak_rate_per_100ms": p["peak_rate_per_100ms"],
+                }
+            )
+    return cells
+
+
+def render_vad_gap_peak_grid(
+    row_values,
+    col_values,
+    results,
+    *,
+    name,
+    cuts_ms=DEFAULT_GAP_CDF_CUTS_MS,
+    row_axis="threshold",
+    col_axis="min_silence_ms",
+):
+    """Render a 2-D cost-peak grid as a plain-text table (iter-365).
+
+    The human-readable twin of :func:`render_vad_gap_peak_grid_json`, the
+    peak-side analogue of :func:`render_vad_gap_grid` and the 2-D analogue of
+    :func:`render_vad_gap_peak_sweep`: a FLAT one-row-per-cell table (not a
+    matrix) so each cell's two swept values plus the costliest band's measures
+    stay unambiguous. ``name`` is the WAV being swept; ``row_axis`` / ``col_axis``
+    name the two swept dimensions (set the two leading column labels and value
+    formats). Any ``None`` in ``results`` (segmenter unavailable) yields the
+    shared install hint. Pure: returns a list of strings.
+
+    Each row prints the two swept values, the segment count, the gap count, and
+    the costliest band's ms range / merged-pauses / rate per +100 ms; a cell that
+    names no cost peak (no gaps, or an all-valley range) prints ``-`` in the peak
+    columns (distinct from a band with a ``0.000`` rate, which never happens — a
+    named peak always has rate > 0). Like the gap grid there is no ``best:`` pick
+    block — the surface's signal is where the cost cluster sits, not a
+    segment-count target.
+    """
+    if any(r is None for r in results):
+        return [
+            "silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        ]
+    cells = vad_gap_peak_grid(
+        row_values, col_values, results, cuts_ms=cuts_ms,
+        row_axis=row_axis, col_axis=col_axis,
+    )
+    row_label = _SWEEP_AXIS_LABEL.get(row_axis, row_axis)
+    col_label = _SWEEP_AXIS_LABEL.get(col_axis, col_axis)
+    lines = [
+        f"silero VAD gap cost-peak grid — {name} ({row_label} × {col_label})",
+        f"  {row_label:>11}  {col_label:>11}  segments  gaps  "
+        "peak_band_ms  merged  rate/100ms",
+    ]
+    for cell in cells:
+        if not cell["peak_found"]:
+            peak_cols = f"{'-':>12}  {'-':>6}  {'-':>10}"
+        else:
+            band = (
+                f"{_format_cut_label(cell['peak_from_ms'])}-"
+                f"{_format_cut_label(cell['peak_to_ms'])}"
+            )
+            peak_cols = (
+                f"{band:>12}  {cell['peak_merged_added']:>6}  "
+                f"{cell['peak_rate_per_100ms']:>10.3f}"
+            )
+        lines.append(
+            f"  {_format_sweep_axis_value(row_axis, cell[row_axis]):>11}  "
+            f"{_format_sweep_axis_value(col_axis, cell[col_axis]):>11}  "
+            f"{cell['num_segments']:>8}  {cell['num_gaps']:>4}  {peak_cols}"
+        )
+    return lines
+
+
+def render_vad_gap_peak_grid_json(
+    row_values,
+    col_values,
+    results,
+    *,
+    name,
+    cuts_ms=DEFAULT_GAP_CDF_CUTS_MS,
+    row_axis="threshold",
+    col_axis="min_silence_ms",
+):
+    """Render a 2-D cost-peak grid as a JSON string (iter-365).
+
+    Machine-readable twin of :func:`render_vad_gap_peak_grid`, so the grid can
+    feed a plotting/tuning script. The payload carries both swept axis names
+    (``row_axis`` / ``col_axis``) so a consumer knows which two dimensions the
+    cells vary (the cells are keyed by those same names), the ``cuts_ms`` axis the
+    bands were scanned over, and a ``grid`` list of per-cell rows, each with
+    ``num_segments`` / ``num_gaps`` / ``peak_found`` / ``peak_from_ms`` /
+    ``peak_to_ms`` / ``peak_width_ms`` / ``peak_merged_added`` /
+    ``peak_rate_per_100ms`` (the peak fields ``null`` / ``false`` for a cell that
+    names no cost peak, the same JSON spelling :func:`render_vad_gap_peak_sweep_json`
+    uses). Any ``None`` in ``results`` → ``{"available": false}`` + install hint,
+    mirroring :func:`render_vad_gap_grid_json`. Like the gap grid there is no
+    ``target`` / ``best`` pick. Pure: returns a single JSON string.
+    """
+    if any(r is None for r in results):
+        return json.dumps(
+            {
+                "available": False,
+                "hint": (
+                    "install 'silero-vad' (pulls torch + torchaudio) to enable "
+                    "offline neural segmentation"
+                ),
+            },
+            indent=2,
+        )
+    cells = vad_gap_peak_grid(
+        row_values, col_values, results, cuts_ms=cuts_ms,
+        row_axis=row_axis, col_axis=col_axis,
+    )
+    payload = {
+        "available": True,
+        "name": name,
+        "row_axis": row_axis,
+        "col_axis": col_axis,
+        "cuts_ms": list(cuts_ms),
+        "grid": cells,
+    }
+    return json.dumps(payload, indent=2)
+
+
+def render_vad_gap_peak_grid_csv(
+    row_values,
+    col_values,
+    results,
+    *,
+    name,
+    cuts_ms=DEFAULT_GAP_CDF_CUTS_MS,
+    row_axis="threshold",
+    col_axis="min_silence_ms",
+):
+    """Render a 2-D cost-peak grid as CSV text (no trailing newline) (iter-365).
+
+    The spreadsheet/plot-friendly twin of :func:`render_vad_gap_peak_grid_json`:
+    where JSON nests the cells under a ``grid`` key, CSV emits a flat
+    ``<row_axis>,<col_axis>,num_segments,num_gaps,peak_found,peak_from_ms,
+    peak_to_ms,peak_width_ms,peak_merged_added,peak_rate_per_100ms`` table (one
+    row per cell, in row-major order) that pivots straight into a spreadsheet or a
+    plotting script. The first two column headers are the swept axis names so the
+    grid is self-describing. ``name`` is accepted for signature parity with the
+    other ``render_vad_gap_peak_grid_*`` twins but is not part of the tabular body
+    (a CSV is a pure data grid), matching :func:`render_vad_gap_peak_sweep_csv`. A
+    cell that names no cost peak emits ``peak_found`` ``False`` and empty cells in
+    the peak-measure columns (the CSV spelling of JSON ``null`` / the human
+    table's ``-``). Any ``None`` in ``results`` (segmenter unavailable) yields a
+    single ``# silero VAD unavailable: ...`` comment line. Pure: returns a single
+    string built with the stdlib :mod:`csv` writer, trailing terminator stripped.
+    """
+    if any(r is None for r in results):
+        return (
+            "# silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        )
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(
+        [
+            row_axis,
+            col_axis,
+            "num_segments",
+            "num_gaps",
+            "peak_found",
+            "peak_from_ms",
+            "peak_to_ms",
+            "peak_width_ms",
+            "peak_merged_added",
+            "peak_rate_per_100ms",
+        ]
+    )
+    for cell in vad_gap_peak_grid(
+        row_values, col_values, results, cuts_ms=cuts_ms,
+        row_axis=row_axis, col_axis=col_axis,
+    ):
+        if cell["peak_found"]:
+            writer.writerow(
+                [
+                    cell[row_axis],
+                    cell[col_axis],
+                    cell["num_segments"],
+                    cell["num_gaps"],
+                    cell["peak_found"],
+                    _format_cut_label(cell["peak_from_ms"]),
+                    _format_cut_label(cell["peak_to_ms"]),
+                    _format_cut_label(cell["peak_width_ms"]),
+                    cell["peak_merged_added"],
+                    cell["peak_rate_per_100ms"],
+                ]
+            )
+        else:
+            # None → "" (empty cell), the CSV spelling of JSON null / human "-".
+            writer.writerow(
+                [
+                    cell[row_axis],
+                    cell[col_axis],
+                    cell["num_segments"],
+                    cell["num_gaps"],
+                    cell["peak_found"],
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                ]
+            )
+    return buf.getvalue().rstrip("\r\n")
+
+
 def vad_gap_grid(
     row_values, col_values, results, *, row_axis="threshold", col_axis="min_silence_ms"
 ):
@@ -7459,6 +7734,149 @@ def cmd_vad_gap_grid(args, *, log=print, segmenter=None, availability=None):
             log(line)
 
 
+def cmd_vad_gap_peak_grid(args, *, log=print, segmenter=None, availability=None):
+    """Segment one WAV across a 2-D knob grid and tabulate the COSTLIEST cost band.
+
+    iter-365's peak-side analogue of :func:`cmd_vad_gap_grid`, and the 2-D
+    analogue of :func:`cmd_vad_gap_peak_sweep`. Where ``gv vad-gap-grid``
+    tabulates the inter-segment silence-gap distribution (min/mean/max gap) per
+    cell of a gate × column-knob grid, ``gv vad-gap-peak-grid`` tabulates the
+    iter-350 cost PEAK per cell — for each (row, col) it names the steepest
+    cost-curve band (the densest pause cluster, the most expensive place to raise
+    the end-of-turn hangover) and reports its ms range, merged pauses, and rate
+    per +100 ms. The headline is how the peak rate MOVES across two knobs at once:
+    where ``vad-gap-grid`` watches the cheapest pause floor move in two dimensions,
+    this watches the costliest cluster move — the cell where NOT to push the
+    hangover through. It is to ``vad-gap-peak-sweep`` what ``vad-gap-grid`` is to
+    ``vad-gap-sweep``.
+
+    Mirrors :func:`cmd_vad_gap_grid`'s axis layout: the ROW axis is always the
+    P(speech) gate (``--thresholds``); the COLUMN axis is ``--min-silences`` (the
+    trailing-silence hangover, the default), ``--min-speeches`` (the
+    minimum-speech floor), ``--speech-pads`` (the symmetric region padding), or
+    ``--max-speeches`` (the force-split ceiling, in SECONDS) — mutually exclusive,
+    exactly one column axis per run. Whichever knob is NOT the column axis is held
+    fixed at its scalar; every other knob is shared across all cells. ``--cuts-ms``
+    (the candidate hangover cuts defining the cost bands) is shared across every
+    cell so the bands are scanned on the same axis everywhere. Like
+    ``vad-gap-grid`` there is no ``--target`` pick block (the pick scores on
+    segment count, which the peak surface does not headline).
+
+    Same injected-dependency contract as :func:`cmd_vad_gap_grid`: ``segmenter`` /
+    ``availability`` default to the real :mod:`vad.silero` functions, imported
+    lazily so the parser stays torch-free. ``--csv`` is mutually exclusive with
+    ``--json``; when ``silero-vad`` is absent the handler prints the install hint
+    and returns, never crashing.
+    """
+    if segmenter is None or availability is None:
+        from vad.silero import segment_recording, silero_available
+
+        segmenter = segment_recording if segmenter is None else segmenter
+        availability = silero_available if availability is None else availability
+
+    as_json = getattr(args, "json", False)
+    as_csv = getattr(args, "csv", False)
+    cuts_ms = args.cuts_ms
+
+    # Rows are always the gate; the column axis is whichever list was passed
+    # (--min-speeches → floor; --speech-pads → region padding; --max-speeches →
+    # force-split ceiling, seconds; else --min-silences → hangover, the
+    # default). The parser's mutex guarantees at most one column list is set.
+    row_axis = "threshold"
+    row_values = args.thresholds
+    min_speeches = getattr(args, "min_speeches", None)
+    speech_pads = getattr(args, "speech_pads", None)
+    max_speeches = getattr(args, "max_speeches", None)
+    if min_speeches is not None:
+        col_axis = "min_speech_ms"
+        col_values = min_speeches
+    elif speech_pads is not None:
+        col_axis = "speech_pad_ms"
+        col_values = speech_pads
+    elif max_speeches is not None:
+        col_axis = "max_speech_s"
+        col_values = max_speeches
+    else:
+        col_axis = "min_silence_ms"
+        col_values = args.min_silences
+
+    if not availability():
+        unavailable = [None]
+        if as_json:
+            log(
+                render_vad_gap_peak_grid_json(
+                    [], [], unavailable, name=args.wav, cuts_ms=cuts_ms,
+                    row_axis=row_axis, col_axis=col_axis,
+                )
+            )
+        elif as_csv:
+            log(
+                render_vad_gap_peak_grid_csv(
+                    [], [], unavailable, name=args.wav, cuts_ms=cuts_ms,
+                    row_axis=row_axis, col_axis=col_axis,
+                )
+            )
+        else:
+            for line in render_vad_gap_peak_grid(
+                [], [], unavailable, name=args.wav, cuts_ms=cuts_ms,
+                row_axis=row_axis, col_axis=col_axis,
+            ):
+                log(line)
+        return
+
+    from vad.silero import SileroParams
+
+    def _seg(row_value, col_value):
+        # The two grid axes take (row_value, col_value); every other dimension
+        # is held at its scalar knob. Whichever ms knob (or the seconds ceiling)
+        # is NOT the column axis is held fixed at its scalar.
+        min_silence_ms = (
+            col_value if col_axis == "min_silence_ms" else args.min_silence_ms
+        )
+        min_speech_ms = (
+            col_value if col_axis == "min_speech_ms" else args.min_speech_ms
+        )
+        speech_pad_ms = (
+            col_value if col_axis == "speech_pad_ms" else args.speech_pad_ms
+        )
+        max_speech_s = (
+            col_value if col_axis == "max_speech_s" else args.max_speech_s
+        )
+        params = SileroParams(
+            threshold=row_value,
+            min_speech_ms=min_speech_ms,
+            min_silence_ms=min_silence_ms,
+            speech_pad_ms=speech_pad_ms,
+            max_speech_s=max_speech_s,
+        )
+        return segmenter(args.wav, params=params)
+
+    # Row-major: row 0's whole row of columns first, then row 1's, … — the same
+    # order vad_gap_peak_grid flattens into.
+    results = [_seg(rv, cv) for rv in row_values for cv in col_values]
+    name = results[0].name if results else args.wav
+    if as_json:
+        log(
+            render_vad_gap_peak_grid_json(
+                row_values, col_values, results, name=name, cuts_ms=cuts_ms,
+                row_axis=row_axis, col_axis=col_axis,
+            )
+        )
+    elif as_csv:
+        log(
+            render_vad_gap_peak_grid_csv(
+                row_values, col_values, results, name=name, cuts_ms=cuts_ms,
+                row_axis=row_axis, col_axis=col_axis,
+            )
+        )
+    else:
+        for line in render_vad_gap_peak_grid(
+            row_values, col_values, results, name=name, cuts_ms=cuts_ms,
+            row_axis=row_axis, col_axis=col_axis,
+        ):
+            log(line)
+
+
 def cmd_bench(args):
     # bench is a legacy argv-driven entrypoint: it parses its own sys.argv
     # rather than taking kwargs, so we rebuild argv here. Only forward
@@ -7512,6 +7930,7 @@ DEFAULT_HANDLERS = {
     "vad-sweep": cmd_vad_sweep,
     "vad-grid": cmd_vad_grid,
     "vad-gap-grid": cmd_vad_gap_grid,
+    "vad-gap-peak-grid": cmd_vad_gap_peak_grid,
 }
 
 # Seed mirror tunables, mirrored as the CLI defaults so the simulator's
@@ -9463,6 +9882,148 @@ def build_parser():
         help="Emit a flat <row_axis>,<col_axis>,num_segments,num_gaps,min_gap_s,"
         "mean_gap_s,max_gap_s,total_silence_s CSV table for spreadsheets/plots "
         "(mutually exclusive with --json)",
+    )
+
+    # gv vad-gap-peak-grid — segment one WAV across a 2-D knob grid and tabulate
+    # the COSTLIEST cost-curve band per cell (iter-365). The peak-side analogue
+    # of vad-gap-grid (and the 2-D analogue of vad-gap-peak-sweep): rows are
+    # always the P(speech) gate (--thresholds); the column axis is the
+    # trailing-silence hangover (--min-silences, default, ms), the minimum-speech
+    # floor (--min-speeches, ms), the region padding (--speech-pads, ms), or the
+    # force-split ceiling (--max-speeches, SECONDS), mutually exclusive. Each cell
+    # names the steepest band (densest pause cluster) so an operator can read
+    # where the cost of raising --min-silence-ms through it MOVES across two knobs
+    # at once. Shares the --cuts-ms cost-band axis with vad-gap-peak(-sweep). No
+    # --target pick block (the pick scores on segment count, which the peak
+    # surface does not headline).
+    vad_gap_peak_grid = sub.add_parser(
+        "vad-gap-peak-grid",
+        help="Offline Silero VAD — segment a WAV across a 2-D grid (gate "
+        "--thresholds × a column axis: --min-silences hangover, --min-speeches "
+        "floor, --speech-pads region padding (ms), or --max-speeches force-split "
+        "ceiling (seconds)) and tabulate the costliest cost-curve band per cell "
+        "(the densest pause cluster — watch how the cost of raising "
+        "--min-silence-ms through it moves in two dimensions)",
+    )
+    vad_gap_peak_grid.add_argument(
+        "wav",
+        help="Path to a 16-bit PCM WAV file to segment at each grid cell",
+    )
+    vad_gap_peak_grid.add_argument(
+        "--thresholds",
+        type=unit_interval_list_type,
+        default=[0.3, 0.5, 0.7, 0.9],
+        help="Comma-separated P(speech) gates in [0, 1] — the grid ROW axis "
+        "(default: 0.3,0.5,0.7,0.9)",
+    )
+    # The column axis: --min-silences (default) OR --min-speeches OR
+    # --speech-pads OR --max-speeches, never more than one. The default list
+    # lives on --min-silences so a bare `vad-gap-peak-grid rec.wav` sweeps gate ×
+    # hangover; a group default isn't "provided", so the mutex only fires when
+    # two are passed explicitly. Mirrors vad-gap-grid's column mutex exactly.
+    vad_gap_peak_grid_col = vad_gap_peak_grid.add_mutually_exclusive_group()
+    vad_gap_peak_grid_col.add_argument(
+        "--min-silences",
+        type=nonneg_float_list_type,
+        default=[400.0, 600.0, 800.0, 1000.0],
+        dest="min_silences",
+        help="Comma-separated trailing-silence hangovers in ms — the grid "
+        "COLUMN axis (default: 400,600,800,1000; mutually exclusive with "
+        "--min-speeches / --speech-pads / --max-speeches)",
+    )
+    vad_gap_peak_grid_col.add_argument(
+        "--min-speeches",
+        type=nonneg_float_list_type,
+        default=None,
+        dest="min_speeches",
+        help="Comma-separated minimum-speech floors in ms to use as the grid "
+        "COLUMN axis instead of the hangover (e.g. 50,100,200,400); the "
+        "non-column knob is held at its scalar (mutually exclusive with "
+        "--min-silences / --speech-pads / --max-speeches)",
+    )
+    vad_gap_peak_grid_col.add_argument(
+        "--speech-pads",
+        type=nonneg_float_list_type,
+        default=None,
+        dest="speech_pads",
+        help="Comma-separated symmetric region paddings in ms to use as the "
+        "grid COLUMN axis instead of the hangover (e.g. 0,20,40,80); the "
+        "non-column knob is held at its scalar (mutually exclusive with "
+        "--min-silences / --min-speeches / --max-speeches)",
+    )
+    vad_gap_peak_grid_col.add_argument(
+        "--max-speeches",
+        type=max_speech_list_type,
+        default=None,
+        dest="max_speeches",
+        help="Comma-separated force-split ceilings in SECONDS to use as the "
+        "grid COLUMN axis instead of the hangover (e.g. 5,10,20,inf); 'inf'/"
+        "'none'/'off' never splits, so include it for the no-cap baseline; the "
+        "non-column knob is held at its scalar (mutually exclusive with "
+        "--min-silences / --min-speeches / --speech-pads)",
+    )
+    vad_gap_peak_grid.add_argument(
+        "--cuts-ms",
+        type=cut_ms_list_type,
+        default=list(DEFAULT_GAP_CDF_CUTS_MS),
+        dest="cuts_ms",
+        help="Comma-separated candidate hangover cuts in ms defining the cost "
+        "bands scanned for the peak at each cell, e.g. '200,400,800,1600' "
+        "(sorted + de-duplicated; default: 200,400,800,1600)",
+    )
+    vad_gap_peak_grid.add_argument(
+        "--min-speech-ms",
+        type=nonneg_float_type,
+        default=vad_min_speech_default,
+        dest="min_speech_ms",
+        help="Drop speech regions shorter than this, in ms — held fixed across "
+        "all cells when the column axis is --min-silences/--speech-pads/"
+        "--max-speeches; ignored when sweeping --min-speeches (default: "
+        f"{vad_min_speech_default})",
+    )
+    vad_gap_peak_grid.add_argument(
+        "--min-silence-ms",
+        type=nonneg_float_type,
+        default=vad_min_silence_default,
+        dest="min_silence_ms",
+        help="Trailing silence before a region ends, in ms — held fixed across "
+        "all cells when the column axis is --min-speeches/--speech-pads/"
+        "--max-speeches; ignored when sweeping --min-silences (default: "
+        f"{vad_min_silence_default})",
+    )
+    vad_gap_peak_grid.add_argument(
+        "--speech-pad-ms",
+        type=nonneg_float_type,
+        default=vad_speech_pad_default,
+        dest="speech_pad_ms",
+        help="Symmetric padding added to each region, in ms — held fixed across "
+        "all cells when the column axis is --min-silences/--min-speeches/"
+        "--max-speeches; ignored when sweeping --speech-pads (default: "
+        f"{vad_speech_pad_default})",
+    )
+    vad_gap_peak_grid.add_argument(
+        "--max-speech-s",
+        type=max_speech_type,
+        default=vad_max_speech_default,
+        dest="max_speech_s",
+        help="Force-split regions longer than this, in seconds — held fixed "
+        "across all cells when the column axis is --min-silences/--min-speeches/"
+        "--speech-pads; ignored when sweeping --max-speeches; 'inf'/'none' "
+        "never splits (default: inf)",
+    )
+    vad_gap_peak_grid_fmt = vad_gap_peak_grid.add_mutually_exclusive_group()
+    vad_gap_peak_grid_fmt.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON instead of the human-readable table",
+    )
+    vad_gap_peak_grid_fmt.add_argument(
+        "--csv",
+        action="store_true",
+        help="Emit a flat <row_axis>,<col_axis>,num_segments,num_gaps,peak_found,"
+        "peak_from_ms,peak_to_ms,peak_width_ms,peak_merged_added,"
+        "peak_rate_per_100ms CSV table for spreadsheets/plots (mutually "
+        "exclusive with --json)",
     )
 
     return parser
