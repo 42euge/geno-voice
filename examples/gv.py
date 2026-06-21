@@ -6279,15 +6279,19 @@ def cmd_vad_gap_peak(args, *, log=print, segmenter=None, availability=None):
     min_rate = getattr(args, "min_rate", 0.0)
     min_rate_pct = getattr(args, "min_rate_pct", None)
     show_rate_dist = getattr(args, "show_rate_dist", False)
+    rate_pcts = getattr(args, "rate_pcts", DEFAULT_BAND_RATE_PCTS)
     kw = dict(cuts_ms=cuts_ms, top_n=top_n, min_rate=min_rate, min_rate_pct=min_rate_pct)
     # iter-358: --show-rate-dist gates ONLY the human face (the JSON always carries
     # band_rate_dist for machine consumers; the CSV's verdict-row schema has no
     # place for the distribution and is unchanged).
-    human_kw = dict(kw, show_rate_dist=show_rate_dist)
+    # iter-359: --rate-pcts drives the band_rate_dist percentile set for the human
+    # AND json faces; the CSV face has no distribution columns so it never sees it.
+    human_kw = dict(kw, show_rate_dist=show_rate_dist, rate_pcts=rate_pcts)
+    json_kw = dict(kw, rate_pcts=rate_pcts)
 
     if not availability():
         if as_json:
-            log(render_vad_gap_peak_json(None, **kw))
+            log(render_vad_gap_peak_json(None, **json_kw))
         elif as_csv:
             log(render_vad_gap_peak_csv(None, **kw))
         else:
@@ -6306,7 +6310,7 @@ def cmd_vad_gap_peak(args, *, log=print, segmenter=None, availability=None):
     )
     result = segmenter(args.wav, params=params)
     if as_json:
-        log(render_vad_gap_peak_json(result, **kw))
+        log(render_vad_gap_peak_json(result, **json_kw))
     elif as_csv:
         log(render_vad_gap_peak_csv(result, **kw))
     else:
@@ -7803,6 +7807,17 @@ def build_parser():
         "— the exact sample --min-rate-pct reads against, so you can see where a "
         "chosen percentile floor will land. The --json face always carries this "
         "as 'band_rate_dist'. Default: off",
+    )
+    vad_gap_peak.add_argument(
+        "--rate-pcts",
+        type=percentile_list_type,
+        default=list(DEFAULT_BAND_RATE_PCTS),
+        dest="rate_pcts",
+        help="Comma-separated percentiles to summarise the observed band-rate "
+        "distribution at, e.g. '50,90,99' (each in (0, 100]; order preserved). "
+        "Drives both the --show-rate-dist block and the --json 'band_rate_dist' "
+        "percentiles, so an operator can ask for arbitrary quantiles instead of "
+        "the default 50,75,90,99",
     )
     vad_gap_peak.add_argument(
         "--threshold",

@@ -1846,3 +1846,117 @@ def test_handler_show_rate_dist_getattr_fallback_false():
         availability=lambda: True,
     )
     assert not any("band-rate dist" in ln for ln in lines)
+
+
+# ---- parser & handler: --rate-pcts (iter-359) ---------------------------
+
+
+def test_parser_rate_pcts_default_is_band_default():
+    # Unset --rate-pcts mirrors DEFAULT_BAND_RATE_PCTS (p50/p75/p90/p99).
+    parser = gv.build_parser()
+    ns = parser.parse_args(["vad-gap-peak", "rec.wav"])
+    assert ns.rate_pcts == list(gv.DEFAULT_BAND_RATE_PCTS)
+    assert ns.rate_pcts == [50.0, 75.0, 90.0, 99.0]
+
+
+def test_parser_accepts_custom_rate_pcts():
+    parser = gv.build_parser()
+    ns = parser.parse_args(["vad-gap-peak", "rec.wav", "--rate-pcts", "25,50,75"])
+    assert ns.rate_pcts == [25.0, 50.0, 75.0]
+
+
+def test_parser_rate_pcts_preserves_order_and_dupes():
+    # percentile_list_type keeps the operator's column order verbatim.
+    parser = gv.build_parser()
+    ns = parser.parse_args(["vad-gap-peak", "rec.wav", "--rate-pcts", "90,50,90"])
+    assert ns.rate_pcts == [90.0, 50.0, 90.0]
+
+
+def test_parser_rejects_bad_rate_pcts():
+    parser = gv.build_parser()
+    for bad in ["0,50", "50,150", "50,nan", ""]:
+        with pytest.raises(SystemExit):
+            parser.parse_args(["vad-gap-peak", "rec.wav", "--rate-pcts", bad])
+
+
+def test_handler_rate_pcts_threads_to_human():
+    # --rate-pcts drives the percentiles printed in the --show-rate-dist block.
+    res, cuts = _canon()
+    lines = _run(
+        _args(cuts_ms=cuts, show_rate_dist=True, rate_pcts=[25.0, 75.0]),
+        segmenter=lambda w, *, params: res,
+        availability=lambda: True,
+    )
+    text = "\n".join(lines)
+    assert "p25" in text
+    assert "p75" in text
+    # The default p90/p99 are NOT printed once a custom set is given.
+    assert "p90" not in text
+    assert "p99" not in text
+
+
+def test_handler_rate_pcts_threads_to_json():
+    # --rate-pcts drives the band_rate_dist percentile list in the JSON face,
+    # even without --show-rate-dist (the flag gates only the human face).
+    res, cuts = _canon()
+    lines = _run(
+        _args(cuts_ms=cuts, json=True, rate_pcts=[10.0, 90.0]),
+        segmenter=lambda w, *, params: res,
+        availability=lambda: True,
+    )
+    payload = json.loads("\n".join(lines))
+    assert [e["p"] for e in payload["band_rate_dist"]["percentiles"]] == [10.0, 90.0]
+
+
+def test_handler_rate_pcts_not_passed_to_csv():
+    # The CSV verdict-row schema has no distribution columns, so --rate-pcts must
+    # not change it (and must not raise — the CSV renderer takes no rate_pcts).
+    res, cuts = _canon()
+    lines = _run(
+        _args(cuts_ms=cuts, csv=True, rate_pcts=[10.0, 90.0]),
+        segmenter=lambda w, *, params: res,
+        availability=lambda: True,
+    )
+    text = "\n".join(lines)
+    rows = list(csv.reader(io.StringIO(text)))
+    assert rows[0] == [
+        "rank",
+        "peak_found",
+        "peak_from_ms",
+        "peak_to_ms",
+        "peak_width_ms",
+        "peak_merged_added",
+        "peak_rate_per_100ms",
+    ]
+    assert "band_rate_dist" not in text
+
+
+def test_handler_rate_pcts_getattr_fallback_to_default():
+    # Older callers without a rate_pcts attr fall back to DEFAULT_BAND_RATE_PCTS.
+    res, cuts = _canon()
+    args = _args(cuts_ms=cuts, json=True)
+    assert not hasattr(args, "rate_pcts")
+    lines = _run(
+        args,
+        segmenter=lambda w, *, params: res,
+        availability=lambda: True,
+    )
+    payload = json.loads("\n".join(lines))
+    assert [e["p"] for e in payload["band_rate_dist"]["percentiles"]] == list(
+        gv.DEFAULT_BAND_RATE_PCTS
+    )
+
+
+def test_handler_rate_pcts_unavailable_json_does_not_raise():
+    # On the unavailable path the JSON face is the bare available:False+hint
+    # payload (no segmentation ran, so no band_rate_dist) — but passing a custom
+    # --rate-pcts through json_kw must not raise.
+    res, cuts = _canon()
+    lines = _run(
+        _args(cuts_ms=cuts, json=True, rate_pcts=[10.0, 90.0]),
+        segmenter=lambda w, *, params: res,
+        availability=lambda: False,
+    )
+    payload = json.loads("\n".join(lines))
+    assert payload["available"] is False
+    assert "band_rate_dist" not in payload
