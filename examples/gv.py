@@ -4014,6 +4014,272 @@ def render_vad_gap_recommend_knob_sweep_csv(values, results, *, name, axis="thre
     return buf.getvalue().rstrip("\r\n")
 
 
+def vad_gap_recommend_knob_grid(
+    row_values, col_values, results, *, row_axis="threshold", col_axis="min_silence_ms"
+):
+    """Pair each (row, col) knob-grid cell with its full bias spread + confidence (iter-373).
+
+    The 2-D analogue of iter-372's :func:`vad_gap_recommend_knob_sweep`, and the
+    recommend-side twin of :func:`vad_gap_grid`. Where the 1-D knob sweep tabulates
+    the short/balanced/long recommended ``--min-silence-ms`` numbers plus the
+    iter-348 confidence grade across ONE segmenter knob, this grid tabulates them
+    across the cartesian product of TWO knobs (the gate × a column knob), so an
+    operator can read how the recommended hangover — and, more tellingly, how the
+    confidence GRADE — moves in two dimensions at once instead of running N
+    separate 1-D knob sweeps. ``vad-gap-grid`` is to ``vad-gap-sweep`` what this is
+    to ``vad-gap-recommend-knob-sweep``: same row-major flattening, but each cell
+    now carries the whole bias spread + grade rather than the min/mean/max gap.
+
+    The headline is two-dimensional in both axes. As either knob tightens, gating
+    out marginal speech or merging adjacent regions reshapes the pause
+    distribution, so the valley the recommendation sits in — and the
+    short/balanced/long numbers that bracket it — drift across the surface. The
+    more telling reading is the confidence grade: the same reshaping can turn a
+    smear of similar pauses (weak) into a clean bimodal split (strong) or vice
+    versa, so an operator sees the REGION of the (gate × column) plane where the
+    recommendation is trustworthy, not just where a single number sits.
+
+    ``results`` is the flattened cell list in ROW-MAJOR order (row 0's whole row of
+    columns first, then row 1's, …), length ``len(row_values) * len(col_values)`` —
+    exactly the order :func:`vad_gap_grid` consumes. For each cell it anchors to
+    :func:`vad_gap_recommend_sweep` over that cell's segmentation, so the per-cell
+    bias spread, valley accounting, and grade agree EXACTLY with
+    ``gv vad-gap-recommend-knob-sweep`` (and ``gv vad-gap-confidence``) at the
+    matching cell.
+
+    Pure: returns a flat list of cell dicts ``{row_axis, col_axis, "num_segments",
+    "num_gaps", "split_found", "biases", "spread_ms", "spread_s", "grade",
+    "dominance", "separation_ratio"}`` in that same row-major order. The
+    recommendation / grade fields are ``None`` for a cell whose segmentation has <2
+    segments (no pause to recommend over), exactly the "no distribution" spelling
+    the sibling gap surfaces use. No I/O, no torch import, so it is testable in
+    isolation. Raises :class:`ValueError` if ``results`` length differs from the
+    row×col product.
+    """
+    expected = len(row_values) * len(col_values)
+    if len(results) != expected:
+        raise ValueError(
+            f"results ({len(results)}) must equal row_values × col_values "
+            f"({len(row_values)} × {len(col_values)} = {expected})"
+        )
+    cells = []
+    i = 0
+    for rv in row_values:
+        for cv in col_values:
+            r = results[i]
+            i += 1
+            s = vad_gap_recommend_sweep(r)
+            cells.append(
+                {
+                    row_axis: rv,
+                    col_axis: cv,
+                    "num_segments": s["num_segments"],
+                    "num_gaps": s["num_gaps"],
+                    "split_found": s["split_found"],
+                    "biases": s["biases"],
+                    "spread_ms": s["spread_ms"],
+                    "spread_s": s["spread_s"],
+                    "grade": s["grade"],
+                    "dominance": s["dominance"],
+                    "separation_ratio": s["separation_ratio"],
+                }
+            )
+    return cells
+
+
+def render_vad_gap_recommend_knob_grid(
+    row_values,
+    col_values,
+    results,
+    *,
+    name,
+    row_axis="threshold",
+    col_axis="min_silence_ms",
+):
+    """Render a 2-D recommend knob grid as a plain-text table (iter-373).
+
+    The human-readable twin of :func:`render_vad_gap_recommend_knob_grid_json`, the
+    recommend-side analogue of :func:`render_vad_gap_grid` and the 2-D analogue of
+    :func:`render_vad_gap_recommend_knob_sweep`: a FLAT one-row-per-cell table (not
+    a matrix) so each cell's two swept values plus its recommendation columns stay
+    unambiguous. ``name`` is the WAV being swept; ``row_axis`` / ``col_axis`` name
+    the two swept dimensions, setting the two leading column labels and value
+    formats (a gate prints ``0.40``, a millisecond knob a bare ``800``, the seconds
+    ceiling compactly via ``%g``). Any ``None`` in ``results`` (segmenter
+    unavailable) yields the shared install hint.
+
+    Each row prints the two swept values, the segment count, the gap count, the
+    three recommended ``--min-silence-ms`` numbers (short/balanced/long), the
+    short→long spread, and the confidence grade; a cell with <2 segments has no
+    pause to recommend over and prints ``-`` in the recommendation columns. Reading
+    the ``confidence`` column across the grid an operator sees the REGION of the
+    plane where the recommendation becomes trustworthy. Pure: returns a list of
+    strings.
+    """
+    if any(r is None for r in results):
+        return [
+            "silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        ]
+    cells = vad_gap_recommend_knob_grid(
+        row_values, col_values, results, row_axis=row_axis, col_axis=col_axis
+    )
+    row_label = _SWEEP_AXIS_LABEL.get(row_axis, row_axis)
+    col_label = _SWEEP_AXIS_LABEL.get(col_axis, col_axis)
+    lines = [
+        f"silero VAD recommended-hangover knob grid — {name} "
+        f"({row_label} × {col_label})",
+        f"  {row_label:>11}  {col_label:>11}  segments  gaps    short  "
+        "balanced      long    spread  confidence",
+    ]
+    for cell in cells:
+        if cell["num_gaps"] == 0:
+            rec_cols = f"{'-':>5}  {'-':>8}  {'-':>8}  {'-':>6}  {'-':>10}"
+        else:
+            short = _format_cut_label(_knob_sweep_bias_ms(cell, "short"))
+            balanced = _format_cut_label(_knob_sweep_bias_ms(cell, "balanced"))
+            long = _format_cut_label(_knob_sweep_bias_ms(cell, "long"))
+            spread = _format_cut_label(cell["spread_ms"])
+            rec_cols = (
+                f"{short:>5}  {balanced:>8}  {long:>8}  {spread:>6}  "
+                f"{cell['grade']:>10}"
+            )
+        lines.append(
+            f"  {_format_sweep_axis_value(row_axis, cell[row_axis]):>11}  "
+            f"{_format_sweep_axis_value(col_axis, cell[col_axis]):>11}  "
+            f"{cell['num_segments']:>8}  {cell['num_gaps']:>4}  {rec_cols}"
+        )
+    return lines
+
+
+def render_vad_gap_recommend_knob_grid_json(
+    row_values,
+    col_values,
+    results,
+    *,
+    name,
+    row_axis="threshold",
+    col_axis="min_silence_ms",
+):
+    """Render a 2-D recommend knob grid as a JSON string (iter-373).
+
+    Machine-readable twin of :func:`render_vad_gap_recommend_knob_grid`, so the
+    grid can feed a plotting/tuning script. The payload carries both swept axis
+    names (``row_axis`` / ``col_axis``) so a consumer knows which two dimensions
+    the cells vary (the cells are keyed by those same names) and a ``grid`` list of
+    per-cell rows, each with ``num_segments`` / ``num_gaps`` / ``split_found`` / the
+    per-bias ``biases`` list / ``spread_ms`` / ``spread_s`` / ``grade`` /
+    ``dominance`` / ``separation_ratio`` (the recommendation + confidence fields
+    ``null`` for a <2-segment cell). Any ``None`` in ``results`` →
+    ``{"available": false}`` + install hint, mirroring the sibling grid JSON
+    renderers. Pure: returns a single JSON string.
+    """
+    if any(r is None for r in results):
+        return json.dumps(
+            {
+                "available": False,
+                "hint": (
+                    "install 'silero-vad' (pulls torch + torchaudio) to enable "
+                    "offline neural segmentation"
+                ),
+            },
+            indent=2,
+        )
+    cells = vad_gap_recommend_knob_grid(
+        row_values, col_values, results, row_axis=row_axis, col_axis=col_axis
+    )
+    payload = {
+        "available": True,
+        "name": name,
+        "row_axis": row_axis,
+        "col_axis": col_axis,
+        "grid": cells,
+    }
+    return json.dumps(payload, indent=2)
+
+
+def render_vad_gap_recommend_knob_grid_csv(
+    row_values,
+    col_values,
+    results,
+    *,
+    name,
+    row_axis="threshold",
+    col_axis="min_silence_ms",
+):
+    """Render a 2-D recommend knob grid as CSV text (no trailing newline) (iter-373).
+
+    The spreadsheet/plot-friendly twin of
+    :func:`render_vad_gap_recommend_knob_grid_json`. Where JSON nests the per-bias
+    rows under each cell's ``biases`` key, CSV flattens to ONE ROW PER CELL with the
+    three bias recommendations as columns:
+    ``<row_axis>,<col_axis>,num_segments,num_gaps,short_ms,balanced_ms,long_ms,
+    spread_ms,grade,dominance,separation_ratio`` (one row per cell, in row-major
+    order) — so a reader sees how the whole spread AND the confidence move across
+    the grid in a single table. The first two column headers are the swept axis
+    names so the grid is self-describing. ``name`` is accepted for signature parity
+    with the other ``render_vad_gap_recommend_knob_grid_*`` twins but is not part of
+    the tabular body (a CSV is a pure data grid), matching the sibling grid CSVs. A
+    <2-segment cell emits empty cells in the recommendation columns (the CSV
+    spelling of JSON ``null`` / the human table's ``-``). Any ``None`` in
+    ``results`` (segmenter unavailable) yields a single ``# silero VAD
+    unavailable: ...`` comment line. Pure: built with the stdlib :mod:`csv` writer,
+    trailing terminator stripped.
+    """
+    if any(r is None for r in results):
+        return (
+            "# silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        )
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(
+        [
+            row_axis,
+            col_axis,
+            "num_segments",
+            "num_gaps",
+            "short_ms",
+            "balanced_ms",
+            "long_ms",
+            "spread_ms",
+            "grade",
+            "dominance",
+            "separation_ratio",
+        ]
+    )
+    for cell in vad_gap_recommend_knob_grid(
+        row_values, col_values, results, row_axis=row_axis, col_axis=col_axis
+    ):
+        if cell["num_gaps"] > 0:
+            short = _format_cut_label(_knob_sweep_bias_ms(cell, "short"))
+            balanced = _format_cut_label(_knob_sweep_bias_ms(cell, "balanced"))
+            long = _format_cut_label(_knob_sweep_bias_ms(cell, "long"))
+            spread = _format_cut_label(cell["spread_ms"])
+            dominance = "" if cell["dominance"] is None else cell["dominance"]
+            sep = "" if cell["separation_ratio"] is None else cell["separation_ratio"]
+            grade = cell["grade"]
+        else:
+            # <2 segments — nothing to recommend; empty cells (CSV null spelling).
+            short = balanced = long = spread = grade = dominance = sep = ""
+        writer.writerow(
+            [
+                cell[row_axis],
+                cell[col_axis],
+                cell["num_segments"],
+                cell["num_gaps"],
+                short,
+                balanced,
+                long,
+                spread,
+                grade,
+                dominance,
+                sep,
+            ]
+        )
+    return buf.getvalue().rstrip("\r\n")
+
+
 # Dominance thresholds grading how clean the recommendation's valley is. The
 # dominance is the fraction of the total gap SPREAD (max_gap - min_gap) taken up
 # by the single widest jump (the valley). A clean bimodal distribution puts most
@@ -7559,6 +7825,142 @@ def cmd_vad_gap_recommend_knob_sweep(args, *, log=print, segmenter=None, availab
             log(line)
 
 
+def cmd_vad_gap_recommend_knob_grid(args, *, log=print, segmenter=None, availability=None):
+    """Segment one WAV across a 2-D knob grid and tabulate the bias spread + confidence.
+
+    iter-373's 2-D analogue of :func:`cmd_vad_gap_recommend_knob_sweep`, and the
+    recommend-side twin of :func:`cmd_vad_gap_grid`. Where ``gv
+    vad-gap-recommend-knob-sweep`` sweeps ONE segmenter knob and reports the
+    short/balanced/long recommended ``--min-silence-ms`` plus the iter-348
+    confidence grade at each value, ``gv vad-gap-recommend-knob-grid`` tabulates the
+    same spread + grade across the cartesian product of TWO knobs (the gate × a
+    column knob) — so an operator reads how the recommended hangover, and more
+    tellingly the confidence grade, MOVE in two dimensions at once instead of
+    running N separate 1-D knob sweeps. It is to ``vad-gap-recommend-knob-sweep``
+    what ``vad-gap-grid`` is to ``vad-gap-sweep``.
+
+    Mirrors :func:`cmd_vad_gap_grid`'s axis layout: the ROW axis is always the
+    P(speech) gate (``--thresholds``); the COLUMN axis is ``--min-silences`` (the
+    trailing-silence hangover, the default), ``--min-speeches`` (the minimum-speech
+    floor), ``--speech-pads`` (the symmetric region padding), or ``--max-speeches``
+    (the force-split ceiling, in SECONDS) — mutually exclusive, exactly one column
+    axis per run. Whichever knob is NOT the column axis is held fixed at its
+    scalar; every other knob is shared across all cells.
+
+    Same injected-dependency contract as :func:`cmd_vad_gap_grid`: ``segmenter`` /
+    ``availability`` default to the real :mod:`vad.silero` functions, imported
+    lazily so the parser stays torch-free. ``--csv`` is mutually exclusive with
+    ``--json``; when ``silero-vad`` is absent the handler prints the install hint
+    and returns, never crashing.
+    """
+    if segmenter is None or availability is None:
+        from vad.silero import segment_recording, silero_available
+
+        segmenter = segment_recording if segmenter is None else segmenter
+        availability = silero_available if availability is None else availability
+
+    as_json = getattr(args, "json", False)
+    as_csv = getattr(args, "csv", False)
+
+    # Rows are always the gate; the column axis is whichever list was passed
+    # (--min-speeches → floor; --speech-pads → region padding; --max-speeches →
+    # force-split ceiling, seconds; else --min-silences → hangover, the default).
+    # The parser's mutex guarantees at most one column list is set.
+    row_axis = "threshold"
+    row_values = args.thresholds
+    min_speeches = getattr(args, "min_speeches", None)
+    speech_pads = getattr(args, "speech_pads", None)
+    max_speeches = getattr(args, "max_speeches", None)
+    if min_speeches is not None:
+        col_axis = "min_speech_ms"
+        col_values = min_speeches
+    elif speech_pads is not None:
+        col_axis = "speech_pad_ms"
+        col_values = speech_pads
+    elif max_speeches is not None:
+        col_axis = "max_speech_s"
+        col_values = max_speeches
+    else:
+        col_axis = "min_silence_ms"
+        col_values = args.min_silences
+
+    if not availability():
+        unavailable = [None]
+        if as_json:
+            log(
+                render_vad_gap_recommend_knob_grid_json(
+                    [], [], unavailable, name=args.wav,
+                    row_axis=row_axis, col_axis=col_axis,
+                )
+            )
+        elif as_csv:
+            log(
+                render_vad_gap_recommend_knob_grid_csv(
+                    [], [], unavailable, name=args.wav,
+                    row_axis=row_axis, col_axis=col_axis,
+                )
+            )
+        else:
+            for line in render_vad_gap_recommend_knob_grid(
+                [], [], unavailable, name=args.wav,
+                row_axis=row_axis, col_axis=col_axis,
+            ):
+                log(line)
+        return
+
+    from vad.silero import SileroParams
+
+    def _seg(row_value, col_value):
+        # The two grid axes take (row_value, col_value); every other dimension is
+        # held at its scalar knob. Whichever ms knob (or the seconds ceiling) is
+        # NOT the column axis is held fixed at its scalar.
+        min_silence_ms = (
+            col_value if col_axis == "min_silence_ms" else args.min_silence_ms
+        )
+        min_speech_ms = (
+            col_value if col_axis == "min_speech_ms" else args.min_speech_ms
+        )
+        speech_pad_ms = (
+            col_value if col_axis == "speech_pad_ms" else args.speech_pad_ms
+        )
+        max_speech_s = (
+            col_value if col_axis == "max_speech_s" else args.max_speech_s
+        )
+        params = SileroParams(
+            threshold=row_value,
+            min_speech_ms=min_speech_ms,
+            min_silence_ms=min_silence_ms,
+            speech_pad_ms=speech_pad_ms,
+            max_speech_s=max_speech_s,
+        )
+        return segmenter(args.wav, params=params)
+
+    # Row-major: row 0's whole row of columns first, then row 1's, … — the same
+    # order vad_gap_recommend_knob_grid flattens into.
+    results = [_seg(rv, cv) for rv in row_values for cv in col_values]
+    name = results[0].name if results else args.wav
+    if as_json:
+        log(
+            render_vad_gap_recommend_knob_grid_json(
+                row_values, col_values, results, name=name,
+                row_axis=row_axis, col_axis=col_axis,
+            )
+        )
+    elif as_csv:
+        log(
+            render_vad_gap_recommend_knob_grid_csv(
+                row_values, col_values, results, name=name,
+                row_axis=row_axis, col_axis=col_axis,
+            )
+        )
+    else:
+        for line in render_vad_gap_recommend_knob_grid(
+            row_values, col_values, results, name=name,
+            row_axis=row_axis, col_axis=col_axis,
+        ):
+            log(line)
+
+
 def cmd_vad_gap_confidence(args, *, log=print, segmenter=None, availability=None):
     """Segment one WAV offline and GRADE the recommended-hangover confidence.
 
@@ -8875,6 +9277,7 @@ DEFAULT_HANDLERS = {
     "vad-gap-recommend": cmd_vad_gap_recommend,
     "vad-gap-recommend-sweep": cmd_vad_gap_recommend_sweep,
     "vad-gap-recommend-knob-sweep": cmd_vad_gap_recommend_knob_sweep,
+    "vad-gap-recommend-knob-grid": cmd_vad_gap_recommend_knob_grid,
     "vad-gap-confidence": cmd_vad_gap_confidence,
     "vad-gap-cost": cmd_vad_gap_cost,
     "vad-gap-peak": cmd_vad_gap_peak,
@@ -9943,6 +10346,138 @@ def build_parser():
         "long_ms,spread_ms,grade,dominance,separation_ratio CSV table for "
         "spreadsheets/plots (one row per swept value; mutually exclusive "
         "with --json)",
+    )
+
+    # gv vad-gap-recommend-knob-grid — segment one WAV across a 2-D knob grid and
+    # tabulate the whole bias spread + confidence grade per cell (iter-373). The
+    # 2-D analogue of vad-gap-recommend-knob-sweep, and the recommend-side twin of
+    # vad-gap-grid: rows are always the P(speech) gate (--thresholds); the column
+    # axis is the trailing-silence hangover (--min-silences, default, ms), the
+    # minimum-speech floor (--min-speeches, ms), the region padding (--speech-pads,
+    # ms), or the force-split ceiling (--max-speeches, SECONDS), mutually
+    # exclusive. Each cell reports the short/balanced/long recommended
+    # --min-silence-ms AND the iter-348 confidence grade — so an operator reads the
+    # REGION of the (gate × column) plane where the recommendation becomes
+    # trustworthy, not just a single 1-D knob sweep at a time.
+    vad_gap_rec_knob_grid = sub.add_parser(
+        "vad-gap-recommend-knob-grid",
+        help="Offline Silero VAD — segment a WAV across a 2-D grid (gate "
+        "--thresholds × a column axis: --min-silences hangover, --min-speeches "
+        "floor, --speech-pads region padding (ms), or --max-speeches force-split "
+        "ceiling (seconds)) and tabulate the short/balanced/long recommended "
+        "--min-silence-ms AND the confidence grade per cell — see where the "
+        "recommendation becomes trustworthy in two dimensions",
+    )
+    vad_gap_rec_knob_grid.add_argument(
+        "wav",
+        help="Path to a 16-bit PCM WAV file to segment at each grid cell",
+    )
+    vad_gap_rec_knob_grid.add_argument(
+        "--thresholds",
+        type=unit_interval_list_type,
+        default=[0.3, 0.5, 0.7, 0.9],
+        help="Comma-separated P(speech) gates in [0, 1] — the grid ROW axis "
+        "(default: 0.3,0.5,0.7,0.9)",
+    )
+    # The column axis: --min-silences (default) OR --min-speeches OR --speech-pads
+    # OR --max-speeches, never more than one. The default list lives on
+    # --min-silences so a bare `vad-gap-recommend-knob-grid rec.wav` sweeps gate ×
+    # hangover; a group default isn't "provided", so the mutex only fires when two
+    # are passed explicitly. Mirrors vad-gap-grid's column mutex exactly.
+    vad_gap_rec_knob_grid_col = vad_gap_rec_knob_grid.add_mutually_exclusive_group()
+    vad_gap_rec_knob_grid_col.add_argument(
+        "--min-silences",
+        type=nonneg_float_list_type,
+        default=[400.0, 600.0, 800.0, 1000.0],
+        dest="min_silences",
+        help="Comma-separated trailing-silence hangovers in ms — the grid COLUMN "
+        "axis (default: 400,600,800,1000; mutually exclusive with --min-speeches / "
+        "--speech-pads / --max-speeches)",
+    )
+    vad_gap_rec_knob_grid_col.add_argument(
+        "--min-speeches",
+        type=nonneg_float_list_type,
+        default=None,
+        dest="min_speeches",
+        help="Comma-separated minimum-speech floors in ms to use as the grid "
+        "COLUMN axis instead of the hangover (e.g. 50,100,200,400); the non-column "
+        "knob is held at its scalar (mutually exclusive with --min-silences / "
+        "--speech-pads / --max-speeches)",
+    )
+    vad_gap_rec_knob_grid_col.add_argument(
+        "--speech-pads",
+        type=nonneg_float_list_type,
+        default=None,
+        dest="speech_pads",
+        help="Comma-separated symmetric region paddings in ms to use as the grid "
+        "COLUMN axis instead of the hangover (e.g. 0,20,40,80); the non-column knob "
+        "is held at its scalar (mutually exclusive with --min-silences / "
+        "--min-speeches / --max-speeches)",
+    )
+    vad_gap_rec_knob_grid_col.add_argument(
+        "--max-speeches",
+        type=max_speech_list_type,
+        default=None,
+        dest="max_speeches",
+        help="Comma-separated force-split ceilings in SECONDS to use as the grid "
+        "COLUMN axis instead of the hangover (e.g. 5,10,20,inf); 'inf'/'none'/'off' "
+        "never splits, so include it for the no-cap baseline; the non-column knob "
+        "is held at its scalar (mutually exclusive with --min-silences / "
+        "--min-speeches / --speech-pads)",
+    )
+    vad_gap_rec_knob_grid.add_argument(
+        "--min-speech-ms",
+        type=nonneg_float_type,
+        default=vad_min_speech_default,
+        dest="min_speech_ms",
+        help="Drop speech regions shorter than this, in ms — held fixed across "
+        "all cells when the column axis is --min-silences/--speech-pads/"
+        "--max-speeches; ignored when sweeping --min-speeches (default: "
+        f"{vad_min_speech_default})",
+    )
+    vad_gap_rec_knob_grid.add_argument(
+        "--min-silence-ms",
+        type=nonneg_float_type,
+        default=vad_min_silence_default,
+        dest="min_silence_ms",
+        help="Trailing silence before a region ends, in ms — held fixed across "
+        "all cells when the column axis is --min-speeches/--speech-pads/"
+        "--max-speeches; ignored when sweeping --min-silences (default: "
+        f"{vad_min_silence_default})",
+    )
+    vad_gap_rec_knob_grid.add_argument(
+        "--speech-pad-ms",
+        type=nonneg_float_type,
+        default=vad_speech_pad_default,
+        dest="speech_pad_ms",
+        help="Symmetric padding added to each region, in ms — held fixed across "
+        "all cells when the column axis is --min-silences/--min-speeches/"
+        "--max-speeches; ignored when sweeping --speech-pads (default: "
+        f"{vad_speech_pad_default})",
+    )
+    vad_gap_rec_knob_grid.add_argument(
+        "--max-speech-s",
+        type=max_speech_type,
+        default=vad_max_speech_default,
+        dest="max_speech_s",
+        help="Force-split regions longer than this, in seconds — held fixed "
+        "across all cells when the column axis is --min-silences/--min-speeches/"
+        "--speech-pads; ignored when sweeping --max-speeches; 'inf'/'none' never "
+        "splits (default: inf)",
+    )
+    vad_gap_rec_knob_grid_fmt = vad_gap_rec_knob_grid.add_mutually_exclusive_group()
+    vad_gap_rec_knob_grid_fmt.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON (per-cell rows: bias spread + "
+        "confidence) instead of the human-readable table",
+    )
+    vad_gap_rec_knob_grid_fmt.add_argument(
+        "--csv",
+        action="store_true",
+        help="Emit a flat <row_axis>,<col_axis>,num_segments,num_gaps,short_ms,"
+        "balanced_ms,long_ms,spread_ms,grade,dominance,separation_ratio CSV table "
+        "for spreadsheets/plots (one row per cell; mutually exclusive with --json)",
     )
 
     # gv vad-gap-confidence — segment one WAV and GRADE how trustworthy the
