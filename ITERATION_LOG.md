@@ -33827,3 +33827,104 @@ re-verified on main post-merge (`test_gv_vad_gap_peak_grid.py` + `test_gv_cli.py
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    ~30 leftover per-iter worktrees. A future lap could `git worktree prune` /
    remove the merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-372 — gv vad-gap-recommend-knob-sweep tracks the bias spread + confidence across a swept segmenter knob
+
+- **Date:** 2026-06-21
+- **Branch:** iter-372-recommend-knob-sweep (ff-merged to main, worktree removed)
+- **Commit:** eb2ce81
+
+**Why.** The standing next-item #1 from iter-371 asked for the
+"vad-gap-recommend-sweep companions — let the sweep accept a swept SEGMENTER knob
+(e.g. how short/balanced/long + the confidence grade shift as `--min-speech-ms`
+varies), the way `vad-gap-sweep` tracks a swept `--min-silence-ms`." With the
+peak-surface knob-lift project CLOSED at iter-371 (distribution iter-358/366/367,
+top-N iter-354/368/369, AND the rate floor iter-355/357/370/371 all lifted across
+single-shot / sweep / grid), this is the next natural gv-CLI expansion — a
+genuinely new surface, not an 18th chat-metrics clone (family complete, iter-328).
+
+**What it is.** iter-352's `gv vad-gap-recommend-sweep` sweeps the BIAS
+(short/balanced/long) over ONE segmentation. This new surface,
+`gv vad-gap-recommend-knob-sweep`, sweeps a SEGMENTER knob (the gate
+`--thresholds` or one of the ms/seconds region knobs) and reports, at EACH swept
+value, the WHOLE bias spread AND the iter-348 confidence grade. It is to
+`vad-gap-recommend-sweep` what `vad-gap-sweep` is to `vad-gaps`: the same
+per-value structure tabulated across a knob axis instead of computed for one
+segmentation. The genuinely-new signal vs the bias-only sweep is the
+`confidence` column — an operator sees not just which hangover to pick but at
+WHICH knob setting the recommendation becomes TRUSTWORTHY (a knob change can turn
+a smear of similar pauses into a clean bimodal split, or vice versa, invisible to
+the recommended number alone).
+
+**What landed in `examples/gv.py` (+471 incl. parser/handler; +491 test lines).**
+- `vad_gap_recommend_knob_sweep(values, results, *, axis="threshold")` — anchors
+  each row to `vad_gap_recommend_sweep` over that value's segmentation, so the
+  per-row bias spread, valley accounting, and grade agree EXACTLY with
+  `gv vad-gap-recommend-sweep` / `gv vad-gap-confidence` at the matching value.
+  Rows carry `{axis, num_segments, num_gaps, split_found, biases, spread_ms,
+  spread_s, grade, dominance, separation_ratio}`; the recommendation/grade fields
+  are `None` for a <2-segment row (the "no distribution" spelling the sibling gap
+  surfaces use). Raises on a values/results length mismatch.
+- `_knob_sweep_bias_ms(row, bias)` — small shared extractor pulling one bias's
+  `recommended_ms` out of a row's `biases` list, used by the human/CSV renderers
+  so the two agree on column extraction.
+- `render_vad_gap_recommend_knob_sweep` / `_json` / `_csv` — the human / `--json`
+  / `--csv` trio. Human prints a table with short/balanced/long + spread + the
+  confidence grade per row (dashes for a <2-segment row). JSON carries the swept
+  `axis` + a `sweep` list of per-value rows (recommendation/grade `null` for a
+  <2-segment row). CSV flattens to ONE ROW PER SWEPT VALUE with the three biases
+  as columns: `<axis>,num_segments,num_gaps,short_ms,balanced_ms,long_ms,
+  spread_ms,grade,dominance,separation_ratio` (empty cells for a <2-segment row).
+  NOTE the CSV contrast with `gv vad-gap-recommend-sweep --csv` (one row per BIAS
+  over a single segmentation): here the sweep axis is the segmenter knob, so the
+  value is the row key and the biases become columns.
+- `cmd_vad_gap_recommend_knob_sweep` — reuses `vad-gap-sweep`'s iter-256 five-axis
+  machinery (`--thresholds` default; `--min-silences` / `--min-speeches` /
+  `--speech-pads` / `--max-speeches` switch the swept dimension, gate held at
+  scalar `--threshold`; the five mutually exclusive). Same injected
+  segmenter/availability/log contract, torch-free parser, degrade-to-install-hint
+  when silero-vad is absent.
+- Registered `vad-gap-recommend-knob-sweep` in `DEFAULT_HANDLERS` and added the
+  parser (mirroring `vad-gap-sweep`'s axis mutex + shared scalar knobs).
+
+**Tests.** `tests/unit/test_gv_vad_gap_recommend_knob_sweep.py` (34 tests): core
+row-per-value keyed by axis / each row matches recommend-sweep exactly / grade
+matches the confidence surface / all-three biases in order / no-valley row grades
+none / no-gaps row has None recommendations / grade can SHIFT across swept values
+/ axis key follows the axis arg / length mismatch raises; human header+columns /
+grade per row / no-gaps dashes / unavailable hint; json shape / no-gaps nulls /
+unavailable; csv header+one-row-per-value / axis header / no-gaps empty cells /
+unavailable; handler human/json/csv paths / min-speeches & min-silences &
+max-speeches axis switching / threshold axis holds other knobs fixed /
+result-name / unavailable human+json+csv / `--json`|`--csv` mutex / axis mutex /
+dispatch-table registration. `test_gv_cli.py`'s `DEFAULT_HANDLERS` exact-dict
+assertion gained the new entry. Fixtures: `_bimodal` (grades strong), `_no_valley`
+(grades none), `_single` (no gaps) — exercising the grade-shift case in one sweep.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5235 passed**
+(5201 prior + 34 net new), run in the feature worktree before ff-merge AND
+re-verified on main post-merge (`test_gv_vad_gap_recommend_knob_sweep.py` +
+`test_gv_cli.py` → 127 passed).
+- Integration: not run this lap (pure string-formatting/arithmetic over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..371 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] vad-gap-recommend-knob-grid** — the 2-D analogue of this lap:
+   sweep TWO segmenter knobs (e.g. `--thresholds` × `--min-silences`) and tabulate
+   how the confidence grade / recommended numbers shift across the surface, the
+   way `vad-gap-grid` is the 2-D analogue of `vad-gap-sweep`. The natural
+   sweep→grid continuation (mirrors iter-364→365, iter-366→367, iter-370→371).
+2. **[gv CLI] vad-gap-recommend-knob-sweep `--bias` filter** — let the operator
+   restrict the swept table to a single bias column (or a subset) when the full
+   short/balanced/long spread is more than they need, keeping the confidence
+   column. Lower priority — the full spread is usually the point.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~30 leftover per-iter worktrees. A future lap could `git worktree prune` /
+   remove the merged ones. NOTE: this lap correctly removed its own worktree.
