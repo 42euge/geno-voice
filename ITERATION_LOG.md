@@ -32267,3 +32267,80 @@ re-run on main post-merge (4850 passed, ~31s).
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    ~31 leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-354 — gv vad-gap-peak `--top-n` — name the N steepest cost bands
+
+- **Date:** 2026-06-21
+- **Branch:** iter-354-peak-topn (ff-merged to main, worktree removed)
+- **Commit:** 58b7c39
+
+**Why.** The standing next-item #2 across iter-351..353: "a `--top-n` flag naming
+the N steepest bands instead of just the single peak." A genuine new behaviour on
+the existing iter-350 verdict surface — not an 18th chat-metrics clone (the
+family is declared complete, iter-328) and not another `*-sweep` clone. It
+answers the question the single-peak verdict raises ("is the worst band the only
+expensive one, or is there a whole cluster I should avoid?") by ranking the N
+costliest bands at once.
+
+**What it is.** iter-350's `gv vad-gap-peak` names the single STEEPEST cost band —
+the densest pause cluster, the most expensive place to raise `--min-silence-ms`.
+`--top-n N` names the N steepest bands instead, ranked by descending marginal
+merge rate. Only NON-empty bands (rate > 0) are cost peaks, so the list may hold
+FEWER than N entries (or be empty when every band is a valley). The default
+`top_n=1` is byte-for-byte the original single-peak behaviour on all three faces.
+
+**What landed in `examples/gv.py` (+158 net lines).**
+- `positive_int_type` — argparse `type` for `--top-n`: an integer `>= 1` (the
+  strictly-positive twin of `nonneg_int_type`; zero would name nothing, negatives
+  and fractionals are nonsensical). Raises `argparse.ArgumentTypeError` otherwise.
+- `vad_gap_peak(result, *, cuts_ms, top_n=1)` — ranks the non-empty bands by
+  descending rate (Python's STABLE sort keeps the earlier band first on a tie,
+  matching the family's earliest-tie rule) and surfaces a `peaks` list of up to
+  `top_n` band entries (`from_ms`/`to_ms`/`from_s`/`to_s`/`width_ms`/
+  `merged_added`/`rate_per_100ms`) plus a `top_n` echo. The legacy scalar
+  `peak_*` fields are kept verbatim and ALWAYS mirror `peaks[0]`, so `top_n=1`
+  callers see no change. Raises `ValueError` on `top_n < 1`.
+- `render_vad_gap_peak` / `_json` / `_csv` thread `top_n` through. Human:
+  `top_n=1` is the unchanged single-peak block; `top_n>1` prints a `top N
+  costliest bands` header then one numbered `#k` line per peak. JSON: adds
+  `top_n` + `peaks` (a strict SUPERSET of the iter-350 shape at `top_n=1`). CSV:
+  SAME six columns, one row PER ranked peak (row order = rank, so no extra column
+  and a clean union with the single-peak CSV); `top_n=1` is the original one-row
+  golden, and an all-valley range still emits the single `peak_found=False` row.
+- `cmd_vad_gap_peak` reads `args.top_n` (getattr fallback to 1 for older callers)
+  and passes it to all three renderers; new `--top-n` subparser arg (default 1).
+
+**Tests.** `tests/unit/test_gv_vad_gap_peak.py` (+28, 54 → 82): `positive_int_type`
+accept/reject; parser default/accept/reject-bad; core default-singleton-peaks,
+descending-rate rank, truncate-to-N, earliest-tie-first, all-valley empty,
+no-gaps empty, below-one raises, each-peak-agrees-with-`vad_gap_cost`; human
+`top_n=1` unchanged + multi golden + all-valley note still fires; json `top_n=1`
+superset + multi + no-gaps empty; csv `top_n=1` legacy golden + multi
+one-row-per-peak + column-union-with-single-surface + all-valley single `False`
+row; handler human/json/csv multi + getattr-fallback-to-1-when-absent.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4877 passed**
+(4850 prior + 27 net new), run in the feature worktree before ff-merge AND
+re-run on main post-merge (4877 passed, ~42s).
+- Integration: not run this lap (pure string-formatting/arithmetic over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..353 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] vad-gap-peak `--top-n` companions** — a `--min-rate` floor so the
+   ranked list drops bands cheaper than a threshold (only the bands worth
+   worrying about), or a JSON/CSV `rank` column making the ordering explicit in
+   the machine faces (the human face already numbers `#k`).
+2. **[gv CLI] vad-gap-recommend-sweep companions** — let the sweep accept a swept
+   SEGMENTER knob (e.g. how short/balanced/long + the confidence grade shift as
+   `--min-speech-ms` varies), the way `vad-gap-sweep` tracks a swept
+   `--min-silence-ms`.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~31 leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
