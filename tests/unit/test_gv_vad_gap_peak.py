@@ -1574,3 +1574,275 @@ def test_handler_min_rate_pct_defaults_to_none_when_absent():
     payload = json.loads("\n".join(lines))
     assert payload["min_rate_pct"] is None
     assert len(payload["peaks"]) == 2
+
+
+# ---- iter-358: band_rate_dist — the observed band-rate distribution -----
+#
+# --min-rate-pct (iter-357) derives a rate FLOOR from the Pth percentile of the
+# observed non-empty band rates, but until iter-358 the operator could not SEE
+# that distribution to know where a chosen P would land. vad_gap_peak now always
+# carries a band_rate_dist summary; the human face shows it behind
+# --show-rate-dist (default off so the verdict face is unchanged); the JSON face
+# always carries it; the CSV verdict-row schema is unchanged.
+
+
+def test_band_rate_distribution_helper_basic():
+    # Two non-empty bands with rates 0.067 and 0.1 (the iter-357 canonical pair).
+    bands = [
+        {"rate_per_100ms": 0.1},
+        {"rate_per_100ms": 0.067},
+        {"rate_per_100ms": 0.0},  # an empty valley — excluded from the sample
+    ]
+    d = gv._band_rate_distribution(bands)
+    assert d["count"] == 2
+    assert d["min"] == pytest.approx(0.067)
+    assert d["max"] == pytest.approx(0.1)
+    assert d["mean"] == pytest.approx(0.084, abs=5e-4)
+    # Default percentiles p50/p75/p90/p99 in order.
+    assert [e["p"] for e in d["percentiles"]] == [50.0, 75.0, 90.0, 99.0]
+    # p50 of [0.067, 0.1] = midpoint 0.0835 -> rounded 0.084 (R-7, matches
+    # vad_gap_percentiles / the --min-rate-pct floor convention).
+    assert d["percentiles"][0]["rate"] == pytest.approx(0.084)
+
+
+def test_band_rate_distribution_helper_empty():
+    # No non-empty bands (every band a valley) -> count 0, None aggregates.
+    assert gv._band_rate_distribution([{"rate_per_100ms": 0.0}]) == {
+        "count": 0,
+        "min": None,
+        "mean": None,
+        "max": None,
+        "percentiles": [],
+    }
+    # Truly empty band list behaves the same.
+    assert gv._band_rate_distribution([])["count"] == 0
+
+
+def test_band_rate_distribution_custom_percentiles_in_order():
+    bands = [{"rate_per_100ms": 0.1}, {"rate_per_100ms": 0.2}]
+    d = gv._band_rate_distribution(bands, percentiles=[90.0, 10.0])
+    assert [e["p"] for e in d["percentiles"]] == [90.0, 10.0]
+
+
+def test_band_rate_distribution_single_band():
+    # A single sample yields that sample for every percentile (R-7).
+    d = gv._band_rate_distribution([{"rate_per_100ms": 0.15}])
+    assert d["count"] == 1
+    assert d["min"] == d["max"] == d["mean"] == pytest.approx(0.15)
+    assert all(e["rate"] == pytest.approx(0.15) for e in d["percentiles"])
+
+
+def test_core_carries_band_rate_dist():
+    res, cuts = _canon()
+    p = gv.vad_gap_peak(res, cuts_ms=cuts)
+    assert p["band_rate_dist"]["count"] == 2
+    assert p["band_rate_dist"]["max"] == pytest.approx(0.1)
+
+
+def test_core_band_rate_dist_is_full_distribution_ignoring_floor():
+    # The distribution is computed over ALL non-empty bands, regardless of the
+    # min_rate / min_rate_pct floor — so the operator sees the bands a floor drops.
+    res, cuts = _canon()
+    unfloored = gv.vad_gap_peak(res, cuts_ms=cuts)["band_rate_dist"]
+    # A high absolute floor drops the cheaper band from the ranking...
+    floored = gv.vad_gap_peak(res, cuts_ms=cuts, min_rate=0.09)
+    assert len(floored["peaks"]) == 1  # cheaper band filtered out
+    # ...but band_rate_dist still describes BOTH non-empty bands.
+    assert floored["band_rate_dist"] == unfloored
+    assert floored["band_rate_dist"]["count"] == 2
+
+
+def test_core_band_rate_dist_p_matches_min_rate_pct_floor():
+    # THE key invariant: the p75 rate printed in the distribution equals the
+    # effective floor --min-rate-pct 75 would apply (both read the same sample
+    # through the same _percentile_of_sorted). So an operator can read the dist,
+    # pick a P, and know exactly where the floor lands.
+    res, cuts = _canon()
+    dist = gv.vad_gap_peak(res, cuts_ms=cuts)["band_rate_dist"]
+    p75_rate = next(e["rate"] for e in dist["percentiles"] if e["p"] == 75.0)
+    floored = gv.vad_gap_peak(res, cuts_ms=cuts, min_rate_pct=75)
+    assert floored["effective_min_rate"] == pytest.approx(p75_rate)
+
+
+def test_core_band_rate_dist_all_valley_empty():
+    res = _result((0, 1), (5, 6))
+    p = gv.vad_gap_peak(res, cuts_ms=[1000.0, 2000.0, 3000.0])
+    assert p["peak_found"] is False
+    assert p["band_rate_dist"]["count"] == 0
+    assert p["band_rate_dist"]["percentiles"] == []
+
+
+def test_core_band_rate_dist_no_bands_empty():
+    p = gv.vad_gap_peak(_result((0, 1)))
+    assert p["num_bands"] == 0
+    assert p["band_rate_dist"]["count"] == 0
+
+
+def test_core_band_rate_dist_custom_rate_pcts():
+    res, cuts = _canon()
+    p = gv.vad_gap_peak(res, cuts_ms=cuts, rate_pcts=[25.0, 75.0])
+    assert [e["p"] for e in p["band_rate_dist"]["percentiles"]] == [25.0, 75.0]
+
+
+# ---- renderer: human --show-rate-dist -----------------------------------
+
+
+def test_render_human_default_omits_rate_dist():
+    # Default face is byte-for-byte unchanged — no rate-dist block leaks in.
+    res, cuts = _canon()
+    lines = gv.render_vad_gap_peak(res, cuts_ms=cuts)
+    assert not any("band-rate dist" in ln for ln in lines)
+
+
+def test_render_human_show_rate_dist_block():
+    res, cuts = _canon()
+    lines = gv.render_vad_gap_peak(res, cuts_ms=cuts, show_rate_dist=True)
+    header = [ln for ln in lines if "band-rate dist:" in ln]
+    assert len(header) == 1
+    assert "2 non-empty bands" in header[0]
+    assert "(iter-358)" in header[0]
+    # One indented line per percentile, naming the pNN label and a rate.
+    pct_lines = [ln for ln in lines if ln.strip().startswith("p")]
+    assert any("p50:" in ln for ln in pct_lines)
+    assert any("p75:" in ln for ln in pct_lines)
+    assert any("p90:" in ln for ln in pct_lines)
+    assert any("p99:" in ln for ln in pct_lines)
+    # The verdict still prints below the dist block.
+    assert any("costliest band:" in ln for ln in lines)
+
+
+def test_render_human_show_rate_dist_all_valley_note():
+    res = _result((0, 1), (5, 6))
+    lines = gv.render_vad_gap_peak(
+        res, cuts_ms=[1000.0, 2000.0, 3000.0], show_rate_dist=True
+    )
+    assert any(
+        "no non-empty bands" in ln and "(iter-358)" in ln for ln in lines
+    )
+
+
+def test_render_human_show_rate_dist_custom_pcts():
+    res, cuts = _canon()
+    lines = gv.render_vad_gap_peak(
+        res, cuts_ms=cuts, show_rate_dist=True, rate_pcts=[25.0]
+    )
+    pct_lines = [ln for ln in lines if ln.strip().startswith("p")]
+    assert len(pct_lines) == 1
+    assert "p25:" in pct_lines[0]
+
+
+# ---- renderer: JSON always carries band_rate_dist -----------------------
+
+
+def test_render_json_carries_band_rate_dist():
+    res, cuts = _canon()
+    payload = json.loads(gv.render_vad_gap_peak_json(res, cuts_ms=cuts))
+    dist = payload["band_rate_dist"]
+    assert dist["count"] == 2
+    assert dist["max"] == pytest.approx(0.1)
+    assert [e["p"] for e in dist["percentiles"]] == [50.0, 75.0, 90.0, 99.0]
+
+
+def test_render_json_band_rate_dist_matches_core():
+    res, cuts = _canon()
+    payload = json.loads(gv.render_vad_gap_peak_json(res, cuts_ms=cuts))
+    core = gv.vad_gap_peak(res, cuts_ms=cuts)
+    assert payload["band_rate_dist"] == core["band_rate_dist"]
+
+
+def test_render_json_band_rate_dist_present_for_all_valley():
+    res = _result((0, 1), (5, 6))
+    payload = json.loads(
+        gv.render_vad_gap_peak_json(res, cuts_ms=[1000.0, 2000.0, 3000.0])
+    )
+    assert payload["band_rate_dist"]["count"] == 0
+    assert payload["band_rate_dist"]["percentiles"] == []
+
+
+def test_render_json_band_rate_dist_custom_pcts():
+    res, cuts = _canon()
+    payload = json.loads(
+        gv.render_vad_gap_peak_json(res, cuts_ms=cuts, rate_pcts=[10.0, 90.0])
+    )
+    assert [e["p"] for e in payload["band_rate_dist"]["percentiles"]] == [10.0, 90.0]
+
+
+# ---- renderer: CSV schema unchanged by the dist -------------------------
+
+
+def test_render_csv_schema_unchanged_no_rate_dist_columns():
+    res, cuts = _canon()
+    text = gv.render_vad_gap_peak_csv(res, cuts_ms=cuts)
+    rows = list(csv.reader(io.StringIO(text)))
+    assert rows[0] == [
+        "rank",
+        "peak_found",
+        "peak_from_ms",
+        "peak_to_ms",
+        "peak_width_ms",
+        "peak_merged_added",
+        "peak_rate_per_100ms",
+    ]
+    # No band-rate-dist token leaks into the CSV.
+    assert "band_rate_dist" not in text
+
+
+# ---- parser & handler: --show-rate-dist ---------------------------------
+
+
+def test_parser_show_rate_dist_default_false():
+    parser = gv.build_parser()
+    ns = parser.parse_args(["vad-gap-peak", "rec.wav"])
+    assert ns.show_rate_dist is False
+
+
+def test_parser_accepts_show_rate_dist():
+    parser = gv.build_parser()
+    ns = parser.parse_args(["vad-gap-peak", "rec.wav", "--show-rate-dist"])
+    assert ns.show_rate_dist is True
+
+
+def test_handler_show_rate_dist_threads_to_human():
+    res, cuts = _canon()
+    lines = _run(
+        _args(cuts_ms=cuts, show_rate_dist=True),
+        segmenter=lambda w, *, params: res,
+        availability=lambda: True,
+    )
+    assert any("band-rate dist:" in ln for ln in lines)
+
+
+def test_handler_show_rate_dist_default_omits_block():
+    res, cuts = _canon()
+    lines = _run(
+        _args(cuts_ms=cuts),
+        segmenter=lambda w, *, params: res,
+        availability=lambda: True,
+    )
+    assert not any("band-rate dist" in ln for ln in lines)
+
+
+def test_handler_json_always_carries_band_rate_dist_without_flag():
+    # The JSON face carries band_rate_dist even without --show-rate-dist (the
+    # flag gates only the human face).
+    res, cuts = _canon()
+    lines = _run(
+        _args(cuts_ms=cuts, json=True),
+        segmenter=lambda w, *, params: res,
+        availability=lambda: True,
+    )
+    payload = json.loads("\n".join(lines))
+    assert payload["band_rate_dist"]["count"] == 2
+
+
+def test_handler_show_rate_dist_getattr_fallback_false():
+    # Older callers without a show_rate_dist attr fall back to False (no block).
+    res, cuts = _canon()
+    args = _args(cuts_ms=cuts)
+    assert not hasattr(args, "show_rate_dist")
+    lines = _run(
+        args,
+        segmenter=lambda w, *, params: res,
+        availability=lambda: True,
+    )
+    assert not any("band-rate dist" in ln for ln in lines)
