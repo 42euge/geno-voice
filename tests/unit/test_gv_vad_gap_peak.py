@@ -1531,10 +1531,14 @@ def test_render_json_min_rate_pct_default_null_and_effective_equals_min_rate():
 
 def test_render_csv_min_rate_pct_columns_unchanged():
     res, cuts = _canon()
+    # iter-363: a percentile floor now trails a `# floor_percentile_listed`
+    # comment, so strip comment lines before comparing the tabular body — the
+    # DATA columns are what must stay unchanged vs the no-floor table.
+    pct_text = gv.render_vad_gap_peak_csv(res, cuts_ms=cuts, top_n=5, min_rate_pct=50)
     pct = list(
         csv.reader(
             io.StringIO(
-                gv.render_vad_gap_peak_csv(res, cuts_ms=cuts, top_n=5, min_rate_pct=50)
+                "\n".join(ln for ln in pct_text.splitlines() if not ln.startswith("#"))
             )
         )
     )
@@ -2272,3 +2276,136 @@ def test_handler_rate_pcts_unavailable_json_does_not_raise():
     payload = json.loads("\n".join(lines))
     assert payload["available"] is False
     assert "band_rate_dist" not in payload
+
+
+# ---- iter-363: CSV face trails floor_percentile_listed as a #-comment ----
+#
+# The CSV's seven-column verdict-row schema has no place for a per-row floor
+# flag, so the floor-info signal (iter-360 human marker / iter-362 human hint /
+# iter-361 JSON flag) reaches the spreadsheet face as a single trailing
+# `# floor_percentile_listed: <bool>` comment — emitted ONLY when an adaptive
+# --min-rate-pct floor is active. The boolean equals iter-361's JSON flag
+# exactly so the three faces never disagree.
+
+
+def test_render_csv_floor_listed_comment_true():
+    # --min-rate-pct 75 IS among the default p50/75/90/99 quantiles → True.
+    res, cuts = _canon()
+    text = gv.render_vad_gap_peak_csv(res, cuts_ms=cuts, min_rate_pct=75)
+    assert text.splitlines()[-1] == "# floor_percentile_listed: True"
+
+
+def test_render_csv_floor_listed_comment_false():
+    # --min-rate-pct 80 is NOT among the default quantiles → False.
+    res, cuts = _canon()
+    text = gv.render_vad_gap_peak_csv(res, cuts_ms=cuts, min_rate_pct=80)
+    assert text.splitlines()[-1] == "# floor_percentile_listed: False"
+
+
+def test_render_csv_floor_comment_absent_without_min_rate_pct():
+    # Default no-floor table is byte-for-byte unchanged — no comment trails it.
+    res, cuts = _canon()
+    text = gv.render_vad_gap_peak_csv(res, cuts_ms=cuts)
+    assert "floor_percentile_listed" not in text
+    # And the body is exactly the iter-356 golden (no trailing line slipped in).
+    assert text == (
+        "rank,peak_found,peak_from_ms,peak_to_ms,peak_width_ms,peak_merged_added,"
+        "peak_rate_per_100ms\r\n"
+        "1,True,500,2500,2000,2,0.1"
+    )
+
+
+def test_render_csv_floor_comment_absent_with_absolute_min_rate():
+    # An absolute --min-rate floor is not a percentile, so the comment is keyed to
+    # min_rate_pct only and stays absent (the CSV is unchanged vs the no-floor one
+    # apart from which bands rank).
+    res, cuts = _canon()
+    text = gv.render_vad_gap_peak_csv(res, cuts_ms=cuts, min_rate=0.05)
+    assert "floor_percentile_listed" not in text
+
+
+def test_render_csv_floor_listed_comment_custom_rate_pcts():
+    # A custom --rate-pcts that INCLUDES the floor percentile → True; one that
+    # excludes it → False. The rule is "floor among the shown quantiles", same as
+    # the JSON flag and the human marker.
+    res, cuts = _canon()
+    incl = gv.render_vad_gap_peak_csv(
+        res, cuts_ms=cuts, min_rate_pct=80, rate_pcts=[25.0, 80.0]
+    )
+    assert incl.splitlines()[-1] == "# floor_percentile_listed: True"
+    excl = gv.render_vad_gap_peak_csv(
+        res, cuts_ms=cuts, min_rate_pct=80, rate_pcts=[25.0, 50.0]
+    )
+    assert excl.splitlines()[-1] == "# floor_percentile_listed: False"
+
+
+def test_render_csv_floor_comment_all_valley_false():
+    # An all-valley result has no non-empty bands → an empty percentiles list, so
+    # no floor percentile can match → False (matching the JSON flag's all-valley
+    # case). The verdict row is still the single peak_found=False blank row.
+    res = _result((0, 1), (5, 6))
+    text = gv.render_vad_gap_peak_csv(
+        res, cuts_ms=[1000.0, 2000.0, 3000.0], min_rate_pct=80
+    )
+    lines = text.splitlines()
+    assert lines[-1] == "# floor_percentile_listed: False"
+    # The data rows are unchanged: header + the blank peak_found=False row.
+    rows = list(csv.reader(io.StringIO("\n".join(lines[:-1]))))
+    assert rows[1] == ["", "False", "", "", "", "", ""]
+
+
+def test_render_csv_floor_comment_header_only_for_no_gaps():
+    # A <2-segment result yields the header alone normally; with an active floor it
+    # still appends the comment (the flag is well-defined: no quantiles → False).
+    res = _result((0, 1))
+    text = gv.render_vad_gap_peak_csv(res, min_rate_pct=75)
+    lines = text.splitlines()
+    assert lines[-1] == "# floor_percentile_listed: False"
+    assert lines[0].startswith("rank,peak_found")
+    assert len(lines) == 2  # header + comment, no data row
+
+
+def test_render_csv_floor_comment_is_skippable_by_pandas_style_reader():
+    # The trailing metadata uses the same `#` comment convention the sibling CSV
+    # renderers use, so a comment-aware reader sees only the tabular body.
+    res, cuts = _canon()
+    text = gv.render_vad_gap_peak_csv(res, cuts_ms=cuts, min_rate_pct=75)
+    data_lines = [ln for ln in text.splitlines() if not ln.startswith("#")]
+    rows = list(csv.reader(io.StringIO("\n".join(data_lines))))
+    assert rows[0][0] == "rank"
+    assert rows[1][1] == "True"  # the verdict row survives the comment strip
+
+
+def test_render_csv_floor_comment_agrees_with_json_flag():
+    # THE cross-face invariant: the CSV comment's boolean equals iter-361's JSON
+    # floor_percentile_listed for both a listed (p75) and an unlisted (p80) floor.
+    res, cuts = _canon()
+    for pct in (75, 80):
+        text = gv.render_vad_gap_peak_csv(res, cuts_ms=cuts, min_rate_pct=pct)
+        csv_flag = text.splitlines()[-1] == "# floor_percentile_listed: True"
+        payload = json.loads(
+            gv.render_vad_gap_peak_json(res, cuts_ms=cuts, min_rate_pct=pct)
+        )
+        assert csv_flag == payload["floor_percentile_listed"]
+
+
+def test_render_csv_floor_comment_unavailable_has_no_comment():
+    # result=None is the bare install-hint comment line — no floor comment is
+    # appended (no analysis ran), matching the other faces' degrade contract.
+    text = gv.render_vad_gap_peak_csv(None, min_rate_pct=75)
+    assert "floor_percentile_listed" not in text
+    assert text.startswith("# silero VAD unavailable")
+
+
+def test_handler_csv_floor_comment_threads_through():
+    # End-to-end: the handler threads --rate-pcts into the CSV face so a custom
+    # quantile set that lists the floor flips the trailing comment to True.
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    cuts = [500.0, 2500.0, 3500.0, 5000.0]
+    lines = _run(
+        _args(cuts_ms=cuts, csv=True, min_rate_pct=80, rate_pcts=[25.0, 80.0]),
+        segmenter=lambda w, *, params: res,
+        availability=lambda: True,
+    )
+    # The CSV is emitted as a single log line; split it to inspect the trailer.
+    assert "\n".join(lines).splitlines()[-1] == "# floor_percentile_listed: True"

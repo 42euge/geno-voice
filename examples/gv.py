@@ -3115,9 +3115,15 @@ def render_vad_gap_peak_json(
 
 
 def render_vad_gap_peak_csv(
-    result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1, min_rate=0.0, min_rate_pct=None
+    result,
+    *,
+    cuts_ms=DEFAULT_GAP_CDF_CUTS_MS,
+    top_n=1,
+    min_rate=0.0,
+    min_rate_pct=None,
+    rate_pcts=DEFAULT_BAND_RATE_PCTS,
 ):
-    """Render the costliest-band verdict as a CSV table (iter-350; ``top_n`` iter-354; ``min_rate`` iter-355; ``min_rate_pct`` iter-357).
+    """Render the costliest-band verdict as a CSV table (iter-350; ``top_n`` iter-354; ``min_rate`` iter-355; ``min_rate_pct`` iter-357; floor-listed comment iter-363).
 
     The spreadsheet-friendly twin of :func:`render_vad_gap_peak` /
     :func:`render_vad_gap_peak_json`, completing the human / ``--json`` / ``--csv``
@@ -3143,8 +3149,24 @@ def render_vad_gap_peak_csv(
     peak but bands exist, the single ``rank``-blank ``peak_found=False`` blank row
     is emitted (same as the all-valley case). iter-357's ``min_rate_pct``
     likewise only changes which bands rank — the column schema is unchanged, so
-    the percentile and absolute floors yield CSVs with an identical shape. Pure:
-    built with the stdlib :mod:`csv` writer, trailing terminator stripped.
+    the percentile and absolute floors yield CSVs with an identical shape.
+
+    iter-363 completes the floor-info signal across all three faces. The human
+    face marks the floor's ``band_rate_dist`` row (iter-360) or hints when it is
+    unlisted (iter-362); the JSON face carries a top-level
+    ``floor_percentile_listed`` boolean (iter-361). The CSV's seven-column
+    verdict-row schema has no place for a distribution or a per-row flag, so this
+    surface trails the same fact as a single ``# floor_percentile_listed: ...``
+    comment line — self-describing metadata a spreadsheet/plotter skips by default
+    (pandas ``read_csv(comment="#")``), matching the ``#``-comment precedent
+    :func:`render_calibration_csv` / :func:`render_vad_sweep_csv` use. It is
+    emitted ONLY when an adaptive ``min_rate_pct`` floor is active (the case the
+    flag describes); no comment trails an absolute ``--min-rate`` floor or the
+    default no-floor table, so those CSVs are byte-for-byte unchanged. The boolean
+    equals iter-361's JSON ``floor_percentile_listed`` exactly (derived from the
+    same ``min_rate_pct`` + ``rate_pcts`` inputs), so the three faces never
+    disagree. Pure: built with the stdlib :mod:`csv` writer, trailing terminator
+    stripped.
     """
     if result is None:
         return (
@@ -3152,7 +3174,12 @@ def render_vad_gap_peak_csv(
             "torchaudio) to enable offline neural segmentation"
         )
     p = vad_gap_peak(
-        result, cuts_ms=cuts_ms, top_n=top_n, min_rate=min_rate, min_rate_pct=min_rate_pct
+        result,
+        cuts_ms=cuts_ms,
+        top_n=top_n,
+        min_rate=min_rate,
+        min_rate_pct=min_rate_pct,
+        rate_pcts=rate_pcts,
     )
     buf = io.StringIO()
     writer = csv.writer(buf)
@@ -3187,7 +3214,21 @@ def render_vad_gap_peak_csv(
         # Bands exist but none is a cost peak (all-valley range): the single
         # peak_found=False row with blank measures (rank blank too — no peak).
         writer.writerow(["", p["peak_found"], "", "", "", "", ""])
-    return buf.getvalue().rstrip("\r\n")
+    body = buf.getvalue().rstrip("\r\n")
+    # iter-363: when an adaptive percentile floor is active, trail the
+    # floor_percentile_listed fact (iter-361's JSON flag) as a #-comment line so
+    # the CSV consumer learns — without re-deriving it — whether the floor's
+    # percentile is one of the band_rate_dist quantiles (i.e. whether the human
+    # face would mark a pNN row). Derived from the same min_rate_pct + rate_pcts
+    # inputs as the JSON flag, so the faces agree exactly. No comment for an
+    # absolute --min-rate floor or the default no-floor table — those CSVs are
+    # unchanged.
+    if min_rate_pct is not None:
+        floor_percentile_listed = any(
+            entry["p"] == min_rate_pct for entry in p["band_rate_dist"]["percentiles"]
+        )
+        body += f"\n# floor_percentile_listed: {floor_percentile_listed}"
+    return body
 
 
 # How far across the valley (or, in the no-valley fallback, across the gap up to
@@ -6339,15 +6380,19 @@ def cmd_vad_gap_peak(args, *, log=print, segmenter=None, availability=None):
     # band_rate_dist for machine consumers; the CSV's verdict-row schema has no
     # place for the distribution and is unchanged).
     # iter-359: --rate-pcts drives the band_rate_dist percentile set for the human
-    # AND json faces; the CSV face has no distribution columns so it never sees it.
+    # AND json faces.
+    # iter-363: the CSV face now also reads --rate-pcts — only to decide whether a
+    # custom percentile set lists the active --min-rate-pct floor for its trailing
+    # floor_percentile_listed #-comment (the row columns are still unchanged).
     human_kw = dict(kw, show_rate_dist=show_rate_dist, rate_pcts=rate_pcts)
     json_kw = dict(kw, rate_pcts=rate_pcts)
+    csv_kw = dict(kw, rate_pcts=rate_pcts)
 
     if not availability():
         if as_json:
             log(render_vad_gap_peak_json(None, **json_kw))
         elif as_csv:
-            log(render_vad_gap_peak_csv(None, **kw))
+            log(render_vad_gap_peak_csv(None, **csv_kw))
         else:
             for line in render_vad_gap_peak(None, **human_kw):
                 log(line)
@@ -6366,7 +6411,7 @@ def cmd_vad_gap_peak(args, *, log=print, segmenter=None, availability=None):
     if as_json:
         log(render_vad_gap_peak_json(result, **json_kw))
     elif as_csv:
-        log(render_vad_gap_peak_csv(result, **kw))
+        log(render_vad_gap_peak_csv(result, **csv_kw))
     else:
         for line in render_vad_gap_peak(result, **human_kw):
             log(line)
