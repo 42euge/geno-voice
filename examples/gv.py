@@ -4362,6 +4362,7 @@ def render_vad_gap_recommend_knob_grid(
     row_axis="threshold",
     col_axis="min_silence_ms",
     biases=GAP_RECOMMEND_BIAS_ORDER,
+    min_grade=None,
 ):
     """Render a 2-D recommend knob grid as a plain-text table (iter-373).
 
@@ -4387,14 +4388,25 @@ def render_vad_gap_recommend_knob_grid(
     short..balanced..long order; the default is the full triad (byte-identical to
     the pre-filter render). ``spread`` and ``grade`` are valley / distribution
     properties — invariant under the column selection — so they are always kept.
+
+    ``min_grade`` (iter-377) drops every cell whose confidence ``grade`` is below
+    the named floor (``"weak"`` / ``"moderate"`` / ``"strong"``), leaving only the
+    region of the (gate × column) plane worth acting on; cells graded ``"none"`` or
+    ungraded (<2 segments) are always dropped when a floor is set. The default
+    ``None`` keeps every cell (byte-identical to the pre-filter render). When the
+    filter removes every cell a single ``(no grid cell reaches ...)`` note replaces
+    the body. The grid analogue of the iter-376 ``min_grade`` on the 1-D knob sweep.
     """
     if any(r is None for r in results):
         return [
             "silero VAD unavailable: install 'silero-vad' (pulls torch + "
             "torchaudio) to enable offline neural segmentation"
         ]
-    cells = vad_gap_recommend_knob_grid(
-        row_values, col_values, results, row_axis=row_axis, col_axis=col_axis
+    cells = _filter_knob_rows_by_grade(
+        vad_gap_recommend_knob_grid(
+            row_values, col_values, results, row_axis=row_axis, col_axis=col_axis
+        ),
+        min_grade,
     )
     row_label = _SWEEP_AXIS_LABEL.get(row_axis, row_axis)
     col_label = _SWEEP_AXIS_LABEL.get(col_axis, col_axis)
@@ -4404,6 +4416,11 @@ def render_vad_gap_recommend_knob_grid(
         f"  {row_label:>11}  {col_label:>11}  segments  gaps"
         f"{_knob_bias_header_segment(biases)}  {'spread':>8}  {'confidence':>10}",
     ]
+    if not cells:
+        lines.append(
+            f"  (no grid cell reaches confidence grade '{min_grade}' or better)"
+        )
+        return lines
     for cell in cells:
         lines.append(
             f"  {_format_sweep_axis_value(row_axis, cell[row_axis]):>11}  "
@@ -4423,6 +4440,7 @@ def render_vad_gap_recommend_knob_grid_json(
     row_axis="threshold",
     col_axis="min_silence_ms",
     biases=GAP_RECOMMEND_BIAS_ORDER,
+    min_grade=None,
 ):
     """Render a 2-D recommend knob grid as a JSON string (iter-373).
 
@@ -4442,6 +4460,13 @@ def render_vad_gap_recommend_knob_grid_json(
     fields are unaffected. The default is the full triad (unchanged payload). When
     the selection is a strict subset the payload also carries a top-level
     ``biases`` key naming the columns kept.
+
+    ``min_grade`` (iter-377) drops every grid cell whose confidence ``grade`` is
+    below the named floor (``"weak"`` / ``"moderate"`` / ``"strong"``); cells graded
+    ``"none"`` or ungraded (<2 segments) are always dropped when a floor is set.
+    The default ``None`` keeps every cell (unchanged payload). When a floor is set
+    the payload also carries a top-level ``min_grade`` key naming the floor, so a
+    consumer knows the ``grid`` list was filtered (and may legitimately be empty).
     """
     if any(r is None for r in results):
         return json.dumps(
@@ -4454,8 +4479,11 @@ def render_vad_gap_recommend_knob_grid_json(
             },
             indent=2,
         )
-    cells = vad_gap_recommend_knob_grid(
-        row_values, col_values, results, row_axis=row_axis, col_axis=col_axis
+    cells = _filter_knob_rows_by_grade(
+        vad_gap_recommend_knob_grid(
+            row_values, col_values, results, row_axis=row_axis, col_axis=col_axis
+        ),
+        min_grade,
     )
     biases = list(biases)
     payload = {
@@ -4464,6 +4492,8 @@ def render_vad_gap_recommend_knob_grid_json(
         "row_axis": row_axis,
         "col_axis": col_axis,
     }
+    if min_grade is not None:
+        payload["min_grade"] = min_grade
     if list(biases) != list(GAP_RECOMMEND_BIAS_ORDER):
         payload["biases"] = biases
         cells = [_knob_filtered_biases(c, biases) for c in cells]
@@ -4480,6 +4510,7 @@ def render_vad_gap_recommend_knob_grid_csv(
     row_axis="threshold",
     col_axis="min_silence_ms",
     biases=GAP_RECOMMEND_BIAS_ORDER,
+    min_grade=None,
 ):
     """Render a 2-D recommend knob grid as CSV text (no trailing newline) (iter-373).
 
@@ -4504,6 +4535,13 @@ def render_vad_gap_recommend_knob_grid_csv(
     ``results`` (segmenter unavailable) yields a single ``# silero VAD
     unavailable: ...`` comment line. Pure: built with the stdlib :mod:`csv` writer,
     trailing terminator stripped.
+
+    ``min_grade`` (iter-377) drops every data row whose confidence ``grade`` is
+    below the named floor (``"weak"`` / ``"moderate"`` / ``"strong"``); cells graded
+    ``"none"`` or ungraded (<2 segments) are always dropped when a floor is set.
+    The default ``None`` keeps every cell. The header is emitted unconditionally so
+    a fully-filtered grid is still a valid one-line CSV (header only), and the table
+    still unions cleanly with an unfiltered run.
     """
     if any(r is None for r in results):
         return (
@@ -4525,9 +4563,13 @@ def render_vad_gap_recommend_knob_grid_csv(
             "separation_ratio",
         ]
     )
-    for cell in vad_gap_recommend_knob_grid(
-        row_values, col_values, results, row_axis=row_axis, col_axis=col_axis
-    ):
+    cells = _filter_knob_rows_by_grade(
+        vad_gap_recommend_knob_grid(
+            row_values, col_values, results, row_axis=row_axis, col_axis=col_axis
+        ),
+        min_grade,
+    )
+    for cell in cells:
         if cell["num_gaps"] > 0:
             bias_cells = [
                 _format_cut_label(_knob_sweep_bias_ms(cell, b)) for b in biases
@@ -8189,6 +8231,10 @@ def cmd_vad_gap_recommend_knob_grid(args, *, log=print, segmenter=None, availabi
     # (canonical short..balanced..long order from the parser); default full triad.
     biases = getattr(args, "bias", None) or GAP_RECOMMEND_BIAS_ORDER
 
+    # iter-377 --min-grade row filter: drop grid cells whose confidence grade is
+    # below the floor (the grid analogue of the iter-376 knob-sweep --min-grade).
+    min_grade = getattr(args, "min_grade", None)
+
     if not availability():
         unavailable = [None]
         if as_json:
@@ -8196,6 +8242,7 @@ def cmd_vad_gap_recommend_knob_grid(args, *, log=print, segmenter=None, availabi
                 render_vad_gap_recommend_knob_grid_json(
                     [], [], unavailable, name=args.wav,
                     row_axis=row_axis, col_axis=col_axis, biases=biases,
+                    min_grade=min_grade,
                 )
             )
         elif as_csv:
@@ -8203,12 +8250,14 @@ def cmd_vad_gap_recommend_knob_grid(args, *, log=print, segmenter=None, availabi
                 render_vad_gap_recommend_knob_grid_csv(
                     [], [], unavailable, name=args.wav,
                     row_axis=row_axis, col_axis=col_axis, biases=biases,
+                    min_grade=min_grade,
                 )
             )
         else:
             for line in render_vad_gap_recommend_knob_grid(
                 [], [], unavailable, name=args.wav,
                 row_axis=row_axis, col_axis=col_axis, biases=biases,
+                min_grade=min_grade,
             ):
                 log(line)
         return
@@ -8249,6 +8298,7 @@ def cmd_vad_gap_recommend_knob_grid(args, *, log=print, segmenter=None, availabi
             render_vad_gap_recommend_knob_grid_json(
                 row_values, col_values, results, name=name,
                 row_axis=row_axis, col_axis=col_axis, biases=biases,
+                min_grade=min_grade,
             )
         )
     elif as_csv:
@@ -8256,12 +8306,14 @@ def cmd_vad_gap_recommend_knob_grid(args, *, log=print, segmenter=None, availabi
             render_vad_gap_recommend_knob_grid_csv(
                 row_values, col_values, results, name=name,
                 row_axis=row_axis, col_axis=col_axis, biases=biases,
+                min_grade=min_grade,
             )
         )
     else:
         for line in render_vad_gap_recommend_knob_grid(
             row_values, col_values, results, name=name,
             row_axis=row_axis, col_axis=col_axis, biases=biases,
+            min_grade=min_grade,
         ):
             log(line)
 
@@ -10806,6 +10858,16 @@ def build_parser():
         "recommendation columns (e.g. 'short' or 'short,long'); narrows the "
         "table to the biases you care about while always keeping the spread + "
         "confidence columns (default: all three, in short..balanced..long order)",
+    )
+    vad_gap_rec_knob_grid.add_argument(
+        "--min-grade",
+        type=gap_confidence_grade_type,
+        default=None,
+        dest="min_grade",
+        help="Hide grid cells whose confidence grade is below this floor "
+        "(weak/moderate/strong) so only the trustworthy region of the (gate × "
+        "column) plane shows; cells graded 'none' or with <2 segments are always "
+        "dropped when set (default: show every grid cell)",
     )
     vad_gap_rec_knob_grid_fmt = vad_gap_rec_knob_grid.add_mutually_exclusive_group()
     vad_gap_rec_knob_grid_fmt.add_argument(

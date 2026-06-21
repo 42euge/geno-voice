@@ -665,3 +665,190 @@ def test_cmd_invalid_bias_rejected():
         gv.build_parser().parse_args(
             ["vad-gap-recommend-knob-grid", "rec.wav", "--bias", "medium"]
         )
+
+
+# ---- iter-377: --min-grade cell filter (grid analogue of iter-376) -------
+#
+# The reusable gap_confidence_grade_type / _grade_meets_min /
+# _filter_knob_rows_by_grade primitives are already exercised in
+# test_gv_vad_gap_recommend_knob_sweep.py; here we verify they are wired into
+# the 2-D grid renderers + handler exactly as iter-376 wired them into the 1-D
+# sweep, with the grid-specific note wording, axis layout, and CSV grade column.
+
+
+def test_render_human_min_grade_default_unchanged():
+    # No --min-grade is byte-identical to the explicit-default render.
+    res = [_bimodal(), _no_valley()]
+    default = gv.render_vad_gap_recommend_knob_grid(
+        [0.3], [400.0, 800.0], res, name="rec.wav",
+    )
+    explicit = gv.render_vad_gap_recommend_knob_grid(
+        [0.3], [400.0, 800.0], res, name="rec.wav", min_grade=None,
+    )
+    assert default == explicit
+
+
+def test_render_human_min_grade_drops_cells_below_floor():
+    # Two cells: one bimodal (strong), one uniform (none). A "weak" floor keeps
+    # only the strong cell.
+    lines = gv.render_vad_gap_recommend_knob_grid(
+        [0.3], [400.0, 800.0], [_bimodal(), _no_valley()], name="rec.wav",
+        min_grade="weak",
+    )
+    body = lines[2:]
+    assert len(body) == 1
+    assert "strong" in body[0]
+    assert "none" not in "\n".join(body)
+
+
+def test_render_human_min_grade_empty_emits_note():
+    # A floor no grid cell reaches replaces the body with a single note line.
+    lines = gv.render_vad_gap_recommend_knob_grid(
+        [0.7], [400.0], [_no_valley()], name="rec.wav", min_grade="strong",
+    )
+    # header (2 lines) + one note line, no data rows.
+    assert len(lines) == 3
+    assert "no grid cell reaches confidence grade 'strong'" in lines[2]
+
+
+def test_render_human_min_grade_drops_ungraded_cells():
+    # A <2-segment cell is ungraded (None) — always dropped under any floor.
+    lines = gv.render_vad_gap_recommend_knob_grid(
+        [0.3], [400.0, 800.0], [_bimodal(), _single()], name="rec.wav",
+        min_grade="weak",
+    )
+    body = lines[2:]
+    assert len(body) == 1
+    assert "strong" in body[0]
+
+
+def test_render_json_min_grade_default_no_key():
+    text = gv.render_vad_gap_recommend_knob_grid_json(
+        [0.3], [400.0], [_bimodal()], name="rec.wav",
+    )
+    payload = json.loads(text)
+    assert "min_grade" not in payload
+    assert len(payload["grid"]) == 1
+
+
+def test_render_json_min_grade_filters_and_names_floor():
+    text = gv.render_vad_gap_recommend_knob_grid_json(
+        [0.3], [400.0, 800.0], [_bimodal(), _no_valley()], name="rec.wav",
+        min_grade="moderate",
+    )
+    payload = json.loads(text)
+    assert payload["min_grade"] == "moderate"
+    assert [c["grade"] for c in payload["grid"]] == ["strong"]
+
+
+def test_render_json_min_grade_empty_grid_is_valid():
+    text = gv.render_vad_gap_recommend_knob_grid_json(
+        [0.7], [400.0], [_no_valley()], name="rec.wav", min_grade="strong",
+    )
+    payload = json.loads(text)
+    assert payload["available"] is True
+    assert payload["min_grade"] == "strong"
+    assert payload["grid"] == []
+
+
+def test_render_json_min_grade_composes_with_bias_filter():
+    # Both filters at once: narrow columns AND drop cells below the floor.
+    text = gv.render_vad_gap_recommend_knob_grid_json(
+        [0.3], [400.0, 800.0], [_bimodal(), _no_valley()], name="rec.wav",
+        biases=["short", "long"], min_grade="moderate",
+    )
+    payload = json.loads(text)
+    assert payload["min_grade"] == "moderate"
+    assert payload["biases"] == ["short", "long"]
+    assert [c["grade"] for c in payload["grid"]] == ["strong"]
+    assert [b["bias"] for b in payload["grid"][0]["biases"]] == ["short", "long"]
+
+
+def test_render_csv_min_grade_header_always_emitted():
+    # A fully-filtered grid is still a valid one-line CSV (header only).
+    text = gv.render_vad_gap_recommend_knob_grid_csv(
+        [0.7], [400.0], [_no_valley()], name="rec.wav", min_grade="strong",
+    )
+    rows = list(csv.reader(io.StringIO(text)))
+    assert len(rows) == 1
+    assert rows[0][0] == "threshold"
+    assert rows[0][1] == "min_silence_ms"
+    assert rows[0][8] == "grade"
+
+
+def test_render_csv_min_grade_drops_cells_below_floor():
+    text = gv.render_vad_gap_recommend_knob_grid_csv(
+        [0.3], [400.0, 800.0], [_bimodal(), _no_valley()], name="rec.wav",
+        min_grade="weak",
+    )
+    rows = list(csv.reader(io.StringIO(text)))
+    # header + one data row (the strong one); the "none" cell is dropped.
+    assert len(rows) == 2
+    assert rows[1][8] == "strong"
+
+
+def test_cmd_min_grade_human_path():
+    lines = _run_handler(
+        [_bimodal(), _bimodal(), _no_valley(), _single()],
+        argv_extra=["--thresholds", "0.3,0.9", "--min-silences", "400,800",
+                    "--min-grade", "weak"],
+    )
+    body = lines[2:]
+    # Two strong cells kept; the none + ungraded cells dropped.
+    assert len(body) == 2
+    assert all("strong" in ln for ln in body)
+
+
+def test_cmd_min_grade_json_path():
+    lines = _run_handler(
+        [_bimodal(), _no_valley()],
+        argv_extra=["--thresholds", "0.3", "--min-silences", "400,800",
+                    "--json", "--min-grade", "moderate"],
+    )
+    payload = json.loads("\n".join(lines))
+    assert payload["min_grade"] == "moderate"
+    assert [c["grade"] for c in payload["grid"]] == ["strong"]
+
+
+def test_cmd_min_grade_csv_path():
+    lines = _run_handler(
+        [_bimodal(), _no_valley()],
+        argv_extra=["--thresholds", "0.3", "--min-silences", "400,800",
+                    "--csv", "--min-grade", "weak"],
+    )
+    rows = list(csv.reader(io.StringIO("\n".join(lines))))
+    assert len(rows) == 2
+    assert rows[1][8] == "strong"
+
+
+def test_cmd_min_grade_default_keeps_all_cells():
+    # Without --min-grade every grid cell is shown (incl. none/ungraded).
+    lines = _run_handler(
+        [_bimodal(), _no_valley(), _single(), _bimodal()],
+        argv_extra=["--thresholds", "0.3,0.9", "--min-silences", "400,800",
+                    "--json"],
+    )
+    payload = json.loads("\n".join(lines))
+    assert "min_grade" not in payload
+    assert len(payload["grid"]) == 4
+
+
+def test_cmd_invalid_min_grade_rejected():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-gap-recommend-knob-grid", "rec.wav", "--min-grade", "none"]
+        )
+
+
+def test_cmd_min_grade_unavailable_json_names_floor():
+    # The unavailable branch still threads min_grade through (graceful degrade).
+    lines: List[str] = []
+    args = gv.build_parser().parse_args(
+        ["vad-gap-recommend-knob-grid", "rec.wav", "--json", "--min-grade", "strong"]
+    )
+    gv.cmd_vad_gap_recommend_knob_grid(
+        args, log=lines.append, segmenter=lambda *a, **k: None,
+        availability=lambda: False,
+    )
+    payload = json.loads("\n".join(lines))
+    assert payload["available"] is False
