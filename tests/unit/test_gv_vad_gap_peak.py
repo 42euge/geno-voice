@@ -1816,6 +1816,123 @@ def test_handler_floor_mark_threads_through_human():
     assert "p75:" in marked[0]
 
 
+# ---- renderer: iter-362 unlisted-floor hint -----------------------------
+# The human-face complement of iter-361's floor_percentile_listed JSON flag:
+# when --show-rate-dist + --min-rate-pct are both set but the floor percentile
+# is NOT among the displayed --rate-pcts quantiles, no row gets the iter-360
+# marker, so an explicit hint names the unlisted floor and tells the operator to
+# add it to --rate-pcts. Silence would otherwise read as "no floor".
+
+
+def test_render_human_unlisted_floor_emits_hint():
+    # --min-rate-pct 80 is not among the default p50/75/90/99 rows, so no row is
+    # marked — instead an explicit hint names the unlisted floor percentile.
+    res, cuts = _canon()
+    lines = gv.render_vad_gap_peak(
+        res, cuts_ms=cuts, show_rate_dist=True, min_rate_pct=80
+    )
+    hints = [ln for ln in lines if "(iter-362)" in ln]
+    assert len(hints) == 1
+    assert "p80" in hints[0]
+    assert "--rate-pcts" in hints[0]
+    # And no row carried the iter-360 marker (mutually exclusive with the hint).
+    assert not any("--min-rate-pct floor" in ln for ln in lines)
+
+
+def test_render_human_listed_floor_suppresses_hint():
+    # When the floor percentile IS among the displayed quantiles, the iter-360
+    # marker fires and the iter-362 hint is suppressed (no double signal).
+    res, cuts = _canon()
+    lines = gv.render_vad_gap_peak(
+        res, cuts_ms=cuts, show_rate_dist=True, min_rate_pct=75
+    )
+    assert any("--min-rate-pct floor" in ln for ln in lines)
+    assert not any("(iter-362)" in ln for ln in lines)
+
+
+def test_render_human_no_hint_without_min_rate_pct():
+    # show_rate_dist alone (no percentile floor) emits neither marker nor hint.
+    res, cuts = _canon()
+    lines = gv.render_vad_gap_peak(res, cuts_ms=cuts, show_rate_dist=True)
+    assert not any("(iter-362)" in ln for ln in lines)
+
+
+def test_render_human_no_hint_with_absolute_min_rate():
+    # An absolute --min-rate floor is not a percentile, so no row could match —
+    # the hint is keyed to min_rate_pct only and stays silent.
+    res, cuts = _canon()
+    lines = gv.render_vad_gap_peak(
+        res, cuts_ms=cuts, show_rate_dist=True, min_rate=0.05
+    )
+    assert not any("(iter-362)" in ln for ln in lines)
+
+
+def test_render_human_unlisted_floor_hint_custom_pcts():
+    # A custom --rate-pcts list that EXCLUDES the floor percentile still emits the
+    # hint (the rule is "floor not among the shown quantiles", not "default set").
+    res, cuts = _canon()
+    lines = gv.render_vad_gap_peak(
+        res,
+        cuts_ms=cuts,
+        show_rate_dist=True,
+        min_rate_pct=80,
+        rate_pcts=[25.0, 50.0],
+    )
+    hints = [ln for ln in lines if "(iter-362)" in ln]
+    assert len(hints) == 1
+    assert "p80" in hints[0]
+
+
+def test_render_human_no_hint_when_no_bands():
+    # An all-valley result has no non-empty bands → the rate-dist block is the
+    # "no non-empty bands" note, with no percentile rows; the unlisted-floor hint
+    # belongs to the per-row loop, so it does not fire (nothing to mark).
+    res = _result((0, 1), (5, 6))
+    lines = gv.render_vad_gap_peak(
+        res,
+        cuts_ms=[1000.0, 2000.0, 3000.0],
+        show_rate_dist=True,
+        min_rate_pct=80,
+    )
+    assert not any("(iter-362)" in ln for ln in lines)
+    assert any("no non-empty bands" in ln for ln in lines)
+
+
+def test_render_human_unlisted_floor_hint_agrees_with_json_flag():
+    # The iter-362 hint presence is the negation of iter-361's
+    # floor_percentile_listed for an active percentile floor: hint shown exactly
+    # when the JSON flag is False. Checked for a listed (p75) and unlisted (p80)
+    # floor.
+    res, cuts = _canon()
+    for pct in (75, 80):
+        lines = gv.render_vad_gap_peak(
+            res, cuts_ms=cuts, show_rate_dist=True, min_rate_pct=pct
+        )
+        hint_shown = any("(iter-362)" in ln for ln in lines)
+        payload = json.loads(
+            gv.render_vad_gap_peak_json(res, cuts_ms=cuts, min_rate_pct=pct)
+        )
+        assert hint_shown == (not payload["floor_percentile_listed"])
+
+
+def test_handler_unlisted_floor_hint_threads_through_human():
+    # End-to-end: the handler passes show_rate_dist + an unlisted min_rate_pct so
+    # the hint appears in the human face.
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    lines = _run(
+        _args(
+            cuts_ms=[500.0, 2500.0, 3500.0, 5000.0],
+            show_rate_dist=True,
+            min_rate_pct=80,
+        ),
+        segmenter=lambda w, *, params: res,
+        availability=lambda: True,
+    )
+    hints = [ln for ln in lines if "(iter-362)" in ln]
+    assert len(hints) == 1
+    assert "p80" in hints[0]
+
+
 # ---- renderer: JSON always carries band_rate_dist -----------------------
 
 

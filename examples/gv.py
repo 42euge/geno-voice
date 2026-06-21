@@ -2831,7 +2831,7 @@ def render_vad_gap_peak(
     show_rate_dist=False,
     rate_pcts=DEFAULT_BAND_RATE_PCTS,
 ):
-    """Render the costliest-band verdict as plain-text report lines (iter-350; ``top_n`` iter-354; ``min_rate`` iter-355; ``min_rate_pct`` iter-357; ``show_rate_dist`` iter-358; floor-mark iter-360).
+    """Render the costliest-band verdict as plain-text report lines (iter-350; ``top_n`` iter-354; ``min_rate`` iter-355; ``min_rate_pct`` iter-357; ``show_rate_dist`` iter-358; floor-mark iter-360; unlisted-floor hint iter-362).
 
     The human-readable face of :func:`vad_gap_peak`, the verdict twin of
     :func:`render_vad_gap_cost`. ``result`` of ``None`` (segmenter unavailable)
@@ -2859,7 +2859,10 @@ def render_vad_gap_peak(
     set and the floor's percentile is one of the displayed ``rate_pcts`` quantiles,
     that pNN row is marked with ``<-- --min-rate-pct floor`` (iter-360) so the
     operator sees the cutoff in context; an unlisted floor percentile leaves every
-    row unmarked. Pure: returns a list of strings (no I/O, no ANSI).
+    row unmarked but appends an explicit hint (iter-362) naming the unlisted floor
+    percentile and telling the operator to add it to ``--rate-pcts`` to mark its
+    row — so the missing marker never reads as "no floor". Pure: returns a list of
+    strings (no I/O, no ANSI).
     """
     if result is None:
         return [
@@ -2923,6 +2926,7 @@ def render_vad_gap_peak(
                 f"max {dist['max']:.3f} per +100ms (the --min-rate-pct sample) "
                 "(iter-358)"
             )
+            floor_marked = False
             for entry in dist["percentiles"]:
                 line = (
                     f"    p{_format_percentile_label(entry['p'])}: "
@@ -2937,7 +2941,25 @@ def render_vad_gap_peak(
                 # leaves every row unmarked, so add it to --rate-pcts to see it.
                 if min_rate_pct is not None and entry["p"] == min_rate_pct:
                     line += "  <-- --min-rate-pct floor (iter-360)"
+                    floor_marked = True
                 lines.append(line)
+            # iter-362: when an adaptive percentile floor IS active but its
+            # percentile is NOT one of the displayed --rate-pcts quantiles, no
+            # row got the iter-360 marker — and silence reads as "no floor". Emit
+            # an explicit hint naming the unlisted floor percentile so the
+            # operator knows to add it to --rate-pcts to see the cutoff row in
+            # context. The human-face complement of iter-361's
+            # floor_percentile_listed JSON flag (which is False in exactly this
+            # case). Suppressed when the floor row WAS marked, when no percentile
+            # floor is active, or for an absolute --min-rate floor (not a
+            # percentile, so no row could match).
+            if min_rate_pct is not None and not floor_marked:
+                lines.append(
+                    f"    (the --min-rate-pct p"
+                    f"{_format_percentile_label(min_rate_pct)} cutoff is not among "
+                    "the shown --rate-pcts quantiles — add it to --rate-pcts to "
+                    "mark its row) (iter-362)"
+                )
     if not p["peak_found"]:
         if p["num_bands"] == 0:
             lines.append(
