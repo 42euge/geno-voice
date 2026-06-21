@@ -31475,3 +31475,69 @@ on main post-merge (4534 passed, ~34s).
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-345 — gv vad-gaps human-table golden-output assertion
+
+- **Date:** 2026-06-20
+- **Branch:** iter-345-gaps-golden (ff-merged to main, worktree removed)
+- **Commit:** fd0bb40
+
+**Why.** iter-344's next-item #1: "One gap human surface remains un-pinned —
+percentiles (iter-340), histogram (iter-341), diff (iter-342), grid (iter-343),
+and sweep (iter-344) are now byte-pinned; only point (`gv vad-gaps`) still
+asserts structure + substrings. Byte-pinning `render_vad_gaps` completes the
+gap-surface golden family (six surfaces total)." The existing tests
+(`test_render_vad_gaps_human_lines`, `test_render_vad_gaps_single_segment_message`)
+prove the report CONTAINS the right phrases (`"silero VAD silence gaps"`,
+`"min gap"`, `"min-silence-ms"`, `"after seg N"`) but never freeze the EXACT
+rendered block. So a silent regression in the hand-tuned label-column padding
+(the trailing spaces after `"segments:"` / `"gaps:"` / `"min gap:"` /
+`"total silence:"`), the `{:8.3f}` total-silence field, the per-gap `[{i:>2}]`
+index padding, the `{:6.3f}s` gap column, or the `(ends {end:.2f}s)` suffix would
+slip past all of them. This lap closes that — the SIXTH and final VAD-gap human
+surface to be byte-pinned, completing the gap-surface golden family.
+
+**What it pins.** `tests/unit/test_gv_vad_gaps.py` gains three golden tests
+(+69 lines, 29 → 32 tests in the module) comparing the full `render_vad_gaps`
+line list verbatim against a literal expected list:
+- **`test_render_human_golden_multi_gap_block`** — three segments
+  (`[0,1] [3,4] [4.5,5]`) → two gaps of distinct sizes (`2.000s` then `0.500s`),
+  so min/mean/max are all different. Freezes the full stats header (the four
+  padded label lines + the `total silence:   2.500s` `{:8.3f}` field) and BOTH
+  per-gap detail rows (`  [ 1]  2.000s  after seg 1 (ends 1.00s)`) byte for byte.
+- **`test_render_human_golden_single_segment_block`** — the <2-segment branch:
+  the stats header is present but truncates at the `(fewer than 2 segments …)`
+  explanatory line, WITHOUT the min-gap knob advice (no pause to tune against).
+  Pins that exact four-line block.
+- **`test_render_human_golden_double_digit_index_alignment`** — 11 segments → 10
+  gaps forces the per-gap index past one digit, pinning that `[{i:>2}]`
+  right-aligns `"[ 9]"` against `"[10]"` (a follow-up `.index("]")` offset
+  assertion proves the bracket column shares a width) and that the `{:8.3f}`
+  total-silence field widens cleanly from `"   2.500s"` to `"  10.000s"`. The
+  pre-existing tests only ever exercised single-digit indices.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4537 passed**
+(4534 prior + 3 net new), run in the feature worktree before ff-merge AND re-run
+on main post-merge (4537 passed, ~28s).
+- Integration: not run this lap (pure string-formatting golden over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-340/341/342/343/344 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] The gap-surface golden family is COMPLETE** — all six human
+   surfaces (point iter-345, percentiles iter-340, histogram iter-341, diff
+   iter-342, grid iter-343, sweep iter-344) are now byte-pinned. A future gv
+   lap should prefer a genuinely new analysis surface over a seventh golden.
+2. **[gv CLI] A genuinely new analysis surface** — a cumulative-distribution /
+   CDF view of where a candidate `--min-silence-ms` cut would fall (what
+   fraction of pauses it would merge), turning the percentile table into a
+   direct "this hangover merges X% of your pauses" answer.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
