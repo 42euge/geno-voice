@@ -34039,3 +34039,108 @@ re-verified on main post-merge (`test_gv_vad_gap_recommend_knob_grid.py` +
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    ~30 leftover per-iter worktrees. A future lap could `git worktree prune` /
    remove the merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-374 — gv vad-gap-recommend-knob-sweep / -knob-grid --bias column filter
+
+- **Date:** 2026-06-21
+- **Branch:** iter-374-bias-filter (ff-merged to main, worktree removed)
+- **Commit:** 957a326
+
+**Why.** The standing next-item #1 from iter-373 asked for a "`--bias` filter
+— let the operator restrict the swept/gridded table to a single bias column
+(or a subset) when the full short/balanced/long spread is more than they need,
+keeping the confidence column. Applies to BOTH the 1-D sweep (iter-372) and
+this 2-D grid." A genuinely new operator-facing knob on the existing gv CLI,
+not an 18th chat-metrics clone (family complete, iter-328).
+
+**What it is.** iter-372's `gv vad-gap-recommend-knob-sweep` and iter-373's
+`gv vad-gap-recommend-knob-grid` tabulate the WHOLE short/balanced/long
+recommended `--min-silence-ms` spread plus the iter-348 confidence grade across
+a swept segmenter knob (1-D) or a 2-D knob grid. The new `--bias` flag narrows
+the per-bias columns to a chosen subset (e.g. `--bias short` or
+`--bias short,long`) while ALWAYS keeping the spread + confidence columns —
+valley / distribution properties that are invariant under which bias is named.
+This serves the common case where the full triad is more than the operator
+wants but the confidence grade (the genuinely-new knob-sweep signal: at WHICH
+knob setting the recommendation becomes trustworthy) still matters.
+
+**Design — core stays complete, filter is render-only.** The core data
+functions `vad_gap_recommend_knob_sweep` / `vad_gap_recommend_knob_grid` are
+left untouched: they remain always-all-three, testable primitives carrying the
+full `biases` list. The `--bias` filter is applied purely in the six render
+functions, so a consumer of the core data is unaffected and the JSON nested
+data stays anchored to the recommend-sweep / confidence surfaces.
+
+**What landed in `examples/gv.py` (+251/-95).**
+- `gap_recommend_bias_list_type(raw)` — new argparse type: a comma-separated
+  subset of short/balanced/long, returned in canonical short..balanced..long
+  order REGARDLESS of typed order (so the monotone short<=balanced<=long
+  reading holds), duplicates collapsed, empty / unknown tokens rejected with
+  an `ArgumentTypeError`. The bias-subset analogue of the millisecond list
+  types.
+- `_KNOB_BIAS_COLS` — the per-bias human-table column widths (a wider `header`
+  field than the `cell` data field), lifted verbatim from the iter-372/373
+  format literals so an unfiltered (all-three) render is BYTE-IDENTICAL to the
+  pre-filter output (verified empirically and by a default==explicit-triad
+  test on both surfaces).
+- `_knob_bias_header_segment(biases)` / `_knob_rec_cols(row, biases)` — shared
+  helpers that build the human-table header bias segment and the per-row
+  cells+spread+confidence tail for the selected biases, in ONE place, used by
+  both the sweep and grid human renderers. `spread`/`grade` always kept; a
+  <2-segment row dashes the (narrowed) recommendation columns.
+- `_knob_filtered_biases(row, biases)` — non-mutating narrow of a row's nested
+  `biases` list for the JSON faces.
+- All six renderers (`render_vad_gap_recommend_knob_sweep` / `_json` / `_csv`
+  and the `_grid` trio) gained a `biases=GAP_RECOMMEND_BIAS_ORDER` kwarg.
+  Human: header + rows reflect the subset (default unchanged). JSON: the
+  unfiltered payload has NO top-level `biases` key and carries the full nested
+  triad; a strict subset adds a top-level `biases` key naming the kept columns
+  AND narrows each row's nested `biases` list. CSV: the `<bias>_ms` columns
+  reflect the selection (default `short_ms,balanced_ms,long_ms` — byte-identical
+  header); spread_ms/grade/dominance/separation_ratio always kept; <2-segment
+  rows still emit empty recommendation cells.
+- Both `cmd_vad_gap_recommend_knob_sweep` and `cmd_vad_gap_recommend_knob_grid`
+  resolve `biases = getattr(args, "bias", None) or GAP_RECOMMEND_BIAS_ORDER`
+  and thread it through every render call (incl. the unavailable branch).
+- Added the `--bias` argument to BOTH parsers (after `--max-speech-s`, before
+  the `--json`/`--csv` format mutex).
+
+**Tests (tests/unit, +27 — 13 sweep, 14 grid, byte-shared structure).**
+bias-list-type canonical-order / dedup / empty / unknown rejection; human
+default==explicit-triad (byte-identical default) / subset columns / single
+bias / no-gaps dashes; JSON narrows-and-names / default-no-top-level-key;
+CSV subset header+columns / no-gaps empty cells; handler human / json / csv
+bias paths / typed-order canonicalized in output / invalid bias rejected at
+the parser — for BOTH the sweep and the grid.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5297 passed**
+(5270 prior + 27 net new), run in the feature worktree before ff-merge AND
+re-verified on main post-merge (`test_gv_vad_gap_recommend_knob_sweep.py` +
+`test_gv_vad_gap_recommend_knob_grid.py` + `test_gv_cli.py` → 189 passed).
+- Integration: not run this lap (pure string-formatting/arithmetic over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..373 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] recommend-knob `--bias` filter — single-shot companions.** The
+   1-D bias-only `vad-gap-recommend-sweep` (iter-352) names all three biases
+   for ONE segmentation; it has no column filter. A future lap could extend
+   `--bias` there too for symmetry (lower priority — a single segmentation's
+   three-row table is already compact).
+2. **[gv CLI] recommend-knob-grid confidence-grade FILTER.** The peak-surface
+   knob-lift project lifted distribution / top-N / rate-floor across
+   single-shot / sweep / grid. The recommend-knob family now spans single
+   (iter-347), confidence (iter-348), bias-sweep (iter-352), knob-sweep
+   (iter-372), knob-grid (iter-373), and this column filter; a natural next
+   recommend-side knob is a confidence-grade THRESHOLD that drops cells/rows
+   below a grade (e.g. `--min-grade moderate`) so an operator sees only the
+   trustworthy region of the sweep/grid.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~30 leftover per-iter worktrees. A future lap could `git worktree prune` /
+   remove the merged ones. NOTE: this lap correctly removed its own worktree.
