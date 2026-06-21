@@ -405,6 +405,7 @@ def test_dispatch_default_handlers_are_the_real_cmds():
         "vad-gap-peak": gv.cmd_vad_gap_peak,
         "vad-gap-hist": gv.cmd_vad_gap_histogram,
         "vad-gap-sweep": gv.cmd_vad_gap_sweep,
+        "vad-gap-peak-sweep": gv.cmd_vad_gap_peak_sweep,
         "vad-diff": gv.cmd_vad_diff,
         "vad-gap-diff": gv.cmd_vad_gap_diff,
         "vad-sweep": gv.cmd_vad_sweep,

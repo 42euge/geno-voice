@@ -4414,6 +4414,216 @@ def render_vad_gap_sweep_csv(values, results, *, name, axis="threshold"):
     return buf.getvalue().rstrip("\r\n")
 
 
+def vad_gap_peak_sweep(values, results, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, axis="threshold"):
+    """Pair each swept-axis value with its COSTLIEST cost-curve band (iter-364).
+
+    The peak-side analogue of :func:`vad_gap_sweep`. Where ``vad_gap_sweep``
+    tabulates the silence-gap distribution (min/mean/max gap) across a swept
+    knob, this surface tabulates the iter-350 cost PEAK — for each swept value it
+    runs :func:`vad_gap_peak` over that value's segmentation and records the
+    steepest band: its ms range, the pauses it merges, and its marginal rate per
+    +100 ms of hangover. The headline column is ``peak_rate_per_100ms``: it shows
+    how the cost of the densest pause cluster MOVES as a SEGMENTER knob (e.g. the
+    ``--min-speech-ms`` floor) tightens. A stricter floor gates out marginal
+    speech, which merges adjacent regions and reshapes the pause clusters — so the
+    steepest band, and how expensive it is to push the hangover through it, drift
+    with the knob. Where ``vad-gap-sweep`` watches the cheapest valley move, this
+    watches the costliest cluster move; the two are the sweep-side twins of
+    ``vad-gap-recommend`` vs ``vad-gap-peak``.
+
+    Pure: takes the parallel ``values`` list (one per swept-axis point) and
+    ``results`` list (each a ``SileroResult``-shaped object segmented at the
+    matching value) and returns a list of rows ``{axis, "num_segments",
+    "num_gaps", "peak_found", "peak_from_ms", "peak_to_ms", "peak_width_ms",
+    "peak_merged_added", "peak_rate_per_100ms"}``. The peak fields are ``None`` /
+    ``False`` for a row whose segmentation names no cost peak (a <2-segment
+    result with no gaps, or an all-valley range with no pause cluster), exactly
+    the "no structure to name" spelling :func:`vad_gap_peak` returns. The row's
+    swept-axis key IS ``axis`` (default ``"threshold"``). Anchors to
+    :func:`vad_gap_peak` (single peak — ``top_n=1``) so the per-row numbers agree
+    EXACTLY with ``gv vad-gap-peak`` at each swept value. No I/O, no torch import,
+    so it is testable in isolation. Raises :class:`ValueError` if the two lists
+    differ in length (or if ``cuts_ms`` is empty / negative, delegated to
+    :func:`vad_gap_peak`).
+    """
+    if len(values) != len(results):
+        raise ValueError(
+            f"values ({len(values)}) and results ({len(results)}) "
+            "must be the same length"
+        )
+    rows = []
+    for v, r in zip(values, results):
+        p = vad_gap_peak(r, cuts_ms=cuts_ms)
+        rows.append(
+            {
+                axis: v,
+                "num_segments": p["num_segments"],
+                "num_gaps": p["num_gaps"],
+                "peak_found": p["peak_found"],
+                "peak_from_ms": p["peak_from_ms"],
+                "peak_to_ms": p["peak_to_ms"],
+                "peak_width_ms": p["peak_width_ms"],
+                "peak_merged_added": p["peak_merged_added"],
+                "peak_rate_per_100ms": p["peak_rate_per_100ms"],
+            }
+        )
+    return rows
+
+
+def render_vad_gap_peak_sweep(values, results, *, name, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, axis="threshold"):
+    """Render a cost-peak sweep as a plain-text table (iter-364).
+
+    The human-readable twin of :func:`render_vad_gap_peak_sweep_json`, the
+    peak-side analogue of :func:`render_vad_gap_sweep`. ``name`` is the WAV being
+    swept; ``axis`` names the swept dimension (sets the column label via
+    :data:`_SWEEP_AXIS_LABEL`). Any ``None`` in ``results`` (segmenter
+    unavailable) yields the shared install hint. Pure: returns a list of strings.
+    Each row prints the swept value, the segment count, the gap count, and the
+    costliest band's ms range / merged-pauses / rate per +100 ms; a row that
+    names no cost peak (no gaps, or an all-valley range) prints ``-`` in the peak
+    columns (distinct from a band with a ``0.000`` rate, which never happens — a
+    named peak always has rate > 0). Reading down the table the peak rate shows
+    how expensive the densest pause cluster is at each knob setting — where it
+    SHRINKS, raising the hangover through the steepest band costs less.
+    """
+    if any(r is None for r in results):
+        return [
+            "silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        ]
+    rows = vad_gap_peak_sweep(values, results, cuts_ms=cuts_ms, axis=axis)
+    label = _SWEEP_AXIS_LABEL.get(axis, axis)
+    lines = [
+        f"silero VAD gap cost-peak sweep — {name}",
+        f"  {label:>9}  segments  gaps  peak_band_ms  merged  rate/100ms",
+    ]
+    for row in rows:
+        if not row["peak_found"]:
+            peak_cols = f"{'-':>12}  {'-':>6}  {'-':>10}"
+        else:
+            band = (
+                f"{_format_cut_label(row['peak_from_ms'])}-"
+                f"{_format_cut_label(row['peak_to_ms'])}"
+            )
+            peak_cols = (
+                f"{band:>12}  {row['peak_merged_added']:>6}  "
+                f"{row['peak_rate_per_100ms']:>10.3f}"
+            )
+        lines.append(
+            f"  {_format_sweep_axis_value(axis, row[axis]):>9}  "
+            f"{row['num_segments']:>8}  {row['num_gaps']:>4}  {peak_cols}"
+        )
+    return lines
+
+
+def render_vad_gap_peak_sweep_json(values, results, *, name, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, axis="threshold"):
+    """Render a cost-peak sweep as a JSON string (iter-364).
+
+    Machine-readable twin of :func:`render_vad_gap_peak_sweep`, so the sweep can
+    feed a plotting/tuning script. The payload carries the swept ``axis`` name
+    (the rows are keyed by that same name), the ``cuts_ms`` axis the bands were
+    scanned over, and a ``sweep`` list of per-value rows, each with
+    ``num_segments`` / ``num_gaps`` / ``peak_found`` / ``peak_from_ms`` /
+    ``peak_to_ms`` / ``peak_width_ms`` / ``peak_merged_added`` /
+    ``peak_rate_per_100ms`` (the peak fields ``null`` / ``false`` for a row that
+    names no cost peak, the same JSON spelling of "no structure" the other peak
+    surfaces use). Any ``None`` in ``results`` → ``{"available": false}`` +
+    install hint, mirroring :func:`render_vad_gap_sweep_json`. Pure: returns a
+    single JSON string.
+    """
+    if any(r is None for r in results):
+        return json.dumps(
+            {
+                "available": False,
+                "hint": (
+                    "install 'silero-vad' (pulls torch + torchaudio) to enable "
+                    "offline neural segmentation"
+                ),
+            },
+            indent=2,
+        )
+    rows = vad_gap_peak_sweep(values, results, cuts_ms=cuts_ms, axis=axis)
+    payload = {
+        "available": True,
+        "name": name,
+        "axis": axis,
+        "cuts_ms": list(cuts_ms),
+        "sweep": rows,
+    }
+    return json.dumps(payload, indent=2)
+
+
+def render_vad_gap_peak_sweep_csv(values, results, *, name, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, axis="threshold"):
+    """Render a cost-peak sweep as CSV text (no trailing newline) (iter-364).
+
+    The spreadsheet/plot-friendly twin of :func:`render_vad_gap_peak_sweep_json`:
+    where JSON nests the rows under a ``sweep`` key, CSV emits a flat
+    ``<axis>,num_segments,num_gaps,peak_found,peak_from_ms,peak_to_ms,
+    peak_width_ms,peak_merged_added,peak_rate_per_100ms`` table that pipes
+    straight into a spreadsheet or plotter. The first column header is the swept
+    ``axis`` name so the grid is self-describing. ``name`` is accepted for
+    signature parity with the other ``render_vad_gap_peak_sweep_*`` twins but is
+    not part of the tabular body (a CSV is a pure data grid), matching
+    :func:`render_vad_gap_sweep_csv`. A row that names no cost peak emits
+    ``peak_found`` ``False`` and empty cells in the peak-measure columns (the CSV
+    spelling of JSON ``null`` / the human table's ``-``). Any ``None`` in
+    ``results`` (segmenter unavailable) yields a single ``# silero VAD
+    unavailable: ...`` comment line. Pure: returns a single string built with the
+    stdlib :mod:`csv` writer, trailing terminator stripped.
+    """
+    if any(r is None for r in results):
+        return (
+            "# silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        )
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(
+        [
+            axis,
+            "num_segments",
+            "num_gaps",
+            "peak_found",
+            "peak_from_ms",
+            "peak_to_ms",
+            "peak_width_ms",
+            "peak_merged_added",
+            "peak_rate_per_100ms",
+        ]
+    )
+    for row in vad_gap_peak_sweep(values, results, cuts_ms=cuts_ms, axis=axis):
+        if row["peak_found"]:
+            writer.writerow(
+                [
+                    row[axis],
+                    row["num_segments"],
+                    row["num_gaps"],
+                    row["peak_found"],
+                    _format_cut_label(row["peak_from_ms"]),
+                    _format_cut_label(row["peak_to_ms"]),
+                    _format_cut_label(row["peak_width_ms"]),
+                    row["peak_merged_added"],
+                    row["peak_rate_per_100ms"],
+                ]
+            )
+        else:
+            # None → "" (empty cell), the CSV spelling of JSON null / human "-".
+            writer.writerow(
+                [
+                    row[axis],
+                    row["num_segments"],
+                    row["num_gaps"],
+                    row["peak_found"],
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                ]
+            )
+    return buf.getvalue().rstrip("\r\n")
+
+
 def vad_gap_grid(
     row_values, col_values, results, *, row_axis="threshold", col_axis="min_silence_ms"
 ):
@@ -6583,6 +6793,113 @@ def cmd_vad_gap_sweep(args, *, log=print, segmenter=None, availability=None):
             log(line)
 
 
+def cmd_vad_gap_peak_sweep(args, *, log=print, segmenter=None, availability=None):
+    """Segment one WAV across a swept knob and tabulate the COSTLIEST cost band.
+
+    iter-364's peak-side analogue of :func:`cmd_vad_gap_sweep`. Where ``gv
+    vad-gap-sweep`` tabulates the inter-segment silence-gap distribution (min/
+    mean/max gap) vs a swept knob, ``gv vad-gap-peak-sweep`` tabulates the
+    iter-350 cost PEAK — for each swept value it names the steepest cost-curve
+    band (the densest pause cluster, the most expensive place to raise the
+    end-of-turn hangover) and reports its ms range, merged pauses, and rate per
+    +100 ms. The headline is how the peak rate MOVES as a SEGMENTER knob (e.g.
+    the ``--min-speech-ms`` floor) tightens: a stricter floor gates marginal
+    speech, merges adjacent regions, and reshapes the pause clusters, so the
+    steepest band and its cost drift with the knob. Where ``vad-gap-sweep``
+    watches the cheapest valley move (where it's safe to set the hangover), this
+    watches the costliest cluster move (where NOT to push it through).
+
+    Shares the iter-256 five-axis sweep machinery of :func:`cmd_vad_gap_sweep`:
+    the default axis is the P(speech) gate (``--thresholds``); ``--min-silences``
+    / ``--min-speeches`` / ``--speech-pads`` / ``--max-speeches`` switch the swept
+    dimension to the hangover / minimum-speech floor / region padding /
+    force-split ceiling (seconds), the gate then held at the scalar
+    ``--threshold``. The five axes are mutually exclusive; exactly one knob varies
+    per run, every non-swept knob is shared across all runs. ``--cuts-ms`` (the
+    candidate hangover cuts defining the cost bands) is shared across every swept
+    value so the bands are scanned on the same axis at each point.
+
+    Same injected-dependency contract as :func:`cmd_vad_gap_sweep`: ``segmenter``
+    / ``availability`` default to the real :mod:`vad.silero` functions, imported
+    lazily so the parser stays torch-free. ``--csv`` is mutually exclusive with
+    ``--json``; when ``silero-vad`` is absent the handler prints the install hint
+    and returns, never crashing.
+    """
+    if segmenter is None or availability is None:
+        from vad.silero import segment_recording, silero_available
+
+        segmenter = segment_recording if segmenter is None else segmenter
+        availability = silero_available if availability is None else availability
+
+    as_json = getattr(args, "json", False)
+    as_csv = getattr(args, "csv", False)
+    cuts_ms = args.cuts_ms
+
+    # Pick the swept axis, mirroring cmd_vad_gap_sweep: --min-silences sweeps the
+    # hangover, --min-speeches the minimum-speech floor, --speech-pads the region
+    # padding, --max-speeches the force-split ceiling (seconds) — all with the
+    # gate held at scalar --threshold; otherwise sweep --thresholds (the default).
+    # The parser guarantees at most one of the five is set.
+    min_silences = getattr(args, "min_silences", None)
+    min_speeches = getattr(args, "min_speeches", None)
+    speech_pads = getattr(args, "speech_pads", None)
+    max_speeches = getattr(args, "max_speeches", None)
+    if min_silences is not None:
+        axis = "min_silence_ms"
+        values = min_silences
+    elif min_speeches is not None:
+        axis = "min_speech_ms"
+        values = min_speeches
+    elif speech_pads is not None:
+        axis = "speech_pad_ms"
+        values = speech_pads
+    elif max_speeches is not None:
+        axis = "max_speech_s"
+        values = max_speeches
+    else:
+        axis = "threshold"
+        values = args.thresholds
+
+    if not availability():
+        if as_json:
+            log(render_vad_gap_peak_sweep_json([], [None], name=args.wav, cuts_ms=cuts_ms, axis=axis))
+        elif as_csv:
+            log(render_vad_gap_peak_sweep_csv([], [None], name=args.wav, cuts_ms=cuts_ms, axis=axis))
+        else:
+            for line in render_vad_gap_peak_sweep([], [None], name=args.wav, cuts_ms=cuts_ms, axis=axis):
+                log(line)
+        return
+
+    from vad.silero import SileroParams
+
+    def _seg(value):
+        # The swept axis takes ``value``; every other dimension is held at its
+        # scalar knob. Every non-swept knob is shared across all runs.
+        threshold = value if axis == "threshold" else args.threshold
+        min_silence_ms = value if axis == "min_silence_ms" else args.min_silence_ms
+        min_speech_ms = value if axis == "min_speech_ms" else args.min_speech_ms
+        speech_pad_ms = value if axis == "speech_pad_ms" else args.speech_pad_ms
+        max_speech_s = value if axis == "max_speech_s" else args.max_speech_s
+        params = SileroParams(
+            threshold=threshold,
+            min_speech_ms=min_speech_ms,
+            min_silence_ms=min_silence_ms,
+            speech_pad_ms=speech_pad_ms,
+            max_speech_s=max_speech_s,
+        )
+        return segmenter(args.wav, params=params)
+
+    results = [_seg(v) for v in values]
+    name = results[0].name if results else args.wav
+    if as_json:
+        log(render_vad_gap_peak_sweep_json(values, results, name=name, cuts_ms=cuts_ms, axis=axis))
+    elif as_csv:
+        log(render_vad_gap_peak_sweep_csv(values, results, name=name, cuts_ms=cuts_ms, axis=axis))
+    else:
+        for line in render_vad_gap_peak_sweep(values, results, name=name, cuts_ms=cuts_ms, axis=axis):
+            log(line)
+
+
 def cmd_vad_diff(args, *, log=print, segmenter=None, availability=None):
     """Segment one WAV under two thresholds and report how the result shifts.
 
@@ -7189,6 +7506,7 @@ DEFAULT_HANDLERS = {
     "vad-gap-peak": cmd_vad_gap_peak,
     "vad-gap-hist": cmd_vad_gap_histogram,
     "vad-gap-sweep": cmd_vad_gap_sweep,
+    "vad-gap-peak-sweep": cmd_vad_gap_peak_sweep,
     "vad-diff": cmd_vad_diff,
     "vad-gap-diff": cmd_vad_gap_diff,
     "vad-sweep": cmd_vad_sweep,
@@ -8394,6 +8712,143 @@ def build_parser():
         help="Emit a flat <axis>,num_segments,num_gaps,min_gap_s,mean_gap_s,"
         "max_gap_s,total_silence_s CSV table for spreadsheets/plots "
         "(mutually exclusive with --json)",
+    )
+
+    # gv vad-gap-peak-sweep — segment one WAV across a swept knob and tabulate
+    # the COSTLIEST cost-curve band at each value (iter-364). The peak-side
+    # analogue of vad-gap-sweep: where vad-gap-sweep tabulates min/mean/max gap
+    # vs the swept knob, vad-gap-peak-sweep tabulates the steepest band (densest
+    # pause cluster) so an operator can watch how expensive it is to raise the
+    # hangover through that cluster MOVE as a segmenter knob (e.g. --min-speeches)
+    # tightens. Shares the iter-256 five-axis mutex (--thresholds default /
+    # --min-silences / --min-speeches / --speech-pads / --max-speeches) and the
+    # --cuts-ms cost-band axis with vad-gap-peak.
+    vad_gap_peak_sweep = sub.add_parser(
+        "vad-gap-peak-sweep",
+        help="Offline Silero VAD — segment a WAV across a swept knob "
+        "(--thresholds gate, --min-silences hangover, --min-speeches floor, "
+        "--speech-pads region padding, or --max-speeches force-split ceiling) "
+        "and tabulate the costliest cost-curve band at each value (the densest "
+        "pause cluster — watch how the cost of raising --min-silence-ms through "
+        "it moves)",
+    )
+    vad_gap_peak_sweep.add_argument(
+        "wav",
+        help="Path to a 16-bit PCM WAV file to segment at each swept value",
+    )
+    # The swept axis: --thresholds (default) OR one of the four ms/seconds knobs,
+    # never more than one — same shape as vad-gap-sweep's axis mutex.
+    vad_gap_peak_sweep_axis = vad_gap_peak_sweep.add_mutually_exclusive_group()
+    vad_gap_peak_sweep_axis.add_argument(
+        "--thresholds",
+        type=unit_interval_list_type,
+        default=[0.3, 0.5, 0.7, 0.9],
+        help="Comma-separated P(speech) gates in [0, 1] to sweep "
+        "(default: 0.3,0.5,0.7,0.9; mutually exclusive with the ms/seconds axes)",
+    )
+    vad_gap_peak_sweep_axis.add_argument(
+        "--min-silences",
+        type=nonneg_float_list_type,
+        default=None,
+        dest="min_silences",
+        help="Comma-separated trailing-silence hangovers in ms to sweep "
+        "instead of the gate (e.g. 400,600,800,1000); the gate is held at the "
+        "scalar --threshold (mutually exclusive with the other axes)",
+    )
+    vad_gap_peak_sweep_axis.add_argument(
+        "--min-speeches",
+        type=nonneg_float_list_type,
+        default=None,
+        dest="min_speeches",
+        help="Comma-separated minimum-speech floors in ms to sweep instead of "
+        "the gate (e.g. 50,100,200,400); the gate is held at the scalar "
+        "--threshold (mutually exclusive with the other axes)",
+    )
+    vad_gap_peak_sweep_axis.add_argument(
+        "--speech-pads",
+        type=nonneg_float_list_type,
+        default=None,
+        dest="speech_pads",
+        help="Comma-separated symmetric region paddings in ms to sweep instead "
+        "of the gate (e.g. 0,20,40,60); the gate is held at the scalar "
+        "--threshold (mutually exclusive with the other axes)",
+    )
+    vad_gap_peak_sweep_axis.add_argument(
+        "--max-speeches",
+        type=max_speech_list_type,
+        default=None,
+        dest="max_speeches",
+        help="Comma-separated force-split ceilings in SECONDS to sweep instead "
+        "of the gate (e.g. 5,10,20,inf); 'inf'/'none'/'off' anchors the no-cap "
+        "baseline; the gate is held at the scalar --threshold (mutually "
+        "exclusive with the other axes)",
+    )
+    vad_gap_peak_sweep.add_argument(
+        "--cuts-ms",
+        type=cut_ms_list_type,
+        default=list(DEFAULT_GAP_CDF_CUTS_MS),
+        dest="cuts_ms",
+        help="Comma-separated candidate hangover cuts in ms defining the cost "
+        "bands scanned for the peak at each swept value, e.g. '200,400,800,1600' "
+        "(sorted + de-duplicated; default: 200,400,800,1600)",
+    )
+    vad_gap_peak_sweep.add_argument(
+        "--threshold",
+        type=unit_interval_type,
+        default=vad_threshold_default,
+        help="Scalar P(speech) gate held fixed when sweeping --min-silences, "
+        "--min-speeches, --speech-pads, or --max-speeches, in [0, 1]; ignored "
+        "when sweeping --thresholds "
+        f"(default: {vad_threshold_default})",
+    )
+    vad_gap_peak_sweep.add_argument(
+        "--min-speech-ms",
+        type=nonneg_float_type,
+        default=vad_min_speech_default,
+        dest="min_speech_ms",
+        help="Drop speech regions shorter than this, in ms — shared by all "
+        "runs when sweeping --thresholds; ignored when sweeping --min-speeches "
+        f"(default: {vad_min_speech_default})",
+    )
+    vad_gap_peak_sweep.add_argument(
+        "--min-silence-ms",
+        type=nonneg_float_type,
+        default=vad_min_silence_default,
+        dest="min_silence_ms",
+        help="Trailing silence before a region ends, in ms — shared by all "
+        "runs when sweeping --thresholds; ignored when sweeping --min-silences "
+        f"(default: {vad_min_silence_default})",
+    )
+    vad_gap_peak_sweep.add_argument(
+        "--speech-pad-ms",
+        type=nonneg_float_type,
+        default=vad_speech_pad_default,
+        dest="speech_pad_ms",
+        help="Symmetric padding added to each region, in ms — shared by all "
+        "runs when sweeping --thresholds; ignored when sweeping --speech-pads "
+        f"(default: {vad_speech_pad_default})",
+    )
+    vad_gap_peak_sweep.add_argument(
+        "--max-speech-s",
+        type=max_speech_type,
+        default=vad_max_speech_default,
+        dest="max_speech_s",
+        help="Force-split regions longer than this, in seconds — shared by "
+        "all runs when sweeping --thresholds; ignored when sweeping "
+        "--max-speeches; 'inf'/'none' never splits (default: inf)",
+    )
+    vad_gap_peak_sweep_fmt = vad_gap_peak_sweep.add_mutually_exclusive_group()
+    vad_gap_peak_sweep_fmt.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON instead of the human-readable table",
+    )
+    vad_gap_peak_sweep_fmt.add_argument(
+        "--csv",
+        action="store_true",
+        help="Emit a flat <axis>,num_segments,num_gaps,peak_found,peak_from_ms,"
+        "peak_to_ms,peak_width_ms,peak_merged_added,peak_rate_per_100ms CSV table "
+        "for spreadsheets/plots (mutually exclusive with --json)",
     )
 
     # gv vad-diff — segment one WAV under two thresholds and report the delta.
