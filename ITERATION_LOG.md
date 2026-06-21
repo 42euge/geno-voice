@@ -31919,3 +31919,99 @@ handler-map golden to include the new `vad-gap-cost` entry.
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    ~30 leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-350 — gv vad-gap-peak — name the costliest band of the merge cost curve
+
+- **Date:** 2026-06-21
+- **Branch:** iter-350-gap-peak (ff-merged to main, worktree removed)
+- **Commit:** 5962e27
+
+**Why.** iter-349's standing next-item #1 was: "a `--peak` flag naming the
+costliest band (the steepest part of the CDF — the densest pause cluster)." This
+lap builds that as a standalone VERDICT subcommand, mirroring how
+`gv vad-gap-recommend` (iter-347) and `gv vad-gap-confidence` (iter-348) are
+standalone verdicts that consume a distribution and name a single answer — rather
+than bolting a flag onto `vad-gap-cost`, which keeps each surface single-purpose
+and testable in isolation (the established family idiom).
+
+**What it is.** `gv vad-gap-peak recording.wav --cuts-ms 200,400,800,1600` reads
+the same gap distribution as `gv vad-gap-cost` (iter-349) — it ANCHORS to
+`vad_gap_cost`, so the bands and aggregates agree EXACTLY — and names the single
+STEEPEST band: the band with the highest `rate_per_100ms` over the sorted,
+de-duplicated cuts. That band is the densest cluster of pauses, the steepest part
+of the CDF, the most EXPENSIVE place to push the end-of-turn hangover
+(`--min-silence-ms` / the live `chat.vad.silence_duration`) through. It is the
+MIRROR IMAGE of `gv vad-gap-recommend`, which points at the cheapest zero-rate
+valley between clusters — peak says where NOT to cut, recommend says where TO cut.
+An operator reading both gets the valley to aim for and the cluster to avoid
+cutting into.
+
+The peak is found by a single max over the cost bands, earliest-tie (the first
+band wins on equal rate, matching the family's widest-jump rule). A band's rate is
+zero exactly when it is an empty valley, so a peak rate of zero means EVERY band
+is a valley — there is no pause cluster anywhere in the scanned range;
+`peak_found` is then `False` and the peak fields are `None` (the same "no
+structure to name" spelling `vad_gap_recommend` uses when `split_found` is
+`False`).
+
+Edge cases mirror the family: a result with <2 segments has no gaps so there are
+no bands and nothing to name (`peak_found` `False`, aggregates `None`); a single
+distinct cut forms no band (a degenerate axis, the same "nothing to show" spelling
+`vad_gap_cost` uses); and an all-valley cut range has no peak. Cut validation
+(non-empty, non-negative, non-NaN) is delegated to `vad_gap_cost`.
+
+**What landed in `examples/gv.py` (+~265 lines).**
+- `vad_gap_peak(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS)` — the pure core.
+  Anchors to `vad_gap_cost` and adds `num_bands` / `peak_found` / `peak_from_ms` /
+  `peak_to_ms` / `peak_from_s` / `peak_to_s` / `peak_width_ms` /
+  `peak_merged_added` / `peak_rate_per_100ms`. Reuses iter-346's
+  `DEFAULT_GAP_CDF_CUTS_MS` and `cut_ms_list_type`.
+- `render_vad_gap_peak` / `_json` / `_csv` — the human / `--json` / `--csv` trio.
+  Human verdict names the costliest band's ms range, its width, the additional
+  pauses it merges, and the marginal rate (or a no-peak / no-gaps / single-cut
+  note). CSV is a one-row
+  `peak_found,peak_from_ms,peak_to_ms,peak_width_ms,peak_merged_added,
+  peak_rate_per_100ms` summary (blanks for the no-peak measures). All degrade to
+  the shared install hint / `{"available": false}` / `# unavailable` comment.
+- `cmd_vad_gap_peak` handler — same injected segmenter/availability/log contract
+  as the rest of the family (torch-free parser, lazy `SileroParams` import). Wired
+  into `DEFAULT_HANDLERS` and a new `vad-gap-peak` subparser sharing all `gv vad`
+  knobs + `--cuts-ms`, plus a usage-docstring example line.
+
+**Tests.** `tests/unit/test_gv_vad_gap_peak.py` (+55 tests): parser registration +
+knob defaults + custom cuts + json/csv mutual exclusion + threshold range; the
+pure core (highest-rate band, agreement with `vad_gap_cost`'s max band, mirror of
+`vad_gap_recommend`'s valley, high-rate cluster, earliest-tie, strict-less-than
+boundary, anchoring to `vad_silence_gaps`, all-valley / no-band / <2-segment /
+zero-segment / single-cut / duplicate-cut empties, sort+dedup, rate rounding,
+default cuts, cut validation, unsorted-segment robustness); all three renderers
+(shape, no-gaps, single-cut, all-valley, unavailable, byte-for-byte human goldens
+for found / all-valley / single-segment / single-cut blocks, json shape / no-peak
+/ no-gaps / core-agreement, csv shape / golden / blanks / header-only x2 /
+match-json); and the handler (human/json/csv, unavailable x3, cut pass-through,
+knob->params). Updated the `test_gv_cli` handler-map golden to include the new
+`vad-gap-peak` entry.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4787 passed**
+(4732 prior + 55 new), run in the feature worktree before ff-merge AND re-run on
+main post-merge (4787 passed, ~45s).
+- Integration: not run this lap (pure string-formatting/arithmetic over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..349 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] vad-gap-peak companions** — a `vad-gap-peak`-sweep/grid (how the
+   costliest band shifts vs a swept segmenter knob — the inverse of how
+   vad-gap-sweep/grid track min_gap), or a `--top-n` flag naming the N steepest
+   bands instead of just the single peak.
+2. **[gv CLI] vad-gap-recommend/confidence companions** — a `--strict`/`--lenient`
+   knob biasing the recommendation toward the short or long side of the valley.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~30 leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
