@@ -3522,6 +3522,109 @@ def render_vad_gap_recommend_csv(result, *, bias=DEFAULT_GAP_RECOMMEND_BIAS):
 GAP_RECOMMEND_BIAS_ORDER = ("short", "balanced", "long")
 
 
+def gap_recommend_bias_list_type(raw):
+    """Argparse ``type`` for the iter-374 ``--bias`` column filter: a bias subset.
+
+    The knob-sweep / knob-grid surfaces (iter-372/373) tabulate the WHOLE
+    short/balanced/long recommended ``--min-silence-ms`` spread plus the confidence
+    grade. This validator parses a comma-separated bias subset (e.g. ``"short"`` or
+    ``"short,long"``) so an operator can narrow the table to the columns they care
+    about while keeping the spread + confidence. Returns the selected biases in
+    canonical :data:`GAP_RECOMMEND_BIAS_ORDER` order (NOT the order typed), so the
+    short..balanced..long monotonicity reads correctly regardless of input order;
+    duplicates collapse. Rejects an empty list and any token not in
+    ``short``/``balanced``/``long``. Pure and side-effect-free for direct unit
+    testing — the bias-subset analogue of the millisecond list types.
+    """
+    if not isinstance(raw, str):
+        raise argparse.ArgumentTypeError(
+            f"a bias list must be a string, got {raw!r}"
+        )
+    tokens = [t.strip() for t in raw.split(",") if t.strip()]
+    if not tokens:
+        raise argparse.ArgumentTypeError(
+            f"a bias list must be non-empty and comma-separated, got {raw!r}"
+        )
+    seen = set()
+    for tok in tokens:
+        if tok not in GAP_RECOMMEND_BIAS_ORDER:
+            raise argparse.ArgumentTypeError(
+                f"invalid bias {tok!r}: choose from "
+                f"{list(GAP_RECOMMEND_BIAS_ORDER)}"
+            )
+        seen.add(tok)
+    # Canonical short..balanced..long order regardless of how the operator typed it.
+    return [b for b in GAP_RECOMMEND_BIAS_ORDER if b in seen]
+
+
+# Per-bias human-table column widths for the knob sweep / grid surfaces, used by
+# the iter-374 ``--bias`` column filter (:func:`_knob_bias_header_segment` /
+# :func:`_knob_rec_cols`). Each bias has a wider header field (``header``) than
+# its data cell (``cell``) — the historical widths from the iter-372/373 literals,
+# preserved here so an unfiltered (all-three) render is byte-identical to the
+# pre-filter output. Keyed by bias name; the column ORDER is always the
+# caller-supplied (canonical short..balanced..long) subset.
+_KNOB_BIAS_COLS = {
+    "short": {"header": 7, "cell": 5},
+    "balanced": {"header": 8, "cell": 8},
+    "long": {"header": 8, "cell": 8},
+}
+
+
+def _knob_bias_header_segment(biases):
+    """The ``  short  balanced      long`` header segment for the selected biases.
+
+    Shared by the knob-sweep and knob-grid human renderers (iter-372/373) so the
+    iter-374 ``--bias`` column filter drops/reorders the per-bias columns in ONE
+    place. Each column is the bias name right-justified in its
+    :data:`_KNOB_BIAS_COLS` ``header`` width, preceded by the two-space separator
+    the surrounding table uses; the full ``("short", "balanced", "long")`` tuple
+    reproduces the historical header byte-for-byte.
+    """
+    return "".join(f"  {b:>{_KNOB_BIAS_COLS[b]['header']}}" for b in biases)
+
+
+def _knob_rec_cols(row, biases):
+    """The per-bias cells + spread + confidence tail for one knob-sweep/grid row.
+
+    Shared by the knob-sweep and knob-grid human renderers (iter-372/373). For a
+    row with gaps it emits each selected bias's recommended ``--min-silence-ms``
+    (right-justified in its :data:`_KNOB_BIAS_COLS` ``cell`` width), then the
+    short→long ``spread`` and the confidence ``grade``; a <2-segment row (no gaps)
+    emits ``-`` in every column. ``spread`` and ``grade`` are valley / distribution
+    properties — invariant under which bias columns the operator selects — so the
+    iter-374 ``--bias`` filter narrows ONLY the per-bias columns and always keeps
+    these two. With the full bias tuple the output is byte-identical to the
+    pre-filter iter-372/373 row.
+    """
+    if row["num_gaps"] == 0:
+        cells = "".join(f"  {'-':>{_KNOB_BIAS_COLS[b]['cell']}}" for b in biases)
+        return f"{cells}  {'-':>6}  {'-':>10}"
+    cells = "".join(
+        f"  {_format_cut_label(_knob_sweep_bias_ms(row, b)):>{_KNOB_BIAS_COLS[b]['cell']}}"
+        for b in biases
+    )
+    spread = _format_cut_label(row["spread_ms"])
+    return f"{cells}  {spread:>6}  {row['grade']:>10}"
+
+
+def _knob_filtered_biases(row, biases):
+    """Return a copy of ``row`` whose ``biases`` list is narrowed to ``biases``.
+
+    The iter-374 ``--bias`` filter for the JSON faces of the knob sweep / grid:
+    the core :func:`vad_gap_recommend_knob_sweep` / :func:`vad_gap_recommend_knob_grid`
+    rows always carry the full short/balanced/long ``biases`` list (they are
+    complete, testable primitives); this trims that nested list to the selected
+    subset in canonical order WITHOUT mutating the source row, leaving every other
+    field (``spread_ms`` / ``grade`` / valley accounting) intact. With the full
+    bias tuple it returns an equivalent row, so the JSON is unchanged by default.
+    """
+    selected = set(biases)
+    out = dict(row)
+    out["biases"] = [b for b in row["biases"] if b["bias"] in selected]
+    return out
+
+
 def vad_gap_recommend_sweep(result):
     """Emit the short/balanced/long recommendations side by side (iter-352).
 
@@ -3861,7 +3964,9 @@ def _knob_sweep_bias_ms(row, bias):
     return None
 
 
-def render_vad_gap_recommend_knob_sweep(values, results, *, name, axis="threshold"):
+def render_vad_gap_recommend_knob_sweep(
+    values, results, *, name, axis="threshold", biases=GAP_RECOMMEND_BIAS_ORDER
+):
     """Render a recommend knob sweep as a plain-text table (iter-372).
 
     The human-readable twin of :func:`render_vad_gap_recommend_knob_sweep_json`.
@@ -3869,12 +3974,17 @@ def render_vad_gap_recommend_knob_sweep(values, results, *, name, axis="threshol
     (sets the column label via :data:`_SWEEP_AXIS_LABEL`). Any ``None`` in
     ``results`` (segmenter unavailable) yields the shared install hint. Pure:
     returns a list of strings. Each row prints the swept value, the segment count,
-    the gap count, the three recommended ``--min-silence-ms`` numbers
-    (short/balanced/long), the short→long spread, and the confidence grade; a row
-    with <2 segments has no pause to recommend over and prints ``-`` in the
-    recommendation columns. Reading down the ``confidence`` column an operator sees
-    at WHICH knob setting the recommendation becomes trustworthy — the genuinely
-    new signal vs the bias-only ``gv vad-gap-recommend-sweep``.
+    the gap count, the recommended ``--min-silence-ms`` numbers for the selected
+    ``biases``, the short→long spread, and the confidence grade; a row with <2
+    segments has no pause to recommend over and prints ``-`` in the recommendation
+    columns. Reading down the ``confidence`` column an operator sees at WHICH knob
+    setting the recommendation becomes trustworthy — the genuinely new signal vs
+    the bias-only ``gv vad-gap-recommend-sweep``.
+
+    ``biases`` (iter-374) selects which per-bias columns appear, in canonical
+    short..balanced..long order; the default is the full triad (byte-identical to
+    the pre-filter render). ``spread`` and ``grade`` are valley / distribution
+    properties — invariant under the column selection — so they are always kept.
     """
     if any(r is None for r in results):
         return [
@@ -3885,31 +3995,20 @@ def render_vad_gap_recommend_knob_sweep(values, results, *, name, axis="threshol
     label = _SWEEP_AXIS_LABEL.get(axis, axis)
     lines = [
         f"silero VAD recommended-hangover knob sweep — {name}",
-        f"  {label:>9}  segments  gaps    short  balanced      long    spread  confidence",
+        f"  {label:>9}  segments  gaps{_knob_bias_header_segment(biases)}"
+        f"  {'spread':>8}  {'confidence':>10}",
     ]
     for row in rows:
-        if row["num_gaps"] == 0:
-            rec_cols = (
-                f"{'-':>5}  {'-':>8}  {'-':>8}  {'-':>6}  {'-':>10}"
-            )
-        else:
-            short = _format_cut_label(_knob_sweep_bias_ms(row, "short"))
-            balanced = _format_cut_label(_knob_sweep_bias_ms(row, "balanced"))
-            long = _format_cut_label(_knob_sweep_bias_ms(row, "long"))
-            spread = _format_cut_label(row["spread_ms"])
-            # grade is "none" (no valley) or strong/moderate/weak — never None for
-            # a num_gaps > 0 row (vad_gap_confidence returns "none", not None).
-            rec_cols = (
-                f"{short:>5}  {balanced:>8}  {long:>8}  {spread:>6}  {row['grade']:>10}"
-            )
         lines.append(
             f"  {_format_sweep_axis_value(axis, row[axis]):>9}  "
-            f"{row['num_segments']:>8}  {row['num_gaps']:>4}  {rec_cols}"
+            f"{row['num_segments']:>8}  {row['num_gaps']:>4}{_knob_rec_cols(row, biases)}"
         )
     return lines
 
 
-def render_vad_gap_recommend_knob_sweep_json(values, results, *, name, axis="threshold"):
+def render_vad_gap_recommend_knob_sweep_json(
+    values, results, *, name, axis="threshold", biases=GAP_RECOMMEND_BIAS_ORDER
+):
     """Render a recommend knob sweep as a JSON string (iter-372).
 
     Machine-readable twin of :func:`render_vad_gap_recommend_knob_sweep`, so the
@@ -3921,6 +4020,13 @@ def render_vad_gap_recommend_knob_sweep_json(values, results, *, name, axis="thr
     ``null`` for a <2-segment row). Any ``None`` in ``results`` →
     ``{"available": false}`` + install hint, mirroring the sibling sweep JSON
     renderers. Pure: returns a single JSON string.
+
+    ``biases`` (iter-374) narrows each row's nested ``biases`` list to the selected
+    subset (canonical short..balanced..long order); the spread / grade / valley
+    fields are unaffected. The default is the full triad (unchanged payload). When
+    the selection is a strict subset the payload also carries a top-level
+    ``biases`` key naming the columns kept, so a consumer knows the list was
+    filtered.
     """
     if any(r is None for r in results):
         return json.dumps(
@@ -3934,32 +4040,43 @@ def render_vad_gap_recommend_knob_sweep_json(values, results, *, name, axis="thr
             indent=2,
         )
     rows = vad_gap_recommend_knob_sweep(values, results, axis=axis)
+    biases = list(biases)
     payload = {
         "available": True,
         "name": name,
         "axis": axis,
-        "sweep": rows,
     }
+    if list(biases) != list(GAP_RECOMMEND_BIAS_ORDER):
+        payload["biases"] = biases
+        rows = [_knob_filtered_biases(r, biases) for r in rows]
+    payload["sweep"] = rows
     return json.dumps(payload, indent=2)
 
 
-def render_vad_gap_recommend_knob_sweep_csv(values, results, *, name, axis="threshold"):
+def render_vad_gap_recommend_knob_sweep_csv(
+    values, results, *, name, axis="threshold", biases=GAP_RECOMMEND_BIAS_ORDER
+):
     """Render a recommend knob sweep as CSV text (no trailing newline) (iter-372).
 
     The spreadsheet/plot-friendly twin of
     :func:`render_vad_gap_recommend_knob_sweep_json`. Where JSON nests the per-bias
     rows under each value's ``biases`` key, CSV flattens to ONE ROW PER SWEPT VALUE
-    with the three bias recommendations as columns:
-    ``<axis>,num_segments,num_gaps,short_ms,balanced_ms,long_ms,spread_ms,grade,
-    dominance,separation_ratio`` — so a reader sees how the whole spread AND the
-    confidence move down a single table. (Contrast ``gv vad-gap-recommend-sweep
-    --csv``, which is one row per bias for a SINGLE segmentation; here the sweep
-    axis is the segmenter knob, so the value is the row key and the biases become
-    columns.) The first column header is the swept ``axis`` name so the grid is
-    self-describing. ``name`` is accepted for signature parity but is not part of
-    the tabular body (a CSV is a pure data grid), matching the sibling sweep CSVs.
-    A <2-segment row emits empty cells in the recommendation columns (the CSV
-    spelling of JSON ``null`` / the human table's ``-``). Any ``None`` in
+    with the selected bias recommendations as columns:
+    ``<axis>,num_segments,num_gaps,<bias>_ms...,spread_ms,grade,dominance,
+    separation_ratio`` — so a reader sees how the spread AND the confidence move
+    down a single table. (Contrast ``gv vad-gap-recommend-sweep --csv``, which is
+    one row per bias for a SINGLE segmentation; here the sweep axis is the segmenter
+    knob, so the value is the row key and the biases become columns.) The first
+    column header is the swept ``axis`` name so the grid is self-describing.
+    ``name`` is accepted for signature parity but is not part of the tabular body (a
+    CSV is a pure data grid), matching the sibling sweep CSVs.
+
+    ``biases`` (iter-374) selects which ``<bias>_ms`` columns appear, in canonical
+    short..balanced..long order; the default is the full triad (header
+    ``short_ms,balanced_ms,long_ms`` — byte-identical to the pre-filter output).
+    The ``spread_ms`` / ``grade`` / ``dominance`` / ``separation_ratio`` columns are
+    always kept. A <2-segment row emits empty cells in the recommendation columns
+    (the CSV spelling of JSON ``null`` / the human table's ``-``). Any ``None`` in
     ``results`` (segmenter unavailable) yields a single ``# silero VAD
     unavailable: ...`` comment line. Pure: built with the stdlib :mod:`csv`
     writer, trailing terminator stripped.
@@ -3976,9 +4093,7 @@ def render_vad_gap_recommend_knob_sweep_csv(values, results, *, name, axis="thre
             axis,
             "num_segments",
             "num_gaps",
-            "short_ms",
-            "balanced_ms",
-            "long_ms",
+            *[f"{b}_ms" for b in biases],
             "spread_ms",
             "grade",
             "dominance",
@@ -3987,24 +4102,23 @@ def render_vad_gap_recommend_knob_sweep_csv(values, results, *, name, axis="thre
     )
     for row in vad_gap_recommend_knob_sweep(values, results, axis=axis):
         if row["num_gaps"] > 0:
-            short = _format_cut_label(_knob_sweep_bias_ms(row, "short"))
-            balanced = _format_cut_label(_knob_sweep_bias_ms(row, "balanced"))
-            long = _format_cut_label(_knob_sweep_bias_ms(row, "long"))
+            bias_cells = [
+                _format_cut_label(_knob_sweep_bias_ms(row, b)) for b in biases
+            ]
             spread = _format_cut_label(row["spread_ms"])
             dominance = "" if row["dominance"] is None else row["dominance"]
             sep = "" if row["separation_ratio"] is None else row["separation_ratio"]
             grade = row["grade"]
         else:
             # <2 segments — nothing to recommend; empty cells (CSV null spelling).
-            short = balanced = long = spread = grade = dominance = sep = ""
+            bias_cells = ["" for _ in biases]
+            spread = grade = dominance = sep = ""
         writer.writerow(
             [
                 row[axis],
                 row["num_segments"],
                 row["num_gaps"],
-                short,
-                balanced,
-                long,
+                *bias_cells,
                 spread,
                 grade,
                 dominance,
@@ -4095,6 +4209,7 @@ def render_vad_gap_recommend_knob_grid(
     name,
     row_axis="threshold",
     col_axis="min_silence_ms",
+    biases=GAP_RECOMMEND_BIAS_ORDER,
 ):
     """Render a 2-D recommend knob grid as a plain-text table (iter-373).
 
@@ -4109,12 +4224,17 @@ def render_vad_gap_recommend_knob_grid(
     unavailable) yields the shared install hint.
 
     Each row prints the two swept values, the segment count, the gap count, the
-    three recommended ``--min-silence-ms`` numbers (short/balanced/long), the
+    recommended ``--min-silence-ms`` numbers for the selected ``biases``, the
     short→long spread, and the confidence grade; a cell with <2 segments has no
     pause to recommend over and prints ``-`` in the recommendation columns. Reading
     the ``confidence`` column across the grid an operator sees the REGION of the
     plane where the recommendation becomes trustworthy. Pure: returns a list of
     strings.
+
+    ``biases`` (iter-374) selects which per-bias columns appear, in canonical
+    short..balanced..long order; the default is the full triad (byte-identical to
+    the pre-filter render). ``spread`` and ``grade`` are valley / distribution
+    properties — invariant under the column selection — so they are always kept.
     """
     if any(r is None for r in results):
         return [
@@ -4129,25 +4249,15 @@ def render_vad_gap_recommend_knob_grid(
     lines = [
         f"silero VAD recommended-hangover knob grid — {name} "
         f"({row_label} × {col_label})",
-        f"  {row_label:>11}  {col_label:>11}  segments  gaps    short  "
-        "balanced      long    spread  confidence",
+        f"  {row_label:>11}  {col_label:>11}  segments  gaps"
+        f"{_knob_bias_header_segment(biases)}  {'spread':>8}  {'confidence':>10}",
     ]
     for cell in cells:
-        if cell["num_gaps"] == 0:
-            rec_cols = f"{'-':>5}  {'-':>8}  {'-':>8}  {'-':>6}  {'-':>10}"
-        else:
-            short = _format_cut_label(_knob_sweep_bias_ms(cell, "short"))
-            balanced = _format_cut_label(_knob_sweep_bias_ms(cell, "balanced"))
-            long = _format_cut_label(_knob_sweep_bias_ms(cell, "long"))
-            spread = _format_cut_label(cell["spread_ms"])
-            rec_cols = (
-                f"{short:>5}  {balanced:>8}  {long:>8}  {spread:>6}  "
-                f"{cell['grade']:>10}"
-            )
         lines.append(
             f"  {_format_sweep_axis_value(row_axis, cell[row_axis]):>11}  "
             f"{_format_sweep_axis_value(col_axis, cell[col_axis]):>11}  "
-            f"{cell['num_segments']:>8}  {cell['num_gaps']:>4}  {rec_cols}"
+            f"{cell['num_segments']:>8}  {cell['num_gaps']:>4}"
+            f"{_knob_rec_cols(cell, biases)}"
         )
     return lines
 
@@ -4160,6 +4270,7 @@ def render_vad_gap_recommend_knob_grid_json(
     name,
     row_axis="threshold",
     col_axis="min_silence_ms",
+    biases=GAP_RECOMMEND_BIAS_ORDER,
 ):
     """Render a 2-D recommend knob grid as a JSON string (iter-373).
 
@@ -4173,6 +4284,12 @@ def render_vad_gap_recommend_knob_grid_json(
     ``null`` for a <2-segment cell). Any ``None`` in ``results`` →
     ``{"available": false}`` + install hint, mirroring the sibling grid JSON
     renderers. Pure: returns a single JSON string.
+
+    ``biases`` (iter-374) narrows each cell's nested ``biases`` list to the selected
+    subset (canonical short..balanced..long order); the spread / grade / valley
+    fields are unaffected. The default is the full triad (unchanged payload). When
+    the selection is a strict subset the payload also carries a top-level
+    ``biases`` key naming the columns kept.
     """
     if any(r is None for r in results):
         return json.dumps(
@@ -4188,13 +4305,17 @@ def render_vad_gap_recommend_knob_grid_json(
     cells = vad_gap_recommend_knob_grid(
         row_values, col_values, results, row_axis=row_axis, col_axis=col_axis
     )
+    biases = list(biases)
     payload = {
         "available": True,
         "name": name,
         "row_axis": row_axis,
         "col_axis": col_axis,
-        "grid": cells,
     }
+    if list(biases) != list(GAP_RECOMMEND_BIAS_ORDER):
+        payload["biases"] = biases
+        cells = [_knob_filtered_biases(c, biases) for c in cells]
+    payload["grid"] = cells
     return json.dumps(payload, indent=2)
 
 
@@ -4206,22 +4327,28 @@ def render_vad_gap_recommend_knob_grid_csv(
     name,
     row_axis="threshold",
     col_axis="min_silence_ms",
+    biases=GAP_RECOMMEND_BIAS_ORDER,
 ):
     """Render a 2-D recommend knob grid as CSV text (no trailing newline) (iter-373).
 
     The spreadsheet/plot-friendly twin of
     :func:`render_vad_gap_recommend_knob_grid_json`. Where JSON nests the per-bias
     rows under each cell's ``biases`` key, CSV flattens to ONE ROW PER CELL with the
-    three bias recommendations as columns:
-    ``<row_axis>,<col_axis>,num_segments,num_gaps,short_ms,balanced_ms,long_ms,
-    spread_ms,grade,dominance,separation_ratio`` (one row per cell, in row-major
-    order) — so a reader sees how the whole spread AND the confidence move across
-    the grid in a single table. The first two column headers are the swept axis
-    names so the grid is self-describing. ``name`` is accepted for signature parity
-    with the other ``render_vad_gap_recommend_knob_grid_*`` twins but is not part of
-    the tabular body (a CSV is a pure data grid), matching the sibling grid CSVs. A
-    <2-segment cell emits empty cells in the recommendation columns (the CSV
-    spelling of JSON ``null`` / the human table's ``-``). Any ``None`` in
+    selected bias recommendations as columns:
+    ``<row_axis>,<col_axis>,num_segments,num_gaps,<bias>_ms...,spread_ms,grade,
+    dominance,separation_ratio`` (one row per cell, in row-major order) — so a
+    reader sees how the spread AND the confidence move across the grid in a single
+    table. The first two column headers are the swept axis names so the grid is
+    self-describing. ``name`` is accepted for signature parity with the other
+    ``render_vad_gap_recommend_knob_grid_*`` twins but is not part of the tabular
+    body (a CSV is a pure data grid), matching the sibling grid CSVs.
+
+    ``biases`` (iter-374) selects which ``<bias>_ms`` columns appear, in canonical
+    short..balanced..long order; the default is the full triad (header
+    ``short_ms,balanced_ms,long_ms`` — byte-identical to the pre-filter output).
+    The ``spread_ms`` / ``grade`` / ``dominance`` / ``separation_ratio`` columns are
+    always kept. A <2-segment cell emits empty cells in the recommendation columns
+    (the CSV spelling of JSON ``null`` / the human table's ``-``). Any ``None`` in
     ``results`` (segmenter unavailable) yields a single ``# silero VAD
     unavailable: ...`` comment line. Pure: built with the stdlib :mod:`csv` writer,
     trailing terminator stripped.
@@ -4239,9 +4366,7 @@ def render_vad_gap_recommend_knob_grid_csv(
             col_axis,
             "num_segments",
             "num_gaps",
-            "short_ms",
-            "balanced_ms",
-            "long_ms",
+            *[f"{b}_ms" for b in biases],
             "spread_ms",
             "grade",
             "dominance",
@@ -4252,25 +4377,24 @@ def render_vad_gap_recommend_knob_grid_csv(
         row_values, col_values, results, row_axis=row_axis, col_axis=col_axis
     ):
         if cell["num_gaps"] > 0:
-            short = _format_cut_label(_knob_sweep_bias_ms(cell, "short"))
-            balanced = _format_cut_label(_knob_sweep_bias_ms(cell, "balanced"))
-            long = _format_cut_label(_knob_sweep_bias_ms(cell, "long"))
+            bias_cells = [
+                _format_cut_label(_knob_sweep_bias_ms(cell, b)) for b in biases
+            ]
             spread = _format_cut_label(cell["spread_ms"])
             dominance = "" if cell["dominance"] is None else cell["dominance"]
             sep = "" if cell["separation_ratio"] is None else cell["separation_ratio"]
             grade = cell["grade"]
         else:
             # <2 segments — nothing to recommend; empty cells (CSV null spelling).
-            short = balanced = long = spread = grade = dominance = sep = ""
+            bias_cells = ["" for _ in biases]
+            spread = grade = dominance = sep = ""
         writer.writerow(
             [
                 cell[row_axis],
                 cell[col_axis],
                 cell["num_segments"],
                 cell["num_gaps"],
-                short,
-                balanced,
-                long,
+                *bias_cells,
                 spread,
                 grade,
                 dominance,
@@ -7783,13 +7907,20 @@ def cmd_vad_gap_recommend_knob_sweep(args, *, log=print, segmenter=None, availab
         axis = "threshold"
         values = args.thresholds
 
+    # iter-374 --bias column filter: narrow the per-bias columns to a subset
+    # (canonical short..balanced..long order from the parser); default full triad.
+    biases = getattr(args, "bias", None) or GAP_RECOMMEND_BIAS_ORDER
+
     if not availability():
         if as_json:
-            log(render_vad_gap_recommend_knob_sweep_json([], [None], name=args.wav, axis=axis))
+            log(render_vad_gap_recommend_knob_sweep_json(
+                [], [None], name=args.wav, axis=axis, biases=biases))
         elif as_csv:
-            log(render_vad_gap_recommend_knob_sweep_csv([], [None], name=args.wav, axis=axis))
+            log(render_vad_gap_recommend_knob_sweep_csv(
+                [], [None], name=args.wav, axis=axis, biases=biases))
         else:
-            for line in render_vad_gap_recommend_knob_sweep([], [None], name=args.wav, axis=axis):
+            for line in render_vad_gap_recommend_knob_sweep(
+                [], [None], name=args.wav, axis=axis, biases=biases):
                 log(line)
         return
 
@@ -7817,11 +7948,14 @@ def cmd_vad_gap_recommend_knob_sweep(args, *, log=print, segmenter=None, availab
     # report; fall back to the raw path only if the sweep is empty.
     name = results[0].name if results else args.wav
     if as_json:
-        log(render_vad_gap_recommend_knob_sweep_json(values, results, name=name, axis=axis))
+        log(render_vad_gap_recommend_knob_sweep_json(
+            values, results, name=name, axis=axis, biases=biases))
     elif as_csv:
-        log(render_vad_gap_recommend_knob_sweep_csv(values, results, name=name, axis=axis))
+        log(render_vad_gap_recommend_knob_sweep_csv(
+            values, results, name=name, axis=axis, biases=biases))
     else:
-        for line in render_vad_gap_recommend_knob_sweep(values, results, name=name, axis=axis):
+        for line in render_vad_gap_recommend_knob_sweep(
+            values, results, name=name, axis=axis, biases=biases):
             log(line)
 
 
@@ -7884,26 +8018,30 @@ def cmd_vad_gap_recommend_knob_grid(args, *, log=print, segmenter=None, availabi
         col_axis = "min_silence_ms"
         col_values = args.min_silences
 
+    # iter-374 --bias column filter: narrow the per-bias columns to a subset
+    # (canonical short..balanced..long order from the parser); default full triad.
+    biases = getattr(args, "bias", None) or GAP_RECOMMEND_BIAS_ORDER
+
     if not availability():
         unavailable = [None]
         if as_json:
             log(
                 render_vad_gap_recommend_knob_grid_json(
                     [], [], unavailable, name=args.wav,
-                    row_axis=row_axis, col_axis=col_axis,
+                    row_axis=row_axis, col_axis=col_axis, biases=biases,
                 )
             )
         elif as_csv:
             log(
                 render_vad_gap_recommend_knob_grid_csv(
                     [], [], unavailable, name=args.wav,
-                    row_axis=row_axis, col_axis=col_axis,
+                    row_axis=row_axis, col_axis=col_axis, biases=biases,
                 )
             )
         else:
             for line in render_vad_gap_recommend_knob_grid(
                 [], [], unavailable, name=args.wav,
-                row_axis=row_axis, col_axis=col_axis,
+                row_axis=row_axis, col_axis=col_axis, biases=biases,
             ):
                 log(line)
         return
@@ -7943,20 +8081,20 @@ def cmd_vad_gap_recommend_knob_grid(args, *, log=print, segmenter=None, availabi
         log(
             render_vad_gap_recommend_knob_grid_json(
                 row_values, col_values, results, name=name,
-                row_axis=row_axis, col_axis=col_axis,
+                row_axis=row_axis, col_axis=col_axis, biases=biases,
             )
         )
     elif as_csv:
         log(
             render_vad_gap_recommend_knob_grid_csv(
                 row_values, col_values, results, name=name,
-                row_axis=row_axis, col_axis=col_axis,
+                row_axis=row_axis, col_axis=col_axis, biases=biases,
             )
         )
     else:
         for line in render_vad_gap_recommend_knob_grid(
             row_values, col_values, results, name=name,
-            row_axis=row_axis, col_axis=col_axis,
+            row_axis=row_axis, col_axis=col_axis, biases=biases,
         ):
             log(line)
 
@@ -10332,6 +10470,15 @@ def build_parser():
         "all runs when sweeping --thresholds; ignored when sweeping "
         "--max-speeches; 'inf'/'none' never splits (default: inf)",
     )
+    vad_gap_rec_knob_sweep.add_argument(
+        "--bias",
+        type=gap_recommend_bias_list_type,
+        default=None,
+        help="Comma-separated subset of short/balanced/long to show as the "
+        "recommendation columns (e.g. 'short' or 'short,long'); narrows the "
+        "table to the biases you care about while always keeping the spread + "
+        "confidence columns (default: all three, in short..balanced..long order)",
+    )
     vad_gap_rec_knob_sweep_fmt = vad_gap_rec_knob_sweep.add_mutually_exclusive_group()
     vad_gap_rec_knob_sweep_fmt.add_argument(
         "--json",
@@ -10464,6 +10611,15 @@ def build_parser():
         "across all cells when the column axis is --min-silences/--min-speeches/"
         "--speech-pads; ignored when sweeping --max-speeches; 'inf'/'none' never "
         "splits (default: inf)",
+    )
+    vad_gap_rec_knob_grid.add_argument(
+        "--bias",
+        type=gap_recommend_bias_list_type,
+        default=None,
+        help="Comma-separated subset of short/balanced/long to show as the "
+        "recommendation columns (e.g. 'short' or 'short,long'); narrows the "
+        "table to the biases you care about while always keeping the spread + "
+        "confidence columns (default: all three, in short..balanced..long order)",
     )
     vad_gap_rec_knob_grid_fmt = vad_gap_rec_knob_grid.add_mutually_exclusive_group()
     vad_gap_rec_knob_grid_fmt.add_argument(

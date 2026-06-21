@@ -489,3 +489,182 @@ def test_cmd_registered_in_dispatch_table():
     assert gv.DEFAULT_HANDLERS["vad-gap-recommend-knob-sweep"] is (
         gv.cmd_vad_gap_recommend_knob_sweep
     )
+
+
+# ---- iter-374: --bias column filter --------------------------------------
+
+
+def test_bias_list_type_canonical_order_and_dedup():
+    # The parser type returns the selected biases in canonical short..balanced..
+    # long order regardless of how they were typed, and collapses duplicates.
+    assert gv.gap_recommend_bias_list_type("long,short") == ["short", "long"]
+    assert gv.gap_recommend_bias_list_type("balanced") == ["balanced"]
+    assert gv.gap_recommend_bias_list_type("long,short,long") == ["short", "long"]
+    assert gv.gap_recommend_bias_list_type(" short , long ") == ["short", "long"]
+
+
+def test_bias_list_type_rejects_empty_and_unknown():
+    import argparse
+
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.gap_recommend_bias_list_type("")
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.gap_recommend_bias_list_type(",, ,")
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.gap_recommend_bias_list_type("medium")
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.gap_recommend_bias_list_type("short,bogus")
+
+
+def test_render_human_default_biases_unchanged():
+    # The full triad is byte-identical to passing no biases at all (the default).
+    res = [_bimodal(), _no_valley()]
+    default = gv.render_vad_gap_recommend_knob_sweep(
+        [0.3, 0.7], res, name="rec.wav", axis="threshold"
+    )
+    explicit = gv.render_vad_gap_recommend_knob_sweep(
+        [0.3, 0.7], res, name="rec.wav", axis="threshold",
+        biases=["short", "balanced", "long"],
+    )
+    assert default == explicit
+    # The header still names all three biases.
+    assert "short" in default[1] and "balanced" in default[1] and "long" in default[1]
+
+
+def test_render_human_filtered_subset_columns():
+    lines = gv.render_vad_gap_recommend_knob_sweep(
+        [0.3], [_bimodal()], name="rec.wav", axis="threshold",
+        biases=["short", "long"],
+    )
+    header = lines[1]
+    # Only the selected per-bias columns appear; balanced is dropped.
+    assert "short" in header
+    assert "long" in header
+    assert "balanced" not in header
+    # The invariant spread + confidence columns are always kept.
+    assert "spread" in header
+    assert "confidence" in header
+
+
+def test_render_human_filtered_single_bias():
+    lines = gv.render_vad_gap_recommend_knob_sweep(
+        [0.3], [_bimodal()], name="rec.wav", biases=["balanced"],
+    )
+    header = lines[1]
+    assert "balanced" in header
+    assert "short" not in header and "long" not in header
+    assert "spread" in header and "confidence" in header
+
+
+def test_render_human_filtered_no_gaps_dashes():
+    # A <2-segment row still dashes the (narrowed) recommendation columns.
+    lines = gv.render_vad_gap_recommend_knob_sweep(
+        [0.5], [_single()], name="rec.wav", biases=["short"],
+    )
+    assert any("-" in ln for ln in lines[2:])
+
+
+def test_render_json_filtered_narrows_biases_and_names_them():
+    text = gv.render_vad_gap_recommend_knob_sweep_json(
+        [0.3], [_bimodal()], name="rec.wav", biases=["short", "long"],
+    )
+    payload = json.loads(text)
+    # Top-level biases key records which columns were kept.
+    assert payload["biases"] == ["short", "long"]
+    # Each row's nested biases list is narrowed to the same subset, in order.
+    assert [b["bias"] for b in payload["sweep"][0]["biases"]] == ["short", "long"]
+    # The valley/confidence fields are untouched by the filter.
+    assert payload["sweep"][0]["grade"] == "strong"
+    assert payload["sweep"][0]["spread_ms"] is not None
+
+
+def test_render_json_default_has_no_top_level_biases_key():
+    # The unfiltered payload is unchanged: no top-level biases key, full triad.
+    text = gv.render_vad_gap_recommend_knob_sweep_json(
+        [0.3], [_bimodal()], name="rec.wav",
+    )
+    payload = json.loads(text)
+    assert "biases" not in payload
+    assert [b["bias"] for b in payload["sweep"][0]["biases"]] == [
+        "short", "balanced", "long",
+    ]
+
+
+def test_render_csv_filtered_header_and_columns():
+    text = gv.render_vad_gap_recommend_knob_sweep_csv(
+        [0.3, 0.7], [_bimodal(), _no_valley()], name="rec.wav",
+        biases=["short", "long"],
+    )
+    rows = list(csv.reader(io.StringIO(text)))
+    assert rows[0] == [
+        "threshold",
+        "num_segments",
+        "num_gaps",
+        "short_ms",
+        "long_ms",
+        "spread_ms",
+        "grade",
+        "dominance",
+        "separation_ratio",
+    ]
+    # short_ms, long_ms present; balanced_ms dropped.
+    assert rows[1][3] != "" and rows[1][4] != ""
+
+
+def test_render_csv_filtered_no_gaps_empty_cells():
+    text = gv.render_vad_gap_recommend_knob_sweep_csv(
+        [0.5], [_single()], name="rec.wav", biases=["short"],
+    )
+    rows = list(csv.reader(io.StringIO(text)))
+    # short_ms..separation_ratio (5 cols for one bias) all empty for a <2-seg row.
+    assert rows[1][3:] == ["", "", "", "", ""]
+
+
+def test_cmd_bias_filter_human_path():
+    lines = _run_handler(
+        [_bimodal(), _bimodal(), _bimodal(), _no_valley()],
+        argv_extra=["--bias", "short,long"],
+    )
+    text = "\n".join(lines)
+    header = lines[1]
+    assert "short" in header and "long" in header
+    assert "balanced" not in header
+    assert "confidence" in header
+
+
+def test_cmd_bias_filter_json_path():
+    lines = _run_handler(
+        [_bimodal(), _bimodal(), _bimodal(), _no_valley()],
+        argv_extra=["--json", "--bias", "long"],
+    )
+    payload = json.loads("\n".join(lines))
+    assert payload["biases"] == ["long"]
+    assert [b["bias"] for b in payload["sweep"][0]["biases"]] == ["long"]
+
+
+def test_cmd_bias_filter_csv_path():
+    lines = _run_handler(
+        [_bimodal(), _bimodal(), _bimodal(), _no_valley()],
+        argv_extra=["--csv", "--bias", "balanced"],
+    )
+    rows = list(csv.reader(io.StringIO("\n".join(lines))))
+    assert rows[0][3] == "balanced_ms"
+    assert "short_ms" not in rows[0] and "long_ms" not in rows[0]
+
+
+def test_cmd_bias_typed_order_canonicalized_in_output():
+    # Typing "long,short" still renders short before long (canonical order).
+    lines = _run_handler(
+        [_bimodal(), _bimodal(), _bimodal(), _no_valley()],
+        argv_extra=["--csv", "--bias", "long,short"],
+    )
+    rows = list(csv.reader(io.StringIO("\n".join(lines))))
+    assert rows[0][3] == "short_ms"
+    assert rows[0][4] == "long_ms"
+
+
+def test_cmd_invalid_bias_rejected():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-gap-recommend-knob-sweep", "rec.wav", "--bias", "medium"]
+        )

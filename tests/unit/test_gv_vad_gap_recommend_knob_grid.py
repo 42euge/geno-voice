@@ -532,3 +532,136 @@ def test_cmd_registered_in_dispatch_table():
     assert gv.DEFAULT_HANDLERS["vad-gap-recommend-knob-grid"] is (
         gv.cmd_vad_gap_recommend_knob_grid
     )
+
+
+# ---- iter-374: --bias column filter --------------------------------------
+
+
+def test_render_human_default_biases_unchanged():
+    # The full triad is byte-identical to passing no biases at all.
+    res = [_bimodal(), _no_valley()]
+    default = gv.render_vad_gap_recommend_knob_grid(
+        [0.3], [400.0, 800.0], res, name="rec.wav",
+    )
+    explicit = gv.render_vad_gap_recommend_knob_grid(
+        [0.3], [400.0, 800.0], res, name="rec.wav",
+        biases=["short", "balanced", "long"],
+    )
+    assert default == explicit
+    assert "short" in default[1] and "balanced" in default[1] and "long" in default[1]
+
+
+def test_render_human_filtered_subset_columns():
+    lines = gv.render_vad_gap_recommend_knob_grid(
+        [0.3], [400.0], [_bimodal()], name="rec.wav", biases=["short", "long"],
+    )
+    header = lines[1]
+    assert "short" in header and "long" in header
+    assert "balanced" not in header
+    assert "spread" in header and "confidence" in header
+
+
+def test_render_human_filtered_no_gaps_dashes():
+    lines = gv.render_vad_gap_recommend_knob_grid(
+        [0.3], [400.0], [_single()], name="rec.wav", biases=["short"],
+    )
+    assert any("-" in ln for ln in lines[2:])
+
+
+def test_render_json_filtered_narrows_biases_and_names_them():
+    text = gv.render_vad_gap_recommend_knob_grid_json(
+        [0.3], [400.0], [_bimodal()], name="rec.wav", biases=["short", "long"],
+    )
+    payload = json.loads(text)
+    assert payload["biases"] == ["short", "long"]
+    assert [b["bias"] for b in payload["grid"][0]["biases"]] == ["short", "long"]
+    assert payload["grid"][0]["grade"] == "strong"
+
+
+def test_render_json_default_has_no_top_level_biases_key():
+    text = gv.render_vad_gap_recommend_knob_grid_json(
+        [0.3], [400.0], [_bimodal()], name="rec.wav",
+    )
+    payload = json.loads(text)
+    assert "biases" not in payload
+    assert [b["bias"] for b in payload["grid"][0]["biases"]] == [
+        "short", "balanced", "long",
+    ]
+
+
+def test_render_csv_filtered_header_and_columns():
+    text = gv.render_vad_gap_recommend_knob_grid_csv(
+        [0.3], [400.0, 800.0], [_bimodal(), _no_valley()], name="rec.wav",
+        biases=["short", "long"],
+    )
+    rows = list(csv.reader(io.StringIO(text)))
+    assert rows[0] == [
+        "threshold",
+        "min_silence_ms",
+        "num_segments",
+        "num_gaps",
+        "short_ms",
+        "long_ms",
+        "spread_ms",
+        "grade",
+        "dominance",
+        "separation_ratio",
+    ]
+
+
+def test_render_csv_filtered_no_gaps_empty_cells():
+    text = gv.render_vad_gap_recommend_knob_grid_csv(
+        [0.3], [400.0], [_single()], name="rec.wav", biases=["short"],
+    )
+    rows = list(csv.reader(io.StringIO(text)))
+    # short_ms..separation_ratio (5 cols for one bias) all empty for a <2-seg cell.
+    assert rows[1][4:] == ["", "", "", "", ""]
+
+
+def test_cmd_bias_filter_human_path():
+    # Default 4×4 grid = 16 cells.
+    lines = _run_handler(
+        [_bimodal() for _ in range(16)],
+        argv_extra=["--bias", "short,long"],
+    )
+    header = lines[1]
+    assert "short" in header and "long" in header
+    assert "balanced" not in header
+    assert "confidence" in header
+
+
+def test_cmd_bias_filter_json_path():
+    lines = _run_handler(
+        [_bimodal() for _ in range(16)],
+        argv_extra=["--json", "--bias", "long"],
+    )
+    payload = json.loads("\n".join(lines))
+    assert payload["biases"] == ["long"]
+    assert [b["bias"] for b in payload["grid"][0]["biases"]] == ["long"]
+
+
+def test_cmd_bias_filter_csv_path():
+    lines = _run_handler(
+        [_bimodal() for _ in range(16)],
+        argv_extra=["--csv", "--bias", "balanced"],
+    )
+    rows = list(csv.reader(io.StringIO("\n".join(lines))))
+    assert rows[0][4] == "balanced_ms"
+    assert "short_ms" not in rows[0] and "long_ms" not in rows[0]
+
+
+def test_cmd_bias_typed_order_canonicalized_in_output():
+    lines = _run_handler(
+        [_bimodal() for _ in range(16)],
+        argv_extra=["--csv", "--bias", "long,short"],
+    )
+    rows = list(csv.reader(io.StringIO("\n".join(lines))))
+    assert rows[0][4] == "short_ms"
+    assert rows[0][5] == "long_ms"
+
+
+def test_cmd_invalid_bias_rejected():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-gap-recommend-knob-grid", "rec.wav", "--bias", "medium"]
+        )
