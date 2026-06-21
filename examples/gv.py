@@ -15,6 +15,7 @@ Usage:
     gv vad-gap-percentiles recording.wav --percentiles 50,90,99  # robust pause percentiles (outlier-proof vs min/mean/max)
     gv vad-gap-cdf recording.wav --cuts-ms 200,400,800,1600  # merge-CDF — what fraction of pauses each --min-silence-ms cut would merge
     gv vad-gap-recommend recording.wav  # verdict — recommends a --min-silence-ms in the valley between short/long pauses
+    gv vad-gap-confidence recording.wav  # grade how trustworthy the recommendation is (strong/moderate/weak by valley dominance)
     gv vad-gap-hist recording.wav --bin-width-s 0.5  # histogram the silence-gap durations (see the distribution shape)
     gv vad-gap-sweep recording.wav --thresholds 0.3,0.5,0.7,0.9  # sweep N gates, tabulate how the min gap moves
     gv vad-gap-grid recording.wav --thresholds 0.3,0.5,0.7 --min-silences 400,800  # gate × hangover gap grid
@@ -2488,6 +2489,284 @@ def render_vad_gap_recommend_csv(result):
     return buf.getvalue().rstrip("\r\n")
 
 
+# Dominance thresholds grading how clean the recommendation's valley is. The
+# dominance is the fraction of the total gap SPREAD (max_gap - min_gap) taken up
+# by the single widest jump (the valley). A clean bimodal distribution puts most
+# of its spread into that one empty band; a smear of similar pauses spreads the
+# range across many small jumps. >= 0.5 means the valley alone accounts for at
+# least half the entire spread (strong two-cluster separation); >= 0.25 is a
+# discernible valley (moderate); below that the clusters bleed together (weak).
+GAP_CONFIDENCE_STRONG_DOMINANCE = 0.5
+GAP_CONFIDENCE_MODERATE_DOMINANCE = 0.25
+
+
+def vad_gap_confidence(result):
+    """Grade how trustworthy the :func:`vad_gap_recommend` verdict is (iter-348).
+
+    iter-347's ``gv vad-gap-recommend`` always names a number, but the number is
+    only as good as the valley it sits in: a clean bimodal distribution (short
+    within-turn pauses well separated from long between-turn pauses) gives a
+    confident recommendation, whereas a smear of similar pauses gives a number
+    that is barely better than a guess. This surface is the CONFIDENCE note
+    iter-347's own next-item asked for — it reads the same gap distribution and
+    grades how dominant the recommendation's valley is, so the operator knows
+    whether to trust the number or fall back to manual tuning.
+
+    The grade is driven by two derived measures of the widest jump (the valley
+    the recommendation sits in), found the same way :func:`vad_gap_recommend`
+    finds it (largest jump between consecutive SORTED gaps):
+
+    - ``dominance`` — the valley width as a FRACTION of the total gap spread
+      (``max_gap - min_gap``, i.e. the sum of every consecutive jump). A clean
+      two-cluster distribution puts most of its spread into that one empty band
+      (dominance near 1); a uniform smear spreads the range across many small
+      jumps (dominance near 0). This drives the ``grade``:
+      ``>= 0.5`` → ``"strong"``, ``>= 0.25`` → ``"moderate"``, else ``"weak"``.
+    - ``separation_ratio`` — the widest jump divided by the SECOND-widest jump.
+      A big ratio means the valley stands clearly above the next-biggest band
+      (the recommendation is unambiguous); a ratio near 1 means a rival valley
+      is almost as wide (the recommendation could plausibly have landed
+      elsewhere). ``None`` when there is only one jump, or the runner-up is a
+      zero-width jump (a perfectly clean separation — the valley is infinitely
+      dominant over its rivals).
+
+    Pure: anchors to :func:`vad_gap_recommend` (so the recommendation and valley
+    fields agree EXACTLY with ``gv vad-gap-recommend``) and adds the confidence
+    fields. A result with fewer than 2 segments has no gaps, so there is nothing
+    to grade: ``grade`` is ``None`` and the measures are ``None``. A single
+    pause, or several pauses all the same length, has no valley
+    (``split_found`` is ``False``), so it cannot be graded either: ``grade`` is
+    ``"none"`` and the measures are ``None`` (the recommendation falls back to
+    just below the shortest pause — a conservative default, not a confident
+    split). ``dominance`` / ``separation_ratio`` round to 3 places, matching the
+    sibling gap surfaces.
+    """
+    r = vad_gap_recommend(result)
+    conf = dict(r)
+    conf["spread_s"] = None
+    conf["runner_up_width_s"] = None
+    conf["dominance"] = None
+    conf["separation_ratio"] = None
+    conf["grade"] = None
+    n = r["num_gaps"]
+    if n == 0:
+        # Fewer than 2 segments — no gaps, nothing to grade. grade stays None.
+        return conf
+    if not r["split_found"]:
+        # One pause, or every pause the same length: no short/long split exists,
+        # so the recommendation is the conservative fallback, not a confident
+        # valley. grade is the explicit "none" rather than a numeric grade.
+        conf["grade"] = "none"
+        return conf
+    # Re-derive the sorted jumps the same way vad_gap_recommend does, so the
+    # widest jump here is exactly the valley it recommended.
+    gaps = sorted(vad_silence_gaps(result)["gaps"])
+    jumps = [gaps[i] - gaps[i - 1] for i in range(1, n)]
+    spread = sum(jumps)  # == max_gap - min_gap
+    best = max(jumps)
+    # The runner-up is the widest jump OTHER than the valley itself (drop one
+    # instance of the max, then take the new max). With a single jump there is
+    # no runner-up.
+    rest = list(jumps)
+    rest.remove(best)
+    runner_up = max(rest) if rest else None
+    conf["spread_s"] = round(spread, 3)
+    conf["runner_up_width_s"] = None if runner_up is None else round(runner_up, 3)
+    # spread > 0 here because split_found means best > 0 and best <= spread.
+    dominance = best / spread
+    conf["dominance"] = round(dominance, 3)
+    if runner_up is not None and runner_up > 0:
+        conf["separation_ratio"] = round(best / runner_up, 3)
+    else:
+        # Only one jump, or every rival jump is zero-width: the valley is
+        # infinitely dominant over its rivals. Spelled as None ("no finite
+        # rival"), matching how the rest of the family spells "not measurable".
+        conf["separation_ratio"] = None
+    if dominance >= GAP_CONFIDENCE_STRONG_DOMINANCE:
+        conf["grade"] = "strong"
+    elif dominance >= GAP_CONFIDENCE_MODERATE_DOMINANCE:
+        conf["grade"] = "moderate"
+    else:
+        conf["grade"] = "weak"
+    return conf
+
+
+def _gap_confidence_summary(grade):
+    """Map a confidence ``grade`` to a one-line operator suggestion (iter-348).
+
+    Per-value mapping inside the helper (the session-summary diversity-check
+    convention applied to this surface): each grade gets text saying what to do
+    about it, with a defensive fallback for an unexpected value so a future grade
+    never drops the signal silently.
+    """
+    if grade == "strong":
+        return "trust the recommendation — the valley is well separated"
+    if grade == "moderate":
+        return (
+            "the recommendation is usable but the valley is shallow — "
+            "sanity-check it against gv vad-gap-hist"
+        )
+    if grade == "weak":
+        return (
+            "the pauses don't cluster cleanly — treat the recommendation as a "
+            "starting point and tune --min-silence-ms by ear"
+        )
+    if grade == "none":
+        return (
+            "no valley to grade — the pauses are uniform, so the recommendation "
+            "is a conservative fallback, not a confident split"
+        )
+    return "unrecognized confidence grade — inspect the distribution directly"
+
+
+def render_vad_gap_confidence(result):
+    """Render the recommendation-confidence grade as plain-text report lines (iter-348).
+
+    The human-readable face of :func:`vad_gap_confidence`. ``result`` of ``None``
+    (segmenter unavailable) yields the shared install hint. A result with fewer
+    than 2 segments has no gaps, so it prints the same short explanatory line
+    :func:`render_vad_gaps` uses (nothing to grade). Otherwise it prints the
+    aggregate header (min/mean/max, total silence) then the verdict: the
+    recommended ``--min-silence-ms`` number it is grading, the grade itself with
+    its dominance / separation measures (or a no-valley note), and the one-line
+    suggestion for that grade. Pure: returns a list of strings (no I/O, no ANSI).
+    """
+    if result is None:
+        return [
+            "silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        ]
+    c = vad_gap_confidence(result)
+    lines = [
+        f"silero VAD recommendation confidence — {result.name}",
+        f"  segments:     {c['num_segments']}",
+        f"  gaps:         {c['num_gaps']} (pauses between consecutive speech regions)",
+    ]
+    if c["num_gaps"] == 0:
+        lines.append("  (fewer than 2 segments — no inter-segment pause to measure)")
+        return lines
+    lines.append(f"  min gap:      {c['min_gap_s']:.3f}s")
+    lines.append(f"  mean gap:     {c['mean_gap_s']:.3f}s")
+    lines.append(f"  max gap:      {c['max_gap_s']:.3f}s")
+    lines.append(f"  total silence:{c['total_silence_s']:8.3f}s")
+    label = _format_cut_label(c["recommended_ms"])
+    lines.append(
+        f"  recommended --min-silence-ms: {label} ({c['recommended_s']:.3f}s)"
+    )
+    if c["grade"] == "none":
+        lines.append(
+            "  confidence:   none (no valley — pauses don't separate into "
+            "short/long clusters)"
+        )
+    else:
+        sep = (
+            "n/a (only one jump / clean split)"
+            if c["separation_ratio"] is None
+            else f"{c['separation_ratio']:.3f}x the next-widest jump"
+        )
+        lines.append(
+            f"  confidence:   {c['grade']} (valley {c['valley_width_s']:.3f}s is "
+            f"{c['dominance'] * 100.0:.1f}% of the {c['spread_s']:.3f}s gap "
+            f"spread; {sep})"
+        )
+    lines.append(f"  suggestion:   {_gap_confidence_summary(c['grade'])} (iter-348)")
+    return lines
+
+
+def render_vad_gap_confidence_json(result):
+    """Render the recommendation-confidence grade as a JSON string (iter-348).
+
+    Machine-readable twin of :func:`render_vad_gap_confidence`, mirroring the
+    degrade-to-``{"available": false}`` contract the other VAD JSON renderers
+    use. Carries the aggregate stats plus the recommendation fields AND the
+    confidence fields (``grade`` / ``dominance`` / ``separation_ratio`` /
+    ``spread_s`` / ``runner_up_width_s``). The confidence fields are ``null``
+    (and ``grade`` ``null`` for a <2-segment result, ``"none"`` for a no-valley
+    result), the same JSON spelling of "not measurable" the other gap surfaces
+    use. Pure: built from :func:`vad_gap_confidence`, so it works on any
+    ``SileroResult``-shaped object.
+    """
+    if result is None:
+        return json.dumps(
+            {
+                "available": False,
+                "hint": (
+                    "install 'silero-vad' (pulls torch + torchaudio) to enable "
+                    "offline neural segmentation"
+                ),
+            },
+            indent=2,
+        )
+    c = vad_gap_confidence(result)
+    payload = {
+        "available": True,
+        "name": result.name,
+        "num_segments": c["num_segments"],
+        "num_gaps": c["num_gaps"],
+        "min_gap_s": c["min_gap_s"],
+        "max_gap_s": c["max_gap_s"],
+        "mean_gap_s": c["mean_gap_s"],
+        "total_silence_s": c["total_silence_s"],
+        "recommended_ms": c["recommended_ms"],
+        "recommended_s": c["recommended_s"],
+        "split_found": c["split_found"],
+        "grade": c["grade"],
+        "dominance": c["dominance"],
+        "separation_ratio": c["separation_ratio"],
+        "spread_s": c["spread_s"],
+        "valley_width_s": c["valley_width_s"],
+        "runner_up_width_s": c["runner_up_width_s"],
+    }
+    return json.dumps(payload, indent=2)
+
+
+def render_vad_gap_confidence_csv(result):
+    """Render the recommendation-confidence grade as a one-row CSV table (iter-348).
+
+    The spreadsheet-friendly twin of :func:`render_vad_gap_confidence` /
+    :func:`render_vad_gap_confidence_json`, completing the human / ``--json`` /
+    ``--csv`` trio every VAD-analysis surface carries. Like the verdict it grades,
+    the confidence is a SINGLE result, so the natural CSV is one summary row:
+    ``recommended_ms,grade,dominance,separation_ratio,valley_width_s,spread_s``.
+    The derivable aggregates are NOT duplicated into the row, matching
+    :func:`render_vad_gap_recommend_csv`'s reasoning. A result with fewer than 2
+    segments yields the header alone (a valid empty-bodied table — nothing to
+    grade). ``result`` of ``None`` (segmenter unavailable) yields a single
+    ``# silero VAD unavailable: ...`` comment line. Pure: built with the stdlib
+    :mod:`csv` writer, trailing terminator stripped.
+    """
+    if result is None:
+        return (
+            "# silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        )
+    c = vad_gap_confidence(result)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(
+        [
+            "recommended_ms",
+            "grade",
+            "dominance",
+            "separation_ratio",
+            "valley_width_s",
+            "spread_s",
+        ]
+    )
+    if c["num_gaps"] > 0:
+        writer.writerow(
+            [
+                _format_cut_label(c["recommended_ms"]),
+                c["grade"],
+                "" if c["dominance"] is None else c["dominance"],
+                "" if c["separation_ratio"] is None else c["separation_ratio"],
+                "" if c["valley_width_s"] is None else c["valley_width_s"],
+                "" if c["spread_s"] is None else c["spread_s"],
+            ]
+        )
+    return buf.getvalue().rstrip("\r\n")
+
+
 def vad_gap_histogram(result, *, bin_width_s=0.5):
     """Bucket the inter-segment silence gaps into a fixed-width histogram (iter-336).
 
@@ -4594,6 +4873,66 @@ def cmd_vad_gap_recommend(args, *, log=print, segmenter=None, availability=None)
             log(line)
 
 
+def cmd_vad_gap_confidence(args, *, log=print, segmenter=None, availability=None):
+    """Segment one WAV offline and GRADE the recommended-hangover confidence.
+
+    iter-348's confidence surface — the companion of :func:`cmd_vad_gap_recommend`.
+    Where ``gv vad-gap-recommend`` always names a number,
+    ``gv vad-gap-confidence recording.wav`` grades how trustworthy that number is:
+    it measures how dominant the recommendation's valley is (the widest jump in
+    the sorted gap distribution) versus the total gap spread and the next-widest
+    jump, and reports a ``strong`` / ``moderate`` / ``weak`` grade (or ``none``
+    when the pauses are uniform and there is no valley to grade). A clean bimodal
+    distribution grades strong; a smear of similar pauses grades weak — telling
+    the operator whether to trust the recommendation or tune ``--min-silence-ms``
+    by ear.
+
+    Same injected-dependency contract as :func:`cmd_vad_gap_recommend`:
+    ``segmenter`` / ``availability`` default to the real :mod:`vad.silero`
+    functions, imported lazily so the parser stays torch-free. The segmenter knobs
+    are shared with ``gv vad`` so the gaps are measured against the same
+    segmentation. ``--csv`` is mutually exclusive with ``--json``; when
+    ``silero-vad`` is absent the handler prints the install hint and returns,
+    never crashing.
+    """
+    if segmenter is None or availability is None:
+        from vad.silero import segment_recording, silero_available
+
+        segmenter = segment_recording if segmenter is None else segmenter
+        availability = silero_available if availability is None else availability
+
+    as_json = getattr(args, "json", False)
+    as_csv = getattr(args, "csv", False)
+
+    if not availability():
+        if as_json:
+            log(render_vad_gap_confidence_json(None))
+        elif as_csv:
+            log(render_vad_gap_confidence_csv(None))
+        else:
+            for line in render_vad_gap_confidence(None):
+                log(line)
+        return
+
+    from vad.silero import SileroParams
+
+    params = SileroParams(
+        threshold=args.threshold,
+        min_speech_ms=args.min_speech_ms,
+        min_silence_ms=args.min_silence_ms,
+        speech_pad_ms=args.speech_pad_ms,
+        max_speech_s=args.max_speech_s,
+    )
+    result = segmenter(args.wav, params=params)
+    if as_json:
+        log(render_vad_gap_confidence_json(result))
+    elif as_csv:
+        log(render_vad_gap_confidence_csv(result))
+    else:
+        for line in render_vad_gap_confidence(result):
+            log(line)
+
+
 def cmd_vad_gap_histogram(args, *, log=print, segmenter=None, availability=None):
     """Segment one WAV offline and report the inter-segment silence-gap HISTOGRAM.
 
@@ -5360,6 +5699,7 @@ DEFAULT_HANDLERS = {
     "vad-gap-percentiles": cmd_vad_gap_percentiles,
     "vad-gap-cdf": cmd_vad_gap_cdf,
     "vad-gap-recommend": cmd_vad_gap_recommend,
+    "vad-gap-confidence": cmd_vad_gap_confidence,
     "vad-gap-hist": cmd_vad_gap_histogram,
     "vad-gap-sweep": cmd_vad_gap_sweep,
     "vad-diff": cmd_vad_diff,
@@ -5998,6 +6338,75 @@ def build_parser():
         action="store_true",
         help="Emit a one-row recommended_ms,recommended_s,split_found,below,"
         "at_or_above,num_gaps CSV summary; mutually exclusive with --json",
+    )
+
+    # gv vad-gap-confidence — segment one WAV and GRADE how trustworthy the
+    # vad-gap-recommend verdict is (iter-348). The companion of vad-gap-recommend:
+    # the verdict always names a number, but the number is only as good as the
+    # valley it sits in. This grades how dominant that valley is (its width vs the
+    # total gap spread and the next-widest jump) into strong/moderate/weak — a
+    # clean bimodal distribution grades strong, a smear of similar pauses grades
+    # weak — so the operator knows whether to trust it. Shares all `gv vad` knobs.
+    vad_gap_conf = sub.add_parser(
+        "vad-gap-confidence",
+        help="Offline Silero VAD — segment a WAV and grade how trustworthy the "
+        "vad-gap-recommend hangover is (strong/moderate/weak by how dominant "
+        "the valley is vs the total gap spread)",
+    )
+    vad_gap_conf.add_argument(
+        "wav",
+        help="Path to a 16-bit PCM WAV file to segment",
+    )
+    vad_gap_conf.add_argument(
+        "--threshold",
+        type=unit_interval_type,
+        default=vad_threshold_default,
+        help=f"P(speech) gate in [0, 1] (default: {vad_threshold_default})",
+    )
+    vad_gap_conf.add_argument(
+        "--min-speech-ms",
+        type=nonneg_float_type,
+        default=vad_min_speech_default,
+        dest="min_speech_ms",
+        help="Drop speech regions shorter than this, in ms "
+        f"(default: {vad_min_speech_default})",
+    )
+    vad_gap_conf.add_argument(
+        "--min-silence-ms",
+        type=nonneg_float_type,
+        default=vad_min_silence_default,
+        dest="min_silence_ms",
+        help="Trailing silence before a region ends, in ms — matches the "
+        f"pipecat stop_secs=0.8 live default (default: {vad_min_silence_default})",
+    )
+    vad_gap_conf.add_argument(
+        "--speech-pad-ms",
+        type=nonneg_float_type,
+        default=vad_speech_pad_default,
+        dest="speech_pad_ms",
+        help="Symmetric padding added to each region, in ms "
+        f"(default: {vad_speech_pad_default})",
+    )
+    vad_gap_conf.add_argument(
+        "--max-speech-s",
+        type=max_speech_type,
+        default=vad_max_speech_default,
+        dest="max_speech_s",
+        help="Force-split regions longer than this, in seconds; 'inf'/'none' "
+        "never splits (default: inf)",
+    )
+    vad_gap_conf_fmt = vad_gap_conf.add_mutually_exclusive_group()
+    vad_gap_conf_fmt.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON (aggregate stats + recommendation + "
+        "confidence fields) instead of the human-readable verdict",
+    )
+    vad_gap_conf_fmt.add_argument(
+        "--csv",
+        action="store_true",
+        help="Emit a one-row recommended_ms,grade,dominance,separation_ratio,"
+        "valley_width_s,spread_s CSV summary; mutually exclusive with --json",
     )
 
     # gv vad-gap-hist — segment one WAV and HISTOGRAM the inter-segment silence
