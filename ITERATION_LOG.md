@@ -31204,3 +31204,69 @@ on main post-merge (4526 passed, ~29s).
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    ~31 leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-341 — gv vad-gap-hist human-table golden-output assertion
+
+- **Date:** 2026-06-20
+- **Branch:** iter-341-gap-hist-golden (ff-merged to main, worktree removed)
+- **Commit:** 151ba11
+
+**Why.** iter-340's next-item #1: "Extend the golden-output pinning to the
+sibling gap surfaces — the percentiles human report is now byte-pinned; the
+other five gap axes (point/sweep/grid/diff/histogram) still assert only
+structure + substrings. A small follow-up could add the same verbatim golden to
+one of them (e.g. the `gv vad-gap-hist` aligned bar block, where column drift is
+most visible)." The existing `test_render_human_*` histogram tests assert
+STRUCTURE + substrings (a bar-line count, a `#` appears *somewhere*, the
+`--min-silence-ms` knob is named) but never freeze the EXACT rendered block. So
+a silent regression in the aggregate header column, the half-open `[lo, hi)`
+range formatting (`{:6.3f}`), the right-aligned count field (`{:>4}`), the
+two-space gutters around the bar, or the bar-scaling arithmetic would slip
+through every one of them. This lap closes that for the histogram — the surface
+where column drift is most visible — making it the second gap axis (after
+percentiles) with a byte-for-byte human golden.
+
+**What it pins.** `tests/unit/test_gv_vad_gap_histogram.py` gains two golden
+tests (+74 lines, 32 → 34 tests in the module) that compare the full
+`render_vad_gap_histogram` line list verbatim against a literal expected list:
+- **`test_render_human_golden_full_width_bars`** — gaps `[1.0, 2.0, 4.0]` at
+  `bin_width_s=1.0` produce five `[lo, hi)` bins spanning `0..5`, each occupied
+  bin holding exactly one gap. With `max_count == 1` every occupied bin draws
+  the full 40-char bar and the two empty bins draw none. Freezes the aggregate
+  header (the min-gap knob-hint line, the right-aligned `total silence:
+  7.000s`), the `[{:6.3f}, {:6.3f})` range column, the `{:>4}` count field, and
+  the full-width bar.
+- **`test_render_human_golden_partial_bar_scaling`** — a bimodal segmentation:
+  three short `0.2s` gaps cluster in the first `0.5s` bin (busiest, count 3) and
+  one lone `2.0s` gap scales to `round(1/3 * 40) == 13` chars. Pins the
+  bar-scaling arithmetic ITSELF (not just "a bar exists"), and a follow-up index
+  assertion proves the bar column starts at the same character offset on the
+  full and partial rows (the range+count prefix is fixed-width regardless of bar
+  length).
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4528 passed**
+(4526 prior + 2 net new), run in the feature worktree before ff-merge AND re-run
+on main post-merge (4528 passed, ~39s).
+- Integration: not run this lap (pure string-formatting golden over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the iter-340
+  unit lap).
+
+**Next planned items:**
+1. **[gv CLI] Extend the golden-output pinning to the remaining gap surfaces** —
+   percentiles (iter-340) and histogram (iter-341) are now byte-pinned; the
+   other four gap axes (point/sweep/grid/diff) still assert only structure +
+   substrings. The `gv vad-gap-diff` two-segmentation delta table or the
+   `gv vad-gap-grid` matrix would be the next-most-alignment-sensitive targets.
+2. **[gv CLI] A genuinely new analysis surface** — a cumulative-distribution /
+   CDF view of where a candidate `--min-silence-ms` cut would fall (what
+   fraction of pauses it would merge), turning the percentile table into a
+   direct "this hangover merges X% of your pauses" answer.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
