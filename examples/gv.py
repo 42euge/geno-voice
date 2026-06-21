@@ -3032,15 +3032,26 @@ def vad_gap_recommend_sweep(result):
     fields name the short..long gap — how much the choice of bias moves the
     number, the same width iter-348's confidence surface grades the quality of.
 
-    Pure: built from :func:`vad_gap_recommend` (one call per bias), so the
-    aggregates, valley, and merge accounting agree EXACTLY with
-    ``gv vad-gap-recommend`` at each bias. A result with fewer than 2 segments
-    has no gaps (nothing to recommend): the per-bias ``recommended_ms`` /
-    ``recommended_s`` are ``None`` and ``spread`` is ``None``, the same "no
-    distribution" spelling the sibling gap surfaces use.
+    iter-353 folds that confidence grade into the shared block: ``grade`` /
+    ``dominance`` / ``separation_ratio`` answer the question the bias spread
+    raises ("which of the three should I pick?") with a prior one — "is the
+    underlying valley even trustworthy?". The grade is a property of the VALLEY,
+    not of where in it the number sits, so it too is invariant across biases and
+    is reported ONCE alongside the other shared fields. The fields are anchored
+    to :func:`vad_gap_confidence`, so they agree EXACTLY with
+    ``gv vad-gap-confidence``.
+
+    Pure: built from :func:`vad_gap_recommend` (one call per bias) and
+    :func:`vad_gap_confidence` (once), so the aggregates, valley, merge
+    accounting, and grade agree EXACTLY with ``gv vad-gap-recommend`` at each
+    bias and ``gv vad-gap-confidence``. A result with fewer than 2 segments has
+    no gaps (nothing to recommend): the per-bias ``recommended_ms`` /
+    ``recommended_s`` are ``None``, ``spread`` is ``None``, and ``grade`` is
+    ``None`` (the same "no distribution" spelling the sibling gap surfaces use).
     """
     rows = [vad_gap_recommend(result, bias=b) for b in GAP_RECOMMEND_BIAS_ORDER]
     base = rows[0]
+    conf = vad_gap_confidence(result)
     out = {
         "num_segments": base["num_segments"],
         "num_gaps": base["num_gaps"],
@@ -3055,6 +3066,10 @@ def vad_gap_recommend_sweep(result):
         "gap_below_s": base["gap_below_s"],
         "gap_above_s": base["gap_above_s"],
         "valley_width_s": base["valley_width_s"],
+        # Confidence grade is a valley property, invariant across biases (iter-353).
+        "grade": conf["grade"],
+        "dominance": conf["dominance"],
+        "separation_ratio": conf["separation_ratio"],
         "biases": [
             {
                 "bias": r["bias"],
@@ -3125,6 +3140,22 @@ def render_vad_gap_recommend_sweep(result):
         f"  spread:       {spread_label}ms ({s['spread_s']:.3f}s) "
         "short→long (how much the bias choice moves the number)"
     )
+    if s["grade"] == "none" or s["grade"] is None:
+        lines.append(
+            "  confidence:   none (no valley — the spread above is a "
+            "conservative fallback, not a confident split)"
+        )
+    else:
+        sep = (
+            "n/a (only one jump / clean split)"
+            if s["separation_ratio"] is None
+            else f"{s['separation_ratio']:.3f}x the next-widest jump"
+        )
+        lines.append(
+            f"  confidence:   {s['grade']} (valley is "
+            f"{s['dominance'] * 100.0:.1f}% of the gap spread; {sep})"
+        )
+    lines.append(f"  suggestion:   {_gap_confidence_summary(s['grade'])} (iter-348)")
     lines.append(
         f"  effect:       merges {s['below']}/{s['num_gaps']} within-turn "
         f"pauses, keeps {s['at_or_above']}/{s['num_gaps']} as turn boundaries "
@@ -3172,6 +3203,9 @@ def render_vad_gap_recommend_sweep_json(result):
         "gap_below_s": s["gap_below_s"],
         "gap_above_s": s["gap_above_s"],
         "valley_width_s": s["valley_width_s"],
+        "grade": s["grade"],
+        "dominance": s["dominance"],
+        "separation_ratio": s["separation_ratio"],
         "biases": s["biases"],
         "spread_ms": s["spread_ms"],
         "spread_s": s["spread_s"],
@@ -3191,10 +3225,14 @@ def render_vad_gap_recommend_sweep_csv(result):
     reader sees the whole spread at once (and the per-bias rows union cleanly
     with the single-bias surface's output). The shared valley endpoints and
     spread are NOT duplicated into every row, matching the single-bias surface's
-    reasoning. A result with fewer than 2 segments yields the header alone (a
-    valid empty-bodied table). ``result`` of ``None`` yields a single
-    ``# silero VAD unavailable: ...`` comment line. Pure: built with the stdlib
-    :mod:`csv` writer, trailing terminator stripped.
+    reasoning. The iter-353 confidence grade is likewise a shared scalar (one
+    per valley, invariant across biases), so it is NOT folded into the per-bias
+    rows either — duplicating it 3× would break the clean union with
+    ``gv vad-gap-recommend --csv``; the grade lives on the human / ``--json``
+    faces (and on ``gv vad-gap-confidence --csv``). A result with fewer than 2
+    segments yields the header alone (a valid empty-bodied table). ``result`` of
+    ``None`` yields a single ``# silero VAD unavailable: ...`` comment line.
+    Pure: built with the stdlib :mod:`csv` writer, trailing terminator stripped.
     """
     if result is None:
         return (

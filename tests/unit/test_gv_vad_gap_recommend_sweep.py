@@ -189,6 +189,56 @@ def test_sweep_bias_order_constant():
     assert set(gv.GAP_RECOMMEND_BIAS_ORDER) == set(gv.GAP_RECOMMEND_BIAS_FRACTIONS)
 
 
+# ---- core: confidence grade folded in (iter-353) ------------------------
+
+
+def test_sweep_carries_confidence_fields():
+    s = gv.vad_gap_recommend_sweep(_bimodal())
+    assert set(("grade", "dominance", "separation_ratio")) <= set(s)
+
+
+def test_sweep_grade_matches_confidence_surface_exactly():
+    # The grade is anchored to vad_gap_confidence, so it must agree field-for-field.
+    res = _bimodal()
+    s = gv.vad_gap_recommend_sweep(res)
+    c = gv.vad_gap_confidence(res)
+    assert s["grade"] == c["grade"]
+    assert s["dominance"] == c["dominance"]
+    assert s["separation_ratio"] == c["separation_ratio"]
+
+
+def test_sweep_clean_bimodal_grades_strong():
+    s = gv.vad_gap_recommend_sweep(_bimodal())
+    assert s["grade"] == "strong"
+
+
+def test_sweep_grade_invariant_across_biases():
+    # The grade is a property of the valley, not of where in it the number sits;
+    # it does not depend on bias. (Sanity: the single confidence surface ignores
+    # bias entirely, and the sweep reports a single shared grade.)
+    res = _bimodal()
+    s = gv.vad_gap_recommend_sweep(res)
+    # The grade sits in the shared block, not per-bias.
+    assert "grade" not in s["biases"][0]
+    assert s["grade"] == gv.vad_gap_confidence(res)["grade"]
+
+
+def test_sweep_no_valley_grades_none():
+    res = _result((0, 1), (2, 3), (4, 5))  # both gaps 1.0s → no valley
+    s = gv.vad_gap_recommend_sweep(res)
+    assert s["split_found"] is False
+    assert s["grade"] == "none"
+    assert s["dominance"] is None
+    assert s["separation_ratio"] is None
+
+
+def test_sweep_no_gaps_grades_none():
+    s = gv.vad_gap_recommend_sweep(_result((0, 1)))
+    assert s["num_gaps"] == 0
+    assert s["grade"] is None
+    assert s["dominance"] is None
+
+
 # ---- human renderer -----------------------------------------------------
 
 
@@ -224,6 +274,10 @@ def test_render_human_golden_with_valley():
         "    long     1575 (1.575s)",
         "  spread:       850ms (0.850s) short→long (how much the bias choice "
         "moves the number)",
+        "  confidence:   strong (valley is 100.0% of the gap spread; n/a (only "
+        "one jump / clean split))",
+        "  suggestion:   trust the recommendation — the valley is well separated "
+        "(iter-348)",
         "  effect:       merges 3/4 within-turn pauses, keeps 1/4 as turn "
         "boundaries (invariant across biases, iter-352)",
     ]
@@ -234,6 +288,20 @@ def test_render_human_no_valley_block():
     lines = gv.render_vad_gap_recommend_sweep(res)
     assert any("no valley" in ln for ln in lines)
     assert any("recommended --min-silence-ms by bias:" in ln for ln in lines)
+
+
+def test_render_human_has_confidence_and_suggestion_lines():
+    lines = gv.render_vad_gap_recommend_sweep(_bimodal())
+    assert any(ln.startswith("  confidence:   strong") for ln in lines)
+    assert any(ln.startswith("  suggestion:") for ln in lines)
+
+
+def test_render_human_no_valley_confidence_is_none():
+    res = _result((0, 1), (2, 3), (4, 5))  # both gaps 1.0s → no valley
+    lines = gv.render_vad_gap_recommend_sweep(res)
+    assert any(ln.startswith("  confidence:   none") for ln in lines)
+    # The 'none' suggestion text from _gap_confidence_summary.
+    assert any("conservative fallback" in ln for ln in lines)
 
 
 # ---- json renderer ------------------------------------------------------
@@ -270,6 +338,21 @@ def test_render_json_matches_core():
     assert payload["biases"] == s["biases"]
     assert payload["below"] == s["below"]
     assert payload["spread_s"] == s["spread_s"]
+
+
+def test_render_json_carries_confidence_fields():
+    res = _bimodal()
+    payload = json.loads(gv.render_vad_gap_recommend_sweep_json(res))
+    c = gv.vad_gap_confidence(res)
+    assert payload["grade"] == c["grade"] == "strong"
+    assert payload["dominance"] == c["dominance"]
+    assert payload["separation_ratio"] == c["separation_ratio"]
+
+
+def test_render_json_no_gaps_grade_null():
+    payload = json.loads(gv.render_vad_gap_recommend_sweep_json(_result((0, 1))))
+    assert payload["grade"] is None
+    assert payload["dominance"] is None
 
 
 # ---- csv renderer -------------------------------------------------------
@@ -322,6 +405,16 @@ def test_render_csv_columns_match_single_surface():
     sweep_header = gv.render_vad_gap_recommend_sweep_csv(res).splitlines()[0]
     single_header = gv.render_vad_gap_recommend_csv(res, bias="short").splitlines()[0]
     assert sweep_header == single_header
+
+
+def test_render_csv_omits_confidence_grade():
+    # The iter-353 confidence grade is a shared scalar (one per valley), so it is
+    # deliberately NOT folded into the per-bias CSV rows — duplicating it would
+    # break the clean union with gv vad-gap-recommend --csv. The grade lives on
+    # the human / --json faces instead.
+    header = gv.render_vad_gap_recommend_sweep_csv(_bimodal()).splitlines()[0]
+    assert "grade" not in header
+    assert "dominance" not in header
 
 
 # ---- parser -------------------------------------------------------------
