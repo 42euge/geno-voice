@@ -902,3 +902,206 @@ def test_cmd_min_grade_unavailable_json_names_floor():
     )
     payload = json.loads("\n".join(lines))
     assert payload["available"] is False
+
+
+# ---- iter-378: --sort-by ordering ----------------------------------------
+
+
+# A weak-grade recording: many near-uniform pauses (~0.5..1.1s) so the widest
+# jump is only a small fraction of the total gap spread (dominance < 0.25) → a
+# split is found but it grades "weak". Used to verify grade-DESC ordering puts
+# strong above weak above none.
+def _weak(name="rec.wav"):
+    return _result(
+        (0, 0.5), (1.0, 1.5), (2.1, 2.6), (3.3, 3.8),
+        (4.6, 5.1), (6.0, 6.5), (7.5, 8.0), (9.1, 9.6),
+        name=name,
+    )
+
+
+def test_sort_type_accepts_two_keys_case_insensitive():
+    assert gv.gap_recommend_sort_type("grade") == "grade"
+    assert gv.gap_recommend_sort_type("SPREAD") == "spread"
+    assert gv.gap_recommend_sort_type(" Grade ") == "grade"
+
+
+def test_sort_type_rejects_empty_and_unknown():
+    import argparse
+
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.gap_recommend_sort_type("")
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.gap_recommend_sort_type("value")
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.gap_recommend_sort_type("confidence")
+
+
+def test_sort_knob_rows_none_is_identity_copy():
+    rows = [{"grade": "weak", "spread_ms": 100.0}, {"grade": "strong", "spread_ms": 50.0}]
+    out = gv._sort_knob_rows(rows, None)
+    assert out == rows
+    assert out is not rows  # a copy, never the source list
+
+
+def test_sort_knob_rows_by_grade_descending_stable():
+    # grade DESC: strong > moderate > weak > none > ungraded(None); ties keep order.
+    rows = [
+        {"grade": "weak", "spread_ms": 1.0},
+        {"grade": "strong", "spread_ms": 2.0},
+        {"grade": None, "spread_ms": None},
+        {"grade": "none", "spread_ms": 3.0},
+        {"grade": "strong", "spread_ms": 4.0},  # second strong: stays after the first
+    ]
+    out = gv._sort_knob_rows(rows, "grade")
+    assert [r["grade"] for r in out] == ["strong", "strong", "weak", "none", None]
+    # stable: the two strongs keep their original spread order (2.0 before 4.0).
+    assert [r["spread_ms"] for r in out if r["grade"] == "strong"] == [2.0, 4.0]
+
+
+def test_sort_knob_rows_by_spread_ascending_none_last_stable():
+    rows = [
+        {"grade": "strong", "spread_ms": 300.0},
+        {"grade": "weak", "spread_ms": None},  # no recommendation → sorts last
+        {"grade": "moderate", "spread_ms": 100.0},
+        {"grade": "strong", "spread_ms": 300.0},  # tie with the first: stays after
+    ]
+    out = gv._sort_knob_rows(rows, "spread")
+    assert [r["spread_ms"] for r in out] == [100.0, 300.0, 300.0, None]
+    # stable on the 300.0 tie: the moderate-then-two-strongs order is preserved.
+    assert [r["grade"] for r in out] == ["moderate", "strong", "strong", "weak"]
+
+
+def test_sort_knob_rows_unknown_key_keeps_order():
+    rows = [{"grade": "weak", "spread_ms": 9.0}, {"grade": "strong", "spread_ms": 1.0}]
+    out = gv._sort_knob_rows(rows, "bogus")
+    assert out == rows
+    assert out is not rows
+
+
+def test_render_human_sort_by_none_unchanged():
+    res = [_bimodal(), _no_valley()]
+    default = gv.render_vad_gap_recommend_knob_sweep([0.3, 0.7], res, name="rec.wav")
+    explicit = gv.render_vad_gap_recommend_knob_sweep(
+        [0.3, 0.7], res, name="rec.wav", sort_by=None
+    )
+    assert default == explicit
+
+
+def test_render_human_sort_by_grade_strong_first():
+    # weak grade at 0.1, strong at 0.5, none at 0.9 → grade DESC: strong, weak, none.
+    res = [_weak(), _bimodal(), _no_valley()]
+    lines = gv.render_vad_gap_recommend_knob_sweep(
+        [0.1, 0.5, 0.9], res, name="rec.wav", sort_by="grade"
+    )
+    body = lines[2:]
+    assert "strong" in body[0]
+    assert "weak" in body[1]
+    assert "none" in body[2]
+
+
+def test_render_json_sort_by_default_no_key():
+    text = gv.render_vad_gap_recommend_knob_sweep_json(
+        [0.3, 0.7], [_bimodal(), _no_valley()], name="rec.wav"
+    )
+    payload = json.loads(text)
+    assert "sort_by" not in payload
+
+
+def test_render_json_sort_by_grade_names_key_and_reorders():
+    text = gv.render_vad_gap_recommend_knob_sweep_json(
+        [0.1, 0.5, 0.9], [_weak(), _bimodal(), _no_valley()], name="rec.wav",
+        sort_by="grade",
+    )
+    payload = json.loads(text)
+    assert payload["sort_by"] == "grade"
+    assert [r["grade"] for r in payload["sweep"]] == ["strong", "weak", "none"]
+
+
+def test_render_json_sort_by_spread_ascending():
+    # bimodal spread 850, no_valley spread 500 → spread ASC: 500 then 850.
+    text = gv.render_vad_gap_recommend_knob_sweep_json(
+        [0.3, 0.7], [_bimodal(), _no_valley()], name="rec.wav", sort_by="spread",
+    )
+    payload = json.loads(text)
+    assert payload["sort_by"] == "spread"
+    assert [r["spread_ms"] for r in payload["sweep"]] == [500.0, 850.0]
+
+
+def test_render_json_sort_by_composes_with_min_grade_and_bias():
+    # All three at once: filter to strong rows, narrow columns, order by grade.
+    text = gv.render_vad_gap_recommend_knob_sweep_json(
+        [0.1, 0.5, 0.9], [_weak(), _bimodal(), _no_valley()], name="rec.wav",
+        biases=["short", "long"], min_grade="moderate", sort_by="grade",
+    )
+    payload = json.loads(text)
+    assert payload["min_grade"] == "moderate"
+    assert payload["sort_by"] == "grade"
+    assert payload["biases"] == ["short", "long"]
+    # only the strong row survives the moderate floor.
+    assert [r["grade"] for r in payload["sweep"]] == ["strong"]
+    assert [b["bias"] for b in payload["sweep"][0]["biases"]] == ["short", "long"]
+
+
+def test_render_csv_sort_by_reorders_rows_header_unchanged():
+    text = gv.render_vad_gap_recommend_knob_sweep_csv(
+        [0.3, 0.7], [_bimodal(), _no_valley()], name="rec.wav", sort_by="spread",
+    )
+    rows = list(csv.reader(io.StringIO(text)))
+    assert rows[0][0] == "threshold"  # header unchanged
+    assert rows[0][7] == "grade"
+    # spread ASC: the no_valley row (spread 500) before the bimodal (spread 850).
+    assert rows[1][7] == "none"
+    assert rows[2][7] == "strong"
+
+
+def test_cmd_sort_by_grade_human_path():
+    lines = _run_handler(
+        [_weak(), _bimodal(), _no_valley()],
+        argv_extra=["--thresholds", "0.1,0.5,0.9", "--sort-by", "grade"],
+    )
+    body = lines[2:]
+    assert "strong" in body[0]
+    assert "weak" in body[1]
+    assert "none" in body[2]
+
+
+def test_cmd_sort_by_json_names_key():
+    lines = _run_handler(
+        [_bimodal(), _no_valley()],
+        argv_extra=["--thresholds", "0.3,0.9", "--json", "--sort-by", "spread"],
+    )
+    payload = json.loads("\n".join(lines))
+    assert payload["sort_by"] == "spread"
+    assert [r["spread_ms"] for r in payload["sweep"]] == [500.0, 850.0]
+
+
+def test_cmd_sort_by_default_keeps_swept_order():
+    lines = _run_handler(
+        [_bimodal(), _no_valley()],
+        argv_extra=["--thresholds", "0.3,0.9", "--json"],
+    )
+    payload = json.loads("\n".join(lines))
+    assert "sort_by" not in payload
+    # default keeps swept-value order: bimodal (strong) first, then none.
+    assert [r["grade"] for r in payload["sweep"]] == ["strong", "none"]
+
+
+def test_cmd_invalid_sort_by_rejected():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-gap-recommend-knob-sweep", "rec.wav", "--sort-by", "value"]
+        )
+
+
+def test_cmd_sort_by_unavailable_json_names_key():
+    # The unavailable branch still threads sort_by through (graceful degrade).
+    lines: List[str] = []
+    args = gv.build_parser().parse_args(
+        ["vad-gap-recommend-knob-sweep", "rec.wav", "--json", "--sort-by", "grade"]
+    )
+    gv.cmd_vad_gap_recommend_knob_sweep(
+        args, log=lines.append, segmenter=lambda *a, **k: None,
+        availability=lambda: False,
+    )
+    payload = json.loads("\n".join(lines))
+    assert payload["available"] is False
