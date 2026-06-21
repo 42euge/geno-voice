@@ -4421,9 +4421,11 @@ def vad_gap_peak_sweep(
     cuts_ms=DEFAULT_GAP_CDF_CUTS_MS,
     axis="threshold",
     top_n=1,
+    min_rate=0.0,
+    min_rate_pct=None,
     rate_pcts=DEFAULT_BAND_RATE_PCTS,
 ):
-    """Pair each swept-axis value with its COSTLIEST cost-curve band (iter-364; ``band_rate_dist`` iter-366; ``top_n`` iter-368).
+    """Pair each swept-axis value with its COSTLIEST cost-curve band (iter-364; ``band_rate_dist`` iter-366; ``top_n`` iter-368; ``min_rate`` / ``min_rate_pct`` iter-370).
 
     The peak-side analogue of :func:`vad_gap_sweep`. Where ``vad_gap_sweep``
     tabulates the silence-gap distribution (min/mean/max gap) across a swept
@@ -4476,11 +4478,37 @@ def vad_gap_peak_sweep(
     :func:`vad_gap_peak`, so each row's ranking agrees EXACTLY with
     ``gv vad-gap-peak --top-n`` at the matching value.
 
+    iter-370 adds ``min_rate`` / ``min_rate_pct`` — the iter-355/357 single-shot
+    rate FLOOR, applied per swept value. Where ``band_rate_dist`` and ``top_n``
+    are purely additive (they never change ``peak_found`` or the scalar columns),
+    the floor FILTERS: it drops cost bands cheaper than the threshold before
+    ranking, so the steepest SURVIVING band — and whether any survives at all —
+    can change with the floor. The two knobs set the same floor two ways and are
+    mutually exclusive (delegated to :func:`vad_gap_peak`, which raises if both
+    are given): ``min_rate`` is an ABSOLUTE rate (same cut at every swept value),
+    while ``min_rate_pct`` is an ADAPTIVE percentile of THAT value's own observed
+    non-empty band rates — so the concrete cut it resolves to differs from row to
+    row. Each row therefore carries ``effective_min_rate``: the absolute rate the
+    floor resolved to at that swept value (it equals ``min_rate`` when an absolute
+    floor or no floor is in play, and the per-row percentile cut under
+    ``min_rate_pct``). Reading down that column an operator sees how the adaptive
+    cutoff itself drifts as the segmenter knob reshapes the cost distribution —
+    invisible to a fixed absolute floor. The floor reflects through the EXISTING
+    scalar ``peak_*`` columns and the ``peaks`` ranking (both now name only
+    surviving bands); ``band_rate_dist`` is UNCHANGED — it is always the FULL
+    pre-floor distribution (the sample the percentile floor reads against), the
+    same stance the single-shot surface takes. A row whose every band is filtered
+    out by the floor spells the no-peak verdict exactly as an all-valley row does
+    (``peak_found`` ``False``, scalar fields ``None``, empty ``peaks``). The floor
+    is threaded straight into :func:`vad_gap_peak`, so each row agrees EXACTLY with
+    ``gv vad-gap-peak --min-rate`` / ``--min-rate-pct`` at the matching value.
+
     The row's swept-axis key IS ``axis`` (default ``"threshold"``). Anchors to
     :func:`vad_gap_peak` so the per-row numbers agree EXACTLY with ``gv
     vad-gap-peak`` at each swept value. No I/O, no torch import, so it is testable
     in isolation. Raises :class:`ValueError` if the two lists differ in length (or
-    if ``cuts_ms`` is empty / negative, or ``top_n`` < 1, delegated to
+    if ``cuts_ms`` is empty / negative, ``top_n`` < 1, ``min_rate`` < 0, or
+    ``min_rate_pct`` is out of range / set together with ``min_rate``, delegated to
     :func:`vad_gap_peak`).
     """
     if len(values) != len(results):
@@ -4490,7 +4518,14 @@ def vad_gap_peak_sweep(
         )
     rows = []
     for v, r in zip(values, results):
-        p = vad_gap_peak(r, cuts_ms=cuts_ms, top_n=top_n, rate_pcts=rate_pcts)
+        p = vad_gap_peak(
+            r,
+            cuts_ms=cuts_ms,
+            top_n=top_n,
+            min_rate=min_rate,
+            min_rate_pct=min_rate_pct,
+            rate_pcts=rate_pcts,
+        )
         rows.append(
             {
                 axis: v,
@@ -4505,8 +4540,15 @@ def vad_gap_peak_sweep(
                 # iter-368: the iter-354 top-N ranking at this swept value (the
                 # scalar peak_* fields above still echo peaks[0]).
                 "peaks": p["peaks"],
+                # iter-370: the iter-355/357 rate floor resolved to an absolute
+                # rate at THIS swept value. Equals min_rate for an absolute / no
+                # floor; the per-row percentile cut under min_rate_pct (so it
+                # drifts row to row as the cost distribution reshapes).
+                "effective_min_rate": p["effective_min_rate"],
                 # iter-366: the observed non-empty band-rate distribution at this
-                # swept value (the iter-358 single-shot view, per row).
+                # swept value (the iter-358 single-shot view, per row). Always the
+                # FULL pre-floor distribution — the sample min_rate_pct reads
+                # against — so it is unchanged by the iter-370 floor.
                 "band_rate_dist": p["band_rate_dist"],
             }
         )
@@ -4521,10 +4563,12 @@ def render_vad_gap_peak_sweep(
     cuts_ms=DEFAULT_GAP_CDF_CUTS_MS,
     axis="threshold",
     top_n=1,
+    min_rate=0.0,
+    min_rate_pct=None,
     show_rate_dist=False,
     rate_pcts=DEFAULT_BAND_RATE_PCTS,
 ):
-    """Render a cost-peak sweep as a plain-text table (iter-364; ``show_rate_dist`` iter-366; ``top_n`` iter-368).
+    """Render a cost-peak sweep as a plain-text table (iter-364; ``show_rate_dist`` iter-366; ``top_n`` iter-368; ``min_rate`` / ``min_rate_pct`` iter-370).
 
     The human-readable twin of :func:`render_vad_gap_peak_sweep_json`, the
     peak-side analogue of :func:`render_vad_gap_sweep`. ``name`` is the WAV being
@@ -4561,18 +4605,53 @@ def render_vad_gap_peak_sweep(
     already carry the single steepest band). The ranked block and the
     ``show_rate_dist`` block are independent — both may appear under a row, the
     ranking first.
+
+    With ``min_rate`` / ``min_rate_pct`` (iter-370) the table gains a header line
+    naming the active rate floor (the iter-355/357 single-shot floor, applied per
+    swept value), and the scalar peak columns + ``--top-n`` ranking already reflect
+    it (they name only surviving bands). For the ADAPTIVE ``min_rate_pct`` floor —
+    whose absolute cut differs at each swept value — each row also prints a short
+    "(floor: p<P> = <rate>/100ms)" note so the operator sees how the cutoff itself
+    drifts as the knob reshapes the cost distribution; the fixed absolute
+    ``min_rate`` floor needs no per-row note (the cut is the same everywhere, so
+    the header alone suffices). The default (no floor) leaves the table
+    byte-for-byte unchanged.
     """
     if any(r is None for r in results):
         return [
             "silero VAD unavailable: install 'silero-vad' (pulls torch + "
             "torchaudio) to enable offline neural segmentation"
         ]
-    rows = vad_gap_peak_sweep(values, results, cuts_ms=cuts_ms, axis=axis, top_n=top_n, rate_pcts=rate_pcts)
+    rows = vad_gap_peak_sweep(
+        values,
+        results,
+        cuts_ms=cuts_ms,
+        axis=axis,
+        top_n=top_n,
+        min_rate=min_rate,
+        min_rate_pct=min_rate_pct,
+        rate_pcts=rate_pcts,
+    )
     label = _SWEEP_AXIS_LABEL.get(axis, axis)
     lines = [
         f"silero VAD gap cost-peak sweep — {name}",
-        f"  {label:>9}  segments  gaps  peak_band_ms  merged  rate/100ms",
     ]
+    # iter-370: name the active rate floor once at the top — the per-row scalar
+    # peak columns + --top-n ranking already exclude bands cheaper than it. Only
+    # emitted when a floor is set, so the default (no floor) header is unchanged.
+    if min_rate_pct is not None:
+        lines.append(
+            f"  rate floor:   p{_format_percentile_label(min_rate_pct)} of each "
+            "value's observed band rates (per-row cut shown below) (iter-370)"
+        )
+    elif min_rate > 0:
+        lines.append(
+            f"  rate floor:   {min_rate:.3f} per +100ms (only bands at or above "
+            "this are named) (iter-370)"
+        )
+    lines.append(
+        f"  {label:>9}  segments  gaps  peak_band_ms  merged  rate/100ms"
+    )
     for row in rows:
         if not row["peak_found"]:
             peak_cols = f"{'-':>12}  {'-':>6}  {'-':>10}"
@@ -4589,6 +4668,16 @@ def render_vad_gap_peak_sweep(
             f"  {_format_sweep_axis_value(axis, row[axis]):>9}  "
             f"{row['num_segments']:>8}  {row['num_gaps']:>4}  {peak_cols}"
         )
+        if min_rate_pct is not None:
+            # iter-370: the adaptive floor resolves to a DIFFERENT absolute rate at
+            # each swept value (it is the Pth percentile of THAT value's own band
+            # rates), so name the per-row cut under its row. The fixed absolute
+            # --min-rate floor is the same everywhere, so it needs no per-row note —
+            # the header line above already states it.
+            lines.append(
+                f"      floor: p{_format_percentile_label(min_rate_pct)} = "
+                f"{row['effective_min_rate']:.3f} per +100ms"
+            )
         if top_n > 1:
             # iter-368: the iter-354 top-N ranking at this swept value, indented
             # under its row — one numbered line per ranked band (fewer than top_n
@@ -4630,8 +4719,8 @@ def render_vad_gap_peak_sweep(
     return lines
 
 
-def render_vad_gap_peak_sweep_json(values, results, *, name, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, axis="threshold", top_n=1, rate_pcts=DEFAULT_BAND_RATE_PCTS):
-    """Render a cost-peak sweep as a JSON string (iter-364; ``band_rate_dist`` iter-366; ``top_n`` iter-368).
+def render_vad_gap_peak_sweep_json(values, results, *, name, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, axis="threshold", top_n=1, min_rate=0.0, min_rate_pct=None, rate_pcts=DEFAULT_BAND_RATE_PCTS):
+    """Render a cost-peak sweep as a JSON string (iter-364; ``band_rate_dist`` iter-366; ``top_n`` iter-368; ``min_rate`` / ``min_rate_pct`` iter-370).
 
     Machine-readable twin of :func:`render_vad_gap_peak_sweep`, so the sweep can
     feed a plotting/tuning script. The payload carries the swept ``axis`` name
@@ -4657,7 +4746,20 @@ def render_vad_gap_peak_sweep_json(values, results, *, name, cuts_ms=DEFAULT_GAP
     requested count echoed once at top level as ``top_n``. At the default
     ``top_n=1`` each row's ``peaks`` holds the single steepest band (or is empty
     for a no-peak row), so the payload is a strict superset of the iter-364/366
-    shape. Any ``None`` in ``results`` → ``{"available": false}`` + install hint,
+    shape.
+
+    iter-370: like the single-shot JSON (which always carries ``min_rate`` /
+    ``min_rate_pct`` / ``effective_min_rate``), the payload echoes the requested
+    floor once at top level as ``min_rate`` (the absolute floor, default ``0.0``)
+    and ``min_rate_pct`` (the requested percentile, or ``null``), and every sweep
+    row carries ``effective_min_rate`` — the absolute rate the floor resolved to at
+    that swept value (it equals ``min_rate`` for an absolute / no floor, and the
+    per-row percentile cut under ``min_rate_pct``, so it can differ row to row). The
+    scalar ``peak_*`` columns and ``peaks`` already reflect the floor (they name
+    only surviving bands); ``band_rate_dist`` is unchanged (always the full
+    pre-floor distribution). At the default no-floor the payload is a strict
+    superset of the iter-368 shape (``effective_min_rate`` then ``0.0`` on every
+    row). Any ``None`` in ``results`` → ``{"available": false}`` + install hint,
     mirroring :func:`render_vad_gap_sweep_json`. Pure: returns a single JSON
     string.
     """
@@ -4672,21 +4774,34 @@ def render_vad_gap_peak_sweep_json(values, results, *, name, cuts_ms=DEFAULT_GAP
             },
             indent=2,
         )
-    rows = vad_gap_peak_sweep(values, results, cuts_ms=cuts_ms, axis=axis, top_n=top_n, rate_pcts=rate_pcts)
+    rows = vad_gap_peak_sweep(
+        values,
+        results,
+        cuts_ms=cuts_ms,
+        axis=axis,
+        top_n=top_n,
+        min_rate=min_rate,
+        min_rate_pct=min_rate_pct,
+        rate_pcts=rate_pcts,
+    )
     payload = {
         "available": True,
         "name": name,
         "axis": axis,
         "cuts_ms": list(cuts_ms),
         "top_n": top_n,
+        # iter-370: echo the requested rate floor once (the per-row resolved cut
+        # rides each sweep row as effective_min_rate).
+        "min_rate": min_rate,
+        "min_rate_pct": min_rate_pct,
         "rate_pcts": list(rate_pcts),
         "sweep": rows,
     }
     return json.dumps(payload, indent=2)
 
 
-def render_vad_gap_peak_sweep_csv(values, results, *, name, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, axis="threshold"):
-    """Render a cost-peak sweep as CSV text (no trailing newline) (iter-364).
+def render_vad_gap_peak_sweep_csv(values, results, *, name, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, axis="threshold", min_rate=0.0, min_rate_pct=None, rate_pcts=DEFAULT_BAND_RATE_PCTS):
+    """Render a cost-peak sweep as CSV text (no trailing newline) (iter-364; ``min_rate`` / ``min_rate_pct`` iter-370).
 
     The spreadsheet/plot-friendly twin of :func:`render_vad_gap_peak_sweep_json`:
     where JSON nests the rows under a ``sweep`` key, CSV emits a flat
@@ -4702,57 +4817,74 @@ def render_vad_gap_peak_sweep_csv(values, results, *, name, cuts_ms=DEFAULT_GAP_
     ``results`` (segmenter unavailable) yields a single ``# silero VAD
     unavailable: ...`` comment line. Pure: returns a single string built with the
     stdlib :mod:`csv` writer, trailing terminator stripped.
+
+    iter-370 threads the ``min_rate`` / ``min_rate_pct`` rate floor (iter-355/357)
+    into the core, so the scalar peak columns + ``peak_found`` already reflect it
+    (they name only surviving bands — unlike ``top_n`` / ``band_rate_dist``, the
+    floor genuinely filters, so the CSV MUST thread it to stay consistent with the
+    other faces). Because ``effective_min_rate`` is a SCALAR (not a nested ranking
+    / distribution), it fits cleanly as a column — so when a floor is active the
+    CSV appends a trailing ``effective_min_rate`` column carrying the per-row
+    resolved cut (the same drift the human note and JSON field show). The default
+    no-floor table is byte-for-byte unchanged (no extra column, exactly the
+    iter-364 nine-column schema).
     """
     if any(r is None for r in results):
         return (
             "# silero VAD unavailable: install 'silero-vad' (pulls torch + "
             "torchaudio) to enable offline neural segmentation"
         )
+    # iter-370: only when a floor is active does the schema gain the trailing
+    # effective_min_rate column — the default no-floor CSV is unchanged.
+    floor_active = min_rate_pct is not None or min_rate > 0
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(
-        [
-            axis,
-            "num_segments",
-            "num_gaps",
-            "peak_found",
-            "peak_from_ms",
-            "peak_to_ms",
-            "peak_width_ms",
-            "peak_merged_added",
-            "peak_rate_per_100ms",
-        ]
-    )
-    for row in vad_gap_peak_sweep(values, results, cuts_ms=cuts_ms, axis=axis):
+    header = [
+        axis,
+        "num_segments",
+        "num_gaps",
+        "peak_found",
+        "peak_from_ms",
+        "peak_to_ms",
+        "peak_width_ms",
+        "peak_merged_added",
+        "peak_rate_per_100ms",
+    ]
+    if floor_active:
+        header.append("effective_min_rate")
+    writer.writerow(header)
+    for row in vad_gap_peak_sweep(values, results, cuts_ms=cuts_ms, axis=axis, min_rate=min_rate, min_rate_pct=min_rate_pct, rate_pcts=rate_pcts):
         if row["peak_found"]:
-            writer.writerow(
-                [
-                    row[axis],
-                    row["num_segments"],
-                    row["num_gaps"],
-                    row["peak_found"],
-                    _format_cut_label(row["peak_from_ms"]),
-                    _format_cut_label(row["peak_to_ms"]),
-                    _format_cut_label(row["peak_width_ms"]),
-                    row["peak_merged_added"],
-                    row["peak_rate_per_100ms"],
-                ]
-            )
+            cells = [
+                row[axis],
+                row["num_segments"],
+                row["num_gaps"],
+                row["peak_found"],
+                _format_cut_label(row["peak_from_ms"]),
+                _format_cut_label(row["peak_to_ms"]),
+                _format_cut_label(row["peak_width_ms"]),
+                row["peak_merged_added"],
+                row["peak_rate_per_100ms"],
+            ]
         else:
             # None → "" (empty cell), the CSV spelling of JSON null / human "-".
-            writer.writerow(
-                [
-                    row[axis],
-                    row["num_segments"],
-                    row["num_gaps"],
-                    row["peak_found"],
-                    "",
-                    "",
-                    "",
-                    "",
-                    "",
-                ]
-            )
+            cells = [
+                row[axis],
+                row["num_segments"],
+                row["num_gaps"],
+                row["peak_found"],
+                "",
+                "",
+                "",
+                "",
+                "",
+            ]
+        if floor_active:
+            # The per-row resolved floor is always a number (min_rate, or the
+            # percentile cut) even on a no-peak row — it describes the cutoff, not
+            # the peak — so it is filled regardless of peak_found.
+            cells.append(row["effective_min_rate"])
+        writer.writerow(cells)
     return buf.getvalue().rstrip("\r\n")
 
 
@@ -7372,6 +7504,18 @@ def cmd_vad_gap_peak_sweep(args, *, log=print, segmenter=None, availability=None
     ``top_n``); the CSV verdict-row schema is unchanged — its flat per-swept-value
     table has no clean place for a nested ranking, so it keeps echoing the single
     steepest band, exactly the iter-366 ``band_rate_dist`` stance.
+
+    iter-370 adds ``--min-rate`` / ``--min-rate-pct``: the iter-355/357 single-shot
+    rate FLOOR, applied per swept value (mutually exclusive, like the single-shot).
+    Unlike ``--show-rate-dist`` / ``--top-n`` (purely additive), the floor FILTERS:
+    it drops bands cheaper than the threshold before ranking, so the scalar peak
+    columns + ``--top-n`` ranking reflect it on ALL three faces. The human table
+    gains a header naming the floor (plus, for the adaptive ``--min-rate-pct``, a
+    per-row note of the resolved cut, which differs row to row); the ``--json`` face
+    echoes ``min_rate`` / ``min_rate_pct`` and carries ``effective_min_rate`` per
+    row; the CSV — because the resolved cut is a SCALAR — appends a trailing
+    ``effective_min_rate`` column when a floor is active (the default no-floor CSV
+    is unchanged).
     """
     if segmenter is None or availability is None:
         from vad.silero import segment_recording, silero_available
@@ -7394,6 +7538,12 @@ def cmd_vad_gap_peak_sweep(args, *, log=print, segmenter=None, availability=None
     # per-swept-value schema keeps echoing the single steepest band (the iter-366
     # band_rate_dist stance).
     top_n = getattr(args, "top_n", 1)
+    # iter-370: --min-rate / --min-rate-pct set the iter-355/357 rate floor, per
+    # swept value. The floor FILTERS bands (it can flip peak_found), so unlike
+    # --show-rate-dist / --top-n it threads into ALL three faces — including the
+    # CSV, which gains a trailing effective_min_rate column when a floor is active.
+    min_rate = getattr(args, "min_rate", 0.0)
+    min_rate_pct = getattr(args, "min_rate_pct", None)
 
     # Pick the swept axis, mirroring cmd_vad_gap_sweep: --min-silences sweeps the
     # hangover, --min-speeches the minimum-speech floor, --speech-pads the region
@@ -7422,11 +7572,11 @@ def cmd_vad_gap_peak_sweep(args, *, log=print, segmenter=None, availability=None
 
     if not availability():
         if as_json:
-            log(render_vad_gap_peak_sweep_json([], [None], name=args.wav, cuts_ms=cuts_ms, axis=axis, top_n=top_n, rate_pcts=rate_pcts))
+            log(render_vad_gap_peak_sweep_json([], [None], name=args.wav, cuts_ms=cuts_ms, axis=axis, top_n=top_n, min_rate=min_rate, min_rate_pct=min_rate_pct, rate_pcts=rate_pcts))
         elif as_csv:
-            log(render_vad_gap_peak_sweep_csv([], [None], name=args.wav, cuts_ms=cuts_ms, axis=axis))
+            log(render_vad_gap_peak_sweep_csv([], [None], name=args.wav, cuts_ms=cuts_ms, axis=axis, min_rate=min_rate, min_rate_pct=min_rate_pct, rate_pcts=rate_pcts))
         else:
-            for line in render_vad_gap_peak_sweep([], [None], name=args.wav, cuts_ms=cuts_ms, axis=axis, top_n=top_n, show_rate_dist=show_rate_dist, rate_pcts=rate_pcts):
+            for line in render_vad_gap_peak_sweep([], [None], name=args.wav, cuts_ms=cuts_ms, axis=axis, top_n=top_n, min_rate=min_rate, min_rate_pct=min_rate_pct, show_rate_dist=show_rate_dist, rate_pcts=rate_pcts):
                 log(line)
         return
 
@@ -7452,11 +7602,11 @@ def cmd_vad_gap_peak_sweep(args, *, log=print, segmenter=None, availability=None
     results = [_seg(v) for v in values]
     name = results[0].name if results else args.wav
     if as_json:
-        log(render_vad_gap_peak_sweep_json(values, results, name=name, cuts_ms=cuts_ms, axis=axis, top_n=top_n, rate_pcts=rate_pcts))
+        log(render_vad_gap_peak_sweep_json(values, results, name=name, cuts_ms=cuts_ms, axis=axis, top_n=top_n, min_rate=min_rate, min_rate_pct=min_rate_pct, rate_pcts=rate_pcts))
     elif as_csv:
-        log(render_vad_gap_peak_sweep_csv(values, results, name=name, cuts_ms=cuts_ms, axis=axis))
+        log(render_vad_gap_peak_sweep_csv(values, results, name=name, cuts_ms=cuts_ms, axis=axis, min_rate=min_rate, min_rate_pct=min_rate_pct, rate_pcts=rate_pcts))
     else:
-        for line in render_vad_gap_peak_sweep(values, results, name=name, cuts_ms=cuts_ms, axis=axis, top_n=top_n, show_rate_dist=show_rate_dist, rate_pcts=rate_pcts):
+        for line in render_vad_gap_peak_sweep(values, results, name=name, cuts_ms=cuts_ms, axis=axis, top_n=top_n, min_rate=min_rate, min_rate_pct=min_rate_pct, show_rate_dist=show_rate_dist, rate_pcts=rate_pcts):
             log(line)
 
 
@@ -9584,6 +9734,36 @@ def build_parser():
         "the WHOLE ranking reorders as the swept knob tightens. The --json face "
         "always carries the ranking per row as 'peaks'; the CSV keeps the single "
         "steepest band. Default: 1",
+    )
+    # iter-370: the iter-355/357 rate FLOOR, applied per swept value. The two knobs
+    # set the same floor two ways (absolute vs adaptive percentile) and are
+    # mutually exclusive — the core also raises ValueError if both are given.
+    # Unlike --top-n / --show-rate-dist, the floor FILTERS bands, so the scalar
+    # peak columns reflect it on ALL three faces (the CSV gains a trailing
+    # effective_min_rate column when a floor is active).
+    vad_gap_peak_sweep_floor = vad_gap_peak_sweep.add_mutually_exclusive_group()
+    vad_gap_peak_sweep_floor.add_argument(
+        "--min-rate",
+        type=nonneg_float_type,
+        default=0.0,
+        dest="min_rate",
+        help="Drop cost bands cheaper than this ABSOLUTE marginal rate (pauses "
+        "merged per +100ms of hangover) before ranking at EACH swept value — the "
+        "iter-355 single-shot --min-rate, applied per row (same cut everywhere). "
+        "Pairs with --top-n; mutually exclusive with --min-rate-pct. Default: 0.0 "
+        "(keep every non-empty band)",
+    )
+    vad_gap_peak_sweep_floor.add_argument(
+        "--min-rate-pct",
+        type=percentile_type,
+        default=None,
+        dest="min_rate_pct",
+        help="Drop cost bands cheaper than the Pth PERCENTILE of EACH swept "
+        "value's OWN observed non-empty band rates before ranking — the iter-357 "
+        "single-shot --min-rate-pct, applied per row (an ADAPTIVE floor whose "
+        "absolute cut differs row to row, shown in the human note / JSON "
+        "effective_min_rate / CSV column). In (0, 100]; mutually exclusive with "
+        "--min-rate. Default: unset (use --min-rate)",
     )
     vad_gap_peak_sweep.add_argument(
         "--show-rate-dist",
