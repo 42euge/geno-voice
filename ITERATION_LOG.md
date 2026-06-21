@@ -31270,3 +31270,72 @@ on main post-merge (4528 passed, ~39s).
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-342 — gv vad-gap-diff human-table golden-output assertion
+
+- **Date:** 2026-06-20
+- **Branch:** iter-342-gap-diff-golden (ff-merged to main, worktree removed)
+- **Commit:** 3387bc0
+
+**Why.** iter-341's next-item #1: "Extend the golden-output pinning to the
+remaining gap surfaces — percentiles (iter-340) and histogram (iter-341) are now
+byte-pinned; the other four gap axes (point/sweep/grid/diff) still assert only
+structure + substrings. The `gv vad-gap-diff` two-segmentation delta table …
+would be the next-most-alignment-sensitive target." The existing
+`test_render_human_*` diff tests assert STRUCTURE + substrings (a min-gap line
+exists, `--min-silence-ms` appears *somewhere*, `+2.000s` is present) but never
+freeze the EXACT rendered block. So a silent regression in the aligned label
+column (every value starts at character offset 16 — labels right-padded from
+`threshold A:` down to `total silence:`), the `A → B (Δ)` arrow/paren spacing,
+the int `_signed` count deltas vs the 3-place `_signed_float3` gap deltas
+(including a `(0.000s)` zero-delta that keeps NO `+`), the `-` / `n/a`
+missing-pause placeholders, or the median-row knob-hint suffix placement would
+slip past every one of them. This lap closes that for the diff surface — the
+third gap axis (after percentiles and histogram) with a byte-for-byte human
+golden.
+
+**What it pins.** `tests/unit/test_gv_vad_gap_diff.py` gains two golden tests
+(+75 lines, 31 → 33 tests in the module) comparing the full
+`render_vad_gap_diff` line list verbatim against a literal expected list:
+- **`test_render_human_golden_both_sides_present`** — `_three` vs `_two`
+  (3 segs/2 gaps {1.0, 2.0} vs 2 segs/1 gap {3.0}). Freezes the whole aligned
+  block: the `threshold A: 0.50` / `threshold B: 0.70` rows, the `segments:
+  3 → 2 (-1)` / `gaps: 2 → 1 (-1)` int deltas, the `min gap: 1.000s → 3.000s
+  (+2.000s)` row with the `--min-silence-ms below this to avoid merging turns`
+  knob-hint suffix, mean/max gap deltas, and the **`total silence:3.000s →
+  3.000s (0.000s)`** zero-delta that keeps NO leading `+`. A follow-up assertion
+  proves every value column starts at character offset 16 regardless of label
+  length (the right-padded label field).
+- **`test_render_human_golden_missing_pause`** — `_three` vs `_single`
+  (the B side collapses to one segment, no inter-segment pause). Pins the `-`
+  value placeholder and `n/a` delta on all three gap-aggregate rows (a missing
+  pause cannot be differenced), while total silence — a real `0.000s` for a
+  single-segment side, NOT a missing pause — still differences to `(-3.000s)`.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4530 passed**
+(4528 prior + 2 net new), run in the feature worktree before ff-merge AND re-run
+on main post-merge (4530 passed, ~41s).
+- Integration: not run this lap (pure string-formatting golden over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-340/341 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] Extend the golden-output pinning to the last gap surfaces** —
+   percentiles (iter-340), histogram (iter-341), and diff (iter-342) are now
+   byte-pinned; point (`gv vad-gaps`), sweep (`gv vad-gap-sweep`), and grid
+   (`gv vad-gap-grid`) still assert only structure + substrings. The
+   `gv vad-gap-grid` matrix is the next-most-alignment-sensitive target (a 2-D
+   aligned table where column drift compounds across rows AND columns).
+2. **[gv CLI] A genuinely new analysis surface** — a cumulative-distribution /
+   CDF view of where a candidate `--min-silence-ms` cut would fall (what
+   fraction of pauses it would merge), turning the percentile table into a
+   direct "this hangover merges X% of your pauses" answer.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
