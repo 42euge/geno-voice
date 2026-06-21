@@ -85,6 +85,13 @@ def _all_valley():
     return _result((0.0, 1.0), (10.0, 11.0))
 
 
+def _multi_band():
+    """4 segments / 3 gaps (0.3s, 0.5s, 1.0s) landing in three distinct cost
+    bands, so band_rate_dist has count 3 — a meaningful spread to summarise
+    (same stand-in the peak-sweep tests use for the iter-366 distribution)."""
+    return _result((0.0, 1.0), (1.3, 2.0), (2.5, 3.0), (4.0, 5.0))
+
+
 # ---- parser: registration & defaults -----------------------------------
 
 
@@ -493,3 +500,229 @@ def test_handler_unavailable_csv():
                              segmenter=_make_segmenter(_three()),
                              availability=_avail_false)
     assert out[0].startswith("# silero VAD unavailable")
+
+
+# ---- iter-367: per-cell band_rate_dist on the cost-peak grid ------------
+#
+# iter-358 added the observed non-empty band-rate distribution (the
+# --min-rate-pct sample) to the SINGLE-shot `gv vad-gap-peak`; iter-366 carried
+# it into the 1-D SWEEP. iter-367 completes the trio by carrying that same view
+# into the 2-D GRID, one distribution per (row, col) cell, so an operator
+# watches not just how the steepest band moves but how the whole cost-rate
+# spread reshapes across two knobs at once. The core + JSON always carry it
+# (machine consumers); --show-rate-dist gates the human face; the CSV
+# verdict-row schema is unchanged (the iter-358/366 stance).
+
+
+def test_core_cell_carries_band_rate_dist():
+    cells = gv.vad_gap_peak_grid([0.5], [800.0], [_multi_band()])
+    dist = cells[0]["band_rate_dist"]
+    assert dist["count"] == 3
+    assert dist["min"] == 0.125
+    assert dist["max"] == 0.5
+    # Default percentiles p50/p75/p90/p99.
+    assert [e["p"] for e in dist["percentiles"]] == [50.0, 75.0, 90.0, 99.0]
+
+
+def test_core_band_rate_dist_matches_single_shot():
+    """Each cell's distribution equals an independent vad_gap_peak on the same
+    result — the grid names the SAME spread the single-shot verdict does."""
+    r = _multi_band()
+    direct = gv.vad_gap_peak(r)["band_rate_dist"]
+    cell = gv.vad_gap_peak_grid([0.5], [800.0], [r])[0]
+    assert cell["band_rate_dist"] == direct
+
+
+def test_core_band_rate_dist_honors_rate_pcts():
+    cells = gv.vad_gap_peak_grid([0.5], [800.0], [_multi_band()], rate_pcts=[90.0])
+    assert [e["p"] for e in cells[0]["band_rate_dist"]["percentiles"]] == [90.0]
+
+
+def test_core_no_peak_cell_has_empty_dist():
+    """An all-valley cell has bands but none non-empty → the empty distribution
+    (count 0, aggregates None, percentiles [])."""
+    cells = gv.vad_gap_peak_grid([0.5], [800.0], [_all_valley()])
+    dist = cells[0]["band_rate_dist"]
+    assert dist["count"] == 0
+    assert dist["min"] is None
+    assert dist["percentiles"] == []
+
+
+def test_core_single_segment_cell_has_empty_dist():
+    cells = gv.vad_gap_peak_grid([0.9], [800.0], [_single()])
+    assert cells[0]["band_rate_dist"]["count"] == 0
+
+
+def test_core_band_rate_dist_per_cell_row_major():
+    """One distribution per (row, col) cell, in row-major order; a no-peak cell
+    carries the empty distribution between two populated ones."""
+    cells = gv.vad_gap_peak_grid(
+        [0.3, 0.7], [400.0, 800.0],
+        [_multi_band(), _all_valley(), _single(), _multi_band()],
+    )
+    counts = [c["band_rate_dist"]["count"] for c in cells]
+    assert counts == [3, 0, 0, 3]
+
+
+def test_render_human_default_omits_dist():
+    """Without --show-rate-dist the human table is byte-for-byte the old shape:
+    no 'band-rate dist' sub-block."""
+    lines = gv.render_vad_gap_peak_grid(
+        [0.3], [800.0], [_multi_band()], name="rec.wav"
+    )
+    assert not any("band-rate dist" in ln for ln in lines)
+
+
+def test_render_human_show_rate_dist_appends_block():
+    lines = gv.render_vad_gap_peak_grid(
+        [0.3], [800.0], [_multi_band()], name="rec.wav", show_rate_dist=True
+    )
+    dist_lines = [ln for ln in lines if "band-rate dist" in ln]
+    assert len(dist_lines) == 1
+    assert "3 non-empty bands" in dist_lines[0]
+    assert "(iter-367)" in dist_lines[0]
+    # The default four percentile rows follow.
+    assert any(ln.strip().startswith("p50:") for ln in lines)
+    assert any(ln.strip().startswith("p99:") for ln in lines)
+
+
+def test_render_human_show_rate_dist_per_cell():
+    """One distribution block per grid cell (here a 1×2 grid)."""
+    lines = gv.render_vad_gap_peak_grid(
+        [0.3], [400.0, 800.0], [_multi_band(), _multi_band()],
+        name="rec.wav", show_rate_dist=True,
+    )
+    assert len([ln for ln in lines if "band-rate dist" in ln]) == 2
+
+
+def test_render_human_show_rate_dist_no_peak_note():
+    """A no-peak cell under --show-rate-dist prints the 'no non-empty bands' note
+    rather than percentile rows."""
+    lines = gv.render_vad_gap_peak_grid(
+        [0.5], [800.0], [_all_valley()], name="rec.wav", show_rate_dist=True
+    )
+    note = [ln for ln in lines if "band-rate dist" in ln]
+    assert len(note) == 1
+    assert "no non-empty bands" in note[0]
+    assert not any(ln.strip().startswith("p50:") for ln in lines)
+
+
+def test_render_human_show_rate_dist_honors_rate_pcts():
+    lines = gv.render_vad_gap_peak_grid(
+        [0.3], [800.0], [_multi_band()], name="rec.wav",
+        show_rate_dist=True, rate_pcts=[90.0],
+    )
+    assert any(ln.strip().startswith("p90:") for ln in lines)
+    assert not any(ln.strip().startswith("p50:") for ln in lines)
+
+
+def test_render_json_cells_carry_band_rate_dist():
+    """The JSON face ALWAYS carries band_rate_dist per cell (no flag), like the
+    single-shot render_vad_gap_peak_json and the sweep's _sweep_json."""
+    out = gv.render_vad_gap_peak_grid_json(
+        [0.3], [800.0], [_multi_band()], name="rec.wav"
+    )
+    payload = json.loads(out)
+    assert payload["rate_pcts"] == list(gv.DEFAULT_BAND_RATE_PCTS)
+    dist = payload["grid"][0]["band_rate_dist"]
+    assert dist["count"] == 3
+    assert [e["p"] for e in dist["percentiles"]] == [50.0, 75.0, 90.0, 99.0]
+
+
+def test_render_json_echoes_custom_rate_pcts():
+    out = gv.render_vad_gap_peak_grid_json(
+        [0.3], [800.0], [_multi_band()], name="rec.wav", rate_pcts=[50.0, 99.0]
+    )
+    payload = json.loads(out)
+    assert payload["rate_pcts"] == [50.0, 99.0]
+    assert [e["p"] for e in payload["grid"][0]["band_rate_dist"]["percentiles"]] \
+        == [50.0, 99.0]
+
+
+def test_render_csv_schema_unchanged_no_dist_column():
+    """The CSV body is the iter-365 ten-column schema — band_rate_dist is NOT a
+    column (the iter-358/366 verdict-row stance)."""
+    out = gv.render_vad_gap_peak_grid_csv(
+        [0.3], [800.0], [_multi_band()], name="rec.wav"
+    )
+    header = list(csv.reader(io.StringIO(out)))[0]
+    assert header == [
+        "threshold", "min_silence_ms", "num_segments", "num_gaps", "peak_found",
+        "peak_from_ms", "peak_to_ms", "peak_width_ms", "peak_merged_added",
+        "peak_rate_per_100ms",
+    ]
+
+
+# ---- parser & handler: --show-rate-dist / --rate-pcts -------------------
+
+
+def test_parser_show_rate_dist_defaults():
+    args = gv.build_parser().parse_args(["vad-gap-peak-grid", "rec.wav"])
+    assert args.show_rate_dist is False
+    assert args.rate_pcts == list(gv.DEFAULT_BAND_RATE_PCTS)
+
+
+def test_parser_custom_rate_pcts():
+    args = gv.build_parser().parse_args(
+        ["vad-gap-peak-grid", "rec.wav", "--show-rate-dist", "--rate-pcts", "50,99"]
+    )
+    assert args.show_rate_dist is True
+    assert args.rate_pcts == [50.0, 99.0]
+
+
+def test_handler_show_rate_dist_human(monkeypatch):
+    _stub_silero(monkeypatch)
+    args = gv.build_parser().parse_args(
+        ["vad-gap-peak-grid", "rec.wav", "--thresholds", "0.3,0.7",
+         "--min-silences", "800", "--show-rate-dist"]
+    )
+    lines = []
+    gv.cmd_vad_gap_peak_grid(args, log=lines.append,
+                             segmenter=_make_segmenter(_multi_band()),
+                             availability=_avail_true)
+    # 2×1 grid → one distribution block per cell.
+    assert len([ln for ln in lines if "band-rate dist" in ln]) == 2
+    assert any("(iter-367)" in ln for ln in lines)
+
+
+def test_handler_default_no_dist_block(monkeypatch):
+    _stub_silero(monkeypatch)
+    args = gv.build_parser().parse_args(
+        ["vad-gap-peak-grid", "rec.wav", "--thresholds", "0.5",
+         "--min-silences", "800"]
+    )
+    lines = []
+    gv.cmd_vad_gap_peak_grid(args, log=lines.append,
+                             segmenter=_make_segmenter(_multi_band()),
+                             availability=_avail_true)
+    assert not any("band-rate dist" in ln for ln in lines)
+
+
+def test_handler_rate_pcts_to_json(monkeypatch):
+    _stub_silero(monkeypatch)
+    args = gv.build_parser().parse_args(
+        ["vad-gap-peak-grid", "rec.wav", "--thresholds", "0.5",
+         "--min-silences", "800", "--rate-pcts", "50,99", "--json"]
+    )
+    out = []
+    gv.cmd_vad_gap_peak_grid(args, log=out.append,
+                             segmenter=_make_segmenter(_multi_band()),
+                             availability=_avail_true)
+    payload = json.loads(out[0])
+    assert payload["rate_pcts"] == [50.0, 99.0]
+    assert [e["p"] for e in payload["grid"][0]["band_rate_dist"]["percentiles"]] \
+        == [50.0, 99.0]
+
+
+def test_handler_unavailable_json_carries_no_grid(monkeypatch):
+    """The unavailable JSON degrade is unchanged by --rate-pcts (no grid key)."""
+    args = gv.build_parser().parse_args(
+        ["vad-gap-peak-grid", "rec.wav", "--rate-pcts", "50,99", "--json"]
+    )
+    out = []
+    gv.cmd_vad_gap_peak_grid(args, log=out.append,
+                             segmenter=_make_segmenter(_multi_band()),
+                             availability=_avail_false)
+    payload = json.loads(out[0])
+    assert payload["available"] is False
+    assert "grid" not in payload
