@@ -3625,6 +3625,83 @@ def _knob_filtered_biases(row, biases):
     return out
 
 
+# iter-376 ``--min-grade`` row filter for the recommend knob sweep. The iter-348
+# confidence grades form a total order strong > moderate > weak > none; a row with
+# <2 segments has no grade at all (None). ``--min-grade`` drops rows BELOW the
+# named grade so an operator scanning a knob sweep sees ONLY the trustworthy region
+# — the knob settings where the recommendation is worth acting on. The three
+# numeric grades are the only valid thresholds (you cannot ask for "at least none":
+# "none" is the ABSENCE of a valley, not a floor); rows graded ``"none"`` or
+# ungraded (``None``) sit below every threshold and are always dropped when one is
+# set. This is the recommend-side analogue of the iter-374 ``--bias`` filter — that
+# one narrows COLUMNS, this narrows ROWS — and the render-only design is the same:
+# the core sweep stays complete and the filter lives purely in the renderers.
+_GAP_CONFIDENCE_GRADE_RANK = {
+    None: -1,
+    "none": 0,
+    "weak": 1,
+    "moderate": 2,
+    "strong": 3,
+}
+GAP_CONFIDENCE_GRADE_CHOICES = ("weak", "moderate", "strong")
+
+
+def gap_confidence_grade_type(raw):
+    """Argparse ``type`` for the iter-376 ``--min-grade`` row filter: a grade floor.
+
+    iter-372's ``gv vad-gap-recommend-knob-sweep`` tabulates the bias spread plus
+    the iter-348 confidence grade at every swept segmenter value. This validator
+    parses a single confidence-grade floor (``weak`` / ``moderate`` / ``strong``,
+    case-insensitive) so an operator can hide every swept value whose
+    recommendation is less trustworthy than that — leaving only the region of the
+    knob worth acting on. ``"none"`` and the empty string are rejected: "none" is
+    the absence of a valley, not a trust floor you can filter to. Pure and
+    side-effect-free for direct unit testing — the grade analogue of
+    :func:`gap_recommend_bias_list_type`.
+    """
+    if not isinstance(raw, str):
+        raise argparse.ArgumentTypeError(
+            f"a confidence grade must be a string, got {raw!r}"
+        )
+    tok = raw.strip().lower()
+    if tok not in GAP_CONFIDENCE_GRADE_CHOICES:
+        raise argparse.ArgumentTypeError(
+            f"invalid confidence grade {raw!r}: choose from "
+            f"{list(GAP_CONFIDENCE_GRADE_CHOICES)}"
+        )
+    return tok
+
+
+def _grade_meets_min(grade, min_grade):
+    """True if ``grade`` is at least as trustworthy as ``min_grade`` (iter-376).
+
+    Ranks the total order ``None`` (ungraded, <2 segments) < ``"none"`` (no valley)
+    < ``"weak"`` < ``"moderate"`` < ``"strong"`` and compares. With ``min_grade``
+    ``None`` (no filter requested) every row passes. An unrecognised grade ranks
+    below everything (defensive: a future grade never silently passes a filter).
+    """
+    if min_grade is None:
+        return True
+    return (
+        _GAP_CONFIDENCE_GRADE_RANK.get(grade, -1)
+        >= _GAP_CONFIDENCE_GRADE_RANK[min_grade]
+    )
+
+
+def _filter_knob_rows_by_grade(rows, min_grade):
+    """Drop knob-sweep rows whose confidence grade is below ``min_grade`` (iter-376).
+
+    Render-only filter: the core :func:`vad_gap_recommend_knob_sweep` stays a
+    complete, testable primitive carrying every swept row; this trims the rendered
+    rows to those whose grade meets the floor. With ``min_grade`` ``None`` returns
+    the rows unchanged (the default sweep is byte-identical to the pre-filter
+    output). Pure — builds a new list, never mutates the source rows.
+    """
+    if min_grade is None:
+        return list(rows)
+    return [r for r in rows if _grade_meets_min(r["grade"], min_grade)]
+
+
 def vad_gap_recommend_sweep(result):
     """Emit the short/balanced/long recommendations side by side (iter-352).
 
@@ -4002,7 +4079,8 @@ def _knob_sweep_bias_ms(row, bias):
 
 
 def render_vad_gap_recommend_knob_sweep(
-    values, results, *, name, axis="threshold", biases=GAP_RECOMMEND_BIAS_ORDER
+    values, results, *, name, axis="threshold", biases=GAP_RECOMMEND_BIAS_ORDER,
+    min_grade=None,
 ):
     """Render a recommend knob sweep as a plain-text table (iter-372).
 
@@ -4022,19 +4100,33 @@ def render_vad_gap_recommend_knob_sweep(
     short..balanced..long order; the default is the full triad (byte-identical to
     the pre-filter render). ``spread`` and ``grade`` are valley / distribution
     properties — invariant under the column selection — so they are always kept.
+
+    ``min_grade`` (iter-376) drops every row whose confidence ``grade`` is below
+    the named floor (``"weak"`` / ``"moderate"`` / ``"strong"``), leaving only the
+    region of the knob worth acting on; rows graded ``"none"`` or ungraded (<2
+    segments) are always dropped when a floor is set. The default ``None`` keeps
+    every row (byte-identical to the pre-filter render). When the filter removes
+    every row a single ``(no swept value meets ...)`` note replaces the body.
     """
     if any(r is None for r in results):
         return [
             "silero VAD unavailable: install 'silero-vad' (pulls torch + "
             "torchaudio) to enable offline neural segmentation"
         ]
-    rows = vad_gap_recommend_knob_sweep(values, results, axis=axis)
+    rows = _filter_knob_rows_by_grade(
+        vad_gap_recommend_knob_sweep(values, results, axis=axis), min_grade
+    )
     label = _SWEEP_AXIS_LABEL.get(axis, axis)
     lines = [
         f"silero VAD recommended-hangover knob sweep — {name}",
         f"  {label:>9}  segments  gaps{_knob_bias_header_segment(biases)}"
         f"  {'spread':>8}  {'confidence':>10}",
     ]
+    if not rows:
+        lines.append(
+            f"  (no swept value reaches confidence grade '{min_grade}' or better)"
+        )
+        return lines
     for row in rows:
         lines.append(
             f"  {_format_sweep_axis_value(axis, row[axis]):>9}  "
@@ -4044,7 +4136,8 @@ def render_vad_gap_recommend_knob_sweep(
 
 
 def render_vad_gap_recommend_knob_sweep_json(
-    values, results, *, name, axis="threshold", biases=GAP_RECOMMEND_BIAS_ORDER
+    values, results, *, name, axis="threshold", biases=GAP_RECOMMEND_BIAS_ORDER,
+    min_grade=None,
 ):
     """Render a recommend knob sweep as a JSON string (iter-372).
 
@@ -4064,6 +4157,13 @@ def render_vad_gap_recommend_knob_sweep_json(
     the selection is a strict subset the payload also carries a top-level
     ``biases`` key naming the columns kept, so a consumer knows the list was
     filtered.
+
+    ``min_grade`` (iter-376) drops every swept row whose confidence ``grade`` is
+    below the named floor (``"weak"`` / ``"moderate"`` / ``"strong"``); rows graded
+    ``"none"`` or ungraded (<2 segments) are always dropped when a floor is set.
+    The default ``None`` keeps every row (unchanged payload). When a floor is set
+    the payload also carries a top-level ``min_grade`` key naming the floor, so a
+    consumer knows the ``sweep`` list was filtered (and may legitimately be empty).
     """
     if any(r is None for r in results):
         return json.dumps(
@@ -4076,13 +4176,17 @@ def render_vad_gap_recommend_knob_sweep_json(
             },
             indent=2,
         )
-    rows = vad_gap_recommend_knob_sweep(values, results, axis=axis)
+    rows = _filter_knob_rows_by_grade(
+        vad_gap_recommend_knob_sweep(values, results, axis=axis), min_grade
+    )
     biases = list(biases)
     payload = {
         "available": True,
         "name": name,
         "axis": axis,
     }
+    if min_grade is not None:
+        payload["min_grade"] = min_grade
     if list(biases) != list(GAP_RECOMMEND_BIAS_ORDER):
         payload["biases"] = biases
         rows = [_knob_filtered_biases(r, biases) for r in rows]
@@ -4091,7 +4195,8 @@ def render_vad_gap_recommend_knob_sweep_json(
 
 
 def render_vad_gap_recommend_knob_sweep_csv(
-    values, results, *, name, axis="threshold", biases=GAP_RECOMMEND_BIAS_ORDER
+    values, results, *, name, axis="threshold", biases=GAP_RECOMMEND_BIAS_ORDER,
+    min_grade=None,
 ):
     """Render a recommend knob sweep as CSV text (no trailing newline) (iter-372).
 
@@ -4117,6 +4222,13 @@ def render_vad_gap_recommend_knob_sweep_csv(
     ``results`` (segmenter unavailable) yields a single ``# silero VAD
     unavailable: ...`` comment line. Pure: built with the stdlib :mod:`csv`
     writer, trailing terminator stripped.
+
+    ``min_grade`` (iter-376) drops every data row whose confidence ``grade`` is
+    below the named floor (``"weak"`` / ``"moderate"`` / ``"strong"``); rows graded
+    ``"none"`` or ungraded (<2 segments) are always dropped when a floor is set.
+    The default ``None`` keeps every row. The header is emitted unconditionally so
+    a fully-filtered sweep is still a valid one-line CSV (header only), and the
+    table still unions cleanly with an unfiltered run.
     """
     if any(r is None for r in results):
         return (
@@ -4137,7 +4249,10 @@ def render_vad_gap_recommend_knob_sweep_csv(
             "separation_ratio",
         ]
     )
-    for row in vad_gap_recommend_knob_sweep(values, results, axis=axis):
+    rows = _filter_knob_rows_by_grade(
+        vad_gap_recommend_knob_sweep(values, results, axis=axis), min_grade
+    )
+    for row in rows:
         if row["num_gaps"] > 0:
             bias_cells = [
                 _format_cut_label(_knob_sweep_bias_ms(row, b)) for b in biases
@@ -7953,17 +8068,23 @@ def cmd_vad_gap_recommend_knob_sweep(args, *, log=print, segmenter=None, availab
     # iter-374 --bias column filter: narrow the per-bias columns to a subset
     # (canonical short..balanced..long order from the parser); default full triad.
     biases = getattr(args, "bias", None) or GAP_RECOMMEND_BIAS_ORDER
+    # iter-376 --min-grade row filter: drop swept values whose confidence grade is
+    # below the floor; default None keeps every row.
+    min_grade = getattr(args, "min_grade", None)
 
     if not availability():
         if as_json:
             log(render_vad_gap_recommend_knob_sweep_json(
-                [], [None], name=args.wav, axis=axis, biases=biases))
+                [], [None], name=args.wav, axis=axis, biases=biases,
+                min_grade=min_grade))
         elif as_csv:
             log(render_vad_gap_recommend_knob_sweep_csv(
-                [], [None], name=args.wav, axis=axis, biases=biases))
+                [], [None], name=args.wav, axis=axis, biases=biases,
+                min_grade=min_grade))
         else:
             for line in render_vad_gap_recommend_knob_sweep(
-                [], [None], name=args.wav, axis=axis, biases=biases):
+                [], [None], name=args.wav, axis=axis, biases=biases,
+                min_grade=min_grade):
                 log(line)
         return
 
@@ -7992,13 +8113,16 @@ def cmd_vad_gap_recommend_knob_sweep(args, *, log=print, segmenter=None, availab
     name = results[0].name if results else args.wav
     if as_json:
         log(render_vad_gap_recommend_knob_sweep_json(
-            values, results, name=name, axis=axis, biases=biases))
+            values, results, name=name, axis=axis, biases=biases,
+            min_grade=min_grade))
     elif as_csv:
         log(render_vad_gap_recommend_knob_sweep_csv(
-            values, results, name=name, axis=axis, biases=biases))
+            values, results, name=name, axis=axis, biases=biases,
+            min_grade=min_grade))
     else:
         for line in render_vad_gap_recommend_knob_sweep(
-            values, results, name=name, axis=axis, biases=biases):
+            values, results, name=name, axis=axis, biases=biases,
+            min_grade=min_grade):
             log(line)
 
 
@@ -10530,6 +10654,16 @@ def build_parser():
         "recommendation columns (e.g. 'short' or 'short,long'); narrows the "
         "table to the biases you care about while always keeping the spread + "
         "confidence columns (default: all three, in short..balanced..long order)",
+    )
+    vad_gap_rec_knob_sweep.add_argument(
+        "--min-grade",
+        type=gap_confidence_grade_type,
+        default=None,
+        dest="min_grade",
+        help="Hide swept values whose confidence grade is below this floor "
+        "(weak/moderate/strong) so only the trustworthy region of the knob shows; "
+        "rows graded 'none' or with <2 segments are always dropped when set "
+        "(default: show every swept value)",
     )
     vad_gap_rec_knob_sweep_fmt = vad_gap_rec_knob_sweep.add_mutually_exclusive_group()
     vad_gap_rec_knob_sweep_fmt.add_argument(

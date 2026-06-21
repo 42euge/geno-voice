@@ -668,3 +668,237 @@ def test_cmd_invalid_bias_rejected():
         gv.build_parser().parse_args(
             ["vad-gap-recommend-knob-sweep", "rec.wav", "--bias", "medium"]
         )
+
+
+# ---- iter-376: --min-grade row filter ------------------------------------
+
+
+def test_grade_type_accepts_three_numeric_grades_case_insensitive():
+    assert gv.gap_confidence_grade_type("weak") == "weak"
+    assert gv.gap_confidence_grade_type("MODERATE") == "moderate"
+    assert gv.gap_confidence_grade_type(" Strong ") == "strong"
+
+
+def test_grade_type_rejects_none_empty_and_unknown():
+    import argparse
+
+    # "none" is the absence of a valley, not a trust floor — rejected.
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.gap_confidence_grade_type("none")
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.gap_confidence_grade_type("")
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.gap_confidence_grade_type("excellent")
+
+
+def test_grade_meets_min_total_order():
+    # strong > moderate > weak > none > None (ungraded). The floor is inclusive.
+    assert gv._grade_meets_min("strong", "moderate")
+    assert gv._grade_meets_min("moderate", "moderate")
+    assert not gv._grade_meets_min("weak", "moderate")
+    assert not gv._grade_meets_min("none", "weak")
+    assert not gv._grade_meets_min(None, "weak")
+    assert gv._grade_meets_min("weak", "weak")
+
+
+def test_grade_meets_min_none_floor_passes_everything():
+    # No filter requested → every grade (incl. None / "none") passes.
+    for g in ("strong", "moderate", "weak", "none", None):
+        assert gv._grade_meets_min(g, None)
+
+
+def test_grade_meets_min_unknown_grade_ranks_below_everything():
+    # Defensive: a future/unexpected grade never silently passes a filter.
+    assert not gv._grade_meets_min("superb", "weak")
+
+
+def test_filter_knob_rows_by_grade_default_is_identity():
+    rows = [{"grade": "strong"}, {"grade": "none"}, {"grade": None}]
+    assert gv._filter_knob_rows_by_grade(rows, None) == rows
+    # A copy, not the same list object (pure, non-mutating).
+    assert gv._filter_knob_rows_by_grade(rows, None) is not rows
+
+
+def test_filter_knob_rows_by_grade_drops_below_floor():
+    rows = [
+        {"grade": "strong"},
+        {"grade": "moderate"},
+        {"grade": "weak"},
+        {"grade": "none"},
+        {"grade": None},
+    ]
+    kept = gv._filter_knob_rows_by_grade(rows, "moderate")
+    assert [r["grade"] for r in kept] == ["strong", "moderate"]
+
+
+def test_render_human_min_grade_default_unchanged():
+    # No --min-grade is byte-identical to the explicit-default render.
+    res = [_bimodal(), _no_valley()]
+    default = gv.render_vad_gap_recommend_knob_sweep(
+        [0.3, 0.7], res, name="rec.wav"
+    )
+    explicit = gv.render_vad_gap_recommend_knob_sweep(
+        [0.3, 0.7], res, name="rec.wav", min_grade=None
+    )
+    assert default == explicit
+
+
+def test_render_human_min_grade_drops_rows_below_floor():
+    # Two values: one bimodal (strong), one uniform (none). A "weak" floor keeps
+    # only the strong row.
+    lines = gv.render_vad_gap_recommend_knob_sweep(
+        [0.3, 0.7], [_bimodal(), _no_valley()], name="rec.wav",
+        min_grade="weak",
+    )
+    body = lines[2:]
+    assert len(body) == 1
+    assert "strong" in body[0]
+    assert "none" not in "\n".join(body)
+
+
+def test_render_human_min_grade_empty_emits_note():
+    # A floor no swept value reaches replaces the body with a single note line.
+    lines = gv.render_vad_gap_recommend_knob_sweep(
+        [0.7], [_no_valley()], name="rec.wav", min_grade="strong",
+    )
+    # header (2 lines) + one note line, no data rows.
+    assert len(lines) == 3
+    assert "no swept value reaches confidence grade 'strong'" in lines[2]
+
+
+def test_render_human_min_grade_drops_ungraded_rows():
+    # A <2-segment row is ungraded (None) — always dropped under any floor.
+    lines = gv.render_vad_gap_recommend_knob_sweep(
+        [0.3, 0.9], [_bimodal(), _single()], name="rec.wav",
+        min_grade="weak",
+    )
+    body = lines[2:]
+    assert len(body) == 1
+    assert "strong" in body[0]
+
+
+def test_render_json_min_grade_default_no_key():
+    text = gv.render_vad_gap_recommend_knob_sweep_json(
+        [0.3], [_bimodal()], name="rec.wav",
+    )
+    payload = json.loads(text)
+    assert "min_grade" not in payload
+    assert len(payload["sweep"]) == 1
+
+
+def test_render_json_min_grade_filters_and_names_floor():
+    text = gv.render_vad_gap_recommend_knob_sweep_json(
+        [0.3, 0.7], [_bimodal(), _no_valley()], name="rec.wav",
+        min_grade="moderate",
+    )
+    payload = json.loads(text)
+    assert payload["min_grade"] == "moderate"
+    assert [r["grade"] for r in payload["sweep"]] == ["strong"]
+
+
+def test_render_json_min_grade_empty_sweep_is_valid():
+    text = gv.render_vad_gap_recommend_knob_sweep_json(
+        [0.7], [_no_valley()], name="rec.wav", min_grade="strong",
+    )
+    payload = json.loads(text)
+    assert payload["available"] is True
+    assert payload["min_grade"] == "strong"
+    assert payload["sweep"] == []
+
+
+def test_render_json_min_grade_composes_with_bias_filter():
+    # Both filters at once: narrow columns AND drop rows below the floor.
+    text = gv.render_vad_gap_recommend_knob_sweep_json(
+        [0.3, 0.7], [_bimodal(), _no_valley()], name="rec.wav",
+        biases=["short", "long"], min_grade="moderate",
+    )
+    payload = json.loads(text)
+    assert payload["min_grade"] == "moderate"
+    assert payload["biases"] == ["short", "long"]
+    assert [r["grade"] for r in payload["sweep"]] == ["strong"]
+    assert [b["bias"] for b in payload["sweep"][0]["biases"]] == ["short", "long"]
+
+
+def test_render_csv_min_grade_header_always_emitted():
+    # A fully-filtered sweep is still a valid one-line CSV (header only).
+    text = gv.render_vad_gap_recommend_knob_sweep_csv(
+        [0.7], [_no_valley()], name="rec.wav", min_grade="strong",
+    )
+    rows = list(csv.reader(io.StringIO(text)))
+    assert len(rows) == 1
+    assert rows[0][0] == "threshold"
+    assert rows[0][7] == "grade"
+
+
+def test_render_csv_min_grade_drops_rows_below_floor():
+    text = gv.render_vad_gap_recommend_knob_sweep_csv(
+        [0.3, 0.7], [_bimodal(), _no_valley()], name="rec.wav",
+        min_grade="weak",
+    )
+    rows = list(csv.reader(io.StringIO(text)))
+    # header + one data row (the strong one); the "none" row is dropped.
+    assert len(rows) == 2
+    assert rows[1][7] == "strong"
+
+
+def test_cmd_min_grade_human_path():
+    lines = _run_handler(
+        [_bimodal(), _bimodal(), _no_valley(), _single()],
+        argv_extra=["--min-grade", "weak"],
+    )
+    body = lines[2:]
+    # Two strong rows kept; the none + ungraded rows dropped.
+    assert len(body) == 2
+    assert all("strong" in ln for ln in body)
+
+
+def test_cmd_min_grade_json_path():
+    lines = _run_handler(
+        [_bimodal(), _no_valley()],
+        argv_extra=["--thresholds", "0.3,0.9", "--json", "--min-grade", "moderate"],
+    )
+    payload = json.loads("\n".join(lines))
+    assert payload["min_grade"] == "moderate"
+    assert [r["grade"] for r in payload["sweep"]] == ["strong"]
+
+
+def test_cmd_min_grade_csv_path():
+    lines = _run_handler(
+        [_bimodal(), _no_valley()],
+        argv_extra=["--thresholds", "0.3,0.9", "--csv", "--min-grade", "weak"],
+    )
+    rows = list(csv.reader(io.StringIO("\n".join(lines))))
+    assert len(rows) == 2
+    assert rows[1][7] == "strong"
+
+
+def test_cmd_min_grade_default_keeps_all_rows():
+    # Without --min-grade every swept value is shown (incl. none/ungraded).
+    lines = _run_handler(
+        [_bimodal(), _no_valley(), _single(), _bimodal()],
+        argv_extra=["--json"],
+    )
+    payload = json.loads("\n".join(lines))
+    assert "min_grade" not in payload
+    assert len(payload["sweep"]) == 4
+
+
+def test_cmd_invalid_min_grade_rejected():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-gap-recommend-knob-sweep", "rec.wav", "--min-grade", "none"]
+        )
+
+
+def test_cmd_min_grade_unavailable_json_names_floor():
+    # The unavailable branch still threads min_grade through (graceful degrade).
+    lines: List[str] = []
+    args = gv.build_parser().parse_args(
+        ["vad-gap-recommend-knob-sweep", "rec.wav", "--json", "--min-grade", "strong"]
+    )
+    gv.cmd_vad_gap_recommend_knob_sweep(
+        args, log=lines.append, segmenter=lambda *a, **k: None,
+        availability=lambda: False,
+    )
+    payload = json.loads("\n".join(lines))
+    assert payload["available"] is False
