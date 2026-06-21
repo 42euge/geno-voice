@@ -30793,3 +30793,101 @@ post-merge (4441 passed, ~37s).
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-336 — gv vad-gap-hist, histogram the inter-segment silence gaps
+
+- **Date:** 2026-06-20
+- **Branch:** iter-336-vad-gap-hist (ff-merged to main, worktree removed)
+- **Commit:** 448daa1
+
+**Why.** iter-335's next-item #2: "A genuinely new gap-family surface … e.g. a
+`gv vad-gap-hist` (histogram of gap durations across one segmentation) —
+distinct from the min/mean/max aggregates by showing the full pause-length
+distribution shape." The silence-gap family already covers point/sweep/grid/diff
+(iter-328/330/332/334) end to end, but every surface reduces the pause
+distribution to min/mean/max. Those three numbers cannot distinguish a BIMODAL
+pattern (a short-pause cluster + a long-pause cluster with a valley between) from
+a uniform spread with the same min/max — and that valley is exactly the safe
+place to set the end-of-turn hangover. This lap adds the distribution-shape
+surface that makes the valley visible.
+
+**What it is.** `gv vad-gap-hist recording.wav --bin-width-s 0.5` segments one
+WAV, computes the inter-segment silence gaps, and buckets them into fixed-width
+half-open `[lo, hi)` bins, reporting a count per bin. The human view draws an
+ASCII bar per bin (scaled to the busiest bin), so a bimodal pause distribution —
+short within-turn pauses in the low bins, long between-turn pauses in the high
+bins, with a zero-count valley between — is visible at a glance. Verified by eye
+on a synthetic bimodal recording: the two short pauses pile into `[0.000, 0.500)`
+and the long pauses land in the high bins with empty bins between.
+
+Surface (`examples/gv.py`), mirroring the iter-328 `vad-gaps` trio:
+- **`vad_gap_histogram(result, *, bin_width_s=0.5)`** — pure core. Anchors to
+  `vad_silence_gaps` for the gap list + aggregates (so the totals always agree
+  with `gv vad-gaps`) and adds a `bins` list of `{lo_s, hi_s, count}`. Bins start
+  at `0.0`; a boundary gap goes to the UPPER bin (standard half-open convention)
+  and is clamped defensively against floating-point overshoot one bin past the
+  top. Bin counts sum to `num_gaps`. A <2-segment result has empty `bins` +
+  `None` aggregates (the same "no distribution" distinction the other gap
+  surfaces make). Raises `ValueError` on a non-positive / NaN `bin_width_s`. No
+  I/O, no torch import.
+- **`render_vad_gap_histogram` / `_json` / `_csv`** — the human / `--json` /
+  `--csv` trio. Human prints the aggregate header (naming the `--min-silence-ms`
+  knob on the min-gap line) then one bar line per bin. JSON carries the
+  aggregates + `bins` (empty list for <2 segments). CSV emits a flat
+  `bin_index,lo_s,hi_s,count` table (one row per bin); the aggregates are
+  derivable so they are NOT duplicated into the table, matching
+  `render_vad_gaps_csv`'s reasoning.
+- **`cmd_vad_gap_histogram`** — same injected segmenter/availability/log contract
+  as `cmd_vad_gaps`; lazy torch import, install-hint degrade path, shared `gv
+  vad` segmenter knobs so the gaps are measured against the same segmentation.
+- **Parser:** `vad-gap-hist` subcommand with `--bin-width-s`
+  (`positive_float_type`) + the five shared `gv vad` knobs + the `--json`/`--csv`
+  mutex. Registered in `DEFAULT_HANDLERS`; added to the usage docstring.
+
+Tests:
+- **`tests/unit/test_gv_vad_gap_histogram.py`** (new, +32): parser
+  registration/defaults/range rejection/json-csv mutex; pure-core bucketing,
+  half-open bin ranges, anchoring to `vad_silence_gaps`, empty bins for <2
+  segments, bimodal-valley visibility, `ValueError` on a bad bin width, boundary
+  clamp; all three renderers (shape, no-gaps, bar scaling to busiest bin, json
+  empty bins, csv header-only, csv-matches-json bins); the handler across
+  human/json/csv, the three unavailable paths, segmenter-runs-with-shared-knobs,
+  and bin-width pass-through.
+- **`tests/unit/test_gv_cli.py`**: the exact-handler-map assertion gains the
+  `vad-gap-hist` entry.
+- **`tests/unit/test_voice_capture_tuning_doc.py`**: `VAD_SUBCOMMANDS` gains
+  `vad-gap-hist`, so its doc sentinels (names-all / appears-in-examples /
+  routes-to-known / all-parse) now COVER the new surface;
+  `docs/research/voice-capture-tuning.md` gains a `gv vad-gap-hist` section with
+  five runnable examples.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4473 passed**
+(4441 prior + 32 net new), run in the feature worktree before ff-merge AND
+re-run on main post-merge (4473 passed, ~46s).
+- Integration: not re-run this lap (pure bucketing + string formatting; no torch
+  import, no audio I/O — the handler is exercised with an injected stub
+  segmenter, mirroring the iter-330/332 vad-gap-sweep/-grid unit laps).
+
+**Next planned items:**
+1. **[gv CLI] An integration test for `gv vad-gap-hist` over the real corpus.**
+   The analogue of the iter-329/331/333/335 gap-family integration laps: run
+   `gv vad-gap-hist` with the real Silero engine over the `fixtures/` recordings
+   and pin the anchoring property — the bin counts sum to an independent
+   `gv vad-gaps --json` gap count at the same threshold, every gap falls in the
+   bin its duration indexes, and the min/max gaps land in the first/last
+   non-empty bins.
+2. **[gv CLI] The silence-gap family now spans five surfaces** — point
+   (`vad-gaps`), sweep (`vad-gap-sweep`), grid (`vad-gap-grid`), diff
+   (`vad-gap-diff`), and histogram (`vad-gap-hist`). A natural lower-effort next:
+   a human-table golden-output assertion for one of them (the tests assert
+   structure + substrings, not the full rendered block — e.g. pin the exact
+   aligned `gv vad-gap-hist` bar block over a fixed stub segmentation).
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
