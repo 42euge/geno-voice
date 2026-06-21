@@ -31541,3 +31541,98 @@ on main post-merge (4537 passed, ~28s).
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-346 — gv vad-gap-cdf silence-gap merge-CDF analysis surface
+
+- **Date:** 2026-06-20
+- **Branch:** iter-346-gap-cdf (ff-merged to main, worktree removed)
+- **Commit:** 3fea460
+
+**Why.** iter-345 declared the six-surface gap golden family COMPLETE (point,
+percentiles, histogram, diff, grid, sweep all byte-pinned) and its next-item #2
+was the standing recommendation across iter-339+: "A genuinely new analysis
+surface — a cumulative-distribution / CDF view of where a candidate
+`--min-silence-ms` cut would fall (what fraction of pauses it would merge),
+turning the percentile table into a direct 'this hangover merges X% of your
+pauses' answer." This lap builds exactly that surface rather than a seventh
+golden over an existing one.
+
+**What it is.** `gv vad-gap-cdf` is the order-statistic INVERSE of iter-338's
+`gv vad-gap-percentiles`. Percentiles answer "what pause length sits at the
+p90?" (fraction → value); the merge-CDF answers the operationally-direct
+opposite — "if I set the end-of-turn hangover (`--min-silence-ms` / the live
+`chat.vad.silence_duration`) to candidate cut `c`, what FRACTION of the
+inter-segment pauses are shorter than `c` and would therefore be MERGED
+(swallowed as within-turn silence rather than ending a turn)?" (value →
+fraction). That is the empirical CDF of the gap distribution sampled at the
+operator's candidate cuts.
+
+The merge rule follows the segmenter's own convention: a region ends once the
+trailing silence REACHES the hangover, so a pause `>= c` ends the turn (kept)
+while a pause STRICTLY `< c` merges. Keeping the hangover below the min gap
+merges nothing (0%); raising it past the max gap merges everything (100%); the
+fraction is monotonic non-decreasing in the cut (it IS a CDF). Default cuts
+200/400/800/1600 ms bracket the live 800 ms default one octave either side,
+mirroring the `gv vad-sweep --min-silences 200,400,800,1600` axis.
+
+**What landed in `examples/gv.py` (+381 lines).**
+- `vad_gap_cdf(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS)` — the pure core.
+  Anchors to `vad_silence_gaps` for the gap list + aggregates (so totals always
+  agree with `gv vad-gaps`) and adds a `cuts` list of
+  `{cut_ms, cut_s, merged, kept, merge_fraction, keep_fraction}` objects, one
+  per requested cut in the order given (not sorted/de-duped). Fewer than 2
+  segments → empty `cuts` + `None` aggregates. Rejects empty / negative / NaN
+  cuts (`ValueError`).
+- `render_vad_gap_cdf` / `_json` / `_csv` — the human / `--json` / `--csv` trio.
+  Human table: a `cut (ms) / cut (s) / merged / merge%` header + one aligned row
+  per cut. JSON: full per-cut objects. CSV: plotter-friendly
+  `cut_ms,cut_s,merged,merge_fraction` (the empirical-CDF curve). All degrade to
+  the shared install hint / `{"available": false}` / `# unavailable` comment.
+- `cut_ms_list_type` parser validator (millisecond sibling of
+  `nonneg_float_list_type`) + `_format_cut_label` (`%g` compact spelling, the
+  cut twin of `_format_percentile_label`).
+- `cmd_vad_gap_cdf` handler — same injected segmenter / availability / log
+  contract as the rest of the family (torch-free parser, lazy `SileroParams`
+  import). Wired into `DEFAULT_HANDLERS` and a new `vad-gap-cdf` subparser
+  sharing all `gv vad` segmenter knobs, plus a usage-docstring example line.
+
+**Tests.** `tests/unit/test_gv_vad_gap_cdf.py` (+634 lines, 54 tests): the
+`cut_ms_list_type` validator (parse/order/whitespace/zero-allowed/reject
+negative+NaN+nonnumber+empty+non-string); parser registration + knob defaults +
+bad-input rejection + json/csv mutual exclusion + threshold range; the pure core
+(merge counts, the strict `< cut` boundary, below-min/above-max endpoints, CDF
+monotonicity, order preservation, anchoring to `vad_silence_gaps`, <2-segment
+empties, `merged+kept==num_gaps`, zero-cut, 3-place rounding, default cuts, error
+paths, unsorted-segment robustness); all three renderers (shape, no-gaps,
+unavailable, custom labels, byte-for-byte human goldens for default/varied/
+single-segment blocks, json shape/empty/unavailable, csv shape/json-agreement/
+header-only/unavailable); and the handler (human/json/csv, unavailable, cut
+pass-through, `SileroParams` knob construction). Updated the `test_gv_cli`
+handler-map golden to include the new `vad-gap-cdf` entry.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4591 passed**
+(4537 prior + 54 new), run in the feature worktree before ff-merge AND re-run on
+main post-merge (4591 passed, ~38s).
+- Integration: not run this lap (pure string-formatting/arithmetic over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..345 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] vad-gap-cdf companions** — the merge-CDF point surface
+   (iter-346) could grow a `--json`/`--csv`-pinned golden family of its own
+   (this lap pins the HUMAN block byte-for-byte but JSON/CSV only by shape), or
+   a `vad-gap-cdf-sweep`/`-grid` (merge fraction at a fixed cut vs a swept
+   segmenter knob) — the inverse of how vad-gap-sweep/grid track min_gap.
+2. **[gv CLI] More new analysis surfaces** — e.g. a "recommended hangover"
+   verdict that reads the CDF and suggests the cut merging the most
+   within-turn pauses while keeping ~all between-turn ones (the valley the
+   histogram shows, named as a number).
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~30 leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
