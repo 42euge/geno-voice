@@ -707,3 +707,314 @@ def test_handler_builds_params_from_knobs():
     assert captured["min_silence_ms"] == 400.0
     assert captured["speech_pad_ms"] == 10.0
     assert captured["max_speech_s"] == 5.0
+
+
+# ---- iter-354: --top-n (name the N steepest cost bands) -----------------
+#
+# vad_gap_peak names the single steepest cost band by default. iter-354's
+# --top-n N ranks the N steepest bands instead — a `peaks` list (descending
+# rate, earliest band first on a tie) holding ONLY non-empty bands, so it may
+# be shorter than N. The legacy scalar peak_* fields always echo peaks[0], so
+# top_n=1 is byte-for-byte unchanged on all three faces.
+
+
+def test_positive_int_type_accepts_one_and_up():
+    assert gv.positive_int_type("1") == 1
+    assert gv.positive_int_type("5") == 5
+    assert gv.positive_int_type(3) == 3
+
+
+def test_positive_int_type_rejects_zero_negative_fraction():
+    import argparse
+
+    for bad in ("0", "-1", "1.5", "abc", ""):
+        with pytest.raises(argparse.ArgumentTypeError):
+            gv.positive_int_type(bad)
+
+
+def test_parser_top_n_default_is_one():
+    parser = gv.build_parser()
+    args = parser.parse_args(["vad-gap-peak", "rec.wav"])
+    assert args.top_n == 1
+
+
+def test_parser_accepts_top_n():
+    parser = gv.build_parser()
+    args = parser.parse_args(["vad-gap-peak", "rec.wav", "--top-n", "3"])
+    assert args.top_n == 3
+
+
+def test_parser_rejects_bad_top_n():
+    parser = gv.build_parser()
+    for bad in ["0", "-2", "x"]:
+        with pytest.raises(SystemExit):
+            parser.parse_args(["vad-gap-peak", "rec.wav", "--top-n", bad])
+
+
+def test_core_default_top_n_is_one_with_singleton_peaks():
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    p = gv.vad_gap_peak(res, cuts_ms=[500.0, 2500.0, 3500.0, 5000.0])
+    assert p["top_n"] == 1
+    assert len(p["peaks"]) == 1
+    # peaks[0] echoes the scalar peak_* fields.
+    pk = p["peaks"][0]
+    assert pk["from_ms"] == p["peak_from_ms"] == 500.0
+    assert pk["to_ms"] == p["peak_to_ms"] == 2500.0
+    assert pk["width_ms"] == p["peak_width_ms"] == 2000.0
+    assert pk["merged_added"] == p["peak_merged_added"] == 2
+    assert pk["rate_per_100ms"] == p["peak_rate_per_100ms"] == pytest.approx(0.1)
+
+
+def test_core_top_n_ranks_descending_rate():
+    # Gaps (sorted): 1.0, 2.0, 4.0, 6.0 seconds.
+    # cuts 500/2500/3500/5000 -> bands:
+    #   500-2500 : {1.0, 2.0} -> +2, rate 0.100  <- #1
+    #   2500-3500: {}         -> +0, rate 0.000  (empty valley, NOT listed)
+    #   3500-5000: {4.0}      -> +1, rate 0.067  <- #2
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    p = gv.vad_gap_peak(res, cuts_ms=[500.0, 2500.0, 3500.0, 5000.0], top_n=5)
+    assert p["top_n"] == 5
+    # Only the two non-empty bands are listed (the empty valley is dropped).
+    assert len(p["peaks"]) == 2
+    rates = [pk["rate_per_100ms"] for pk in p["peaks"]]
+    assert rates == sorted(rates, reverse=True)
+    assert p["peaks"][0]["from_ms"] == 500.0
+    assert p["peaks"][1]["from_ms"] == 3500.0
+
+
+def test_core_top_n_truncates_to_n():
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    p = gv.vad_gap_peak(res, cuts_ms=[500.0, 2500.0, 3500.0, 5000.0], top_n=1)
+    assert len(p["peaks"]) == 1
+    assert p["peaks"][0]["from_ms"] == 500.0
+
+
+def test_core_top_n_earliest_tie_first():
+    # Two bands with equal rate 0.1; the earlier (lower-cut) band ranks first.
+    res = _result((0, 1), (1.5, 2.0), (3.5, 4.0))  # gaps 0.5, 1.5
+    p = gv.vad_gap_peak(res, cuts_ms=[0.0, 1000.0, 2000.0], top_n=2)
+    assert len(p["peaks"]) == 2
+    assert p["peaks"][0]["rate_per_100ms"] == pytest.approx(0.1)
+    assert p["peaks"][1]["rate_per_100ms"] == pytest.approx(0.1)
+    assert p["peaks"][0]["from_ms"] == 0.0
+    assert p["peaks"][1]["from_ms"] == 1000.0
+
+
+def test_core_top_n_all_valley_empty_peaks():
+    res = _result((0, 1), (5, 6))  # one gap of 4.0s, outside all bands
+    p = gv.vad_gap_peak(res, cuts_ms=[1000.0, 2000.0, 3000.0], top_n=3)
+    assert p["peak_found"] is False
+    assert p["peaks"] == []
+
+
+def test_core_top_n_no_gaps_empty_peaks():
+    res = _result((0, 1))
+    p = gv.vad_gap_peak(res, top_n=4)
+    assert p["num_bands"] == 0
+    assert p["peaks"] == []
+    assert p["top_n"] == 4
+
+
+def test_core_top_n_below_one_raises():
+    res = _result((0, 1), (2, 3), (5, 6))
+    with pytest.raises(ValueError):
+        gv.vad_gap_peak(res, top_n=0)
+    with pytest.raises(ValueError):
+        gv.vad_gap_peak(res, top_n=-1)
+
+
+def test_core_top_n_each_peak_matches_vad_gap_cost_band():
+    res = _result((0, 1), (2, 3), (6, 7), (12, 13), (20, 21))
+    cuts = [200.0, 1500.0, 3000.0, 5000.0, 9000.0]
+    p = gv.vad_gap_peak(res, cuts_ms=cuts, top_n=10)
+    c = gv.vad_gap_cost(res, cuts_ms=cuts)
+    nonempty = sorted(
+        (b for b in c["bands"] if b["rate_per_100ms"] > 0),
+        key=lambda b: -b["rate_per_100ms"],
+    )
+    assert len(p["peaks"]) == len(nonempty)
+    for pk, b in zip(p["peaks"], nonempty):
+        assert pk["from_ms"] == b["from_ms"]
+        assert pk["to_ms"] == b["to_ms"]
+        assert pk["rate_per_100ms"] == b["rate_per_100ms"]
+        assert pk["merged_added"] == b["merged_added"]
+
+
+# ---- renderer faces under --top-n ---------------------------------------
+
+
+def test_render_human_top_n_one_is_unchanged():
+    # top_n=1 reproduces the original single-peak golden exactly.
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    lines = gv.render_vad_gap_peak(res, cuts_ms=[500.0, 2500.0, 3500.0, 5000.0])
+    lines_explicit = gv.render_vad_gap_peak(
+        res, cuts_ms=[500.0, 2500.0, 3500.0, 5000.0], top_n=1
+    )
+    assert lines == lines_explicit
+    assert any("costliest band:" in ln for ln in lines)
+    assert not any("top 1 costliest" in ln for ln in lines)
+
+
+def test_render_human_top_n_multi_golden():
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    lines = gv.render_vad_gap_peak(
+        res, cuts_ms=[500.0, 2500.0, 3500.0, 5000.0], top_n=3
+    )
+    assert lines == [
+        "silero VAD gap cost peak — rec.wav",
+        "  segments:     5",
+        "  gaps:         4 (pauses between consecutive speech regions)",
+        "  min gap:      1.000s",
+        "  mean gap:     3.250s",
+        "  max gap:      6.000s",
+        "  total silence:  13.000s",
+        "  top 3 costliest bands (steepest first — the densest pause clusters / "
+        "steepest parts of the CDF; don't raise --min-silence-ms through these) "
+        "(iter-354):",
+        "    #1: 500-2500ms (width 2000ms) — merges +2 pauses, 0.100 per +100ms",
+        "    #2: 3500-5000ms (width 1500ms) — merges +1 pauses, 0.067 per +100ms",
+    ]
+
+
+def test_render_human_top_n_all_valley_note_still_fires():
+    res = _result((0, 1), (5, 6))
+    lines = gv.render_vad_gap_peak(
+        res, cuts_ms=[1000.0, 2000.0, 3000.0], top_n=3
+    )
+    assert any("no cost peak" in ln for ln in lines)
+    assert not any("costliest band" in ln for ln in lines)
+
+
+def test_render_json_top_n_one_superset_of_legacy():
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    cuts = [500.0, 2500.0, 3500.0, 5000.0]
+    payload = json.loads(gv.render_vad_gap_peak_json(res, cuts_ms=cuts))
+    assert payload["top_n"] == 1
+    assert len(payload["peaks"]) == 1
+    assert payload["peaks"][0]["from_ms"] == payload["peak_from_ms"]
+
+
+def test_render_json_top_n_multi():
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    payload = json.loads(
+        gv.render_vad_gap_peak_json(
+            res, cuts_ms=[500.0, 2500.0, 3500.0, 5000.0], top_n=5
+        )
+    )
+    assert payload["top_n"] == 5
+    assert len(payload["peaks"]) == 2
+    assert payload["peaks"][0]["from_ms"] == 500.0
+    assert payload["peaks"][1]["from_ms"] == 3500.0
+
+
+def test_render_json_top_n_no_gaps_empty_peaks():
+    res = _result((0, 1))
+    payload = json.loads(gv.render_vad_gap_peak_json(res, top_n=3))
+    assert payload["peaks"] == []
+    assert payload["top_n"] == 3
+
+
+def test_render_csv_top_n_one_is_legacy_golden():
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    text = gv.render_vad_gap_peak_csv(
+        res, cuts_ms=[500.0, 2500.0, 3500.0, 5000.0], top_n=1
+    )
+    assert text == (
+        "peak_found,peak_from_ms,peak_to_ms,peak_width_ms,peak_merged_added,"
+        "peak_rate_per_100ms\r\n"
+        "True,500,2500,2000,2,0.1"
+    )
+
+
+def test_render_csv_top_n_multi_one_row_per_peak():
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    text = gv.render_vad_gap_peak_csv(
+        res, cuts_ms=[500.0, 2500.0, 3500.0, 5000.0], top_n=3
+    )
+    rows = list(csv.reader(io.StringIO(text)))
+    assert rows[0] == [
+        "peak_found",
+        "peak_from_ms",
+        "peak_to_ms",
+        "peak_width_ms",
+        "peak_merged_added",
+        "peak_rate_per_100ms",
+    ]
+    assert len(rows) == 3  # header + two ranked rows (empty valley dropped)
+    assert rows[1] == ["True", "500", "2500", "2000", "2", "0.1"]
+    assert rows[2] == ["True", "3500", "5000", "1500", "1", "0.067"]
+
+
+def test_render_csv_top_n_columns_match_single_surface():
+    # The multi-row CSV unions cleanly with the single-peak CSV: same header.
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    cuts = [500.0, 2500.0, 3500.0, 5000.0]
+    single = list(csv.reader(io.StringIO(gv.render_vad_gap_peak_csv(res, cuts_ms=cuts))))
+    multi = list(
+        csv.reader(io.StringIO(gv.render_vad_gap_peak_csv(res, cuts_ms=cuts, top_n=3)))
+    )
+    assert single[0] == multi[0]
+
+
+def test_render_csv_top_n_all_valley_single_false_row():
+    res = _result((0, 1), (5, 6))
+    text = gv.render_vad_gap_peak_csv(
+        res, cuts_ms=[1000.0, 2000.0, 3000.0], top_n=3
+    )
+    rows = list(csv.reader(io.StringIO(text)))
+    assert len(rows) == 2
+    assert rows[1] == ["False", "", "", "", "", ""]
+
+
+# ---- handler threads --top-n through ------------------------------------
+
+
+def test_handler_top_n_human_multi():
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    lines = _run(
+        _args(cuts_ms=[500.0, 2500.0, 3500.0, 5000.0], top_n=3),
+        segmenter=lambda w, *, params: res,
+        availability=lambda: True,
+    )
+    assert any("top 3 costliest bands" in ln for ln in lines)
+    assert any(ln.strip().startswith("#1:") for ln in lines)
+    assert any(ln.strip().startswith("#2:") for ln in lines)
+
+
+def test_handler_top_n_json_multi():
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    lines = _run(
+        _args(cuts_ms=[500.0, 2500.0, 3500.0, 5000.0], top_n=5, json=True),
+        segmenter=lambda w, *, params: res,
+        availability=lambda: True,
+    )
+    payload = json.loads("\n".join(lines))
+    assert payload["top_n"] == 5
+    assert len(payload["peaks"]) == 2
+
+
+def test_handler_top_n_csv_multi():
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    lines = _run(
+        _args(cuts_ms=[500.0, 2500.0, 3500.0, 5000.0], top_n=3, csv=True),
+        segmenter=lambda w, *, params: res,
+        availability=lambda: True,
+    )
+    rows = list(csv.reader(io.StringIO("\n".join(lines))))
+    assert len(rows) == 3  # header + two ranked rows
+
+
+def test_handler_top_n_defaults_to_one_when_absent():
+    # Older callers without a top_n attr fall back to 1 (getattr default).
+    # _args() omits top_n by default, so this exercises the getattr fallback.
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    args = _args(cuts_ms=[500.0, 2500.0, 3500.0, 5000.0], json=True)
+    assert not hasattr(args, "top_n")
+    lines = _run(
+        args,
+        segmenter=lambda w, *, params: res,
+        availability=lambda: True,
+    )
+    payload = json.loads("\n".join(lines))
+    assert payload["top_n"] == 1
+    assert len(payload["peaks"]) == 1
