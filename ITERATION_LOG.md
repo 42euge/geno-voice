@@ -31636,3 +31636,99 @@ main post-merge (4591 passed, ~38s).
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    ~30 leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-347 — gv vad-gap-recommend recommended-hangover verdict surface
+
+- **Date:** 2026-06-21
+- **Branch:** iter-347-gap-recommend (ff-merged to main, worktree removed)
+- **Commit:** 47638a4
+
+**Why.** iter-346 built `gv vad-gap-cdf` and its standing next-item #2 (the
+recommendation recurring across iter-339+) was: "a 'recommended hangover'
+verdict that reads the CDF and suggests the cut merging the most within-turn
+pauses while keeping ~all between-turn ones (the valley the histogram shows,
+named as a number)." The whole gap-analysis family — `gv vad-gaps` (iter-328),
+`gv vad-gap-hist` (iter-336), `gv vad-gap-percentiles` (iter-338),
+`gv vad-gap-cdf` (iter-346) — SHOWS the operator the inter-segment pause
+distribution and leaves the "so what number do I set `--min-silence-ms` to?"
+judgement to them. This lap builds the VERDICT surface that answers it
+directly, rather than a seventh golden over an existing surface.
+
+**What it is.** `gv vad-gap-recommend recording.wav` reads the gap distribution
+and names a single recommended end-of-turn hangover. The split between the
+short within-turn pauses (which should MERGE) and the long between-turn pauses
+(which should END a turn) is found by the 1-D largest-gap (Jenks) rule: sort
+the gaps, take the WIDEST jump between two consecutive sorted gaps — that empty
+band is the valley separating the short cluster from the long cluster — and
+recommend its midpoint. The merge accounting (`below` / `at_or_above`) follows
+the segmenter's own strict `< cut` convention (a pause `< cut` merges, `>= cut`
+is kept), so the recommendation agrees EXACTLY with what `gv vad-gap-cdf` would
+report at the recommended cut (asserted by a test). It is the natural CONSUMER
+of the CDF/histogram family: the histogram's valley, turned into a number.
+
+Edge cases mirror the rest of the family: a result with <2 segments has nothing
+to recommend (`recommended_ms`/`recommended_s` `None`, aggregates `None`); a
+single pause, or several pauses all the same length, has no valley
+(`split_found` `False`) — there is no short/long cluster to split, so it
+recommends just below the shortest pause (`min_gap / 2`), the conservative
+default where every real pause is kept as a turn boundary. Earliest-tie on the
+widest jump, matching the family.
+
+**What landed in `examples/gv.py` (+~290 lines).**
+- `vad_gap_recommend(result)` — the pure core. Anchors to `vad_silence_gaps`
+  for the gap list + aggregates (so totals always agree with `gv vad-gaps`) and
+  adds `recommended_s`/`recommended_ms`/`split_found`/`below`/`at_or_above`/the
+  valley endpoints (`gap_below_s`/`gap_above_s`/`valley_width_s`). `cut_s` and
+  gap endpoints round to 3 places, `recommended_ms` to 1.
+- `render_vad_gap_recommend` / `_json` / `_csv` — the human / `--json` / `--csv`
+  trio. Human verdict names the number, the valley (or a no-valley note), and
+  the merge/keep effect. CSV is a one-row
+  `recommended_ms,recommended_s,split_found,below,at_or_above,num_gaps` summary
+  (the verdict is a single recommendation, not a per-gap/per-cut table). All
+  degrade to the shared install hint / `{"available": false}` / `# unavailable`
+  comment.
+- `cmd_vad_gap_recommend` handler — same injected segmenter/availability/log
+  contract as the rest of the family (torch-free parser, lazy `SileroParams`
+  import). Wired into `DEFAULT_HANDLERS` and a new `vad-gap-recommend` subparser
+  sharing all `gv vad` segmenter knobs, plus a usage-docstring example line.
+
+**Tests.** `tests/unit/test_gv_vad_gap_recommend.py` (+42 tests): parser
+registration + knob defaults + custom-knob + json/csv mutual exclusion +
+threshold range; the pure core (valley midpoint, below/at_or_above split,
+agreement with `vad_gap_cdf` at the recommended cut, anchoring to
+`vad_silence_gaps`, single-gap and all-equal no-valley paths, earliest-tie on
+both an implicit and explicit tie, <2-segment and zero-segment empties,
+unsorted-segment robustness, rounding, recommendation strictly within
+min/max); all three renderers (shape, no-valley, no-gaps, unavailable,
+byte-for-byte human goldens for valley/no-valley/single-segment blocks, compact
+`%g` ms label, json shape/no-gaps/no-valley/unavailable, csv
+shape/json-agreement/header-only/unavailable); and the handler (human/json/csv,
+unavailable x3, knob pass-through). Updated the `test_gv_cli` handler-map golden
+to include the new `vad-gap-recommend` entry.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4633 passed**
+(4591 prior + 42 new), run in the feature worktree before ff-merge AND re-run on
+main post-merge (4633 passed, ~34s).
+- Integration: not run this lap (pure string-formatting/arithmetic over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..346 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] vad-gap-recommend companions** — the verdict (iter-347) could
+   grow a `vad-gap-recommend`-sweep/grid (how the recommended hangover moves vs
+   a swept segmenter knob — the inverse of how vad-gap-sweep/grid track
+   min_gap), or a `--strict`/`--lenient` knob biasing the recommendation toward
+   the short or long side of the valley.
+2. **[gv CLI] More new analysis surfaces** — e.g. a "merge cost curve" naming
+   the marginal pauses merged per +100 ms of hangover (the derivative of the
+   CDF), or a confidence note when the valley is shallow (clusters poorly
+   separated → the recommendation is weak).
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~30 leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
