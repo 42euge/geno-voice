@@ -2722,7 +2722,21 @@ def render_vad_gap_peak_csv(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS):
     return buf.getvalue().rstrip("\r\n")
 
 
-def vad_gap_recommend(result):
+# How far across the valley (or, in the no-valley fallback, across the gap up to
+# the shortest pause) the recommended hangover sits, per --bias (iter-351). The
+# valley is the EMPTY band between the short within-turn cluster and the long
+# between-turn cluster, so ANY interior point splits the pauses the same way —
+# the fraction only shifts the named number, never the merge accounting. "short"
+# hugs the top of the short cluster (a smaller, eager hangover that ends turns
+# fast — but risks clipping a slow talker); "long" hugs the bottom of the long
+# cluster (a larger, patient hangover that tolerates mid-turn pauses — but adds
+# end-of-turn latency); "balanced" is the midpoint, the iter-347 default. 0.5 for
+# balanced reproduces the original ``(best_lo + best_hi) / 2`` midpoint EXACTLY.
+GAP_RECOMMEND_BIAS_FRACTIONS = {"short": 0.25, "balanced": 0.5, "long": 0.75}
+DEFAULT_GAP_RECOMMEND_BIAS = "balanced"
+
+
+def vad_gap_recommend(result, *, bias=DEFAULT_GAP_RECOMMEND_BIAS):
     """Recommend an end-of-turn hangover by finding the valley in the gap distribution (iter-347).
 
     The natural CONSUMER of the gap-analysis family. ``gv vad-gaps`` /
@@ -2738,12 +2752,24 @@ def vad_gap_recommend(result):
     The split is found by the largest-gap (1-D Jenks) rule on a single feature:
     sort the gaps, then take the WIDEST jump between two consecutive sorted gaps.
     That widest jump is the empty band separating the short cluster from the long
-    cluster, and the recommended hangover is its midpoint — below it sit the
+    cluster, and the recommended hangover sits inside it — below it sit the
     within-turn pauses (which a hangover there would merge), at or above it sit
     the between-turn pauses (which it would keep as boundaries). The merge
     accounting follows the segmenter's own convention (a pause STRICTLY ``< cut``
     merges; ``>= cut`` is kept), so ``below`` / ``at_or_above`` are exactly what
     :func:`vad_gap_cdf` would report at the recommended cut.
+
+    ``bias`` (iter-351) chooses WHERE in that empty valley the number sits:
+    ``"balanced"`` (default) is the midpoint, the iter-347 behaviour exactly;
+    ``"short"`` biases a quarter of the way up from the short cluster's top (a
+    smaller, eager hangover — ends turns faster, but risks clipping a slow
+    talker); ``"long"`` biases three quarters of the way up, hugging the long
+    cluster's bottom (a larger, patient hangover — tolerates mid-turn pauses, but
+    adds end-of-turn latency). Because every interior point of the EMPTY valley
+    splits the pauses identically, ``below`` / ``at_or_above`` are INVARIANT
+    across biases — only ``recommended_ms`` / ``recommended_s`` shift. The chosen
+    bias is echoed back in the ``bias`` field. Raises :class:`ValueError` for an
+    unknown bias.
 
     Pure: anchors to :func:`vad_silence_gaps` for the gap list + aggregates (so
     the totals always agree with ``gv vad-gaps``) and adds the recommendation
@@ -2752,11 +2778,18 @@ def vad_gap_recommend(result):
     aggregates are ``None`` — the same distinction the other gap surfaces make.
     A single pause, or several pauses all the same length, has no valley
     (``split_found`` is ``False``); there is no short/long cluster split to make,
-    so it recommends just below the shortest pause (``min_gap / 2``) — every real
-    pause is then kept as a turn boundary, the conservative default. ``cut_s`` /
-    the gap endpoints round to 3 places and ``recommended_ms`` to 1 place,
-    matching the sibling gap surfaces.
+    so it recommends below the shortest pause (``min_gap * frac``, ``frac < 1``)
+    — every real pause is then kept as a turn boundary, the conservative default,
+    and ``bias`` only nudges HOW far below. ``cut_s`` / the gap endpoints round to
+    3 places and ``recommended_ms`` to 1 place, matching the sibling gap surfaces.
     """
+    try:
+        frac = GAP_RECOMMEND_BIAS_FRACTIONS[bias]
+    except KeyError:
+        raise ValueError(
+            f"unknown bias {bias!r}: expected one of "
+            f"{sorted(GAP_RECOMMEND_BIAS_FRACTIONS)}"
+        ) from None
     d = vad_silence_gaps(result)
     gaps = sorted(d["gaps"])
     n = d["num_gaps"]
@@ -2767,6 +2800,7 @@ def vad_gap_recommend(result):
         "max_gap_s": d["max_gap_s"],
         "mean_gap_s": d["mean_gap_s"],
         "total_silence_s": d["total_silence_s"],
+        "bias": bias,
         "recommended_s": None,
         "recommended_ms": None,
         "split_found": False,
@@ -2796,12 +2830,15 @@ def vad_gap_recommend(result):
         rec["gap_below_s"] = round(best_lo, 3)
         rec["gap_above_s"] = round(best_hi, 3)
         rec["valley_width_s"] = round(best_width, 3)
-        cut_s = (best_lo + best_hi) / 2.0
+        # frac of the way across the empty valley. balanced (0.5) is the original
+        # midpoint exactly; short/long slide toward the short/long cluster.
+        cut_s = best_lo + frac * (best_hi - best_lo)
     else:
         # No valley: one pause, or every pause the same length. There is no
-        # short/long split to make, so recommend just below the single cluster
-        # (the shortest pause halved) — every real pause is kept as a boundary.
-        cut_s = gaps[0] / 2.0
+        # short/long split to make, so recommend below the single cluster (a
+        # fraction of the shortest pause) — every real pause is kept as a
+        # boundary. balanced (0.5) is the original min_gap / 2.
+        cut_s = gaps[0] * frac
     cut_s = round(cut_s, 3)
     # Count against the rounded recommendation so below / at_or_above are exactly
     # what setting --min-silence-ms to the reported number would produce.
@@ -2813,7 +2850,7 @@ def vad_gap_recommend(result):
     return rec
 
 
-def render_vad_gap_recommend(result):
+def render_vad_gap_recommend(result, *, bias=DEFAULT_GAP_RECOMMEND_BIAS):
     """Render the recommended-hangover verdict as plain-text report lines (iter-347).
 
     The human-readable face of :func:`vad_gap_recommend`. ``result`` of ``None``
@@ -2821,16 +2858,19 @@ def render_vad_gap_recommend(result):
     than 2 segments has no gaps, so it prints the same short explanatory line
     :func:`render_vad_gaps` uses (nothing to recommend). Otherwise it prints the
     aggregate header (min/mean/max, total silence) then the verdict: the
-    recommended ``--min-silence-ms`` number, the valley it sits in (or a note
-    that no valley was found), and the effect — how many pauses that hangover
-    would merge vs keep. Pure: returns a list of strings (no I/O, no ANSI).
+    recommended ``--min-silence-ms`` number (annotated with the chosen ``bias``),
+    the valley it sits in (or a note that no valley was found), and the effect —
+    how many pauses that hangover would merge vs keep. ``bias`` (iter-351) chooses
+    where in the valley the number sits — ``short``/``balanced``/``long`` — and is
+    echoed on the recommended line. Pure: returns a list of strings (no I/O, no
+    ANSI).
     """
     if result is None:
         return [
             "silero VAD unavailable: install 'silero-vad' (pulls torch + "
             "torchaudio) to enable offline neural segmentation"
         ]
-    r = vad_gap_recommend(result)
+    r = vad_gap_recommend(result, bias=bias)
     lines = [
         f"silero VAD recommended hangover — {result.name}",
         f"  segments:     {r['num_segments']}",
@@ -2845,7 +2885,8 @@ def render_vad_gap_recommend(result):
     lines.append(f"  total silence:{r['total_silence_s']:8.3f}s")
     label = _format_cut_label(r["recommended_ms"])
     lines.append(
-        f"  recommended --min-silence-ms: {label} ({r['recommended_s']:.3f}s)"
+        f"  recommended --min-silence-ms: {label} ({r['recommended_s']:.3f}s) "
+        f"[bias: {r['bias']}]"
     )
     if r["split_found"]:
         lines.append(
@@ -2866,17 +2907,18 @@ def render_vad_gap_recommend(result):
     return lines
 
 
-def render_vad_gap_recommend_json(result):
+def render_vad_gap_recommend_json(result, *, bias=DEFAULT_GAP_RECOMMEND_BIAS):
     """Render the recommended-hangover verdict as a JSON string (iter-347).
 
     Machine-readable twin of :func:`render_vad_gap_recommend`, mirroring the
     degrade-to-``{"available": false}`` contract the other VAD JSON renderers
     use. Carries the aggregate stats plus the recommendation fields
-    (``recommended_ms`` / ``recommended_s`` / ``split_found`` / ``below`` /
-    ``at_or_above`` / the valley endpoints). The recommendation fields are
-    ``null`` / ``0`` / ``false`` for a <2-segment result (nothing to recommend),
-    the same JSON spelling of "no distribution" the other gap surfaces use. Pure:
-    built from :func:`vad_gap_recommend`, so it works on any
+    (``bias`` / ``recommended_ms`` / ``recommended_s`` / ``split_found`` /
+    ``below`` / ``at_or_above`` / the valley endpoints). The recommendation fields
+    are ``null`` / ``0`` / ``false`` for a <2-segment result (nothing to
+    recommend), the same JSON spelling of "no distribution" the other gap surfaces
+    use; ``bias`` (iter-351) is always present, echoing the chosen short/balanced/
+    long bias. Pure: built from :func:`vad_gap_recommend`, so it works on any
     ``SileroResult``-shaped object.
     """
     if result is None:
@@ -2890,7 +2932,7 @@ def render_vad_gap_recommend_json(result):
             },
             indent=2,
         )
-    r = vad_gap_recommend(result)
+    r = vad_gap_recommend(result, bias=bias)
     payload = {
         "available": True,
         "name": result.name,
@@ -2900,6 +2942,7 @@ def render_vad_gap_recommend_json(result):
         "max_gap_s": r["max_gap_s"],
         "mean_gap_s": r["mean_gap_s"],
         "total_silence_s": r["total_silence_s"],
+        "bias": r["bias"],
         "recommended_ms": r["recommended_ms"],
         "recommended_s": r["recommended_s"],
         "split_found": r["split_found"],
@@ -2912,7 +2955,7 @@ def render_vad_gap_recommend_json(result):
     return json.dumps(payload, indent=2)
 
 
-def render_vad_gap_recommend_csv(result):
+def render_vad_gap_recommend_csv(result, *, bias=DEFAULT_GAP_RECOMMEND_BIAS):
     """Render the recommended-hangover verdict as a one-row CSV table (iter-347).
 
     The spreadsheet-friendly twin of :func:`render_vad_gap_recommend` /
@@ -2920,24 +2963,26 @@ def render_vad_gap_recommend_csv(result):
     ``--csv`` trio every VAD-analysis surface carries. Unlike the per-gap /
     per-cut surfaces, the verdict is a SINGLE recommendation, so the natural CSV
     is one summary row:
-    ``recommended_ms,recommended_s,split_found,below,at_or_above,num_gaps``. The
-    derivable aggregates and valley endpoints are NOT duplicated into the row,
-    matching :func:`render_vad_gap_cdf_csv`'s reasoning. A result with fewer than
-    2 segments yields the header alone (a valid empty-bodied table — nothing to
-    recommend). ``result`` of ``None`` (segmenter unavailable) yields a single
-    ``# silero VAD unavailable: ...`` comment line. Pure: built with the stdlib
-    :mod:`csv` writer, trailing terminator stripped.
+    ``bias,recommended_ms,recommended_s,split_found,below,at_or_above,num_gaps``.
+    The derivable aggregates and valley endpoints are NOT duplicated into the row,
+    matching :func:`render_vad_gap_cdf_csv`'s reasoning; the chosen ``bias``
+    (iter-351) IS carried so a sweep across biases is self-describing per row. A
+    result with fewer than 2 segments yields the header alone (a valid
+    empty-bodied table — nothing to recommend). ``result`` of ``None`` (segmenter
+    unavailable) yields a single ``# silero VAD unavailable: ...`` comment line.
+    Pure: built with the stdlib :mod:`csv` writer, trailing terminator stripped.
     """
     if result is None:
         return (
             "# silero VAD unavailable: install 'silero-vad' (pulls torch + "
             "torchaudio) to enable offline neural segmentation"
         )
-    r = vad_gap_recommend(result)
+    r = vad_gap_recommend(result, bias=bias)
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(
         [
+            "bias",
             "recommended_ms",
             "recommended_s",
             "split_found",
@@ -2949,6 +2994,7 @@ def render_vad_gap_recommend_csv(result):
     if r["num_gaps"] > 0:
         writer.writerow(
             [
+                r["bias"],
                 _format_cut_label(r["recommended_ms"]),
                 r["recommended_s"],
                 r["split_found"],
@@ -5302,9 +5348,11 @@ def cmd_vad_gap_recommend(args, *, log=print, segmenter=None, availability=None)
     Same injected-dependency contract as :func:`cmd_vad_gap_cdf`: ``segmenter`` /
     ``availability`` default to the real :mod:`vad.silero` functions, imported
     lazily so the parser stays torch-free. The segmenter knobs are shared with
-    ``gv vad`` so the gaps are measured against the same segmentation. ``--csv``
-    is mutually exclusive with ``--json``; when ``silero-vad`` is absent the
-    handler prints the install hint and returns, never crashing.
+    ``gv vad`` so the gaps are measured against the same segmentation. ``--bias``
+    (iter-351) chooses where in the valley the recommended number sits
+    (short/balanced/long); it defaults to ``balanced`` (the iter-347 behaviour).
+    ``--csv`` is mutually exclusive with ``--json``; when ``silero-vad`` is absent
+    the handler prints the install hint and returns, never crashing.
     """
     if segmenter is None or availability is None:
         from vad.silero import segment_recording, silero_available
@@ -5314,14 +5362,15 @@ def cmd_vad_gap_recommend(args, *, log=print, segmenter=None, availability=None)
 
     as_json = getattr(args, "json", False)
     as_csv = getattr(args, "csv", False)
+    bias = getattr(args, "bias", DEFAULT_GAP_RECOMMEND_BIAS)
 
     if not availability():
         if as_json:
-            log(render_vad_gap_recommend_json(None))
+            log(render_vad_gap_recommend_json(None, bias=bias))
         elif as_csv:
-            log(render_vad_gap_recommend_csv(None))
+            log(render_vad_gap_recommend_csv(None, bias=bias))
         else:
-            for line in render_vad_gap_recommend(None):
+            for line in render_vad_gap_recommend(None, bias=bias):
                 log(line)
         return
 
@@ -5336,11 +5385,11 @@ def cmd_vad_gap_recommend(args, *, log=print, segmenter=None, availability=None)
     )
     result = segmenter(args.wav, params=params)
     if as_json:
-        log(render_vad_gap_recommend_json(result))
+        log(render_vad_gap_recommend_json(result, bias=bias))
     elif as_csv:
-        log(render_vad_gap_recommend_csv(result))
+        log(render_vad_gap_recommend_csv(result, bias=bias))
     else:
-        for line in render_vad_gap_recommend(result):
+        for line in render_vad_gap_recommend(result, bias=bias):
             log(line)
 
 
@@ -7075,6 +7124,17 @@ def build_parser():
         help="Force-split regions longer than this, in seconds; 'inf'/'none' "
         "never splits (default: inf)",
     )
+    vad_gap_rec.add_argument(
+        "--bias",
+        choices=sorted(GAP_RECOMMEND_BIAS_FRACTIONS),
+        default=DEFAULT_GAP_RECOMMEND_BIAS,
+        help="Where in the valley the recommended hangover sits: 'short' biases "
+        "toward the short cluster (smaller, eager hangover — ends turns faster), "
+        "'long' toward the long cluster (larger, patient hangover — tolerates "
+        "mid-turn pauses), 'balanced' is the midpoint "
+        f"(default: {DEFAULT_GAP_RECOMMEND_BIAS}). The below/keeps split is "
+        "unchanged by the bias — only the named number shifts",
+    )
     vad_gap_rec_fmt = vad_gap_rec.add_mutually_exclusive_group()
     vad_gap_rec_fmt.add_argument(
         "--json",
@@ -7085,7 +7145,7 @@ def build_parser():
     vad_gap_rec_fmt.add_argument(
         "--csv",
         action="store_true",
-        help="Emit a one-row recommended_ms,recommended_s,split_found,below,"
+        help="Emit a one-row bias,recommended_ms,recommended_s,split_found,below,"
         "at_or_above,num_gaps CSV summary; mutually exclusive with --json",
     )
 

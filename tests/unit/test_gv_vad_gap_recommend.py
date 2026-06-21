@@ -325,7 +325,7 @@ def test_render_human_golden_with_valley():
         "  mean gap:     1.350s",
         "  max gap:      3.000s",
         "  total silence:   5.400s",
-        "  recommended --min-silence-ms: 1100 (1.100s)",
+        "  recommended --min-silence-ms: 1100 (1.100s) [bias: balanced]",
         "  valley:       between 0.200s (top of short pauses) and 2.000s "
         "(bottom of long pauses), width 1.800s",
         "  effect:       merges 2/4 within-turn pauses, keeps 2/4 as turn "
@@ -346,7 +346,7 @@ def test_render_human_golden_no_valley():
         "  mean gap:     1.000s",
         "  max gap:      1.000s",
         "  total silence:   3.000s",
-        "  recommended --min-silence-ms: 500 (0.500s)",
+        "  recommended --min-silence-ms: 500 (0.500s) [bias: balanced]",
         "  (no valley — pauses don't separate into short/long clusters; "
         "recommending just below the shortest pause so every pause is kept)",
         "  effect:       merges 0/3 within-turn pauses, keeps 3/3 as turn "
@@ -387,6 +387,7 @@ def test_render_json_shape():
     assert payload["name"] == "rec.wav"
     assert payload["num_segments"] == 5
     assert payload["num_gaps"] == 4
+    assert payload["bias"] == "balanced"
     assert payload["recommended_ms"] == 1100.0
     assert payload["recommended_s"] == 1.1
     assert payload["split_found"] is True
@@ -428,6 +429,7 @@ def test_render_csv_shape():
     text = gv.render_vad_gap_recommend_csv(res)
     rows = list(csv.reader(io.StringIO(text)))
     assert rows[0] == [
+        "bias",
         "recommended_ms",
         "recommended_s",
         "split_found",
@@ -436,11 +438,12 @@ def test_render_csv_shape():
         "num_gaps",
     ]
     assert len(rows) == 2  # header + one summary row
-    assert rows[1][0] == "1100"
-    assert rows[1][2] == "True"
-    assert int(rows[1][3]) == 2
+    assert rows[1][0] == "balanced"
+    assert rows[1][1] == "1100"
+    assert rows[1][3] == "True"
     assert int(rows[1][4]) == 2
-    assert int(rows[1][5]) == 4
+    assert int(rows[1][5]) == 2
+    assert int(rows[1][6]) == 4
 
 
 def test_render_csv_matches_json():
@@ -448,10 +451,11 @@ def test_render_csv_matches_json():
     payload = json.loads(gv.render_vad_gap_recommend_json(res))
     text = gv.render_vad_gap_recommend_csv(res)
     row = list(csv.reader(io.StringIO(text)))[1]
-    assert float(row[1]) == pytest.approx(payload["recommended_s"])
-    assert int(row[3]) == payload["below"]
-    assert int(row[4]) == payload["at_or_above"]
-    assert int(row[5]) == payload["num_gaps"]
+    assert row[0] == payload["bias"]
+    assert float(row[2]) == pytest.approx(payload["recommended_s"])
+    assert int(row[4]) == payload["below"]
+    assert int(row[5]) == payload["at_or_above"]
+    assert int(row[6]) == payload["num_gaps"]
 
 
 def test_render_csv_header_only_for_no_gaps():
@@ -460,6 +464,7 @@ def test_render_csv_header_only_for_no_gaps():
     rows = list(csv.reader(io.StringIO(text)))
     assert rows == [
         [
+            "bias",
             "recommended_ms",
             "recommended_s",
             "split_found",
@@ -492,6 +497,7 @@ def _args(**over):
         min_silence_ms=800.0,
         speech_pad_ms=30.0,
         max_speech_s=float("inf"),
+        bias="balanced",
         json=False,
         csv=False,
     )
@@ -534,7 +540,7 @@ def test_handler_csv():
     )
     text = "\n".join(lines)
     rows = list(csv.reader(io.StringIO(text)))
-    assert rows[0][0] == "recommended_ms"
+    assert rows[0][0] == "bias"
     assert len(rows) == 2
 
 
@@ -599,3 +605,180 @@ def test_handler_builds_params_from_knobs():
     assert captured["min_silence_ms"] == 400.0
     assert captured["speech_pad_ms"] == 10.0
     assert captured["max_speech_s"] == 5.0
+
+
+# ---- iter-351: --bias knob ----------------------------------------------
+#
+# The valley between the short within-turn cluster and the long between-turn
+# cluster is an EMPTY band, so any interior point splits the pauses identically.
+# --bias only shifts WHERE in that valley the recommended number sits — short
+# (quarter up from the short cluster), balanced (midpoint, the iter-347 default),
+# long (three quarters up, hugging the long cluster). The merge accounting
+# (below / at_or_above) is therefore invariant across biases.
+
+
+def test_parser_bias_default_is_balanced():
+    parser = gv.build_parser()
+    args = parser.parse_args(["vad-gap-recommend", "rec.wav"])
+    assert args.bias == "balanced"
+
+
+def test_parser_bias_accepts_each_choice():
+    parser = gv.build_parser()
+    for choice in ("short", "balanced", "long"):
+        args = parser.parse_args(["vad-gap-recommend", "rec.wav", "--bias", choice])
+        assert args.bias == choice
+
+
+def test_parser_bias_rejects_unknown():
+    parser = gv.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["vad-gap-recommend", "rec.wav", "--bias", "medium"])
+
+
+def test_bias_fraction_table_and_default():
+    # The fraction table and default constant are the single source of truth.
+    assert gv.GAP_RECOMMEND_BIAS_FRACTIONS == {
+        "short": 0.25,
+        "balanced": 0.5,
+        "long": 0.75,
+    }
+    assert gv.DEFAULT_GAP_RECOMMEND_BIAS == "balanced"
+
+
+def test_core_balanced_equals_legacy_midpoint():
+    # balanced (0.5) reproduces the original (best_lo + best_hi) / 2 midpoint.
+    # Sorted gaps 0.2, 0.2, 2.0, 3.0; valley 0.2->2.0; midpoint 1.1s.
+    res = _result((0, 1), (1.2, 2), (2.2, 3), (5, 6), (9, 10))
+    r = gv.vad_gap_recommend(res, bias="balanced")
+    assert r["bias"] == "balanced"
+    assert r["recommended_s"] == 1.1
+    assert r["recommended_ms"] == 1100.0
+    # Default arg == explicit balanced.
+    assert gv.vad_gap_recommend(res) == r
+
+
+def test_core_short_bias_smaller_than_balanced_than_long():
+    # Valley 0.2 -> 2.0 (width 1.8). short=0.2+0.25*1.8=0.65; balanced=1.1;
+    # long=0.2+0.75*1.8=1.55. Monotone short < balanced < long.
+    res = _result((0, 1), (1.2, 2), (2.2, 3), (5, 6), (9, 10))
+    short = gv.vad_gap_recommend(res, bias="short")
+    balanced = gv.vad_gap_recommend(res, bias="balanced")
+    long = gv.vad_gap_recommend(res, bias="long")
+    assert short["recommended_s"] == 0.65
+    assert balanced["recommended_s"] == 1.1
+    assert long["recommended_s"] == 1.55
+    assert short["recommended_s"] < balanced["recommended_s"] < long["recommended_s"]
+
+
+def test_bias_lands_strictly_inside_valley():
+    # Every bias point sits strictly between the valley endpoints, so it is a
+    # valid cut that merges the short cluster and keeps the long cluster.
+    res = _result((0, 1), (1.2, 2), (2.2, 3), (5, 6), (9, 10))
+    for choice in ("short", "balanced", "long"):
+        r = gv.vad_gap_recommend(res, bias=choice)
+        assert r["gap_below_s"] < r["recommended_s"] < r["gap_above_s"]
+
+
+def test_bias_does_not_change_merge_accounting():
+    # The whole point: shifting the number within the EMPTY valley leaves the
+    # below / at_or_above split identical across all three biases.
+    res = _result((0, 1), (1.2, 2), (2.2, 3), (5, 6), (9, 10))
+    splits = {
+        choice: (
+            gv.vad_gap_recommend(res, bias=choice)["below"],
+            gv.vad_gap_recommend(res, bias=choice)["at_or_above"],
+        )
+        for choice in ("short", "balanced", "long")
+    }
+    assert splits["short"] == splits["balanced"] == splits["long"] == (2, 2)
+
+
+def test_bias_no_valley_fallback_scales_shortest_pause():
+    # No valley (all gaps equal 1.0s): recommend a fraction of the shortest pause.
+    # short=1.0*0.25=0.25; balanced=0.5; long=0.75. All below the shortest pause,
+    # so every pause is still kept regardless of bias.
+    res = _result((0, 1), (2, 3), (4, 5), (6, 7))
+    assert gv.vad_gap_recommend(res, bias="short")["recommended_s"] == 0.25
+    assert gv.vad_gap_recommend(res, bias="balanced")["recommended_s"] == 0.5
+    assert gv.vad_gap_recommend(res, bias="long")["recommended_s"] == 0.75
+    for choice in ("short", "balanced", "long"):
+        r = gv.vad_gap_recommend(res, bias=choice)
+        assert r["split_found"] is False
+        assert r["below"] == 0
+        assert r["at_or_above"] == 3
+
+
+def test_core_rejects_unknown_bias():
+    res = _result((0, 1), (1.2, 2), (2.2, 3), (5, 6), (9, 10))
+    with pytest.raises(ValueError, match="unknown bias"):
+        gv.vad_gap_recommend(res, bias="medium")
+
+
+def test_bias_present_for_no_gaps():
+    # The bias field is echoed even when there are no gaps to recommend against.
+    res = _result((0, 1))
+    r = gv.vad_gap_recommend(res, bias="long")
+    assert r["bias"] == "long"
+    assert r["recommended_ms"] is None
+
+
+def test_render_human_bias_echoed_on_recommended_line():
+    res = _result((0, 1), (1.2, 2), (2.2, 3), (5, 6), (9, 10))
+    lines = gv.render_vad_gap_recommend(res, bias="short")
+    rec_line = next(ln for ln in lines if "recommended --min-silence-ms" in ln)
+    assert "[bias: short]" in rec_line
+    assert "650 (0.650s)" in rec_line
+
+
+def test_render_json_carries_bias():
+    res = _result((0, 1), (1.2, 2), (2.2, 3), (5, 6), (9, 10))
+    payload = json.loads(gv.render_vad_gap_recommend_json(res, bias="long"))
+    assert payload["bias"] == "long"
+    assert payload["recommended_s"] == 1.55
+
+
+def test_render_csv_carries_bias():
+    res = _result((0, 1), (1.2, 2), (2.2, 3), (5, 6), (9, 10))
+    text = gv.render_vad_gap_recommend_csv(res, bias="long")
+    row = list(csv.reader(io.StringIO(text)))[1]
+    assert row[0] == "long"
+    assert row[1] == "1550"
+
+
+def test_render_unavailable_accepts_bias():
+    # The unavailable path still takes the bias kwarg without crashing.
+    assert gv.render_vad_gap_recommend(None, bias="short")[0].startswith(
+        "silero VAD unavailable"
+    )
+    assert (
+        json.loads(gv.render_vad_gap_recommend_json(None, bias="short"))["available"]
+        is False
+    )
+    assert gv.render_vad_gap_recommend_csv(None, bias="short").startswith(
+        "# silero VAD unavailable"
+    )
+
+
+def test_handler_passes_bias_through():
+    res = _result((0, 1), (1.2, 2), (2.2, 3), (5, 6), (9, 10))
+    lines = _run(
+        _args(bias="long", json=True),
+        segmenter=lambda w, *, params: res,
+        availability=lambda: True,
+    )
+    payload = json.loads("\n".join(lines))
+    assert payload["bias"] == "long"
+    assert payload["recommended_s"] == 1.55
+
+
+def test_handler_bias_defaults_balanced_when_absent():
+    # A namespace without a bias attr (older callers) falls back to balanced.
+    res = _result((0, 1), (1.2, 2), (2.2, 3), (5, 6), (9, 10))
+    args = _args(json=True)
+    del args.bias
+    lines = _run(
+        args, segmenter=lambda w, *, params: res, availability=lambda: True
+    )
+    payload = json.loads("\n".join(lines))
+    assert payload["bias"] == "balanced"
