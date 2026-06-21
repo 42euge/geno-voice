@@ -33717,3 +33717,113 @@ re-verified on main post-merge (`test_gv_vad_gap_peak_sweep.py` + `test_gv_cli.p
    ~30 leftover per-iter worktrees (iter-001..028, 232, 317). A future lap could
    `git worktree prune` / remove the merged ones. NOTE: this lap correctly removed
    its own worktree.
+
+## iter-371 — gv vad-gap-peak-grid carries a per-cell rate floor
+
+- **Date:** 2026-06-21
+- **Branch:** iter-371-peak-grid-floor (ff-merged to main, worktree removed)
+- **Commit:** f6e32a1
+
+**Why.** The standing next-item #1 from iter-370 asked to apply the iter-355/357
+rate floor (the last single-shot `gv vad-gap-peak` knob lifted onto the sweep in
+iter-370) to the 2-D `vad-gap-peak-grid` (iter-365), "completing the floor view
+across the single-shot / sweep / grid trio (mirrors the iter-366→367 /
+iter-368→369 sweep→grid cadence) … then the peak-surface knob-lift project is
+fully done." This lap does the 2-D GRID, following the established
+sweep-this-lap / grid-next cadence (iter-364→365, iter-366→367, iter-368→369,
+iter-370→371). With the distribution view (iter-358/366/367) AND the top-N view
+(iter-354/368/369) already complete across single-shot / sweep / grid, and the
+floor now on single-shot (iter-355/357) + sweep (iter-370) + grid (this lap), the
+peak-surface knob-lift project is COMPLETE: every single-shot knob
+(distribution, top-N, absolute floor, adaptive-percentile floor) is now lifted
+onto both the 1-D sweep and the 2-D grid. A genuinely new behaviour on the
+existing surface, not an 18th chat-metrics clone (family complete, iter-328) and
+not a brand-new subcommand.
+
+**What it is.** Where `band_rate_dist` (iter-367) and `top_n` (iter-369) are
+PURELY ADDITIVE (they never change `peak_found` or the scalar columns), the floor
+FILTERS: it drops cost bands cheaper than the threshold before ranking, so the
+steepest SURVIVING band — and whether any survives at all — can shift with the
+floor. It therefore reflects through the EXISTING scalar `peak_*` columns and the
+`--top-n` ranking on ALL three faces. The genuinely-new per-cell datum is
+`effective_min_rate`: the absolute rate the floor resolves to at each cell. For
+the ABSOLUTE `--min-rate` floor that cut is the same everywhere; for the ADAPTIVE
+`--min-rate-pct` floor it is the Pth percentile of THAT cell's own observed band
+rates, so it RESHAPES cell to cell as the two segmenter knobs reshape the cost
+distribution — invisible to a fixed absolute floor. Each cell agrees EXACTLY with
+`gv vad-gap-peak --min-rate` / `--min-rate-pct` at the matching cell.
+
+**What landed in `examples/gv.py` (+295 incl. parser/handler; +318 test lines).**
+- `vad_gap_peak_grid` gains `min_rate=0.0` / `min_rate_pct=None` kwargs threaded
+  straight into `vad_gap_peak` (so the floor agrees exactly with the single-shot),
+  and each cell now carries `effective_min_rate`. The two knobs are mutually
+  exclusive (delegated to the core, which raises). `band_rate_dist` is UNCHANGED —
+  always the FULL pre-floor distribution (the sample `--min-rate-pct` reads
+  against), the same stance the single-shot + sweep surfaces take. A cell the
+  floor eliminates spells the no-peak verdict exactly as an all-valley cell does
+  (`peak_found` False, scalar fields None, empty `peaks`).
+- `render_vad_gap_peak_grid` gains `min_rate` / `min_rate_pct`: a header line
+  names the active floor; for the adaptive `--min-rate-pct` floor each cell also
+  prints a "(floor: p<P> = <rate>/100ms)" note showing the per-cell cut (the fixed
+  absolute floor needs no per-cell note — the cut is the same everywhere). The
+  floor note and the `top_n` ranking block are independent (floor note first).
+  The default (no floor) leaves the table byte-for-byte unchanged.
+- `render_vad_gap_peak_grid_json` echoes `min_rate` / `min_rate_pct` once at top
+  level and carries `effective_min_rate` per cell — a strict superset of the
+  iter-369 shape (`effective_min_rate` then 0.0 on every cell).
+- `render_vad_gap_peak_grid_csv` — because the resolved cut is a SCALAR (not a
+  nested ranking / distribution) — appends a trailing `effective_min_rate` column
+  when a floor is active. This is the FIRST peak-grid knob to touch the CSV face
+  (`top_n` / `band_rate_dist` were nested so the CSV stayed frozen at iter-369),
+  exactly the iter-370 sweep-CSV stance: the floor genuinely filters the scalar
+  columns, so the CSV MUST thread it to stay consistent with the other faces. The
+  default no-floor CSV is byte-for-byte the iter-365 ten-column schema.
+- `cmd_vad_gap_peak_grid` reads `--min-rate` / `--min-rate-pct` (a
+  mutually-exclusive argparse group mirroring the sweep) and threads them to all
+  three renderers (including the unavailable branch).
+
+**Tests.** `tests/unit/test_gv_vad_gap_peak_grid.py` (+28 net, 76 → 104): core
+`effective_min_rate` default / absolute floor filters / absolute floor can
+eliminate the peak / pct floor resolves the per-cell cut / matches single-shot /
+`band_rate_dist` stays full pre-floor / pct cut reshapes across cells /
+mutually-exclusive floors raise; human default omits header / absolute header
+without per-cell note / pct header + per-cell note / unavailable hint / floor
+note + top_n both appear (floor first); json echoes floor + per-cell cut /
+default shape / absolute echo; csv default schema unchanged / floor appends
+column / column present on a no-peak cell; parser floor defaults / `--min-rate` /
+`--min-rate-pct` parsed / mutually exclusive / out-of-range rejected; handler pct
+human / default no header / floor → json / floor → csv. Reused the existing
+`_multi_band` fixture (rates 0.5/0.25/0.125 → p75 = 0.375) and `_three` (single
+0.125 band) for the cross-cell reshape case.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5201 passed**
+(5173 prior + 28 net new), run in the feature worktree before ff-merge AND
+re-verified on main post-merge (`test_gv_vad_gap_peak_grid.py` + `test_gv_cli.py`
+→ 197 passed).
+- Integration: not run this lap (pure string-formatting/arithmetic over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..370 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] vad-gap-recommend-sweep companions** — let the sweep accept a swept
+   SEGMENTER knob (e.g. how short/balanced/long + the confidence grade shift as
+   `--min-speech-ms` varies), the way `vad-gap-sweep` tracks a swept
+   `--min-silence-ms`. With the peak-surface knob-lift project now CLOSED
+   (distribution iter-358/366/367, top-N iter-354/368/369, AND the floor
+   iter-355/357/370/371 all complete across single-shot / sweep / grid), this is
+   the next natural gv-CLI expansion.
+2. **[gv CLI] vad-gap-peak-grid CSV nested-knob views** — `top_n` /
+   `band_rate_dist` remain CSV-frozen on the grid (nested data has no flat-column
+   home). A future lap could emit a SEPARATE long-format CSV (one row per
+   (cell, rank) or (cell, percentile)) so the nested views reach a spreadsheet
+   without disturbing the verdict-row schema. Lower priority — the JSON face
+   already carries them.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~30 leftover per-iter worktrees. A future lap could `git worktree prune` /
+   remove the merged ones. NOTE: this lap correctly removed its own worktree.
