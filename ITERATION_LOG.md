@@ -32423,3 +32423,82 @@ re-run on main post-merge (4895 passed, ~52s).
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    ~31 leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-356 — gv vad-gap-peak — explicit `rank` in the JSON/CSV machine faces
+
+- **Date:** 2026-06-21
+- **Branch:** iter-356-peak-rank (ff-merged to main, worktree removed)
+- **Commit:** 8225e7c
+
+**Why.** The standing next-item #1 from iter-355: "a JSON/CSV `rank` column making
+the ordering explicit in the machine faces (the human face already numbers `#k`)."
+A genuine new behaviour on the existing iter-350/354/355 verdict surface — not an
+18th chat-metrics clone (the family is declared complete, iter-328) and not
+another `*-sweep` clone. It closes the asymmetry iter-354's `--top-n` introduced:
+the human face prints numbered `#1:`/`#2:` lines, but the machine faces left the
+descending-rate order IMPLICIT in array index / CSV row position. A consumer that
+re-sorts, filters, or interleaves the rows would then lose the ranking. Naming it
+in the data fixes that.
+
+**What it is.** Each `peaks` entry gains a 1-based `rank` (rank 1 == steepest
+band), and the CSV gains a leading `rank` column. `rank` always equals the
+entry's position in the list + 1, so it is purely a convenience for machine
+consumers — the human face is byte-for-byte unchanged (it already numbers `#k`
+and never prints a "rank" token). The single-peak default (`top_n=1`) carries
+rank 1; the no-peak / all-valley / all-filtered CSV row leaves rank blank (no
+peak to rank). `rank` names position in the FINAL filtered+truncated ranking,
+not the original band index — so after a `--min-rate` floor drops the cheaper
+band, the surviving band is rank 1.
+
+**What landed in `examples/gv.py` (+56 / −18 → +38 net lines, incl. tests in the
+diff stat).**
+- `vad_gap_peak` — each `peaks` entry now carries `"rank"` via
+  `enumerate(ranked[:top_n], start=1)`. The scalar `peak_*` fields still echo
+  `peaks[0]` verbatim, so `top_n=1` callers are unchanged apart from the new key.
+- `render_vad_gap_peak_json` — `peaks` objects now include `rank` (flows through
+  from the core; no renderer change beyond the docstring).
+- `render_vad_gap_peak_csv` — header + rows gain a leading `rank` column:
+  `rank,peak_found,peak_from_ms,peak_to_ms,peak_width_ms,peak_merged_added,
+  peak_rate_per_100ms` (7 cols). One row per ranked peak with its rank; the
+  no-peak `peak_found=False` row leaves rank blank. The single-peak and
+  multi-peak CSVs still share an identical schema (the clean column union prior
+  laps protected is preserved — now 7 cols).
+- `--csv` help text updated to name the new column / per-peak rows.
+- `render_vad_gap_peak` (human) — UNCHANGED on purpose: it already numbers `#k`,
+  so the rank is redundant there. A test asserts no literal "rank" token leaks
+  into the human lines (machine-faces only).
+
+**Tests.** `tests/unit/test_gv_vad_gap_peak.py` (+8 net, 100 → 108): core peaks
+carry 1-based rank / single-peak rank 1 / rank survives `min_rate` filter (names
+the filtered position, not the original band index) / no-peak has no rank; json
+peaks carry rank / single rank 1; human face prints no "rank" token; csv rank
+column equals json rank. Updated every prior CSV golden/shape assertion to the
+new 7-column header and rank-prefixed rows (single golden, multi one-row-per-peak,
+all-valley blank, min-rate filtered+blank, matches-json index shift, handler csv
+header, no-gaps/single-cut header-only).
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4903 passed**
+(4895 prior + 8 net new), run in the feature worktree before ff-merge AND re-run
+on main post-merge (4903 passed, ~40s).
+- Integration: not run this lap (pure string-formatting/arithmetic over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..355 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] vad-gap-peak companions** — a `--min-rate` expressed as a
+   PERCENTILE of the observed band rates instead of an absolute number (so the
+   floor adapts to the recording's cost scale), or a `vad-gap-peak`-sweep tracking
+   how the costliest band(s) shift vs a swept segmenter knob.
+2. **[gv CLI] vad-gap-recommend-sweep companions** — let the sweep accept a swept
+   SEGMENTER knob (e.g. how short/balanced/long + the confidence grade shift as
+   `--min-speech-ms` varies), the way `vad-gap-sweep` tracks a swept
+   `--min-silence-ms`.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~31 leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
