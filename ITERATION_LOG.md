@@ -31732,3 +31732,101 @@ main post-merge (4633 passed, ~34s).
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    ~30 leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-348 — gv vad-gap-confidence recommendation-confidence grade surface
+
+- **Date:** 2026-06-21
+- **Branch:** iter-348-gap-confidence (ff-merged to main, worktree removed)
+- **Commit:** 3794ee3
+
+**Why.** iter-347 built `gv vad-gap-recommend` (names a recommended
+`--min-silence-ms` from the valley between short/long pauses) and its standing
+next-item #2 was: "a confidence note when the valley is shallow (clusters poorly
+separated → the recommendation is weak)." The verdict always names a number, but
+the number is only as good as the valley it sits in — a clean bimodal
+distribution gives a confident recommendation, a smear of similar pauses gives a
+guess. This lap builds the CONFIDENCE surface that grades the verdict's
+trustworthiness, the natural companion of iter-347 rather than a clone of an
+existing surface.
+
+**What it is.** `gv vad-gap-confidence recording.wav` reads the same gap
+distribution as `vad-gap-recommend` (it ANCHORS to `vad_gap_recommend`, so the
+recommendation and valley fields agree EXACTLY) and grades how dominant the
+recommendation's valley (the widest jump in the sorted gaps) is, by two derived
+measures:
+
+- **dominance** — the valley width as a FRACTION of the total gap spread
+  (`max_gap - min_gap`, i.e. the sum of every consecutive jump). A clean
+  two-cluster distribution puts most of its spread into that one empty band
+  (dominance → 1); a uniform smear spreads the range across many small jumps
+  (dominance → 0). Drives the grade: `>= 0.5` → `"strong"`, `>= 0.25` →
+  `"moderate"`, else `"weak"` (thresholds `GAP_CONFIDENCE_STRONG_DOMINANCE` /
+  `_MODERATE_DOMINANCE`).
+- **separation_ratio** — the widest jump over the SECOND-widest jump. A big
+  ratio means the valley clearly tops the next band (unambiguous); near 1 means
+  a rival valley is almost as wide. `None` when there is a single jump or the
+  runner-up is zero-width (a perfectly clean split — infinitely dominant).
+
+Edge cases mirror the family: a <2-segment result has no gaps so `grade` is
+`None` (nothing to grade); a single pause / all-equal pauses has no valley
+(`split_found` `False`) so `grade` is the explicit `"none"` and the measures are
+`None` (the recommendation is the conservative `min_gap/2` fallback, not a
+confident split). Earliest-tie behaviour inherited from `vad_gap_recommend`.
+
+**What landed in `examples/gv.py` (+409 lines).**
+- `GAP_CONFIDENCE_STRONG_DOMINANCE` (0.5) / `_MODERATE_DOMINANCE` (0.25)
+  module-level thresholds with a comment explaining the spread-fraction logic.
+- `vad_gap_confidence(result)` — the pure core. Anchors to `vad_gap_recommend`
+  and adds `spread_s` / `runner_up_width_s` / `dominance` / `separation_ratio` /
+  `grade`. Re-derives the sorted jumps so the widest jump is exactly the valley
+  the recommendation sits in.
+- `_gap_confidence_summary(grade)` — per-grade one-line operator suggestion
+  (strong/moderate/weak/none) with a defensive unknown-value fallback (the
+  diversity-check per-value-mapping convention).
+- `render_vad_gap_confidence` / `_json` / `_csv` — the human / `--json` / `--csv`
+  trio. Human verdict names the recommendation it grades, the grade with its
+  dominance/separation measures (or a no-valley note), and the suggestion. CSV is
+  a one-row `recommended_ms,grade,dominance,separation_ratio,valley_width_s,
+  spread_s` summary (blanks for the no-valley measures). All degrade to the
+  shared install hint / `{"available": false}` / `# unavailable` comment.
+- `cmd_vad_gap_confidence` handler — same injected segmenter/availability/log
+  contract as the rest of the family (torch-free parser, lazy `SileroParams`
+  import). Wired into `DEFAULT_HANDLERS` and a new `vad-gap-confidence` subparser
+  sharing all `gv vad` segmenter knobs, plus a usage-docstring example line.
+
+**Tests.** `tests/unit/test_gv_vad_gap_confidence.py` (+48 tests): parser
+registration + knob defaults + custom-knob + json/csv mutual exclusion +
+threshold range; the pure core (strong/moderate/weak grades, the strong boundary
+at dominance 0.5, `dominance == widest/spread`, agreement with `vad_gap_recommend`,
+single-gap and all-equal no-valley paths, two-gap single-jump `separation=None`,
+<2-segment and zero-segment empties, unsorted-segment robustness, rounding,
+dominance in (0,1]); the summary helper (per-grade + defensive unknown); all
+three renderers (shape, no-gaps, no-valley, unavailable, byte-for-byte human
+goldens for strong/none/single-segment blocks, the `n/a` separation branch, json
+shape/no-valley/no-gaps/core-agreement, csv shape/blanks/header-only); and the
+handler (human/json/csv, unavailable x3, knob pass-through). Updated the
+`test_gv_cli` handler-map golden to include the new `vad-gap-confidence` entry.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4681 passed**
+(4633 prior + 48 new), run in the feature worktree before ff-merge AND re-run on
+main post-merge (4681 passed, ~51s).
+- Integration: not run this lap (pure string-formatting/arithmetic over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..347 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] vad-gap-confidence/recommend companions** — a `--strict`/`--lenient`
+   knob biasing the recommendation toward the short or long side of the valley,
+   or a `vad-gap-recommend`-sweep/grid (how the recommended hangover moves vs a
+   swept segmenter knob — the inverse of how vad-gap-sweep/grid track min_gap).
+2. **[gv CLI] More new analysis surfaces** — e.g. a "merge cost curve" naming the
+   marginal pauses merged per +100 ms of hangover (the derivative of the CDF).
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~30 leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
