@@ -30626,3 +30626,100 @@ tests or production code). Run in the feature worktree before ff-merge.
 4. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-334 — gv vad-gap-diff, the gap-side analogue of gv vad-diff
+
+- **Date:** 2026-06-20
+- **Branch:** iter-334-vad-gap-diff (ff-merged to main, worktree removed)
+- **Commit:** eb50fb0
+
+**Why.** iter-333's next-item #1: "a `gv vad-gap-diff` — the gap-side analogue
+of `gv vad-diff` (iter-234), quantifying how the inter-segment gap distribution
+shifts between two (threshold) settings (min/mean/max gap deltas + which short
+pauses a longer hangover merges away)." This completes the silence-gap family's
+coverage of the comparison axis: iter-328 shipped the single-point `gv vad-gaps`
+distribution, iter-330/332 its 1-D sweep + 2-D grid; this lap adds the two-point
+diff — the gap-side mirror of how `vad-diff` mirrors `vad`.
+
+**What it is.** `gv vad-gap-diff recording.wav --threshold-a X --threshold-b Y`
+segments one WAV twice (once per gate, all other knobs shared) and reports how
+the inter-segment SILENCE-gap distribution shifts — the signed min/mean/max gap
+and total-silence delta. The headline is the min-gap row: the shortest real
+pause is the floor above which raising the end-of-turn hangover
+(`--min-silence-ms` / the live `chat.vad.silence_duration`) starts merging two
+genuine turns into one, so the min-gap transition tells an operator whether a
+stricter gate buys merge headroom.
+
+Surface (`examples/gv.py`), mirroring the iter-235/313 `vad-diff` trio:
+- **`vad_gap_delta(result_a, result_b)`** — pure core, the gap-side twin of
+  `vad_segmentation_delta`. Runs `vad_silence_gaps` over each side and returns
+  both sides + signed deltas. A side with <2 segments has `None` gap
+  aggregates, so an aggregate delta is `None` whenever EITHER side is `None` (a
+  missing pause cannot be differenced); the always-present counts
+  (`num_segments`/`num_gaps`) and `total_silence_s` (a float, `0.0` when no
+  gaps) always difference. Deltas round to 3 places. No I/O, no torch import.
+- **`render_vad_gap_diff` / `_json` / `_csv`** — the human / `--json` / `--csv`
+  trio. Human prints `A → B (Δ)` per aggregate, `-`/`n/a` for a missing pause,
+  and names the `--min-silence-ms` knob on the min-gap line. JSON
+  null-distinguishes a missing pause. CSV emits the SAME flat
+  `threshold,num_segments,num_gaps,min_gap_s,mean_gap_s,max_gap_s,
+  total_silence_s` schema as a two-value `vad-gap-sweep --csv` — byte-identical
+  over the same pair (the contract iter-313 holds between `vad-diff` and
+  `vad-sweep`).
+- **`_signed_float3`** — the 3-decimal signed-delta formatter (the
+  gap-precision analogue of `_signed_float`), since the gap surfaces round to 3
+  places.
+- **`cmd_vad_gap_diff`** — same injected segmenter/availability/log contract as
+  `cmd_vad_diff`; lazy torch import, install-hint degrade path.
+- **Parser:** `vad-gap-diff` subcommand with `--threshold-a`/`-b` + the four
+  shared scalar knobs + the `--json`/`--csv` mutex (cloned from `vad-diff`).
+  Registered in `DEFAULT_HANDLERS`; added to the usage docstring.
+
+Tests:
+- **`tests/unit/test_gv_vad_gap_diff.py`** (new, +29): parser
+  registration/defaults (mirror `vad-diff`)/json-csv mutex/range rejection;
+  pure-core both-sides + signed deltas, per-side anchoring to
+  `vad_silence_gaps`, missing-pause → `None` delta (one side + both sides),
+  3-place rounding; all three renderers (shape/deltas, missing-pause dash+n/a,
+  negative sign, unavailable, json null delta, csv two-row + empty cells +
+  byte-identical-to-gap-sweep); the handler across human/json/csv, held-scalar
+  fixity, A-then-B segmentation order, result-name-not-raw-path, and the three
+  unavailable paths.
+- **`tests/unit/test_gv_cli.py`**: the exact-handler-map assertion gains the
+  `vad-gap-diff` entry.
+- **`tests/unit/test_voice_capture_tuning_doc.py`**: `VAD_SUBCOMMANDS` gains
+  `vad-gap-diff`, so its doc sentinels (names-all / appears-in-examples /
+  routes-to-known / all-parse) now COVER the new surface;
+  `docs/research/voice-capture-tuning.md` gains a `gv vad-gap-diff` section with
+  four runnable examples.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4441 passed**
+(4412 prior + 29 net new), run in the feature worktree before ff-merge AND
+re-run on main post-merge (4441 passed, ~45s).
+- Integration: not re-run this lap (pure delta + string formatting; no torch
+  import, no audio I/O — the handler is exercised with an injected stub
+  segmenter, mirroring the iter-330/332 vad-gap-sweep/-grid unit laps).
+
+**Next planned items:**
+1. **[gv CLI] An integration test for `gv vad-gap-diff` over the real corpus.**
+   This lap shipped the surface with full UNIT coverage but drives only an
+   injected stub segmenter. The analogue of the iter-204+ `vad-diff` integration
+   coverage: run `gv vad-gap-diff` with the real Silero engine over the
+   `fixtures/` recordings and pin the anchoring property — each side's gap
+   aggregates equal an independent `gv vad-gaps --json` at that threshold, and
+   the diff equals the difference of two standalone gap reports; plus the
+   monotonic min-gap-rises-as-gate-tightens trend.
+2. **[gv CLI] The silence-gap family is now complete across all four axes:**
+   point (`vad-gaps`, iter-328), sweep (`vad-gap-sweep`, iter-330), grid
+   (`vad-gap-grid`, iter-332), and diff (`vad-gap-diff`, this lap). A natural
+   lower-effort next: a human-table golden-output assertion for one of these
+   (the tests assert structure + substrings, not the full rendered table).
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
