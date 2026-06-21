@@ -397,6 +397,7 @@ def test_dispatch_default_handlers_are_the_real_cmds():
         "vad": gv.cmd_vad,
         "vad-gaps": gv.cmd_vad_gaps,
         "vad-gap-percentiles": gv.cmd_vad_gap_percentiles,
+        "vad-gap-cdf": gv.cmd_vad_gap_cdf,
         "vad-gap-hist": gv.cmd_vad_gap_histogram,
         "vad-gap-sweep": gv.cmd_vad_gap_sweep,
         "vad-diff": gv.cmd_vad_diff,

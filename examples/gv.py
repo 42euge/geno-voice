@@ -13,6 +13,7 @@ Usage:
     gv vad-gaps recording.wav  # report the silence gaps BETWEEN speech regions (tune --min-silence-ms)
     gv vad-gaps recording.wav --json # machine-readable gap stats + per-gap list
     gv vad-gap-percentiles recording.wav --percentiles 50,90,99  # robust pause percentiles (outlier-proof vs min/mean/max)
+    gv vad-gap-cdf recording.wav --cuts-ms 200,400,800,1600  # merge-CDF — what fraction of pauses each --min-silence-ms cut would merge
     gv vad-gap-hist recording.wav --bin-width-s 0.5  # histogram the silence-gap durations (see the distribution shape)
     gv vad-gap-sweep recording.wav --thresholds 0.3,0.5,0.7,0.9  # sweep N gates, tabulate how the min gap moves
     gv vad-gap-grid recording.wav --thresholds 0.3,0.5,0.7 --min-silences 400,800  # gate × hangover gap grid
@@ -242,6 +243,33 @@ def nonneg_float_list_type(raw):
     if not tokens:
         raise argparse.ArgumentTypeError(
             f"a millisecond list must be non-empty and comma-separated, got {raw!r}"
+        )
+    return [nonneg_float_type(tok) for tok in tokens]
+
+
+def cut_ms_list_type(raw):
+    """Argparse ``type`` for ``gv vad-gap-cdf --cuts-ms``: a millisecond list.
+
+    iter-346's ``gv vad-gap-cdf`` evaluates the empirical CDF of the silence gaps
+    at candidate end-of-turn hangover cuts — for each cut it reports the fraction
+    of pauses that hangover would MERGE (pauses shorter than the cut). This parses
+    a comma-separated list (e.g. ``"200,400,800,1600"``) into
+    ``[200.0, 400.0, 800.0, 1600.0]`` at the parser. Each token must be a valid
+    :func:`nonneg_float_type` value (a number ``>= 0``, not NaN — ``0`` is
+    legitimate: a zero hangover merges nothing); duplicates and unsorted input are
+    preserved as given (the operator may want a specific column order). Rejects an
+    empty list. A thin millisecond-semantics alias of
+    :func:`nonneg_float_list_type` kept distinct so the ``--cuts-ms`` error text
+    reads in cut terms. Pure and side-effect-free for direct unit testing.
+    """
+    if not isinstance(raw, str):
+        raise argparse.ArgumentTypeError(
+            f"cuts must be a string, got {raw!r}"
+        )
+    tokens = [t.strip() for t in raw.split(",") if t.strip()]
+    if not tokens:
+        raise argparse.ArgumentTypeError(
+            f"cuts must be a non-empty comma-separated list, got {raw!r}"
         )
     return [nonneg_float_type(tok) for tok in tokens]
 
@@ -2003,6 +2031,221 @@ def render_vad_gap_percentiles_csv(result, *, percentiles=DEFAULT_GAP_PERCENTILE
     writer.writerow(["percentile", "value_s"])
     for entry in s["percentiles"]:
         writer.writerow([_format_percentile_label(entry["p"]), entry["value_s"]])
+    return buf.getvalue().rstrip("\r\n")
+
+
+# Default candidate hangover cuts (in milliseconds) for the gap merge-CDF
+# surface: 200 / 400 / 800 / 1600 ms. They bracket the live default
+# `--min-silence-ms` (800 ms, pipecat stop_secs=0.8) one octave either side, so
+# the table shows how the merge fraction climbs as the hangover lengthens around
+# the operating point. Mirrors the `gv vad-sweep --min-silences 200,400,800,1600`
+# example axis.
+DEFAULT_GAP_CDF_CUTS_MS = (200.0, 400.0, 800.0, 1600.0)
+
+
+def vad_gap_cdf(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS):
+    """Evaluate the empirical CDF of the silence gaps at candidate hangover cuts (iter-346).
+
+    The order-statistic INVERSE of :func:`vad_gap_percentiles`. Percentiles
+    answer "what pause length sits at the p90?" (fraction → value); this answers
+    the operationally-direct opposite — "if I set the end-of-turn hangover
+    (``--min-silence-ms`` / the live ``chat.vad.silence_duration``) to candidate
+    cut ``c``, what FRACTION of the inter-segment pauses are shorter than ``c``
+    and would therefore be MERGED (swallowed as within-turn silence rather than
+    ending a turn)?" (value → fraction). That is the empirical CDF of the gap
+    distribution sampled at the operator's candidate cuts, turning the percentile
+    table into a direct "this hangover merges X% of your pauses" answer.
+
+    The merge rule follows the segmenter's own convention: a region ends once the
+    trailing silence REACHES the hangover, so a pause ``>= c`` ends the turn
+    (kept as a boundary) while a pause STRICTLY ``< c`` is too short to trigger an
+    end and merges the two regions into one. ``merged`` counts gaps ``< cut_s``;
+    ``merge_fraction`` is ``merged / num_gaps``. Keeping the hangover below the
+    min gap merges nothing (``merge_fraction == 0``); raising it past the max gap
+    merges everything (``merge_fraction == 1``).
+
+    Pure: anchors to :func:`vad_silence_gaps` for the gap list + aggregates (so
+    the totals always agree with ``gv vad-gaps``) and adds a ``cuts`` list of
+    ``{cut_ms, cut_s, merged, kept, merge_fraction, keep_fraction}`` objects, one
+    per requested cut in the order given. ``cut_s`` is ``cut_ms / 1000`` rounded
+    to 3 places; the fractions round to 3 places, matching the sibling gap
+    surfaces. Cuts are NOT sorted or de-duplicated (the operator may want a
+    specific column order). A result with fewer than 2 segments has no gaps, so
+    ``cuts`` is empty (no distribution to sample) and the aggregates are ``None``
+    — the same distinction the other gap surfaces make. Raises :class:`ValueError`
+    if ``cuts_ms`` is empty or any entry is negative / NaN.
+    """
+    cuts = list(cuts_ms)
+    if not cuts:
+        raise ValueError("cuts_ms must be a non-empty sequence")
+    for c in cuts:
+        if c != c:  # NaN is unordered.
+            raise ValueError("cut must be a number, got nan")
+        if c < 0:
+            raise ValueError(f"cut must be >= 0, got {c}")
+    d = vad_silence_gaps(result)
+    gaps = d["gaps"]
+    n_gaps = d["num_gaps"]
+    out = []
+    if gaps:
+        for c in cuts:
+            cut_s = c / 1000.0
+            # A pause shorter than the hangover is too short to end a turn, so it
+            # merges; a pause that reaches the hangover ends the turn (kept).
+            merged = sum(1 for g in gaps if g < cut_s)
+            kept = n_gaps - merged
+            out.append(
+                {
+                    "cut_ms": c,
+                    "cut_s": round(cut_s, 3),
+                    "merged": merged,
+                    "kept": kept,
+                    "merge_fraction": round(merged / n_gaps, 3),
+                    "keep_fraction": round(kept / n_gaps, 3),
+                }
+            )
+    return {
+        "num_segments": d["num_segments"],
+        "num_gaps": n_gaps,
+        "min_gap_s": d["min_gap_s"],
+        "max_gap_s": d["max_gap_s"],
+        "mean_gap_s": d["mean_gap_s"],
+        "total_silence_s": d["total_silence_s"],
+        "cuts": out,
+    }
+
+
+def _format_cut_label(cut_ms):
+    """Render a candidate-cut millisecond value compactly: ``800`` not ``800.0``.
+
+    The default cuts (200/400/800/1600) and most operator inputs are whole
+    millisecond counts, so an ``800`` label reads better than ``800.0``; a
+    fractional cut (``750.5``) keeps its decimals. Pure helper shared by the
+    human and CSV renderers so the two agree on the label spelling — the cut twin
+    of :func:`_format_percentile_label`.
+    """
+    return f"{cut_ms:g}"
+
+
+def render_vad_gap_cdf(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS):
+    """Render the silence-gap merge-CDF as plain-text report lines (iter-346).
+
+    The human-readable face of :func:`vad_gap_cdf`, the inverse-CDF twin of
+    :func:`render_vad_gap_percentiles`. ``result`` of ``None`` (segmenter
+    unavailable) yields the shared install hint. A result with fewer than 2
+    segments has no gaps, so it prints the same short explanatory line
+    :func:`render_vad_gaps` uses (no distribution to sample). Otherwise it prints
+    the aggregate header (min/mean/max, total silence — naming the actionable
+    ``--min-silence-ms`` knob on the min-gap line) then a small table: one row per
+    candidate cut giving the cut in ms and seconds, the ``merged/num_gaps`` count,
+    and the merge percentage. The merge fraction is the fraction of pauses shorter
+    than the cut (which that hangover would swallow as within-turn silence). Pure:
+    returns a list of strings (no I/O, no ANSI).
+    """
+    if result is None:
+        return [
+            "silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        ]
+    c = vad_gap_cdf(result, cuts_ms=cuts_ms)
+    lines = [
+        f"silero VAD gap merge-CDF — {result.name}",
+        f"  segments:     {c['num_segments']}",
+        f"  gaps:         {c['num_gaps']} (pauses between consecutive speech regions)",
+    ]
+    if c["num_gaps"] == 0:
+        lines.append("  (fewer than 2 segments — no inter-segment pause to measure)")
+        return lines
+    lines.append(
+        f"  min gap:      {c['min_gap_s']:.3f}s "
+        "(shortest real pause — keep --min-silence-ms below this to avoid "
+        "merging turns)"
+    )
+    lines.append(f"  mean gap:     {c['mean_gap_s']:.3f}s")
+    lines.append(f"  max gap:      {c['max_gap_s']:.3f}s")
+    lines.append(f"  total silence:{c['total_silence_s']:8.3f}s")
+    lines.append("  cut (ms)  cut (s)    merged   merge%")
+    for entry in c["cuts"]:
+        label = _format_cut_label(entry["cut_ms"])
+        merged_col = f"{entry['merged']}/{c['num_gaps']}"
+        pct = entry["merge_fraction"] * 100.0
+        lines.append(
+            f"  {label:>8}  {entry['cut_s']:7.3f}  {merged_col:>8}  {pct:>6.1f}%"
+        )
+    return lines
+
+
+def render_vad_gap_cdf_json(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS):
+    """Render the silence-gap merge-CDF as a JSON string (iter-346).
+
+    Machine-readable twin of :func:`render_vad_gap_cdf`, mirroring the
+    degrade-to-``{"available": false}`` contract the other VAD JSON renderers
+    use. Carries the aggregate stats plus a ``cuts`` list of
+    ``{cut_ms, cut_s, merged, kept, merge_fraction, keep_fraction}`` objects
+    (empty for a <2-segment result, the same JSON spelling of "no distribution"
+    the other gap surfaces use). Pure: built from :func:`vad_gap_cdf`, so it works
+    on any ``SileroResult``-shaped object.
+    """
+    if result is None:
+        return json.dumps(
+            {
+                "available": False,
+                "hint": (
+                    "install 'silero-vad' (pulls torch + torchaudio) to enable "
+                    "offline neural segmentation"
+                ),
+            },
+            indent=2,
+        )
+    c = vad_gap_cdf(result, cuts_ms=cuts_ms)
+    payload = {
+        "available": True,
+        "name": result.name,
+        "num_segments": c["num_segments"],
+        "num_gaps": c["num_gaps"],
+        "min_gap_s": c["min_gap_s"],
+        "max_gap_s": c["max_gap_s"],
+        "mean_gap_s": c["mean_gap_s"],
+        "total_silence_s": c["total_silence_s"],
+        "cuts": c["cuts"],
+    }
+    return json.dumps(payload, indent=2)
+
+
+def render_vad_gap_cdf_csv(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS):
+    """Render the silence-gap merge-CDF as a per-cut CSV table (iter-346).
+
+    The spreadsheet/plot-friendly twin of :func:`render_vad_gap_cdf` /
+    :func:`render_vad_gap_cdf_json`, completing the human / ``--json`` / ``--csv``
+    trio every VAD-analysis surface carries. The natural CSV unit is one row per
+    candidate cut: ``cut_ms,cut_s,merged,merge_fraction`` — the shape a plotter
+    wants (the empirical CDF curve, merge-fraction vs cut) and a spreadsheet wants
+    (one cut per line). The aggregate stats and the derivable ``kept`` /
+    ``keep_fraction`` columns are NOT duplicated into the table, matching
+    :func:`render_vad_gap_percentiles_csv`'s reasoning. A result with fewer than 2
+    segments yields the header alone (a valid empty-bodied table). ``result`` of
+    ``None`` (segmenter unavailable) yields a single ``# silero VAD unavailable:
+    ...`` comment line. Pure: built with the stdlib :mod:`csv` writer, trailing
+    terminator stripped.
+    """
+    if result is None:
+        return (
+            "# silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        )
+    c = vad_gap_cdf(result, cuts_ms=cuts_ms)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["cut_ms", "cut_s", "merged", "merge_fraction"])
+    for entry in c["cuts"]:
+        writer.writerow(
+            [
+                _format_cut_label(entry["cut_ms"]),
+                entry["cut_s"],
+                entry["merged"],
+                entry["merge_fraction"],
+            ]
+        )
     return buf.getvalue().rstrip("\r\n")
 
 
@@ -3995,6 +4238,66 @@ def cmd_vad_gap_percentiles(args, *, log=print, segmenter=None, availability=Non
             log(line)
 
 
+def cmd_vad_gap_cdf(args, *, log=print, segmenter=None, availability=None):
+    """Segment one WAV offline and report the silence-gap merge-CDF at candidate cuts.
+
+    iter-346's inverse-CDF complement of :func:`cmd_vad_gap_percentiles`. Where
+    ``gv vad-gap-percentiles`` answers "what pause length is the p90?" (fraction →
+    value), ``gv vad-gap-cdf recording.wav`` answers the operationally-direct
+    opposite — "if I set the end-of-turn hangover (``--min-silence-ms`` / the live
+    ``chat.vad.silence_duration``) to candidate cut ``c``, what FRACTION of the
+    pauses would it MERGE?" (value → fraction). For each ``--cuts-ms`` value it
+    reports how many gaps are shorter than that cut (and so would be swallowed as
+    within-turn silence), turning the percentile table into a direct "this
+    hangover merges X% of your pauses" answer.
+
+    Same injected-dependency contract as :func:`cmd_vad_gap_percentiles`:
+    ``segmenter`` / ``availability`` default to the real :mod:`vad.silero`
+    functions, imported lazily so the parser stays torch-free. The segmenter knobs
+    are shared with ``gv vad`` so the gaps are measured against the same
+    segmentation. ``--csv`` is mutually exclusive with ``--json``; when
+    ``silero-vad`` is absent the handler prints the install hint and returns,
+    never crashing.
+    """
+    if segmenter is None or availability is None:
+        from vad.silero import segment_recording, silero_available
+
+        segmenter = segment_recording if segmenter is None else segmenter
+        availability = silero_available if availability is None else availability
+
+    as_json = getattr(args, "json", False)
+    as_csv = getattr(args, "csv", False)
+    cuts_ms = args.cuts_ms
+
+    if not availability():
+        if as_json:
+            log(render_vad_gap_cdf_json(None, cuts_ms=cuts_ms))
+        elif as_csv:
+            log(render_vad_gap_cdf_csv(None, cuts_ms=cuts_ms))
+        else:
+            for line in render_vad_gap_cdf(None, cuts_ms=cuts_ms):
+                log(line)
+        return
+
+    from vad.silero import SileroParams
+
+    params = SileroParams(
+        threshold=args.threshold,
+        min_speech_ms=args.min_speech_ms,
+        min_silence_ms=args.min_silence_ms,
+        speech_pad_ms=args.speech_pad_ms,
+        max_speech_s=args.max_speech_s,
+    )
+    result = segmenter(args.wav, params=params)
+    if as_json:
+        log(render_vad_gap_cdf_json(result, cuts_ms=cuts_ms))
+    elif as_csv:
+        log(render_vad_gap_cdf_csv(result, cuts_ms=cuts_ms))
+    else:
+        for line in render_vad_gap_cdf(result, cuts_ms=cuts_ms):
+            log(line)
+
+
 def cmd_vad_gap_histogram(args, *, log=print, segmenter=None, availability=None):
     """Segment one WAV offline and report the inter-segment silence-gap HISTOGRAM.
 
@@ -4759,6 +5062,7 @@ DEFAULT_HANDLERS = {
     "vad": cmd_vad,
     "vad-gaps": cmd_vad_gaps,
     "vad-gap-percentiles": cmd_vad_gap_percentiles,
+    "vad-gap-cdf": cmd_vad_gap_cdf,
     "vad-gap-hist": cmd_vad_gap_histogram,
     "vad-gap-sweep": cmd_vad_gap_sweep,
     "vad-diff": cmd_vad_diff,
@@ -5250,6 +5554,83 @@ def build_parser():
         action="store_true",
         help="Emit a flat percentile,value_s CSV table (one row per percentile) "
         "for spreadsheets/plots; mutually exclusive with --json",
+    )
+
+    # gv vad-gap-cdf — segment one WAV and evaluate the empirical CDF of the
+    # inter-segment silence gaps at candidate end-of-turn hangover cuts (iter-346).
+    # The INVERSE of vad-gap-percentiles: percentiles answer "what pause length is
+    # the p90?" (fraction → value), the merge-CDF answers "if I set --min-silence-ms
+    # to cut c, what fraction of pauses would it MERGE (pauses shorter than c)?"
+    # (value → fraction) — a direct "this hangover merges X% of your pauses"
+    # answer. Shares all segmenter knobs with `gv vad`.
+    vad_gap_cdf = sub.add_parser(
+        "vad-gap-cdf",
+        help="Offline Silero VAD — segment a WAV and evaluate the empirical CDF "
+        "of the silence gaps at candidate --min-silence-ms cuts (what fraction "
+        "of pauses each hangover would merge)",
+    )
+    vad_gap_cdf.add_argument(
+        "wav",
+        help="Path to a 16-bit PCM WAV file to segment",
+    )
+    vad_gap_cdf.add_argument(
+        "--cuts-ms",
+        type=cut_ms_list_type,
+        default=list(DEFAULT_GAP_CDF_CUTS_MS),
+        dest="cuts_ms",
+        help="Comma-separated candidate hangover cuts in ms to evaluate, e.g. "
+        "'200,400,800,1600' (default: 200,400,800,1600)",
+    )
+    vad_gap_cdf.add_argument(
+        "--threshold",
+        type=unit_interval_type,
+        default=vad_threshold_default,
+        help=f"P(speech) gate in [0, 1] (default: {vad_threshold_default})",
+    )
+    vad_gap_cdf.add_argument(
+        "--min-speech-ms",
+        type=nonneg_float_type,
+        default=vad_min_speech_default,
+        dest="min_speech_ms",
+        help="Drop speech regions shorter than this, in ms "
+        f"(default: {vad_min_speech_default})",
+    )
+    vad_gap_cdf.add_argument(
+        "--min-silence-ms",
+        type=nonneg_float_type,
+        default=vad_min_silence_default,
+        dest="min_silence_ms",
+        help="Trailing silence before a region ends, in ms — matches the "
+        f"pipecat stop_secs=0.8 live default (default: {vad_min_silence_default})",
+    )
+    vad_gap_cdf.add_argument(
+        "--speech-pad-ms",
+        type=nonneg_float_type,
+        default=vad_speech_pad_default,
+        dest="speech_pad_ms",
+        help="Symmetric padding added to each region, in ms "
+        f"(default: {vad_speech_pad_default})",
+    )
+    vad_gap_cdf.add_argument(
+        "--max-speech-s",
+        type=max_speech_type,
+        default=vad_max_speech_default,
+        dest="max_speech_s",
+        help="Force-split regions longer than this, in seconds; 'inf'/'none' "
+        "never splits (default: inf)",
+    )
+    vad_gap_cdf_fmt = vad_gap_cdf.add_mutually_exclusive_group()
+    vad_gap_cdf_fmt.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON (aggregate stats + per-cut merge "
+        "fractions) instead of the human-readable report",
+    )
+    vad_gap_cdf_fmt.add_argument(
+        "--csv",
+        action="store_true",
+        help="Emit a flat cut_ms,cut_s,merged,merge_fraction CSV table (one row "
+        "per cut) for spreadsheets/plots; mutually exclusive with --json",
     )
 
     # gv vad-gap-hist — segment one WAV and HISTOGRAM the inter-segment silence
