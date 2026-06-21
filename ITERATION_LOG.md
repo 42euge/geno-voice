@@ -32973,3 +32973,86 @@ re-verified on main post-merge (`test_gv_vad_gap_peak.py` → 190 passed).
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-363 — gv vad-gap-peak `--csv` trails a `floor_percentile_listed` comment
+
+- **Date:** 2026-06-21
+- **Branch:** iter-363-peak-csvfloor (ff-merged to main, worktree removed)
+- **Commit:** dc357d1
+
+**Why.** The standing next-item #1 from iter-362 offered the CSV-face mirror:
+"mirror the iter-361 JSON flag / iter-362 human hint onto the CSV face (an extra
+column flagging the floor row) if a spreadsheet consumer needs it." This
+completes the floor-info signal across all three `vad-gap-peak` faces — iter-360
+marks the floor's `band_rate_dist` row in the HUMAN face, iter-362 hints when
+that floor percentile is unlisted, iter-361 carries the `floor_percentile_listed`
+boolean on the JSON face — leaving the CSV face the only surface with no signal.
+A genuine new behaviour on the existing iter-350/354..362 verdict surface, not an
+18th chat-metrics clone (family complete, iter-328) and not a `*-sweep` clone.
+
+**What it is.** The CSV's seven-column verdict-row schema
+(`rank,peak_found,peak_from_ms,peak_to_ms,peak_width_ms,peak_merged_added,
+peak_rate_per_100ms`) has no place for a distribution or a per-row flag, so
+rather than bolt on a column (which would change the schema every existing CSV
+test pins), this lap trails the fact as a single
+`# floor_percentile_listed: <bool>` comment — the idiomatic CSV-metadata
+convention `render_calibration_csv` / `render_vad_sweep_csv` already use for
+non-tabular metadata (a spreadsheet/plotter skips `#` lines by default, e.g.
+pandas `read_csv(comment="#")`), so the data grid stays a pure parseable table
+while the floor's bottom line stays visible in the same file.
+
+**What landed in `examples/gv.py` (+63 / −10, incl. tests).**
+- `render_vad_gap_peak_csv` gains a `rate_pcts=DEFAULT_BAND_RATE_PCTS` kwarg
+  (threaded to the core so a custom `--rate-pcts` decides whether the floor is
+  listed) and, after building the tabular body, appends
+  `# floor_percentile_listed: True/False` **iff** `min_rate_pct is not None`. The
+  boolean is `any(entry["p"] == min_rate_pct for entry in
+  band_rate_dist["percentiles"])` — the exact expression iter-361's JSON flag
+  uses, so the two faces agree by construction.
+- Emitted ONLY for an adaptive `--min-rate-pct` floor: no comment trails an
+  absolute `--min-rate` floor or the default no-floor table, so those CSVs are
+  byte-for-byte unchanged. The all-valley case has an empty `percentiles` list →
+  `False` (matching the JSON flag). The `result=None` install-hint line carries
+  no comment (no analysis ran), matching the degrade contract.
+- The handler (`cmd_vad_gap_peak`) builds a new `csv_kw = dict(kw,
+  rate_pcts=rate_pcts)` and passes it on both the available and unavailable CSV
+  paths, so a custom `--rate-pcts` reaches the CSV face.
+- Scope is the CSV face ONLY: the core `vad_gap_peak`, the human renderer, and
+  the JSON renderer are untouched. Docstring + one-line summary iter-tag updated.
+
+**Tests.** `tests/unit/test_gv_vad_gap_peak.py` (+11 net, 190 → 201):
+listed-true (p75) / listed-false (p80) / absent without a percentile floor (with
+a golden-body assert proving no trailing line slipped in) / absent for an
+absolute `--min-rate` floor / custom `--rate-pcts` include-vs-exclude flips the
+boolean / all-valley false / header-only-no-gaps false / comment skippable by a
+`#`-aware reader / agreement with the iter-361 JSON flag for p75 and p80 / no
+comment on the unavailable path / handler threads `--rate-pcts` through the CSV
+face end-to-end. The pre-existing `test_render_csv_min_rate_pct_columns_unchanged`
+now strips comment lines before comparing the tabular body.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4996 passed**
+(4985 prior + 11 net new), run in the feature worktree before ff-merge AND
+re-verified on main post-merge (`test_gv_vad_gap_peak.py` → 201 passed).
+- Integration: not run this lap (pure string-formatting/arithmetic over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..362 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] vad-gap-peak companions** — the floor-info signal is now complete
+   across all three faces (human marker iter-360, human hint iter-362, JSON flag
+   iter-361, CSV comment iter-363). Next: a `vad-gap-peak`-sweep tracking how the
+   costliest band(s) / band-rate distribution shift vs a swept segmenter knob
+   (e.g. `--min-speech-ms`).
+2. **[gv CLI] vad-gap-recommend-sweep companions** — let the sweep accept a swept
+   SEGMENTER knob (e.g. how short/balanced/long + the confidence grade shift as
+   `--min-speech-ms` varies), the way `vad-gap-sweep` tracks a swept
+   `--min-silence-ms`.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
