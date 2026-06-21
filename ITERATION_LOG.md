@@ -30966,3 +30966,94 @@ post-merge (4473 passed, ~35s).
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    ~31 leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-338 — gv vad-gap-percentiles, robust pause percentiles (outlier-proof)
+
+- **Date:** 2026-06-20
+- **Branch:** iter-338-vad-gap-percentiles (ff-merged to main, worktree removed)
+- **Commit:** a8a112a
+
+**Why.** iter-337's next-item #2: "A genuinely new gap-family surface … e.g. a
+`gv vad-gap-percentiles` (p50/p90/p99 of the pause distribution) — distinct from
+min/mean/max by being robust to outliers." The silence-gap family is now complete
+end-to-end across five axes (point/sweep/grid/diff/histogram), but every one of
+those reduces to or visualizes min/mean/max-style aggregates — each of which is
+fragile to a single outlier pause. A percentile is a different statistic with a
+different failure mode (robust to a lone outlier), so this lap adds a sixth,
+genuinely-distinct surface rather than a golden-output near-clone of an existing
+one.
+
+**What changed.**
+- **`examples/gv.py`:**
+  - `percentile_list_type` — argparse validator for the comma-separated
+    `--percentiles` list (the percentile twin of `unit_interval_list_type`).
+    Accepts numbers in `(0, 100]`; rejects `0` (the trivial minimum, already
+    covered by `gv vad-gaps`), `>100`, NaN, non-numbers, and the empty list;
+    order + duplicates preserved.
+  - `vad_gap_percentiles` — pure core. Anchors to `vad_silence_gaps` for the gap
+    list + aggregates (totals always agree with `gv vad-gaps`) and adds a
+    `percentiles` list of `{p, value_s}`. Each value is linear interpolation
+    between the two closest ranks of the SORTED gaps (numpy `"linear"` / R-7
+    convention: `rank = (p/100)*(n-1)`, interpolate floor↔ceil). A single gap
+    yields that gap for every percentile; a <2-segment result has empty
+    `percentiles` + `None` aggregates. Raises `ValueError` on an empty /
+    out-of-range / NaN percentile. No I/O, no torch.
+  - `render_vad_gap_percentiles` / `_json` / `_csv` — the human / `--json` /
+    `--csv` trio. Human prints the aggregate header then one aligned `pNN: value`
+    line per percentile, naming the `--min-silence-ms` knob on the median line.
+    JSON carries the aggregates + per-percentile list (empty for <2 segments).
+    CSV emits a flat `percentile,value_s` table (an empirical CDF); aggregates
+    are derivable so NOT duplicated, matching `render_vad_gaps_csv`. Shared
+    `_format_percentile_label` renders `50` not `50.0` while keeping `99.5`.
+  - `cmd_vad_gap_percentiles` — same injected segmenter/availability/log contract
+    as `cmd_vad_gaps`; lazy torch import, install-hint degrade path, shared
+    `gv vad` segmenter knobs.
+  - Parser: `vad-gap-percentiles` subcommand with `--percentiles`
+    (`percentile_list_type`, default `50,90,99`) + the five shared `gv vad`
+    knobs + the `--json`/`--csv` mutex. Registered in `DEFAULT_HANDLERS`; added
+    to the usage docstring.
+- **`tests/unit/test_gv_vad_gap_percentiles.py`** (new, +51): validator
+  parse/order/range/NaN/empty rejection; parser registration/defaults/custom/
+  range/mutex; pure-core interpolation, `p100==max`, order preserved,
+  monotonicity in p, OUTLIER-ROBUSTNESS (median unmoved while max/mean move),
+  single-gap, anchoring to `vad_silence_gaps`, empty for <2 segments, 3-place
+  rounding, default 50/90/99, unsorted-segment handling; all three renderers
+  (shape, no-gaps, unavailable, custom fractional labels, csv-matches-json,
+  header-only); the handler across human/json/csv, both unavailable paths,
+  percentile pass-through, and `SileroParams` construction from the knobs.
+- **`tests/unit/test_gv_cli.py`:** exact-handler-map assertion gains the
+  `vad-gap-percentiles` entry.
+- **`tests/unit/test_voice_capture_tuning_doc.py`:** `VAD_SUBCOMMANDS` gains
+  `vad-gap-percentiles`, so the doc sentinels (names-all / appears-in-examples /
+  routes-to-known / all-parse) now COVER it;
+  `docs/research/voice-capture-tuning.md` gains a `gv vad-gap-percentiles`
+  section with five runnable examples.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4524 passed**
+(4473 prior + 51 net new), run in the feature worktree before ff-merge AND
+re-run on main post-merge (4524 passed, ~32s).
+- Integration: not run this lap (pure interpolation + string formatting; no
+  torch import, no audio I/O — the handler is exercised with an injected stub
+  segmenter, mirroring the iter-330/332/336 vad-gap unit laps).
+
+**Next planned items:**
+1. **[gv CLI] An integration test for `gv vad-gap-percentiles` over the real
+   corpus** — the analogue of the iter-329/331/333/335/337 gap-family integration
+   laps: run `gv vad-gap-percentiles` with the real Silero engine over the
+   `fixtures/` recordings and pin the anchoring property (aggregates equal an
+   independent `gv vad-gaps --json` run at the same gate; percentiles are
+   monotonic non-decreasing in p; `min <= p_lowest` and `p_highest <= max`; the
+   median is robust — adding/removing a single extreme gap moves max but not p50).
+2. **[gv CLI] A human-table golden-output assertion** for one gap surface (the
+   tests assert structure + substrings, not the full rendered block — e.g. pin
+   the exact aligned `gv vad-gap-percentiles` `pNN` block over a fixed stub
+   segmentation).
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
