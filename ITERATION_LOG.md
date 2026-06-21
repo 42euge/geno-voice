@@ -32894,3 +32894,82 @@ re-verified on main post-merge (`test_gv_vad_gap_peak.py` → 182 passed).
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-362 — gv vad-gap-peak `--show-rate-dist` hints an unlisted `--min-rate-pct` floor
+
+- **Date:** 2026-06-21
+- **Branch:** iter-362-peak-floorhint (ff-merged to main, worktree removed)
+- **Commit:** fe5e544
+
+**Why.** iter-360 marks the `band_rate_dist` percentile row whose quantile
+equals the active `--min-rate-pct` floor (`<-- --min-rate-pct floor`), and its
+docstring noted that an *unlisted* floor percentile (one not among the displayed
+`--rate-pcts` quantiles) leaves every row unmarked — but the operator got NO
+runtime signal in that case. The absence of any marker reads as "no floor
+active" rather than "the floor lands between the shown rows." iter-361 surfaced
+this case to MACHINE consumers as the `floor_percentile_listed=False` JSON flag;
+this lap gives the HUMAN face the same signal. A genuine new behaviour on the
+existing iter-350/354..361 verdict surface — not an 18th chat-metrics clone
+(family declared complete, iter-328) and not another `*-sweep` clone.
+
+**What it is.** When `--show-rate-dist` AND `--min-rate-pct` are both set but the
+floor's percentile is not one of the displayed `--rate-pcts` quantiles, the human
+renderer now appends an explicit hint naming the unlisted floor percentile and
+telling the operator to add it to `--rate-pcts` to mark its row in context. The
+hint is the exact human-face complement of iter-361's `floor_percentile_listed`
+flag — shown precisely when that JSON flag is `False`.
+
+**What landed in `examples/gv.py` (+26 / −2, plus +117 test lines).**
+- In `render_vad_gap_peak`'s `--show-rate-dist` percentile loop: track a
+  `floor_marked` flag set when the iter-360 marker fires. After the loop, if
+  `min_rate_pct is not None` AND `not floor_marked`, append the hint line naming
+  the unlisted floor percentile (`(the --min-rate-pct pNN cutoff is not among the
+  shown --rate-pcts quantiles — add it to --rate-pcts to mark its row)
+  (iter-362)`). Worded to avoid the substring `--min-rate-pct floor` so it never
+  collides with the iter-360 marker-detection in existing tests.
+- Suppressed when iter-360's marker DID fire (floor row is listed — no double
+  signal), when no percentile floor is active, for an absolute `--min-rate` floor
+  (not a percentile, so no row could match), and for an all-valley result whose
+  rate-dist block is the "no non-empty bands" note (no per-row loop, nothing to
+  mark — the hint lives inside the `else` per-row branch).
+- Scope is the HUMAN face ONLY: the core `vad_gap_peak`, the JSON renderer
+  (already carries the flag, iter-361), and the CSV renderer (seven-column
+  verdict-row schema, no distribution columns) are untouched. Default verdict
+  face (no `--show-rate-dist`) is byte-for-byte unchanged.
+- Docstring + the iter-tag in the one-line summary updated.
+
+**Tests.** `tests/unit/test_gv_vad_gap_peak.py` (+8 net, 182 → 190): unlisted
+floor emits a single hint naming the percentile + `--rate-pcts`; listed floor
+suppresses the hint (iter-360 marker fires instead); no hint without a percentile
+floor; no hint for an absolute `--min-rate` floor; unlisted hint with a custom
+`--rate-pcts` that excludes the floor; no hint for an all-valley result (and the
+"no non-empty bands" note is present); hint presence equals the negation of the
+iter-361 `floor_percentile_listed` JSON flag for p75 (listed) and p80 (unlisted);
+handler threads `show_rate_dist` + an unlisted `min_rate_pct` end-to-end.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4985 passed**
+(4977 prior + 8 net new), run in the feature worktree before ff-merge AND
+re-verified on main post-merge (`test_gv_vad_gap_peak.py` → 190 passed).
+- Integration: not run this lap (pure string-formatting/arithmetic over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..361 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] vad-gap-peak companions** — a `vad-gap-peak`-sweep tracking how the
+   costliest band(s) / band-rate distribution shift vs a swept segmenter knob
+   (e.g. `--min-speech-ms`); OR mirror the iter-361 JSON flag / iter-362 human
+   hint onto the CSV face (an extra column flagging the floor row) if a
+   spreadsheet consumer needs it.
+2. **[gv CLI] vad-gap-recommend-sweep companions** — let the sweep accept a swept
+   SEGMENTER knob (e.g. how short/balanced/long + the confidence grade shift as
+   `--min-speech-ms` varies), the way `vad-gap-sweep` tracks a swept
+   `--min-silence-ms`.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
