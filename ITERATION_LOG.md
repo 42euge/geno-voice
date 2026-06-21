@@ -33234,3 +33234,98 @@ re-verified on main post-merge (`test_gv_vad_gap_peak_grid.py` → 34 passed,
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-366 — gv vad-gap-peak-sweep carries per-row band_rate_dist
+
+- **Date:** 2026-06-21
+- **Branch:** iter-366-peak-sweep-ratedist (ff-merged to main, worktree removed)
+- **Commit:** 38b0057
+
+**Why.** The standing next-item #1 from iter-364/365 asked to extend the cost-peak
+sweep (or grid) to track the `band_rate_dist` percentiles per row "the way iter-358
+added the distribution to the single-shot peak." iter-364 shipped the 1-D peak
+SWEEP and iter-365 its 2-D GRID; both carried only the steepest-band columns. This
+lap adds the iter-358 band-rate-distribution VIEW to the 1-D sweep — a genuinely new
+behaviour on the existing surface, not an 18th chat-metrics clone (family complete,
+iter-328) and not a brand-new subcommand. (The grid can follow next, mirroring the
+iter-364→365 cadence.)
+
+**What it is.** Where iter-364 tabulated only the costliest band per swept value,
+iter-366 also carries — per row — the iter-358 summary of the OBSERVED non-empty
+band-rate distribution (`count` / `min` / `mean` / `max` + a `percentiles` list,
+default p50/p75/p90/p99). The single-shot `gv vad-gap-peak --show-rate-dist` shows
+where a chosen `--min-rate-pct` floor lands for ONE knob setting; the sweep version
+shows how that whole cost-rate spread (the `--min-rate-pct` sample) SHIFTS as a
+segmenter knob tightens. Reading down the column an operator sees not just how the
+steepest band moves but how the cost distribution underneath it reshapes — the
+sweep-side complement of the single-shot distribution view.
+
+**What landed in `examples/gv.py` (+150, incl. parser/handler; +234 test lines).**
+- `vad_gap_peak_sweep` gains a `rate_pcts=DEFAULT_BAND_RATE_PCTS` kwarg threaded to
+  `vad_gap_peak`, and each row now carries a `band_rate_dist` key. A no-peak row
+  (single segment, or an all-valley range with no non-empty bands) carries the
+  empty distribution (`count` 0, aggregates `None`, `percentiles` `[]`) — the same
+  "no distribution to summarise" spelling the single-shot peak uses. Computed over
+  the FULL band set (before any floor) so it always agrees with
+  `gv vad-gap-peak --show-rate-dist` at the matching value.
+- `render_vad_gap_peak_sweep` gains `show_rate_dist=False` / `rate_pcts` kwargs:
+  with `show_rate_dist` it appends an indented band-rate-distribution sub-block
+  under EACH swept row (count + min/mean/max + the `rate_pcts` percentiles), or a
+  short "(no non-empty bands)" note for a no-peak row. The default `False` leaves
+  the human table byte-for-byte unchanged.
+- `render_vad_gap_peak_sweep_json` ALWAYS carries `band_rate_dist` per row (no
+  flag, like the single-shot `render_vad_gap_peak_json`) and echoes the `rate_pcts`
+  the percentiles were taken at as a top-level `rate_pcts` key.
+- `render_vad_gap_peak_sweep_csv` is UNCHANGED — the flat nine-column verdict-row
+  schema has no place for a nested distribution, exactly the iter-358 single-shot
+  stance (and every existing CSV test pins that schema). The CSV renderer only
+  reads scalar columns, so the new core key never reaches it.
+- `cmd_vad_gap_peak_sweep` reads `--show-rate-dist` / `--rate-pcts` and threads
+  them: human gets both, JSON gets `rate_pcts`, CSV unchanged. Two new argparse
+  args on the `vad-gap-peak-sweep` subparser mirror the single-shot
+  `vad-gap-peak` knobs (`percentile_list_type`, default 50,75,90,99).
+
+**Tests.** `tests/unit/test_gv_vad_gap_peak_sweep.py` (+19 net, 34 → 53): core row
+carries the dist / matches the single-shot `vad_gap_peak` / honors `rate_pcts` /
+empty dist for no-peak + single-segment rows; human default omits the block /
+`--show-rate-dist` appends one block per row / per-row count for a multi-value
+sweep / no-peak "(no non-empty bands)" note / honors custom `rate_pcts`; JSON
+always carries the per-row dist + echoes `rate_pcts` (default and custom); CSV
+schema unchanged (no `band_rate_dist` column, exact nine-column header pinned);
+parser `show_rate_dist`/`rate_pcts` defaults + custom `--rate-pcts`; handler
+end-to-end (show-rate-dist human, default no-dist, `--rate-pcts` → JSON,
+unavailable JSON degrade unchanged). The pre-existing pinned exact-dict core test
+(`test_core_basic_two_value_threshold_sweep`) gained the new `band_rate_dist` key
+for both the peak row and the no-peak row. Added a `_multi_band` fixture (4
+segments / 3 distinct-band gaps → `count` 3) so the distribution has a meaningful
+spread to assert against.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5083 passed**
+(5064 prior + 19 net new), run in the feature worktree before ff-merge AND
+re-verified on main post-merge (`test_gv_vad_gap_peak_sweep.py` → 53 passed,
+`test_gv_cli.py` → unchanged).
+- Integration: not run this lap (pure string-formatting/arithmetic over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..365 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] vad-gap-peak-grid band_rate_dist** — apply this same per-cell
+   `band_rate_dist` to the 2-D `vad-gap-peak-grid` (iter-365), completing the
+   distribution view across the single-shot / sweep / grid trio (mirrors the
+   iter-364→365 sweep→grid cadence).
+2. **[gv CLI] vad-gap-peak-sweep --top-n** — extend the sweep (and grid) to track
+   the `--top-n` ranking (how the N steepest bands reorder vs the knob), the other
+   half of the iter-354 single-shot knobs not yet on the sweep.
+3. **[gv CLI] vad-gap-recommend-sweep companions** — let the sweep accept a swept
+   SEGMENTER knob (e.g. how short/balanced/long + the confidence grade shift as
+   `--min-speech-ms` varies), the way `vad-gap-sweep` tracks a swept
+   `--min-silence-ms`.
+4. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+5. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+6. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   leftover per-iter worktrees. A future lap could `git worktree prune` the merged
+   ones. NOTE: this lap correctly removed its own worktree.
