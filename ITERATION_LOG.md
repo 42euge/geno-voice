@@ -31830,3 +31830,92 @@ main post-merge (4681 passed, ~51s).
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    ~30 leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-349 — gv vad-gap-cost merge cost curve (derivative of the CDF)
+
+- **Date:** 2026-06-21
+- **Branch:** iter-349-gap-cost (ff-merged to main, worktree removed)
+- **Commit:** 775d61b
+
+**Why.** iter-348's standing next-item #2 was: "a 'merge cost curve' naming the
+marginal pauses merged per +100 ms of hangover (the derivative of the CDF)."
+iter-346's `gv vad-gap-cdf` gives the CUMULATIVE picture — at cut `c`, what
+fraction of pauses have merged. But an operator tuning the end-of-turn hangover
+reasons MARGINALLY: "what does the next +100 ms cost me?" This lap builds that
+derivative surface, the natural companion of the CDF rather than a clone of an
+existing surface.
+
+**What it is.** `gv vad-gap-cost recording.wav --cuts-ms 200,400,800,1600` reads
+the same gap distribution as `vad-gap-cdf` and reports the COST CURVE between
+consecutive cuts: for each band, how many ADDITIONAL pauses merge
+(`merged_added`) and the rate per +100 ms (`rate_per_100ms`). The operator
+reading:
+
+- A **high-rate** band sits inside a pause cluster — every extra ms of hangover
+  swallows more real turn boundaries (expensive to raise the hangover there).
+- A **zero-rate** band is an EMPTY band in the distribution — a valley where
+  raising the hangover costs nothing. That zero-cost valley is exactly where
+  `gv vad-gap-recommend` (iter-347) points, so the cost curve and the
+  recommendation agree by construction (a test asserts the band containing the
+  recommended hangover is zero-rate).
+
+Each band's `merged_cumulative` equals exactly what `vad_gap_cdf` reports at its
+top cut, so the two surfaces agree (the cost curve really is the CDF's
+derivative). Unlike `vad_gap_cdf` (which preserves the operator's column order),
+a derivative needs a monotone axis, so cuts are SORTED + DE-DUPLICATED here; N
+distinct cuts yield N-1 bands. Edge cases mirror the family: a <2-segment result
+has no gaps (`bands` empty, aggregates `None`); a single distinct cut forms no
+band (degenerate axis, `bands` empty).
+
+**What landed in `examples/gv.py` (+285 lines).**
+- `vad_gap_cost(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS)` — the pure core.
+  Anchors to `vad_silence_gaps` and adds a `bands` list of
+  `{from_ms, to_ms, from_s, to_s, width_ms, merged_added, merged_cumulative,
+  rate_per_100ms}`. Reuses iter-346's `DEFAULT_GAP_CDF_CUTS_MS` and
+  `cut_ms_list_type`. Validates cuts (non-empty, non-negative, non-NaN).
+- `render_vad_gap_cost` / `_json` / `_csv` — the human / `--json` / `--csv`
+  trio. Human prints the aggregate header then a per-band table (ms range,
+  width, `+N` merged, rate per +100ms). CSV is one row per band
+  (`from_ms,to_ms,width_ms,merged_added,merged_cumulative,rate_per_100ms`). All
+  degrade to the shared install hint / `{"available": false}` / `# unavailable`
+  comment.
+- `cmd_vad_gap_cost` handler — same injected segmenter/availability/log contract
+  as the rest of the family (torch-free parser, lazy `SileroParams` import).
+  Wired into `DEFAULT_HANDLERS` and a new `vad-gap-cost` subparser sharing all
+  `gv vad` knobs + a `--cuts-ms` list, plus a usage-docstring example line.
+
+**Tests.** `tests/unit/test_gv_vad_gap_cost.py` (+51 tests): parser registration
++ knob defaults + custom cuts + json/csv mutual exclusion + threshold range; the
+pure core (marginal counts, derivative-of-CDF agreement, telescoping sum,
+zero-rate-band == recommended valley, strict-less-than boundary, high-rate
+cluster band, sort+dedup of cuts, anchoring to `vad_silence_gaps`, <2-segment /
+zero-segment / single-cut / all-duplicate-cut empties, rate rounding,
+default-cut bands, unsorted-segment robustness, cut validation); all three
+renderers (shape, no-gaps, single-cut note, unavailable, byte-for-byte human
+goldens for varied/single-segment/single-cut blocks, json shape/empty/agreement,
+csv shape/golden/header-only x2/match-json); and the handler (human/json/csv,
+unavailable x3, cut pass-through, knob->params). Updated the `test_gv_cli`
+handler-map golden to include the new `vad-gap-cost` entry.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4732 passed**
+(4681 prior + 51 new), run in the feature worktree before ff-merge.
+- Integration: not run this lap (pure string-formatting/arithmetic over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..348 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] vad-gap-cost companions** — a `--peak` flag naming the costliest
+   band (the steepest part of the CDF — the densest pause cluster), or a
+   `vad-gap-cost`-sweep/grid (how the cost curve shifts vs a swept segmenter
+   knob).
+2. **[gv CLI] vad-gap-recommend/confidence companions** — a `--strict`/`--lenient`
+   knob biasing the recommendation toward the short or long side of the valley.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~30 leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
