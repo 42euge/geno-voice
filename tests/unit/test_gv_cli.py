@@ -401,6 +401,7 @@ def test_dispatch_default_handlers_are_the_real_cmds():
         "vad-gap-recommend": gv.cmd_vad_gap_recommend,
         "vad-gap-confidence": gv.cmd_vad_gap_confidence,
         "vad-gap-cost": gv.cmd_vad_gap_cost,
+        "vad-gap-peak": gv.cmd_vad_gap_peak,
         "vad-gap-hist": gv.cmd_vad_gap_histogram,
         "vad-gap-sweep": gv.cmd_vad_gap_sweep,
         "vad-diff": gv.cmd_vad_diff,
