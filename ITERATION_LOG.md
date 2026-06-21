@@ -33146,3 +33146,91 @@ re-verified on main post-merge (`test_gv_vad_gap_peak_sweep.py` → 34 passed).
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-365 — gv vad-gap-peak-grid: costliest cost band across a 2-D knob grid
+
+- **Date:** 2026-06-21
+- **Branch:** iter-365-peak-grid (ff-merged to main, worktree removed)
+- **Commit:** fb7ee02
+
+**Why.** The standing next-item #1 from iter-364 asked for a 2-D
+`vad-gap-peak-grid` (the `vad-gap-grid` analogue) crossing two segmenter knobs.
+iter-364 completed the 1-D peak SWEEP; this lap adds its 2-D twin — a genuinely
+new surface, not an 18th chat-metrics clone (family complete, iter-328).
+
+**What it is.** `gv vad-gap-peak-grid` is to `gv vad-gap-peak-sweep` what
+`gv vad-gap-grid` is to `gv vad-gap-sweep`: where the peak sweep tabulates the
+iter-350 cost PEAK across ONE swept knob, the peak grid tabulates it across the
+cartesian product of TWO knobs (the P(speech) gate × a column knob). For each
+(row, col) cell it runs `vad_gap_peak` (single peak, `top_n=1`) and names the
+steepest cost-curve band — the densest pause cluster, the most expensive place
+to raise the end-of-turn hangover — reporting its ms range, merged pauses, and
+marginal rate per +100 ms. The headline is how the peak rate MOVES across two
+knobs at once: where `vad-gap-grid` watches the cheapest pause floor move in two
+dimensions (where it's SAFE to set the hangover), this watches the costliest
+cluster move (where NOT to push it through).
+
+**What landed in `examples/gv.py` (+~560, incl. parser/handler; +495 test lines).**
+- `vad_gap_peak_grid(row_values, col_values, results, *, cuts_ms, row_axis,
+  col_axis)` — pure core, one cell per (row, col) in ROW-MAJOR order, each
+  anchored to `vad_gap_peak` so the per-cell peak fields agree EXACTLY with
+  `gv vad-gap-peak` / `gv vad-gap-peak-sweep` at that cell. Cells carry
+  `num_segments` / `num_gaps` / `peak_found` / `peak_from_ms` / `peak_to_ms` /
+  `peak_width_ms` / `peak_merged_added` / `peak_rate_per_100ms`; the peak fields
+  are `None` / `False` for a cell that names no cost peak (<2 segments, or an
+  all-valley range). Raises `ValueError` on a results/row×col length mismatch
+  (cut-axis validation delegated to `vad_gap_peak`).
+- Three renderers (human / `--json` / `--csv`) mirroring the
+  `render_vad_gap_grid_*` trio plus the peak columns of
+  `render_vad_gap_peak_sweep_*`: human prints `-` in the peak columns for a
+  no-peak cell; JSON degrades to `{"available": false}` + install hint and
+  carries the `cuts_ms` axis the bands were scanned over; CSV emits a flat
+  self-describing `<row_axis>,<col_axis>,num_segments,num_gaps,peak_found,
+  peak_from_ms,peak_to_ms,peak_width_ms,peak_merged_added,peak_rate_per_100ms`
+  table with blank peak cells for a no-peak cell and a single `#` install-hint
+  comment when silero is absent.
+- `cmd_vad_gap_peak_grid` handler sharing `cmd_vad_gap_grid`'s axis layout (row =
+  gate `--thresholds`; column mutex `--min-silences` default / `--min-speeches` /
+  `--speech-pads` / `--max-speeches`) and the `--cuts-ms` cost-band axis with
+  `vad-gap-peak`(-sweep); same injected `segmenter` / `availability` / `log`
+  contract, lazy `vad.silero` import so the parser stays torch-free, `--csv`
+  mutually exclusive with `--json`. Registered in `DEFAULT_HANDLERS` + a full
+  argparse subparser.
+
+**Tests.** `tests/unit/test_gv_vad_gap_peak_grid.py` (34 new): parser
+registration / defaults mirror `gv vad` / column-axis mutex / json-csv mutex /
+cuts-ms; the pure core (row-major order + keys, peak fields match `vad_gap_peak`,
+axis keys follow args, all-valley/single no-peak cells, custom cuts-ms lands a
+different band, length-mismatch, empty grid); the three renderers (header+rows,
+axis labels, unavailable hint, custom cuts-ms, no-peak blanks/dashes, CSV no
+trailing newline); and the handler end-to-end across the min-silences /
+min-speeches / max-speeches column axes and all three faces incl. the
+unavailable degrade paths. `test_gv_cli.py`'s pinned `DEFAULT_HANDLERS` map
+gained the new entry.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5064 passed**
+(5030 prior + 34 net new), run in the feature worktree before ff-merge AND
+re-verified on main post-merge (`test_gv_vad_gap_peak_grid.py` → 34 passed,
+`test_gv_cli.py` pin updated).
+- Integration: not run this lap (pure string-formatting/arithmetic over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..364 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] vad-gap-peak-grid / -sweep companions** — extend the peak grid (or
+   sweep) to track the `--top-n` ranking (how the N steepest bands reorder vs the
+   knobs) or the `band_rate_dist` percentiles per cell, the way iter-358 added the
+   distribution to the single-shot peak.
+2. **[gv CLI] vad-gap-recommend-sweep companions** — let the sweep accept a swept
+   SEGMENTER knob (e.g. how short/balanced/long + the confidence grade shift as
+   `--min-speech-ms` varies), the way `vad-gap-sweep` tracks a swept
+   `--min-silence-ms`.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
