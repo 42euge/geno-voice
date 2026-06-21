@@ -1852,6 +1852,116 @@ def test_render_json_band_rate_dist_custom_pcts():
     assert [e["p"] for e in payload["band_rate_dist"]["percentiles"]] == [10.0, 90.0]
 
 
+# ---- renderer: JSON floor_percentile_listed flag (iter-361) -------------
+# The machine-readable twin of the iter-360 human floor-marker: a boolean
+# telling a consumer whether the active --min-rate-pct floor's percentile is
+# one of the displayed band_rate_dist quantiles, so it can replicate the human
+# "<-- --min-rate-pct floor" mark without re-deriving it from rate_pcts.
+
+
+def test_render_json_floor_percentile_listed_true_when_floor_in_pcts():
+    # --min-rate-pct 75 is among the default p50/75/90/99 quantiles → listed.
+    res, cuts = _canon()
+    payload = json.loads(
+        gv.render_vad_gap_peak_json(res, cuts_ms=cuts, min_rate_pct=75)
+    )
+    assert payload["floor_percentile_listed"] is True
+
+
+def test_render_json_floor_percentile_listed_false_when_floor_not_in_pcts():
+    # --min-rate-pct 80 is NOT among the default quantiles → not listed (the
+    # human face leaves every row unmarked in the same case).
+    res, cuts = _canon()
+    payload = json.loads(
+        gv.render_vad_gap_peak_json(res, cuts_ms=cuts, min_rate_pct=80)
+    )
+    assert payload["floor_percentile_listed"] is False
+
+
+def test_render_json_floor_percentile_listed_true_with_custom_pcts():
+    # A custom rate_pcts list that includes the floor percentile → listed.
+    res, cuts = _canon()
+    payload = json.loads(
+        gv.render_vad_gap_peak_json(
+            res, cuts_ms=cuts, min_rate_pct=80, rate_pcts=[80.0]
+        )
+    )
+    assert payload["floor_percentile_listed"] is True
+
+
+def test_render_json_floor_percentile_listed_false_without_min_rate_pct():
+    # No percentile floor at all → False (nothing to mark).
+    res, cuts = _canon()
+    payload = json.loads(gv.render_vad_gap_peak_json(res, cuts_ms=cuts))
+    assert payload["floor_percentile_listed"] is False
+
+
+def test_render_json_floor_percentile_listed_false_with_absolute_min_rate():
+    # An absolute --min-rate floor is not a percentile → never listed, matching
+    # the human marker keyed to min_rate_pct only.
+    res, cuts = _canon()
+    payload = json.loads(
+        gv.render_vad_gap_peak_json(res, cuts_ms=cuts, min_rate=0.05)
+    )
+    assert payload["floor_percentile_listed"] is False
+
+
+def test_render_json_floor_percentile_listed_false_for_all_valley():
+    # All-valley result has an empty band_rate_dist percentiles list, so even a
+    # set min_rate_pct cannot be "listed" — consistent with the human face
+    # having no rows to mark.
+    res = _result((0, 1), (5, 6))
+    payload = json.loads(
+        gv.render_vad_gap_peak_json(
+            res, cuts_ms=[1000.0, 2000.0, 3000.0], min_rate_pct=50
+        )
+    )
+    assert payload["band_rate_dist"]["count"] == 0
+    assert payload["floor_percentile_listed"] is False
+
+
+def test_render_json_floor_percentile_listed_matches_human_marker():
+    # The JSON flag agrees with the presence of the iter-360 human marker for
+    # the same args — the two faces never disagree.
+    res, cuts = _canon()
+    for pct in (75, 80):
+        payload = json.loads(
+            gv.render_vad_gap_peak_json(res, cuts_ms=cuts, min_rate_pct=pct)
+        )
+        human = gv.render_vad_gap_peak(
+            res, cuts_ms=cuts, show_rate_dist=True, min_rate_pct=pct
+        )
+        human_marked = any("--min-rate-pct floor" in ln for ln in human)
+        assert payload["floor_percentile_listed"] is human_marked
+
+
+def test_render_json_floor_percentile_listed_absent_when_unavailable():
+    # The degrade payload carries no floor_percentile_listed key (no analysis ran).
+    payload = json.loads(gv.render_vad_gap_peak_json(None, min_rate_pct=75))
+    assert payload == {
+        "available": False,
+        "hint": payload["hint"],
+    }
+    assert "floor_percentile_listed" not in payload
+
+
+def test_handler_floor_percentile_listed_threads_through_json():
+    # End-to-end: the handler's JSON face carries the flag derived from
+    # --min-rate-pct + --rate-pcts.
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    lines = _run(
+        _args(
+            cuts_ms=[500.0, 2500.0, 3500.0, 5000.0],
+            json=True,
+            min_rate_pct=75,
+        ),
+        segmenter=lambda w, *, params: res,
+        availability=lambda: True,
+    )
+    payload = json.loads("\n".join(lines))
+    assert payload["floor_percentile_listed"] is True
+
+
 # ---- renderer: CSV schema unchanged by the dist -------------------------
 
 

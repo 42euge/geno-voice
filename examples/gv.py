@@ -2998,7 +2998,7 @@ def render_vad_gap_peak_json(
     min_rate_pct=None,
     rate_pcts=DEFAULT_BAND_RATE_PCTS,
 ):
-    """Render the costliest-band verdict as a JSON string (iter-350; ``top_n`` iter-354; ``min_rate`` iter-355; ``min_rate_pct`` iter-357; ``band_rate_dist`` iter-358).
+    """Render the costliest-band verdict as a JSON string (iter-350; ``top_n`` iter-354; ``min_rate`` iter-355; ``min_rate_pct`` iter-357; ``band_rate_dist`` iter-358; ``floor_percentile_listed`` iter-361).
 
     Machine-readable twin of :func:`render_vad_gap_peak`, mirroring the
     degrade-to-``{"available": false}`` contract the other VAD JSON renderers use.
@@ -3024,7 +3024,15 @@ def render_vad_gap_peak_json(
     observed non-empty band-rate distribution (``count`` / ``min`` / ``mean`` /
     ``max`` + a ``percentiles`` list over ``rate_pcts``), the exact sample
     ``--min-rate-pct`` interpolates against, always present so a machine consumer
-    can read where a chosen percentile floor would land. Pure: built from
+    can read where a chosen percentile floor would land. iter-361 adds
+    ``floor_percentile_listed`` — the machine-readable twin of the iter-360 human
+    floor-marker: ``True`` when an adaptive ``min_rate_pct`` floor is active AND
+    its percentile is one of the displayed ``band_rate_dist`` quantiles (i.e. the
+    human face would mark a ``pNN`` row with ``<-- --min-rate-pct floor``),
+    ``False`` otherwise (no percentile floor, an absolute ``--min-rate`` floor, the
+    floor percentile not among ``rate_pcts``, or an all-valley result with no
+    quantile rows). A consumer can replicate the human marker turnkey without
+    re-deriving it from ``min_rate_pct`` + ``rate_pcts``. Pure: built from
     :func:`vad_gap_peak`, so it works on any ``SileroResult``-shaped object.
     """
     if result is None:
@@ -3046,6 +3054,15 @@ def render_vad_gap_peak_json(
         min_rate_pct=min_rate_pct,
         rate_pcts=rate_pcts,
     )
+    # iter-361: the machine-readable twin of the iter-360 human floor-marker.
+    # True iff an adaptive percentile floor is active AND its percentile is one
+    # of the band_rate_dist quantiles the human face would mark — derived purely
+    # from the same two inputs the human renderer uses, so the faces never
+    # disagree (the all-valley case has an empty percentiles list, so no floor
+    # percentile can match — False, matching the human "no rows to mark" face).
+    floor_percentile_listed = min_rate_pct is not None and any(
+        entry["p"] == min_rate_pct for entry in p["band_rate_dist"]["percentiles"]
+    )
     payload = {
         "available": True,
         "name": result.name,
@@ -3061,6 +3078,7 @@ def render_vad_gap_peak_json(
         "min_rate_pct": p["min_rate_pct"],
         "effective_min_rate": p["effective_min_rate"],
         "band_rate_dist": p["band_rate_dist"],
+        "floor_percentile_listed": floor_percentile_listed,
         "peak_found": p["peak_found"],
         "peak_from_ms": p["peak_from_ms"],
         "peak_to_ms": p["peak_to_ms"],
