@@ -32673,3 +32673,73 @@ on main post-merge (4953 passed, ~52s).
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    ~31 leftover per-iter worktrees. A future lap could `git worktree prune` the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-359 — gv vad-gap-peak `--rate-pcts` — custom band-rate-dist percentiles
+
+- **Date:** 2026-06-21
+- **Branch:** iter-359-peak-ratepcts (ff-merged to main, worktree removed)
+- **Commit:** 89a00bc
+
+**Why.** The standing next-item #1 from iter-358: "letting `--show-rate-dist`
+accept a custom `--rate-pcts` list at the CLI (the core already accepts
+`rate_pcts`; only the parser arg is missing) so an operator can ask for arbitrary
+quantiles." A genuine new behaviour on the existing iter-350/354..358 verdict
+surface — not an 18th chat-metrics clone (the family is declared complete,
+iter-328) and not another `*-sweep` clone.
+
+**What it is.** iter-358 added the `band_rate_dist` summary (count/min/mean/max +
+a `percentiles` list over `rate_pcts`) and the `--show-rate-dist` flag to print
+it, but the percentile set was hardcoded to `DEFAULT_BAND_RATE_PCTS`
+(p50/p75/p90/p99). The core (`vad_gap_peak`) and the human/json renderers already
+accepted a `rate_pcts` kwarg — only the CLI surface to set it was missing. This
+lap wires `--rate-pcts` so an operator can request arbitrary quantiles (e.g.
+`--rate-pcts 25,50,75`) without editing code. Unset, it defaults to
+`list(DEFAULT_BAND_RATE_PCTS)`, so the iter-358 behaviour is byte-for-byte
+unchanged.
+
+**What landed in `examples/gv.py` (+21 / −3, plus +114 test lines).**
+- New `--rate-pcts` subparser arg on `vad-gap-peak`, typed by the existing
+  `percentile_list_type` (each token in `(0, 100]`; order + dupes preserved per
+  iter-338's convention), `default=list(DEFAULT_BAND_RATE_PCTS)`, `dest="rate_pcts"`.
+- `cmd_vad_gap_peak` reads `args.rate_pcts` (getattr fallback
+  `DEFAULT_BAND_RATE_PCTS`) and threads it to the human renderer (the
+  `--show-rate-dist` block) AND the json renderer (which always carries
+  `band_rate_dist`) via a new `json_kw` dict. The CSV renderer takes NO
+  `rate_pcts` — its seven-column verdict-row schema has no distribution columns —
+  so it is left untouched, preserving the column union prior laps protected. The
+  base `kw` dict (no `rate_pcts`) still feeds the CSV face.
+
+**Tests.** `tests/unit/test_gv_vad_gap_peak.py` (+9 net, 158 → 167): parser
+default mirrors `DEFAULT_BAND_RATE_PCTS` / accepts custom list / preserves
+order+dupes / rejects out-of-range/nan/empty; handler threads to human (custom
+`pNN` printed, defaults `p90`/`p99` not) / to json (`band_rate_dist` percentiles
+list) / NOT to csv (schema unchanged, no `band_rate_dist` token, no raise) /
+getattr fallback to default / unavailable-json path does not raise with a custom
+set (returns the bare `available:False`+hint payload).
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **4962 passed**
+(4953 prior + 9 net new), run in the feature worktree before ff-merge AND re-run
+on main post-merge (4962 passed, ~33s).
+- Integration: not run this lap (pure string-formatting/arithmetic over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..358 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] vad-gap-peak companions** — a `vad-gap-peak`-sweep tracking how the
+   costliest band(s) / band-rate distribution shift vs a swept segmenter knob
+   (e.g. `--min-speech-ms`), or letting `--show-rate-dist` also surface WHICH
+   percentile the active `--min-rate-pct` floor lands at (mark the chosen P in the
+   printed distribution so the operator sees the cutoff in context).
+2. **[gv CLI] vad-gap-recommend-sweep companions** — let the sweep accept a swept
+   SEGMENTER knob (e.g. how short/balanced/long + the confidence grade shift as
+   `--min-speech-ms` varies), the way `vad-gap-sweep` tracks a swept
+   `--min-silence-ms`.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~31 leftover per-iter worktrees. A future lap could `git worktree prune` the
+   merged ones. NOTE: this lap correctly removed its own worktree.
