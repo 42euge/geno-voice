@@ -489,6 +489,7 @@ def test_render_csv_shape():
     text = gv.render_vad_gap_peak_csv(res, cuts_ms=[500.0, 2500.0, 3500.0, 5000.0])
     rows = list(csv.reader(io.StringIO(text)))
     assert rows[0] == [
+        "rank",
         "peak_found",
         "peak_from_ms",
         "peak_to_ms",
@@ -497,17 +498,18 @@ def test_render_csv_shape():
         "peak_rate_per_100ms",
     ]
     assert len(rows) == 2  # header + one verdict row
-    assert rows[1][0] == "True"
-    assert rows[1][1] == "500"
+    assert rows[1][0] == "1"  # rank (iter-356)
+    assert rows[1][1] == "True"
+    assert rows[1][2] == "500"
 
 
 def test_render_csv_golden():
     res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
     text = gv.render_vad_gap_peak_csv(res, cuts_ms=[500.0, 2500.0, 3500.0, 5000.0])
     assert text == (
-        "peak_found,peak_from_ms,peak_to_ms,peak_width_ms,peak_merged_added,"
+        "rank,peak_found,peak_from_ms,peak_to_ms,peak_width_ms,peak_merged_added,"
         "peak_rate_per_100ms\r\n"
-        "True,500,2500,2000,2,0.1"
+        "1,True,500,2500,2000,2,0.1"
     )
 
 
@@ -516,9 +518,9 @@ def test_render_csv_blanks_for_all_valley():
     text = gv.render_vad_gap_peak_csv(res, cuts_ms=[1000.0, 2000.0, 3000.0])
     rows = list(csv.reader(io.StringIO(text)))
     # Bands exist (num_bands > 0) so the row is emitted, but the peak measures
-    # are blank because no peak was found.
+    # (and the rank — no peak) are blank because no peak was found.
     assert len(rows) == 2
-    assert rows[1] == ["False", "", "", "", "", ""]
+    assert rows[1] == ["", "False", "", "", "", "", ""]
 
 
 def test_render_csv_header_only_for_no_gaps():
@@ -527,6 +529,7 @@ def test_render_csv_header_only_for_no_gaps():
     rows = list(csv.reader(io.StringIO(text)))
     assert rows == [
         [
+            "rank",
             "peak_found",
             "peak_from_ms",
             "peak_to_ms",
@@ -550,9 +553,10 @@ def test_render_csv_matches_json():
     payload = json.loads(gv.render_vad_gap_peak_json(res, cuts_ms=cuts))
     text = gv.render_vad_gap_peak_csv(res, cuts_ms=cuts)
     row = list(csv.reader(io.StringIO(text)))[1]
-    assert (row[0] == "True") == payload["peak_found"]
-    assert int(row[4]) == payload["peak_merged_added"]
-    assert float(row[5]) == pytest.approx(payload["peak_rate_per_100ms"])
+    assert int(row[0]) == payload["peaks"][0]["rank"]  # rank column (iter-356)
+    assert (row[1] == "True") == payload["peak_found"]
+    assert int(row[5]) == payload["peak_merged_added"]
+    assert float(row[6]) == pytest.approx(payload["peak_rate_per_100ms"])
 
 
 def test_render_csv_unavailable():
@@ -625,6 +629,7 @@ def test_handler_csv():
     text = "\n".join(lines)
     rows = list(csv.reader(io.StringIO(text)))
     assert rows[0] == [
+        "rank",
         "peak_found",
         "peak_from_ms",
         "peak_to_ms",
@@ -920,9 +925,9 @@ def test_render_csv_top_n_one_is_legacy_golden():
         res, cuts_ms=[500.0, 2500.0, 3500.0, 5000.0], top_n=1
     )
     assert text == (
-        "peak_found,peak_from_ms,peak_to_ms,peak_width_ms,peak_merged_added,"
+        "rank,peak_found,peak_from_ms,peak_to_ms,peak_width_ms,peak_merged_added,"
         "peak_rate_per_100ms\r\n"
-        "True,500,2500,2000,2,0.1"
+        "1,True,500,2500,2000,2,0.1"
     )
 
 
@@ -933,6 +938,7 @@ def test_render_csv_top_n_multi_one_row_per_peak():
     )
     rows = list(csv.reader(io.StringIO(text)))
     assert rows[0] == [
+        "rank",
         "peak_found",
         "peak_from_ms",
         "peak_to_ms",
@@ -941,8 +947,9 @@ def test_render_csv_top_n_multi_one_row_per_peak():
         "peak_rate_per_100ms",
     ]
     assert len(rows) == 3  # header + two ranked rows (empty valley dropped)
-    assert rows[1] == ["True", "500", "2500", "2000", "2", "0.1"]
-    assert rows[2] == ["True", "3500", "5000", "1500", "1", "0.067"]
+    # The rank column (iter-356) counts up across the ranked rows.
+    assert rows[1] == ["1", "True", "500", "2500", "2000", "2", "0.1"]
+    assert rows[2] == ["2", "True", "3500", "5000", "1500", "1", "0.067"]
 
 
 def test_render_csv_top_n_columns_match_single_surface():
@@ -963,7 +970,7 @@ def test_render_csv_top_n_all_valley_single_false_row():
     )
     rows = list(csv.reader(io.StringIO(text)))
     assert len(rows) == 2
-    assert rows[1] == ["False", "", "", "", "", ""]
+    assert rows[1] == ["", "False", "", "", "", "", ""]
 
 
 # ---- handler threads --top-n through ------------------------------------
@@ -1171,11 +1178,11 @@ def test_render_csv_min_rate_filters_rows_columns_unchanged():
     cuts = [500.0, 2500.0, 3500.0, 5000.0]
     text = gv.render_vad_gap_peak_csv(res, cuts_ms=cuts, top_n=5, min_rate=0.08)
     rows = list(csv.reader(io.StringIO(text)))
-    # Same six columns as the single-peak surface; one ranked row survives.
+    # Same seven columns as the single-peak surface; one ranked row survives.
     single = list(csv.reader(io.StringIO(gv.render_vad_gap_peak_csv(res, cuts_ms=cuts))))
     assert rows[0] == single[0]
     assert len(rows) == 2
-    assert rows[1] == ["True", "500", "2500", "2000", "2", "0.1"]
+    assert rows[1] == ["1", "True", "500", "2500", "2000", "2", "0.1"]
 
 
 def test_render_csv_min_rate_all_filtered_blank_row():
@@ -1185,7 +1192,7 @@ def test_render_csv_min_rate_all_filtered_blank_row():
     )
     rows = list(csv.reader(io.StringIO(text)))
     assert len(rows) == 2
-    assert rows[1] == ["False", "", "", "", "", ""]
+    assert rows[1] == ["", "False", "", "", "", "", ""]
 
 
 def test_handler_min_rate_threads_through_json():
@@ -1213,3 +1220,89 @@ def test_handler_min_rate_defaults_to_zero_when_absent():
     payload = json.loads("\n".join(lines))
     assert payload["min_rate"] == 0.0
     assert len(payload["peaks"]) == 2
+
+
+# ---- iter-356: explicit `rank` field in the machine faces ---------------
+#
+# Each `peaks` entry carries a 1-based `rank` (1 == steepest), and the CSV
+# gains a leading `rank` column. The human face already numbers `#k`, so it is
+# unchanged. The rank always equals the entry's position in the list + 1.
+
+
+def test_core_peaks_carry_one_based_rank():
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    p = gv.vad_gap_peak(res, cuts_ms=[500.0, 2500.0, 3500.0, 5000.0], top_n=5)
+    assert [pk["rank"] for pk in p["peaks"]] == [1, 2]
+    # rank == list position + 1, and the steepest band is rank 1.
+    for i, pk in enumerate(p["peaks"]):
+        assert pk["rank"] == i + 1
+    assert p["peaks"][0]["rank"] == 1
+    assert p["peaks"][0]["rate_per_100ms"] == pytest.approx(0.1)
+
+
+def test_core_single_peak_rank_is_one():
+    # The default top_n=1 singleton still carries rank 1.
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    p = gv.vad_gap_peak(res, cuts_ms=[500.0, 2500.0, 3500.0, 5000.0])
+    assert len(p["peaks"]) == 1
+    assert p["peaks"][0]["rank"] == 1
+
+
+def test_core_rank_survives_min_rate_filter():
+    # After a floor drops the cheaper band, the surviving band is still rank 1
+    # (rank names position in the FILTERED ranking, not the original band index).
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    p = gv.vad_gap_peak(
+        res, cuts_ms=[500.0, 2500.0, 3500.0, 5000.0], top_n=5, min_rate=0.08
+    )
+    assert len(p["peaks"]) == 1
+    assert p["peaks"][0]["rank"] == 1
+
+
+def test_core_no_peak_has_no_rank():
+    # All-valley range: no peaks, so no rank to assign.
+    res = _result((0, 1), (5, 6))
+    p = gv.vad_gap_peak(res, cuts_ms=[1000.0, 2000.0, 3000.0], top_n=3)
+    assert p["peaks"] == []
+
+
+def test_render_json_peaks_carry_rank():
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    payload = json.loads(
+        gv.render_vad_gap_peak_json(
+            res, cuts_ms=[500.0, 2500.0, 3500.0, 5000.0], top_n=5
+        )
+    )
+    assert [pk["rank"] for pk in payload["peaks"]] == [1, 2]
+
+
+def test_render_json_single_peak_rank_one():
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    payload = json.loads(
+        gv.render_vad_gap_peak_json(res, cuts_ms=[500.0, 2500.0, 3500.0, 5000.0])
+    )
+    assert payload["peaks"][0]["rank"] == 1
+
+
+def test_render_human_rank_face_unchanged_no_rank_field_leak():
+    # The human face numbers #k already; it does not print a literal "rank"
+    # token, so the iter-356 field is invisible there (machine-faces only).
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    lines = gv.render_vad_gap_peak(
+        res, cuts_ms=[500.0, 2500.0, 3500.0, 5000.0], top_n=3
+    )
+    assert not any("rank" in ln for ln in lines)
+    assert any(ln.strip().startswith("#1:") for ln in lines)
+
+
+def test_render_csv_rank_column_matches_json_rank():
+    res = _result((0, 1), (2, 3), (5, 6), (10, 11), (17, 18))
+    cuts = [500.0, 2500.0, 3500.0, 5000.0]
+    payload = json.loads(gv.render_vad_gap_peak_json(res, cuts_ms=cuts, top_n=5))
+    rows = list(
+        csv.reader(io.StringIO(gv.render_vad_gap_peak_csv(res, cuts_ms=cuts, top_n=5)))
+    )
+    # Body rows (skip header); the CSV rank column equals each peak's JSON rank.
+    csv_ranks = [int(r[0]) for r in rows[1:]]
+    json_ranks = [pk["rank"] for pk in payload["peaks"]]
+    assert csv_ranks == json_ranks == [1, 2]

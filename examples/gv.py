@@ -2539,7 +2539,10 @@ def vad_gap_peak(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1, min_rate=0
     the worst offender. The result always carries a ``peaks`` list of up to
     ``top_n`` band entries sorted by descending rate (earliest band first on a
     tie), each carrying the same ``from_ms`` / ``to_ms`` / ``from_s`` / ``to_s`` /
-    ``width_ms`` / ``merged_added`` / ``rate_per_100ms`` fields. Only NON-empty
+    ``width_ms`` / ``merged_added`` / ``rate_per_100ms`` fields plus a 1-based
+    ``rank`` (iter-356) that makes the descending-rate order explicit in the entry
+    itself (``rank`` 1 is the steepest band; it always equals the entry's position
+    in the list + 1). Only NON-empty
     bands (rate > 0) are listed — an empty valley is not a "cost peak" — so the
     list may hold FEWER than ``top_n`` entries (or be empty when every band is a
     valley). The legacy scalar ``peak_*`` fields are kept verbatim and always echo
@@ -2617,6 +2620,11 @@ def vad_gap_peak(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1, min_rate=0
         return peak
     peaks = [
         {
+            # iter-356: 1-based rank making the descending-rate order explicit in
+            # the entry itself. The list is already sorted, so rank == position+1;
+            # carrying it as a field lets the machine faces (JSON/CSV) name the
+            # ordering without relying on array/row position alone.
+            "rank": i,
             "from_ms": b["from_ms"],
             "to_ms": b["to_ms"],
             "from_s": b["from_s"],
@@ -2625,7 +2633,7 @@ def vad_gap_peak(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1, min_rate=0
             "merged_added": b["merged_added"],
             "rate_per_100ms": b["rate_per_100ms"],
         }
-        for b in ranked[:top_n]
+        for i, b in enumerate(ranked[:top_n], start=1)
     ]
     peak["peaks"] = peaks
     # The legacy scalar peak_* fields always echo the single steepest band — the
@@ -2753,8 +2761,9 @@ def render_vad_gap_peak_json(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1
     same JSON spelling of "no structure" the other gap surfaces use.
 
     iter-354 adds ``top_n`` (the requested count) and a ``peaks`` list of up to
-    ``top_n`` ranked band objects (descending rate, earliest first on a tie). The
-    scalar ``peak_*`` fields are unchanged and echo ``peaks[0]``, so a default
+    ``top_n`` ranked band objects (descending rate, earliest first on a tie), each
+    carrying a 1-based ``rank`` (iter-356) that names its position in the ordering.
+    The scalar ``peak_*`` fields are unchanged and echo ``peaks[0]``, so a default
     ``top_n=1`` payload is a strict superset of the iter-350 shape. iter-355 adds
     ``min_rate`` (the applied rate floor; bands cheaper than it are excluded from
     ``peaks``), defaulting to ``0.0`` (every non-empty band kept — the iter-354
@@ -2814,15 +2823,17 @@ def render_vad_gap_peak_csv(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1,
     ``None`` (segmenter unavailable) yields a single ``# silero VAD unavailable:
     ...`` comment line.
 
-    iter-354's ``top_n`` keeps the SAME six columns and emits one row PER ranked
-    peak (descending rate, earliest first on a tie) — the row order IS the rank,
-    so no extra column is needed and the rows union cleanly with the single-peak
-    CSV. ``top_n == 1`` is byte-for-byte the original one-row table. iter-355's
-    ``min_rate`` floor simply changes which bands are ranked (the columns are
-    unchanged); when the floor leaves no peak but bands exist, the legacy single
-    ``peak_found=False`` blank row is emitted (same as the all-valley case).
-    ``min_rate == 0.0`` is unchanged. Pure: built with the stdlib :mod:`csv`
-    writer, trailing terminator stripped.
+    iter-354's ``top_n`` emits one row PER ranked peak (descending rate, earliest
+    first on a tie). iter-356 prepends an explicit ``rank`` column (1-based) so the
+    descending order is named in the data, not implied by row position alone — the
+    seven columns are ``rank,peak_found,peak_from_ms,peak_to_ms,peak_width_ms,
+    peak_merged_added,peak_rate_per_100ms``. ``rank`` is ``1`` for the single-peak
+    (``top_n == 1``) table and counts up across the ranked rows; it is blank on the
+    no-peak ``peak_found=False`` row. iter-355's ``min_rate`` floor simply changes
+    which bands are ranked (the columns are unchanged); when the floor leaves no
+    peak but bands exist, the single ``rank``-blank ``peak_found=False`` blank row
+    is emitted (same as the all-valley case). Pure: built with the stdlib
+    :mod:`csv` writer, trailing terminator stripped.
     """
     if result is None:
         return (
@@ -2834,6 +2845,7 @@ def render_vad_gap_peak_csv(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1,
     writer = csv.writer(buf)
     writer.writerow(
         [
+            "rank",
             "peak_found",
             "peak_from_ms",
             "peak_to_ms",
@@ -2843,11 +2855,13 @@ def render_vad_gap_peak_csv(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1,
         ]
     )
     if p["peaks"]:
-        # One row per ranked peak; row order = rank. peak_found is True for every
-        # named peak (only non-empty bands reach the list).
+        # One row per ranked peak; the explicit rank column (iter-356) names the
+        # descending-rate order. peak_found is True for every named peak (only
+        # non-empty bands reach the list).
         for pk in p["peaks"]:
             writer.writerow(
                 [
+                    pk["rank"],
                     True,
                     _format_cut_label(pk["from_ms"]),
                     _format_cut_label(pk["to_ms"]),
@@ -2857,9 +2871,9 @@ def render_vad_gap_peak_csv(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS, top_n=1,
                 ]
             )
     elif p["num_bands"] > 0:
-        # Bands exist but none is a cost peak (all-valley range): the legacy single
-        # peak_found=False row with blank measures.
-        writer.writerow([p["peak_found"], "", "", "", "", ""])
+        # Bands exist but none is a cost peak (all-valley range): the single
+        # peak_found=False row with blank measures (rank blank too — no peak).
+        writer.writerow(["", p["peak_found"], "", "", "", "", ""])
     return buf.getvalue().rstrip("\r\n")
 
 
@@ -7546,9 +7560,9 @@ def build_parser():
     vad_gap_peak_fmt.add_argument(
         "--csv",
         action="store_true",
-        help="Emit a one-row peak_found,peak_from_ms,peak_to_ms,peak_width_ms,"
-        "peak_merged_added,peak_rate_per_100ms CSV summary; mutually exclusive "
-        "with --json",
+        help="Emit a rank,peak_found,peak_from_ms,peak_to_ms,peak_width_ms,"
+        "peak_merged_added,peak_rate_per_100ms CSV summary (one row per ranked "
+        "peak when --top-n > 1); mutually exclusive with --json",
     )
 
     # gv vad-gap-recommend — segment one WAV and RECOMMEND an end-of-turn hangover
