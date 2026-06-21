@@ -34527,3 +34527,92 @@ in the feature worktree before ff-merge AND re-verified on main post-merge
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    ~30 leftover per-iter worktrees. A future lap could `git worktree prune` /
    remove the merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-379 — gv vad-gap-recommend-knob-grid --sort-by grade/spread ordering
+
+- **Date:** 2026-06-21
+- **Branch:** iter-379-grid-sort-by (ff-merged to main, worktree removed)
+- **Commit:** 17232e4
+
+**Why.** The standing next-item #1 from iter-378 asked to "extend `--sort-by`
+ordering to the 2-D knob-grid": iter-378 added `--sort-by {grade,spread}` to the
+1-D `vad-gap-recommend-knob-sweep`; the 2-D `vad-gap-recommend-knob-grid`
+(iter-373) tabulates the same grade + spread per CELL but had no ordering. This is
+the grid analogue, exactly as iter-377 extended `--min-grade` from sweep to grid.
+With this lap the recommend-knob family spans `--bias` (column filter, iter-374/
+375), `--min-grade` (row filter, iter-376/377), and `--sort-by` (ordering,
+iter-378/this lap) across BOTH the 1-D and 2-D surfaces — feature-complete on
+filters AND ordering. A genuinely new operator-facing knob on the existing gv CLI,
+not an 18th chat-metrics clone (family complete, iter-328).
+
+**What it is.** `gv vad-gap-recommend-knob-grid recording.wav --sort-by grade`
+reorders the (gate × column) grid cells so the most-useful region of the plane
+reads first instead of by row-major order:
+- `grade` — confidence grade DESCENDING (strong → moderate → weak → none →
+  ungraded), so the trustworthy cells float to the top.
+- `spread` — short→long `spread_ms` ASCENDING (tightest first), so the cells whose
+  three biases agree most — the least bias-sensitive, most decisive
+  recommendations — come first.
+Both orderings are STABLE (cells tying on the key keep their row-major order) and
+place cells with no recommendation (`None` spread / ungraded, <2 segments) LAST.
+
+**Design — render-only ordering; reuses the iter-378 primitives wholesale.** The
+core `vad_gap_recommend_knob_grid` is untouched: it stays the always-row-major,
+testable primitive. Grid cells carry the same `grade` / `spread_ms` keys as sweep
+rows, so the shared `_sort_knob_rows` (stable; `None` = identity copy; unknown key
+keeps order) and `gap_recommend_sort_type` argparse type apply UNCHANGED — no new
+helpers were needed (contrast iter-376/377/378 which each added at least the
+docstrings; this lap is pure wiring of an existing primitive into the grid).
+
+**What landed in `examples/gv.py` (+87/-18 incl. parser/handler).**
+- All three grid renderers (`render_vad_gap_recommend_knob_grid` / `_json` /
+  `_csv`) gained a `sort_by=None` kwarg, applied AFTER the `min_grade` filter so
+  only surviving cells are reordered. Human: reorders the body rows. JSON: adds a
+  top-level `sort_by` key when set (composes with both `biases` and `min_grade`).
+  CSV: header + column set unchanged so a sorted run still unions cleanly with an
+  unsorted one — only the row order differs.
+- `cmd_vad_gap_recommend_knob_grid` resolves
+  `sort_by = getattr(args, "sort_by", None)` and threads it through every render
+  call (incl. the unavailable branch).
+- Added `--sort-by {grade,spread}` to the grid parser (after `--min-grade`, before
+  the --json/--csv format mutex), mirroring the sweep registration.
+
+**Tests (tests/unit, +12 net — test_gv_vad_gap_recommend_knob_grid.py 66→78).**
+human default==explicit-None / grade-strong-first; JSON default-no-key /
+grade-names-key+reorders / spread-ascending / composes with min_grade+bias; CSV
+reorders rows + header unchanged (grade at col 8); handler grade/spread paths /
+default-keeps-row-major-order / invalid-rejected-at-parser / unavailable threads
+through. Added a `_weak` fixture (mirrors the sweep test file) to exercise the
+strong > weak > none grade ordering. The shared sort-type / `_sort_knob_rows`
+primitives are already exercised in the sweep test file; the grid tests verify the
+wiring, not the primitives.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5381 passed**
+(5369 prior + 12 net new), run in the feature worktree before ff-merge AND
+re-verified on main post-merge (`test_gv_vad_gap_recommend_knob_grid.py` +
+`test_gv_cli.py` → 168 passed).
+- Integration: not run this lap (pure string-formatting/arithmetic over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..378 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] recommend-knob family is now feature-complete on filters AND
+   ordering.** `--bias` (column filter, iter-374/375), `--min-grade` (row filter,
+   iter-376/377), and `--sort-by` (ordering, iter-378/379) all span both the 1-D
+   sweep and 2-D grid. A natural NEW direction (noted iter-378 #2): a `--top-N`
+   that keeps only the first N rows/cells AFTER sorting (a filter that composes
+   with the ordering — "show me the 3 most trustworthy knob settings"), distinct
+   from `--min-grade` (threshold, not count). Add to the sweep first, then the grid.
+2. **[gv CLI] single-shot `vad-gap-recommend-sweep` has no `--min-grade`/`--sort-by`**
+   — it names short/balanced/long for ONE segmentation (one grade/spread for the
+   whole table), so a grade/order ROW filter is degenerate there. Not worth a lap;
+   noting it so a future lap doesn't mistake it for a gap.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~30 leftover per-iter worktrees. A future lap could `git worktree prune` /
+   remove the merged ones. NOTE: this lap correctly removed its own worktree.
