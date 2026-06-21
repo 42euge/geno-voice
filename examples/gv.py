@@ -14,6 +14,7 @@ Usage:
     gv vad-gaps recording.wav --json # machine-readable gap stats + per-gap list
     gv vad-gap-percentiles recording.wav --percentiles 50,90,99  # robust pause percentiles (outlier-proof vs min/mean/max)
     gv vad-gap-cdf recording.wav --cuts-ms 200,400,800,1600  # merge-CDF — what fraction of pauses each --min-silence-ms cut would merge
+    gv vad-gap-recommend recording.wav  # verdict — recommends a --min-silence-ms in the valley between short/long pauses
     gv vad-gap-hist recording.wav --bin-width-s 0.5  # histogram the silence-gap durations (see the distribution shape)
     gv vad-gap-sweep recording.wav --thresholds 0.3,0.5,0.7,0.9  # sweep N gates, tabulate how the min gap moves
     gv vad-gap-grid recording.wav --thresholds 0.3,0.5,0.7 --min-silences 400,800  # gate × hangover gap grid
@@ -2249,6 +2250,244 @@ def render_vad_gap_cdf_csv(result, *, cuts_ms=DEFAULT_GAP_CDF_CUTS_MS):
     return buf.getvalue().rstrip("\r\n")
 
 
+def vad_gap_recommend(result):
+    """Recommend an end-of-turn hangover by finding the valley in the gap distribution (iter-347).
+
+    The natural CONSUMER of the gap-analysis family. ``gv vad-gaps`` /
+    ``gv vad-gap-hist`` / ``gv vad-gap-cdf`` / ``gv vad-gap-percentiles`` all
+    SHOW the operator the inter-segment pause distribution and leave the
+    "so what number do I set ``--min-silence-ms`` to?" judgement to them. This
+    surface answers that question directly: it reads the gap distribution, finds
+    the valley between the short within-turn pauses (which should MERGE) and the
+    long between-turn pauses (which should END a turn), and names a single
+    recommended hangover sitting in that valley — the histogram's valley, turned
+    into a number.
+
+    The split is found by the largest-gap (1-D Jenks) rule on a single feature:
+    sort the gaps, then take the WIDEST jump between two consecutive sorted gaps.
+    That widest jump is the empty band separating the short cluster from the long
+    cluster, and the recommended hangover is its midpoint — below it sit the
+    within-turn pauses (which a hangover there would merge), at or above it sit
+    the between-turn pauses (which it would keep as boundaries). The merge
+    accounting follows the segmenter's own convention (a pause STRICTLY ``< cut``
+    merges; ``>= cut`` is kept), so ``below`` / ``at_or_above`` are exactly what
+    :func:`vad_gap_cdf` would report at the recommended cut.
+
+    Pure: anchors to :func:`vad_silence_gaps` for the gap list + aggregates (so
+    the totals always agree with ``gv vad-gaps``) and adds the recommendation
+    fields. A result with fewer than 2 segments has no gaps, so there is nothing
+    to recommend: ``recommended_ms`` / ``recommended_s`` are ``None`` and the
+    aggregates are ``None`` — the same distinction the other gap surfaces make.
+    A single pause, or several pauses all the same length, has no valley
+    (``split_found`` is ``False``); there is no short/long cluster split to make,
+    so it recommends just below the shortest pause (``min_gap / 2``) — every real
+    pause is then kept as a turn boundary, the conservative default. ``cut_s`` /
+    the gap endpoints round to 3 places and ``recommended_ms`` to 1 place,
+    matching the sibling gap surfaces.
+    """
+    d = vad_silence_gaps(result)
+    gaps = sorted(d["gaps"])
+    n = d["num_gaps"]
+    rec = {
+        "num_segments": d["num_segments"],
+        "num_gaps": n,
+        "min_gap_s": d["min_gap_s"],
+        "max_gap_s": d["max_gap_s"],
+        "mean_gap_s": d["mean_gap_s"],
+        "total_silence_s": d["total_silence_s"],
+        "recommended_s": None,
+        "recommended_ms": None,
+        "split_found": False,
+        "below": 0,
+        "at_or_above": 0,
+        "gap_below_s": None,
+        "gap_above_s": None,
+        "valley_width_s": None,
+    }
+    if not gaps:
+        return rec
+    # The widest jump between consecutive SORTED gaps is the empty band that
+    # separates the short within-turn cluster from the long between-turn cluster
+    # (1-D Jenks / largest-gap split). Duplicates give a zero-width jump so they
+    # never win; the first widest jump wins on a tie (earliest-tie, matching the
+    # rest of the family).
+    best_width = 0.0
+    best_lo = best_hi = None
+    for i in range(1, n):
+        width = gaps[i] - gaps[i - 1]
+        if width > best_width:
+            best_width = width
+            best_lo = gaps[i - 1]
+            best_hi = gaps[i]
+    if best_width > 0:
+        rec["split_found"] = True
+        rec["gap_below_s"] = round(best_lo, 3)
+        rec["gap_above_s"] = round(best_hi, 3)
+        rec["valley_width_s"] = round(best_width, 3)
+        cut_s = (best_lo + best_hi) / 2.0
+    else:
+        # No valley: one pause, or every pause the same length. There is no
+        # short/long split to make, so recommend just below the single cluster
+        # (the shortest pause halved) — every real pause is kept as a boundary.
+        cut_s = gaps[0] / 2.0
+    cut_s = round(cut_s, 3)
+    # Count against the rounded recommendation so below / at_or_above are exactly
+    # what setting --min-silence-ms to the reported number would produce.
+    below = sum(1 for g in gaps if g < cut_s)
+    rec["recommended_s"] = cut_s
+    rec["recommended_ms"] = round(cut_s * 1000.0, 1)
+    rec["below"] = below
+    rec["at_or_above"] = n - below
+    return rec
+
+
+def render_vad_gap_recommend(result):
+    """Render the recommended-hangover verdict as plain-text report lines (iter-347).
+
+    The human-readable face of :func:`vad_gap_recommend`. ``result`` of ``None``
+    (segmenter unavailable) yields the shared install hint. A result with fewer
+    than 2 segments has no gaps, so it prints the same short explanatory line
+    :func:`render_vad_gaps` uses (nothing to recommend). Otherwise it prints the
+    aggregate header (min/mean/max, total silence) then the verdict: the
+    recommended ``--min-silence-ms`` number, the valley it sits in (or a note
+    that no valley was found), and the effect — how many pauses that hangover
+    would merge vs keep. Pure: returns a list of strings (no I/O, no ANSI).
+    """
+    if result is None:
+        return [
+            "silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        ]
+    r = vad_gap_recommend(result)
+    lines = [
+        f"silero VAD recommended hangover — {result.name}",
+        f"  segments:     {r['num_segments']}",
+        f"  gaps:         {r['num_gaps']} (pauses between consecutive speech regions)",
+    ]
+    if r["num_gaps"] == 0:
+        lines.append("  (fewer than 2 segments — no inter-segment pause to measure)")
+        return lines
+    lines.append(f"  min gap:      {r['min_gap_s']:.3f}s")
+    lines.append(f"  mean gap:     {r['mean_gap_s']:.3f}s")
+    lines.append(f"  max gap:      {r['max_gap_s']:.3f}s")
+    lines.append(f"  total silence:{r['total_silence_s']:8.3f}s")
+    label = _format_cut_label(r["recommended_ms"])
+    lines.append(
+        f"  recommended --min-silence-ms: {label} ({r['recommended_s']:.3f}s)"
+    )
+    if r["split_found"]:
+        lines.append(
+            f"  valley:       between {r['gap_below_s']:.3f}s (top of short "
+            f"pauses) and {r['gap_above_s']:.3f}s (bottom of long pauses), "
+            f"width {r['valley_width_s']:.3f}s"
+        )
+    else:
+        lines.append(
+            "  (no valley — pauses don't separate into short/long clusters; "
+            "recommending just below the shortest pause so every pause is kept)"
+        )
+    lines.append(
+        f"  effect:       merges {r['below']}/{r['num_gaps']} within-turn "
+        f"pauses, keeps {r['at_or_above']}/{r['num_gaps']} as turn boundaries "
+        "(iter-347)"
+    )
+    return lines
+
+
+def render_vad_gap_recommend_json(result):
+    """Render the recommended-hangover verdict as a JSON string (iter-347).
+
+    Machine-readable twin of :func:`render_vad_gap_recommend`, mirroring the
+    degrade-to-``{"available": false}`` contract the other VAD JSON renderers
+    use. Carries the aggregate stats plus the recommendation fields
+    (``recommended_ms`` / ``recommended_s`` / ``split_found`` / ``below`` /
+    ``at_or_above`` / the valley endpoints). The recommendation fields are
+    ``null`` / ``0`` / ``false`` for a <2-segment result (nothing to recommend),
+    the same JSON spelling of "no distribution" the other gap surfaces use. Pure:
+    built from :func:`vad_gap_recommend`, so it works on any
+    ``SileroResult``-shaped object.
+    """
+    if result is None:
+        return json.dumps(
+            {
+                "available": False,
+                "hint": (
+                    "install 'silero-vad' (pulls torch + torchaudio) to enable "
+                    "offline neural segmentation"
+                ),
+            },
+            indent=2,
+        )
+    r = vad_gap_recommend(result)
+    payload = {
+        "available": True,
+        "name": result.name,
+        "num_segments": r["num_segments"],
+        "num_gaps": r["num_gaps"],
+        "min_gap_s": r["min_gap_s"],
+        "max_gap_s": r["max_gap_s"],
+        "mean_gap_s": r["mean_gap_s"],
+        "total_silence_s": r["total_silence_s"],
+        "recommended_ms": r["recommended_ms"],
+        "recommended_s": r["recommended_s"],
+        "split_found": r["split_found"],
+        "below": r["below"],
+        "at_or_above": r["at_or_above"],
+        "gap_below_s": r["gap_below_s"],
+        "gap_above_s": r["gap_above_s"],
+        "valley_width_s": r["valley_width_s"],
+    }
+    return json.dumps(payload, indent=2)
+
+
+def render_vad_gap_recommend_csv(result):
+    """Render the recommended-hangover verdict as a one-row CSV table (iter-347).
+
+    The spreadsheet-friendly twin of :func:`render_vad_gap_recommend` /
+    :func:`render_vad_gap_recommend_json`, completing the human / ``--json`` /
+    ``--csv`` trio every VAD-analysis surface carries. Unlike the per-gap /
+    per-cut surfaces, the verdict is a SINGLE recommendation, so the natural CSV
+    is one summary row:
+    ``recommended_ms,recommended_s,split_found,below,at_or_above,num_gaps``. The
+    derivable aggregates and valley endpoints are NOT duplicated into the row,
+    matching :func:`render_vad_gap_cdf_csv`'s reasoning. A result with fewer than
+    2 segments yields the header alone (a valid empty-bodied table — nothing to
+    recommend). ``result`` of ``None`` (segmenter unavailable) yields a single
+    ``# silero VAD unavailable: ...`` comment line. Pure: built with the stdlib
+    :mod:`csv` writer, trailing terminator stripped.
+    """
+    if result is None:
+        return (
+            "# silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        )
+    r = vad_gap_recommend(result)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(
+        [
+            "recommended_ms",
+            "recommended_s",
+            "split_found",
+            "below",
+            "at_or_above",
+            "num_gaps",
+        ]
+    )
+    if r["num_gaps"] > 0:
+        writer.writerow(
+            [
+                _format_cut_label(r["recommended_ms"]),
+                r["recommended_s"],
+                r["split_found"],
+                r["below"],
+                r["at_or_above"],
+                r["num_gaps"],
+            ]
+        )
+    return buf.getvalue().rstrip("\r\n")
+
+
 def vad_gap_histogram(result, *, bin_width_s=0.5):
     """Bucket the inter-segment silence gaps into a fixed-width histogram (iter-336).
 
@@ -4298,6 +4537,63 @@ def cmd_vad_gap_cdf(args, *, log=print, segmenter=None, availability=None):
             log(line)
 
 
+def cmd_vad_gap_recommend(args, *, log=print, segmenter=None, availability=None):
+    """Segment one WAV offline and RECOMMEND an end-of-turn hangover number.
+
+    iter-347's verdict surface — the natural consumer of the gap-analysis family.
+    Where ``gv vad-gaps`` / ``gv vad-gap-hist`` / ``gv vad-gap-cdf`` /
+    ``gv vad-gap-percentiles`` SHOW the operator the pause distribution and leave
+    the "so what do I set ``--min-silence-ms`` to?" judgement to them,
+    ``gv vad-gap-recommend recording.wav`` answers it directly: it finds the
+    valley between the short within-turn pauses and the long between-turn pauses
+    (the widest jump in the sorted gap distribution) and names a single
+    recommended hangover sitting in that valley.
+
+    Same injected-dependency contract as :func:`cmd_vad_gap_cdf`: ``segmenter`` /
+    ``availability`` default to the real :mod:`vad.silero` functions, imported
+    lazily so the parser stays torch-free. The segmenter knobs are shared with
+    ``gv vad`` so the gaps are measured against the same segmentation. ``--csv``
+    is mutually exclusive with ``--json``; when ``silero-vad`` is absent the
+    handler prints the install hint and returns, never crashing.
+    """
+    if segmenter is None or availability is None:
+        from vad.silero import segment_recording, silero_available
+
+        segmenter = segment_recording if segmenter is None else segmenter
+        availability = silero_available if availability is None else availability
+
+    as_json = getattr(args, "json", False)
+    as_csv = getattr(args, "csv", False)
+
+    if not availability():
+        if as_json:
+            log(render_vad_gap_recommend_json(None))
+        elif as_csv:
+            log(render_vad_gap_recommend_csv(None))
+        else:
+            for line in render_vad_gap_recommend(None):
+                log(line)
+        return
+
+    from vad.silero import SileroParams
+
+    params = SileroParams(
+        threshold=args.threshold,
+        min_speech_ms=args.min_speech_ms,
+        min_silence_ms=args.min_silence_ms,
+        speech_pad_ms=args.speech_pad_ms,
+        max_speech_s=args.max_speech_s,
+    )
+    result = segmenter(args.wav, params=params)
+    if as_json:
+        log(render_vad_gap_recommend_json(result))
+    elif as_csv:
+        log(render_vad_gap_recommend_csv(result))
+    else:
+        for line in render_vad_gap_recommend(result):
+            log(line)
+
+
 def cmd_vad_gap_histogram(args, *, log=print, segmenter=None, availability=None):
     """Segment one WAV offline and report the inter-segment silence-gap HISTOGRAM.
 
@@ -5063,6 +5359,7 @@ DEFAULT_HANDLERS = {
     "vad-gaps": cmd_vad_gaps,
     "vad-gap-percentiles": cmd_vad_gap_percentiles,
     "vad-gap-cdf": cmd_vad_gap_cdf,
+    "vad-gap-recommend": cmd_vad_gap_recommend,
     "vad-gap-hist": cmd_vad_gap_histogram,
     "vad-gap-sweep": cmd_vad_gap_sweep,
     "vad-diff": cmd_vad_diff,
@@ -5631,6 +5928,76 @@ def build_parser():
         action="store_true",
         help="Emit a flat cut_ms,cut_s,merged,merge_fraction CSV table (one row "
         "per cut) for spreadsheets/plots; mutually exclusive with --json",
+    )
+
+    # gv vad-gap-recommend — segment one WAV and RECOMMEND an end-of-turn hangover
+    # number (iter-347). The verdict surface / natural consumer of the gap-analysis
+    # family: where vad-gaps/vad-gap-hist/vad-gap-cdf/vad-gap-percentiles SHOW the
+    # pause distribution, vad-gap-recommend finds the valley between short
+    # within-turn pauses and long between-turn pauses (the widest jump in the
+    # sorted gaps) and names a single recommended --min-silence-ms sitting in it.
+    # Shares all segmenter knobs with `gv vad`.
+    vad_gap_rec = sub.add_parser(
+        "vad-gap-recommend",
+        help="Offline Silero VAD — segment a WAV and recommend an end-of-turn "
+        "--min-silence-ms by finding the valley between short within-turn "
+        "pauses and long between-turn pauses (names the number, not just the "
+        "distribution)",
+    )
+    vad_gap_rec.add_argument(
+        "wav",
+        help="Path to a 16-bit PCM WAV file to segment",
+    )
+    vad_gap_rec.add_argument(
+        "--threshold",
+        type=unit_interval_type,
+        default=vad_threshold_default,
+        help=f"P(speech) gate in [0, 1] (default: {vad_threshold_default})",
+    )
+    vad_gap_rec.add_argument(
+        "--min-speech-ms",
+        type=nonneg_float_type,
+        default=vad_min_speech_default,
+        dest="min_speech_ms",
+        help="Drop speech regions shorter than this, in ms "
+        f"(default: {vad_min_speech_default})",
+    )
+    vad_gap_rec.add_argument(
+        "--min-silence-ms",
+        type=nonneg_float_type,
+        default=vad_min_silence_default,
+        dest="min_silence_ms",
+        help="Trailing silence before a region ends, in ms — matches the "
+        f"pipecat stop_secs=0.8 live default (default: {vad_min_silence_default})",
+    )
+    vad_gap_rec.add_argument(
+        "--speech-pad-ms",
+        type=nonneg_float_type,
+        default=vad_speech_pad_default,
+        dest="speech_pad_ms",
+        help="Symmetric padding added to each region, in ms "
+        f"(default: {vad_speech_pad_default})",
+    )
+    vad_gap_rec.add_argument(
+        "--max-speech-s",
+        type=max_speech_type,
+        default=vad_max_speech_default,
+        dest="max_speech_s",
+        help="Force-split regions longer than this, in seconds; 'inf'/'none' "
+        "never splits (default: inf)",
+    )
+    vad_gap_rec_fmt = vad_gap_rec.add_mutually_exclusive_group()
+    vad_gap_rec_fmt.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON (aggregate stats + recommendation "
+        "fields) instead of the human-readable verdict",
+    )
+    vad_gap_rec_fmt.add_argument(
+        "--csv",
+        action="store_true",
+        help="Emit a one-row recommended_ms,recommended_s,split_found,below,"
+        "at_or_above,num_gaps CSV summary; mutually exclusive with --json",
     )
 
     # gv vad-gap-hist — segment one WAV and HISTOGRAM the inter-segment silence
