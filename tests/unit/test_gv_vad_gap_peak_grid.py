@@ -726,3 +726,245 @@ def test_handler_unavailable_json_carries_no_grid(monkeypatch):
     payload = json.loads(out[0])
     assert payload["available"] is False
     assert "grid" not in payload
+
+
+# ---- iter-369: per-cell top-N ranking on the cost-peak grid -------------
+#
+# iter-354 added the top-N ranking (the N steepest bands) to the SINGLE-shot
+# `gv vad-gap-peak`; iter-368 carried it into the 1-D SWEEP. iter-369 completes
+# the trio by carrying that same view into the 2-D GRID, one ranking per
+# (row, col) cell, so an operator watches not just how the single steepest band
+# moves but how the WHOLE ranking reorders across two knobs at once. The core +
+# JSON always carry the `peaks` list (machine consumers); --top-n > 1 gates the
+# human numbered sub-block; the CSV verdict-row schema is unchanged (the
+# iter-368 stance).
+
+
+def test_core_cell_carries_peaks_default_top_n_1():
+    """At the default top_n=1 each cell's `peaks` holds exactly the single
+    steepest band, and its rank-1 entry mirrors the scalar peak_* fields."""
+    cells = gv.vad_gap_peak_grid([0.5], [800.0], [_multi_band()])
+    peaks = cells[0]["peaks"]
+    assert len(peaks) == 1
+    assert peaks[0]["rank"] == 1
+    assert peaks[0]["from_ms"] == cells[0]["peak_from_ms"]
+    assert peaks[0]["rate_per_100ms"] == cells[0]["peak_rate_per_100ms"]
+
+
+def test_core_top_n_ranks_steepest_first():
+    """top_n=3 names the three distinct bands ranked by descending rate."""
+    cells = gv.vad_gap_peak_grid([0.5], [800.0], [_multi_band()], top_n=3)
+    peaks = cells[0]["peaks"]
+    assert [p["rank"] for p in peaks] == [1, 2, 3]
+    rates = [p["rate_per_100ms"] for p in peaks]
+    assert rates == sorted(rates, reverse=True)
+    assert rates == [0.5, 0.25, 0.125]
+
+
+def test_core_top_n_caps_at_available_bands():
+    """Fewer than top_n entries appear when the range holds fewer non-empty
+    bands (here three distinct bands, top_n=5 → three entries)."""
+    cells = gv.vad_gap_peak_grid([0.5], [800.0], [_multi_band()], top_n=5)
+    assert len(cells[0]["peaks"]) == 3
+
+
+def test_core_peaks_match_single_shot():
+    """The per-cell ranking equals an independent vad_gap_peak --top-n on the
+    same result — the grid names the SAME ranking the single-shot verdict does."""
+    r = _multi_band()
+    direct = gv.vad_gap_peak(r, top_n=3)["peaks"]
+    cell = gv.vad_gap_peak_grid([0.5], [800.0], [r], top_n=3)[0]
+    assert cell["peaks"] == direct
+
+
+def test_core_no_peak_cell_has_empty_peaks():
+    """An all-valley cell (bands but none non-empty) carries an empty ranking."""
+    cells = gv.vad_gap_peak_grid([0.5], [800.0], [_all_valley()], top_n=3)
+    assert cells[0]["peaks"] == []
+
+
+def test_core_single_segment_cell_has_empty_peaks():
+    cells = gv.vad_gap_peak_grid([0.9], [800.0], [_single()], top_n=3)
+    assert cells[0]["peaks"] == []
+
+
+def test_core_peaks_per_cell_row_major():
+    """A no-peak cell between two populated cells carries an empty ranking while
+    its neighbours carry full rankings — preserving row-major order."""
+    cells = gv.vad_gap_peak_grid(
+        [0.3, 0.7], [400.0, 800.0],
+        [_multi_band(), _all_valley(), _single(), _multi_band()],
+        top_n=3,
+    )
+    lengths = [len(c["peaks"]) for c in cells]
+    assert lengths == [3, 0, 0, 3]
+
+
+def test_render_human_default_top_n_1_omits_ranking():
+    """Without --top-n > 1 the human table is byte-for-byte the old shape: no
+    'top ... costliest bands' sub-block."""
+    lines = gv.render_vad_gap_peak_grid(
+        [0.5], [800.0], [_multi_band()], name="rec.wav"
+    )
+    assert not any("costliest bands" in ln for ln in lines)
+
+
+def test_render_human_top_n_appends_ranking_block():
+    lines = gv.render_vad_gap_peak_grid(
+        [0.5], [800.0], [_multi_band()], name="rec.wav", top_n=3
+    )
+    header = [ln for ln in lines if "costliest bands" in ln]
+    assert len(header) == 1
+    assert "top 3 costliest bands" in header[0]
+    # Three numbered ranked lines follow (one per distinct band).
+    numbered = [ln for ln in lines if ln.strip().startswith("#")]
+    assert len(numbered) == 3
+    assert numbered[0].strip().startswith("#1:")
+    assert numbered[2].strip().startswith("#3:")
+
+
+def test_render_human_top_n_per_cell():
+    """One ranking block per cell (here a 1×2 grid → two cells)."""
+    lines = gv.render_vad_gap_peak_grid(
+        [0.5], [400.0, 800.0], [_multi_band(), _multi_band()],
+        name="rec.wav", top_n=2,
+    )
+    assert len([ln for ln in lines if "costliest bands" in ln]) == 2
+
+
+def test_render_human_top_n_no_peak_note():
+    """A no-peak cell under --top-n prints the '(no cost peak)' note rather than
+    numbered ranked lines."""
+    lines = gv.render_vad_gap_peak_grid(
+        [0.5], [800.0], [_all_valley()], name="rec.wav", top_n=3
+    )
+    note = [ln for ln in lines if "no cost peak" in ln]
+    assert len(note) == 1
+    assert not any(ln.strip().startswith("#") for ln in lines)
+
+
+def test_render_human_top_n_and_rate_dist_both_appear():
+    """The ranking and the band-rate-distribution blocks are independent; both
+    appear under a cell when both are requested, the ranking first."""
+    lines = gv.render_vad_gap_peak_grid(
+        [0.5], [800.0], [_multi_band()], name="rec.wav",
+        top_n=2, show_rate_dist=True,
+    )
+    rank_i = next(i for i, ln in enumerate(lines) if "costliest bands" in ln)
+    dist_i = next(i for i, ln in enumerate(lines) if "band-rate dist" in ln)
+    assert rank_i < dist_i
+
+
+def test_render_json_cells_carry_peaks_and_top_n():
+    """The JSON face ALWAYS carries `peaks` per cell + a top-level `top_n`, like
+    the single-shot render_vad_gap_peak_json and the sweep's _sweep_json."""
+    out = gv.render_vad_gap_peak_grid_json(
+        [0.5], [800.0], [_multi_band()], name="rec.wav", top_n=3
+    )
+    payload = json.loads(out)
+    assert payload["top_n"] == 3
+    peaks = payload["grid"][0]["peaks"]
+    assert [p["rank"] for p in peaks] == [1, 2, 3]
+
+
+def test_render_json_default_top_n_1_carries_single_peak():
+    """At the default top_n=1 the JSON still carries the `peaks` list (one entry)
+    and top_n=1 — a strict superset of the iter-365/367 shape."""
+    out = gv.render_vad_gap_peak_grid_json(
+        [0.5], [800.0], [_multi_band()], name="rec.wav"
+    )
+    payload = json.loads(out)
+    assert payload["top_n"] == 1
+    assert len(payload["grid"][0]["peaks"]) == 1
+
+
+def test_render_csv_schema_unchanged_no_peaks_column():
+    """The CSV body is the iter-365 ten-column scalar-steepest-band schema —
+    `peaks` is NOT a column even with a multi-band result (iter-368 stance)."""
+    out = gv.render_vad_gap_peak_grid_csv(
+        [0.5], [800.0], [_multi_band()], name="rec.wav"
+    )
+    header = list(csv.reader(io.StringIO(out)))[0]
+    assert header == [
+        "threshold", "min_silence_ms", "num_segments", "num_gaps",
+        "peak_found", "peak_from_ms", "peak_to_ms", "peak_width_ms",
+        "peak_merged_added", "peak_rate_per_100ms",
+    ]
+    assert "peaks" not in out
+    assert "rank" not in out
+
+
+def test_parser_top_n_default():
+    args = gv.build_parser().parse_args(["vad-gap-peak-grid", "rec.wav"])
+    assert args.top_n == 1
+
+
+def test_parser_top_n_custom_parsed():
+    args = gv.build_parser().parse_args(
+        ["vad-gap-peak-grid", "rec.wav", "--top-n", "4"]
+    )
+    assert args.top_n == 4
+
+
+def test_parser_top_n_rejects_zero():
+    with pytest.raises(SystemExit):
+        gv.build_parser().parse_args(
+            ["vad-gap-peak-grid", "rec.wav", "--top-n", "0"]
+        )
+
+
+def test_handler_top_n_human(monkeypatch):
+    _stub_silero(monkeypatch)
+    args = gv.build_parser().parse_args(
+        ["vad-gap-peak-grid", "rec.wav", "--thresholds", "0.5",
+         "--min-silences", "800", "--top-n", "3"]
+    )
+    lines = []
+    gv.cmd_vad_gap_peak_grid(args, log=lines.append,
+                             segmenter=_make_segmenter(_multi_band()),
+                             availability=_avail_true)
+    assert any("top 3 costliest bands" in ln for ln in lines)
+
+
+def test_handler_default_top_n_no_ranking(monkeypatch):
+    _stub_silero(monkeypatch)
+    args = gv.build_parser().parse_args(
+        ["vad-gap-peak-grid", "rec.wav", "--thresholds", "0.5",
+         "--min-silences", "800"]
+    )
+    lines = []
+    gv.cmd_vad_gap_peak_grid(args, log=lines.append,
+                             segmenter=_make_segmenter(_multi_band()),
+                             availability=_avail_true)
+    assert not any("costliest bands" in ln for ln in lines)
+
+
+def test_handler_threads_top_n_to_json(monkeypatch):
+    _stub_silero(monkeypatch)
+    args = gv.build_parser().parse_args(
+        ["vad-gap-peak-grid", "rec.wav", "--thresholds", "0.5",
+         "--min-silences", "800", "--top-n", "3", "--json"]
+    )
+    out = []
+    gv.cmd_vad_gap_peak_grid(args, log=out.append,
+                             segmenter=_make_segmenter(_multi_band()),
+                             availability=_avail_true)
+    payload = json.loads(out[0])
+    assert payload["top_n"] == 3
+    assert [p["rank"] for p in payload["grid"][0]["peaks"]] == [1, 2, 3]
+
+
+def test_handler_top_n_csv_schema_unchanged(monkeypatch):
+    """--top-n does not change the CSV (scalar steepest band only)."""
+    _stub_silero(monkeypatch)
+    args = gv.build_parser().parse_args(
+        ["vad-gap-peak-grid", "rec.wav", "--thresholds", "0.5",
+         "--min-silences", "800", "--top-n", "3", "--csv"]
+    )
+    out = []
+    gv.cmd_vad_gap_peak_grid(args, log=out.append,
+                             segmenter=_make_segmenter(_multi_band()),
+                             availability=_avail_true)
+    header = list(csv.reader(io.StringIO(out[0])))[0]
+    assert "peaks" not in out[0]
+    assert header[0] == "threshold"

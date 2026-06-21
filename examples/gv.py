@@ -4764,9 +4764,10 @@ def vad_gap_peak_grid(
     cuts_ms=DEFAULT_GAP_CDF_CUTS_MS,
     row_axis="threshold",
     col_axis="min_silence_ms",
+    top_n=1,
     rate_pcts=DEFAULT_BAND_RATE_PCTS,
 ):
-    """Pair each (row, col) axis-value cell with its COSTLIEST cost-curve band (iter-365; ``band_rate_dist`` iter-367).
+    """Pair each (row, col) axis-value cell with its COSTLIEST cost-curve band (iter-365; ``band_rate_dist`` iter-367; ``top_n`` iter-369).
 
     The 2-D analogue of :func:`vad_gap_peak_sweep`, and the peak-side twin of
     :func:`vad_gap_grid`. Where :func:`vad_gap_grid` tabulates the silence-gap
@@ -4791,12 +4792,27 @@ def vad_gap_peak_grid(
 
     Pure: returns a flat list of cell dicts ``{row_axis, col_axis,
     "num_segments", "num_gaps", "peak_found", "peak_from_ms", "peak_to_ms",
-    "peak_width_ms", "peak_merged_added", "peak_rate_per_100ms",
+    "peak_width_ms", "peak_merged_added", "peak_rate_per_100ms", "peaks",
     "band_rate_dist"}`` in that same row-major order. The peak fields are
     ``None`` / ``False`` for a cell whose segmentation names no cost peak (a
     <2-segment result with no gaps, or an all-valley range with no pause
     cluster), exactly the "no structure to name" spelling :func:`vad_gap_peak`
     returns and :func:`vad_gap_peak_sweep` carries per row.
+
+    iter-369 adds ``top_n`` — the iter-354 single-shot ranking, carried per grid
+    cell, completing the top-N view across the single-shot / sweep / grid trio
+    (iter-354 / iter-368 / this lap). Each cell gains a ``peaks`` list of up to
+    ``top_n`` ranked band objects (descending rate, earliest band first on a tie),
+    each with a 1-based ``rank``, so an operator can watch how the WHOLE
+    steepest-N ranking reorders across TWO knobs at once — not just whether the
+    single steepest band moves. A knob change that swaps which cluster is #1 vs #2
+    (without moving the headline ``peak_rate_per_100ms`` much) is invisible to the
+    scalar columns but obvious in the ranked list. The scalar ``peak_*`` fields are
+    unchanged and always echo the single steepest band (``peaks[0]``), so the
+    default ``top_n=1`` cell is a strict superset of the iter-365/367 shape (its
+    ``peaks`` then holds exactly one entry, or is empty for a no-peak cell).
+    ``top_n`` is threaded straight into :func:`vad_gap_peak`, so each cell's
+    ranking agrees EXACTLY with ``gv vad-gap-peak --top-n`` at the matching cell.
 
     iter-367 adds ``band_rate_dist`` — the iter-358 summary of the OBSERVED
     non-empty band-rate distribution at each cell (``count`` / ``min`` /
@@ -4815,7 +4831,8 @@ def vad_gap_peak_grid(
 
     No I/O, no torch import, so it is testable in isolation. Raises
     :class:`ValueError` if ``results`` length differs from the row×col product
-    (or if ``cuts_ms`` is empty / negative, delegated to :func:`vad_gap_peak`).
+    (or if ``cuts_ms`` is empty / negative, or ``top_n`` < 1, delegated to
+    :func:`vad_gap_peak`).
     """
     expected = len(row_values) * len(col_values)
     if len(results) != expected:
@@ -4829,7 +4846,7 @@ def vad_gap_peak_grid(
         for cv in col_values:
             r = results[i]
             i += 1
-            p = vad_gap_peak(r, cuts_ms=cuts_ms, rate_pcts=rate_pcts)
+            p = vad_gap_peak(r, cuts_ms=cuts_ms, top_n=top_n, rate_pcts=rate_pcts)
             cells.append(
                 {
                     row_axis: rv,
@@ -4842,6 +4859,9 @@ def vad_gap_peak_grid(
                     "peak_width_ms": p["peak_width_ms"],
                     "peak_merged_added": p["peak_merged_added"],
                     "peak_rate_per_100ms": p["peak_rate_per_100ms"],
+                    # iter-369: the iter-354 top-N ranking at this cell (the
+                    # scalar peak_* fields above still echo peaks[0]).
+                    "peaks": p["peaks"],
                     # iter-367: the observed non-empty band-rate distribution at
                     # this cell (the iter-358 single-shot view, per grid cell).
                     "band_rate_dist": p["band_rate_dist"],
@@ -4859,10 +4879,11 @@ def render_vad_gap_peak_grid(
     cuts_ms=DEFAULT_GAP_CDF_CUTS_MS,
     row_axis="threshold",
     col_axis="min_silence_ms",
+    top_n=1,
     show_rate_dist=False,
     rate_pcts=DEFAULT_BAND_RATE_PCTS,
 ):
-    """Render a 2-D cost-peak grid as a plain-text table (iter-365; ``show_rate_dist`` iter-367).
+    """Render a 2-D cost-peak grid as a plain-text table (iter-365; ``show_rate_dist`` iter-367; ``top_n`` iter-369).
 
     The human-readable twin of :func:`render_vad_gap_peak_grid_json`, the
     peak-side analogue of :func:`render_vad_gap_grid` and the 2-D analogue of
@@ -4893,6 +4914,17 @@ def render_vad_gap_peak_grid(
     the core so the printed percentiles match ``gv vad-gap-peak --show-rate-dist
     --rate-pcts`` at the matching cell), mirroring
     :func:`render_vad_gap_peak_sweep`.
+
+    With ``top_n > 1`` (iter-369) each cell is followed by an indented ranked
+    sub-block — the iter-354 single-shot ``--top-n`` view, per grid cell: up to
+    ``top_n`` numbered lines naming the N steepest bands (descending rate, earliest
+    first on a tie), so an operator watches how the WHOLE ranking reorders across
+    two knobs at once, not just whether the single steepest band moves. A cell that
+    names no cost peak prints a short "(no cost peak)" note instead. The default
+    ``top_n=1`` leaves the table byte-for-byte unchanged (the scalar peak columns
+    already carry the single steepest band). The ranked block and the
+    ``show_rate_dist`` block are independent — both may appear under a cell, the
+    ranking first, mirroring :func:`render_vad_gap_peak_sweep`.
     """
     if any(r is None for r in results):
         return [
@@ -4901,7 +4933,7 @@ def render_vad_gap_peak_grid(
         ]
     cells = vad_gap_peak_grid(
         row_values, col_values, results, cuts_ms=cuts_ms,
-        row_axis=row_axis, col_axis=col_axis, rate_pcts=rate_pcts,
+        row_axis=row_axis, col_axis=col_axis, top_n=top_n, rate_pcts=rate_pcts,
     )
     row_label = _SWEEP_AXIS_LABEL.get(row_axis, row_axis)
     col_label = _SWEEP_AXIS_LABEL.get(col_axis, col_axis)
@@ -4927,6 +4959,24 @@ def render_vad_gap_peak_grid(
             f"{_format_sweep_axis_value(col_axis, cell[col_axis]):>11}  "
             f"{cell['num_segments']:>8}  {cell['num_gaps']:>4}  {peak_cols}"
         )
+        if top_n > 1:
+            # iter-369: the iter-354 top-N ranking at this cell, indented under
+            # its row — one numbered line per ranked band (fewer than top_n when
+            # the range holds fewer non-empty bands), or a "(no cost peak)" note
+            # for a no-peak cell.
+            if not cell["peaks"]:
+                lines.append("      top bands: (no cost peak)")
+            else:
+                lines.append(f"      top {top_n} costliest bands (steepest first):")
+                for pk in cell["peaks"]:
+                    lo = _format_cut_label(pk["from_ms"])
+                    hi = _format_cut_label(pk["to_ms"])
+                    width = _format_cut_label(pk["width_ms"])
+                    lines.append(
+                        f"        #{pk['rank']}: {lo}-{hi}ms (width {width}ms) — "
+                        f"merges +{pk['merged_added']} pauses, "
+                        f"{pk['rate_per_100ms']:.3f} per +100ms"
+                    )
         if show_rate_dist:
             # iter-367: the observed non-empty band-rate distribution at this
             # cell — the iter-358 single-shot view, indented under its row.
@@ -4959,9 +5009,10 @@ def render_vad_gap_peak_grid_json(
     cuts_ms=DEFAULT_GAP_CDF_CUTS_MS,
     row_axis="threshold",
     col_axis="min_silence_ms",
+    top_n=1,
     rate_pcts=DEFAULT_BAND_RATE_PCTS,
 ):
-    """Render a 2-D cost-peak grid as a JSON string (iter-365; ``band_rate_dist`` iter-367).
+    """Render a 2-D cost-peak grid as a JSON string (iter-365; ``band_rate_dist`` iter-367; ``top_n`` iter-369).
 
     Machine-readable twin of :func:`render_vad_gap_peak_grid`, so the grid can
     feed a plotting/tuning script. The payload carries both swept axis names
@@ -4983,6 +5034,15 @@ def render_vad_gap_peak_grid_json(
     that cell (the iter-358 view, per cell); the payload also echoes the
     ``rate_pcts`` the percentiles were taken at so a consumer can label the
     quantiles without re-deriving them.
+
+    iter-369: like the single-shot JSON and the sweep's
+    ``render_vad_gap_peak_sweep_json`` (which always carry ``peaks`` / ``top_n``),
+    every grid cell carries a ``peaks`` list of up to ``top_n`` ranked band objects
+    (descending rate, each with a 1-based ``rank``) regardless of ``--top-n`` — so
+    a machine consumer always reads the full ranking, with the requested count
+    echoed once at top level as ``top_n``. At the default ``top_n=1`` each cell's
+    ``peaks`` holds the single steepest band (or is empty for a no-peak cell), so
+    the payload is a strict superset of the iter-365/367 shape.
     """
     if any(r is None for r in results):
         return json.dumps(
@@ -4997,7 +5057,7 @@ def render_vad_gap_peak_grid_json(
         )
     cells = vad_gap_peak_grid(
         row_values, col_values, results, cuts_ms=cuts_ms,
-        row_axis=row_axis, col_axis=col_axis, rate_pcts=rate_pcts,
+        row_axis=row_axis, col_axis=col_axis, top_n=top_n, rate_pcts=rate_pcts,
     )
     payload = {
         "available": True,
@@ -5005,6 +5065,7 @@ def render_vad_gap_peak_grid_json(
         "row_axis": row_axis,
         "col_axis": col_axis,
         "cuts_ms": list(cuts_ms),
+        "top_n": top_n,
         "rate_pcts": list(rate_pcts),
         "grid": cells,
     }
@@ -7998,6 +8059,14 @@ def cmd_vad_gap_peak_grid(args, *, log=print, segmenter=None, availability=None)
     appends an indented distribution sub-block under each human cell; the
     ``--json`` face always carries it per cell as ``band_rate_dist``; the CSV
     verdict-row schema is unchanged (the iter-358 stance).
+
+    iter-369 adds ``--top-n``: the iter-354 single-shot top-N ranking, carried per
+    grid cell (mirroring :func:`cmd_vad_gap_peak_sweep`'s per-row iter-368 view,
+    completing the top-N view across the single-shot / sweep / grid trio).
+    ``--top-n N`` appends an indented numbered ranked sub-block under each human
+    cell; the ``--json`` face always carries the ranking per cell as ``peaks`` plus
+    a top-level ``top_n``; the CSV verdict-row schema is unchanged (the iter-368
+    stance — it keeps echoing the single steepest band).
     """
     if segmenter is None or availability is None:
         from vad.silero import segment_recording, silero_available
@@ -8015,6 +8084,11 @@ def cmd_vad_gap_peak_grid(args, *, log=print, segmenter=None, availability=None)
     # human AND json faces.
     show_rate_dist = getattr(args, "show_rate_dist", False)
     rate_pcts = getattr(args, "rate_pcts", DEFAULT_BAND_RATE_PCTS)
+    # iter-369: --top-n drives the per-cell top-N ranking for the human AND json
+    # faces (the human gets the numbered sub-block; the json always carries
+    # 'peaks' + a top-level 'top_n'). The CSV's flat verdict-row schema keeps the
+    # single steepest band, exactly the iter-368 stance.
+    top_n = getattr(args, "top_n", 1)
 
     # Rows are always the gate; the column axis is whichever list was passed
     # (--min-speeches → floor; --speech-pads → region padding; --max-speeches →
@@ -8044,7 +8118,8 @@ def cmd_vad_gap_peak_grid(args, *, log=print, segmenter=None, availability=None)
             log(
                 render_vad_gap_peak_grid_json(
                     [], [], unavailable, name=args.wav, cuts_ms=cuts_ms,
-                    row_axis=row_axis, col_axis=col_axis, rate_pcts=rate_pcts,
+                    row_axis=row_axis, col_axis=col_axis, top_n=top_n,
+                    rate_pcts=rate_pcts,
                 )
             )
         elif as_csv:
@@ -8057,7 +8132,7 @@ def cmd_vad_gap_peak_grid(args, *, log=print, segmenter=None, availability=None)
         else:
             for line in render_vad_gap_peak_grid(
                 [], [], unavailable, name=args.wav, cuts_ms=cuts_ms,
-                row_axis=row_axis, col_axis=col_axis,
+                row_axis=row_axis, col_axis=col_axis, top_n=top_n,
                 show_rate_dist=show_rate_dist, rate_pcts=rate_pcts,
             ):
                 log(line)
@@ -8098,7 +8173,8 @@ def cmd_vad_gap_peak_grid(args, *, log=print, segmenter=None, availability=None)
         log(
             render_vad_gap_peak_grid_json(
                 row_values, col_values, results, name=name, cuts_ms=cuts_ms,
-                row_axis=row_axis, col_axis=col_axis, rate_pcts=rate_pcts,
+                row_axis=row_axis, col_axis=col_axis, top_n=top_n,
+                rate_pcts=rate_pcts,
             )
         )
     elif as_csv:
@@ -8111,7 +8187,7 @@ def cmd_vad_gap_peak_grid(args, *, log=print, segmenter=None, availability=None)
     else:
         for line in render_vad_gap_peak_grid(
             row_values, col_values, results, name=name, cuts_ms=cuts_ms,
-            row_axis=row_axis, col_axis=col_axis,
+            row_axis=row_axis, col_axis=col_axis, top_n=top_n,
             show_rate_dist=show_rate_dist, rate_pcts=rate_pcts,
         ):
             log(line)
@@ -10284,6 +10360,19 @@ def build_parser():
         "across all cells when the column axis is --min-silences/--min-speeches/"
         "--speech-pads; ignored when sweeping --max-speeches; 'inf'/'none' "
         "never splits (default: inf)",
+    )
+    vad_gap_peak_grid.add_argument(
+        "--top-n",
+        type=positive_int_type,
+        default=1,
+        dest="top_n",
+        help="Name the N steepest cost bands under EACH grid cell instead of just "
+        "the single peak (ranked by descending rate, earliest band first on a "
+        "tie; only non-empty bands count, so fewer than N may appear) — the "
+        "iter-354 single-shot --top-n view, per grid cell, so you can watch how "
+        "the WHOLE ranking reorders across two knobs at once. The --json face "
+        "always carries the ranking per cell as 'peaks'; the CSV keeps the single "
+        "steepest band. Default: 1",
     )
     vad_gap_peak_grid.add_argument(
         "--show-rate-dist",
