@@ -23,6 +23,7 @@ Usage:
     gv vad-gap-grid recording.wav --thresholds 0.3,0.5,0.7 --min-silences 400,800  # gate × hangover gap grid
     gv vad-diff recording.wav --threshold-a 0.5 --threshold-b 0.7  # compare two P(speech) gates
     gv vad-gap-diff recording.wav --threshold-a 0.5 --threshold-b 0.7  # how the silence-gap distribution shifts
+    gv vad-gap-recommend-diff before.wav after.wav  # compare two recordings' recommended hangovers + grades (did re-recording move it?)
     gv vad-sweep recording.wav --thresholds 0.3,0.5,0.7,0.9  # sweep N gates, tabulate the elbow
     gv vad-sweep recording.wav --min-silences 200,400,800,1600  # sweep the hangover instead
     gv vad-sweep recording.wav --min-speeches 50,100,200,400  # sweep the min-speech floor instead
@@ -5341,6 +5342,217 @@ def render_vad_gap_confidence_csv(result):
     return buf.getvalue().rstrip("\r\n")
 
 
+def vad_gap_recommend_delta(result_a, result_b, *, bias=DEFAULT_GAP_RECOMMEND_BIAS):
+    """Compare TWO recordings' recommended hangovers + confidence grades (iter-384).
+
+    The natural "did my tuning change help?" tool, and a genuinely new surface
+    after the recommend-knob family went feature-complete (iter-383). Every prior
+    diff in the family compares two SETTINGS of ONE recording: ``gv vad-diff`` /
+    ``gv vad-gap-diff`` segment the SAME WAV under ``--threshold-a`` vs
+    ``--threshold-b``. This compares ONE setting across TWO recordings: segment
+    ``wav_a`` and ``wav_b`` under the same knobs and report how each WAV's
+    :func:`vad_gap_recommend` hangover (and its :func:`vad_gap_confidence` grade)
+    differs. The headline is ``recommended_ms_delta`` — how far the recommended
+    end-of-turn ``--min-silence-ms`` moves between the two recordings, so an
+    operator who re-recorded after changing the mic, the room, or the speaker can
+    see whether their preferred hangover still holds.
+
+    ``bias`` (iter-351) is shared by both sides — the recommendation is taken at
+    the same point in each WAV's valley, so the comparison is apples-to-apples;
+    it is echoed back in the ``bias`` field. The confidence ``grade`` is a valley
+    property (invariant across biases, iter-353), so each side carries its own
+    grade for free — a recommendation that moved a lot but stayed ``strong`` on
+    both sides is a real shift, whereas one that moved while a side reads ``weak``
+    is mostly noise.
+
+    Pure: built from :func:`vad_gap_recommend` (once per side, at ``bias``) and
+    :func:`vad_gap_confidence` (once per side), so the per-side numbers and grades
+    agree EXACTLY with ``gv vad-gap-recommend`` / ``gv vad-gap-confidence`` on each
+    WAV. The always-present counts (``num_segments`` / ``num_gaps``) carry integer
+    deltas. A side with fewer than 2 segments has no gaps (nothing to recommend),
+    so its ``recommended_ms`` / ``recommended_s`` are ``None`` and the delta is
+    ``None`` whenever EITHER side is missing — a missing recommendation cannot be
+    differenced, the same ``null`` distinction the sibling diff surfaces make. The
+    ms delta rounds to 1 place (matching ``recommended_ms``) and the seconds delta
+    to 3 (matching the gap surfaces). No I/O, no torch import, so it is testable
+    without importing torch.
+    """
+    a = vad_gap_recommend(result_a, bias=bias)
+    b = vad_gap_recommend(result_b, bias=bias)
+    ca = vad_gap_confidence(result_a)
+    cb = vad_gap_confidence(result_b)
+
+    def _delta(x, y, places):
+        # A missing recommendation (None on either side) cannot be differenced.
+        if x is None or y is None:
+            return None
+        return round(y - x, places)
+
+    return {
+        "bias": bias,
+        "num_segments_a": a["num_segments"],
+        "num_segments_b": b["num_segments"],
+        "num_segments_delta": b["num_segments"] - a["num_segments"],
+        "num_gaps_a": a["num_gaps"],
+        "num_gaps_b": b["num_gaps"],
+        "num_gaps_delta": b["num_gaps"] - a["num_gaps"],
+        "recommended_ms_a": a["recommended_ms"],
+        "recommended_ms_b": b["recommended_ms"],
+        "recommended_ms_delta": _delta(a["recommended_ms"], b["recommended_ms"], 1),
+        "recommended_s_a": a["recommended_s"],
+        "recommended_s_b": b["recommended_s"],
+        "recommended_s_delta": _delta(a["recommended_s"], b["recommended_s"], 3),
+        "grade_a": ca["grade"],
+        "grade_b": cb["grade"],
+    }
+
+
+def render_vad_gap_recommend_diff(result_a, result_b, *, label_a, label_b,
+                                  bias=DEFAULT_GAP_RECOMMEND_BIAS):
+    """Render a two-recording recommended-hangover comparison as text (iter-384).
+
+    The human-readable face of :func:`vad_gap_recommend_delta`. ``label_a`` /
+    ``label_b`` name the two recordings being compared (their WAV paths). Either
+    result of ``None`` (segmenter unavailable) yields the shared install hint,
+    matching :func:`render_vad_gap_diff`. Prints the shared ``bias``, the two
+    labels, the segment/gap counts as ``A → B (Δ)``, the recommended
+    ``--min-silence-ms`` per recording with its signed delta, and each side's
+    confidence grade. A side with fewer than 2 segments has no recommendation and
+    prints ``-`` for its number; the delta prints ``n/a`` when EITHER side is
+    missing (a missing recommendation cannot be differenced, distinct from a
+    ``0.0ms`` change). Pure: returns a list of strings.
+    """
+    if result_a is None or result_b is None:
+        return [
+            "silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        ]
+    d = vad_gap_recommend_delta(result_a, result_b, bias=bias)
+
+    def _ms(value):
+        # A missing recommendation (None) prints "-" — distinct from a 0ms value.
+        return "-" if value is None else f"{_format_cut_label(value)}ms"
+
+    def _ms_delta(value):
+        # A delta is "n/a" when either side had no recommendation to difference.
+        if value is None:
+            return "n/a"
+        return f"{_signed_float(value)}ms"
+
+    def _grade(value):
+        # A side with no gaps has no grade (None) — print "-" to match the
+        # missing-number column.
+        return "-" if value is None else value
+
+    return [
+        "silero VAD recommended-hangover diff (two recordings)",
+        f"  bias:         {d['bias']}",
+        f"  recording A:  {label_a}",
+        f"  recording B:  {label_b}",
+        f"  segments:     {d['num_segments_a']} → {d['num_segments_b']} "
+        f"({_signed(d['num_segments_delta'])})",
+        f"  gaps:         {d['num_gaps_a']} → {d['num_gaps_b']} "
+        f"({_signed(d['num_gaps_delta'])})",
+        f"  recommended --min-silence-ms: {_ms(d['recommended_ms_a'])} → "
+        f"{_ms(d['recommended_ms_b'])} ({_ms_delta(d['recommended_ms_delta'])}) — "
+        "how far the recommended hangover moves between the two recordings",
+        f"  confidence:   {_grade(d['grade_a'])} → {_grade(d['grade_b'])} "
+        "(per-recording valley grade — trust the delta most when both read strong)",
+    ]
+
+
+def render_vad_gap_recommend_diff_json(result_a, result_b, *, label_a, label_b,
+                                       bias=DEFAULT_GAP_RECOMMEND_BIAS):
+    """Render a two-recording recommended-hangover comparison as JSON (iter-384).
+
+    Machine-readable twin of :func:`render_vad_gap_recommend_diff`, mirroring the
+    degrade-to-``{"available": false}`` contract the other VAD JSON renderers use.
+    Carries the two recording labels (``recording_a`` / ``recording_b``), the
+    shared ``bias``, and every key :func:`vad_gap_recommend_delta` returns (both
+    sides + signed deltas + per-side grades). The recommendation deltas are
+    ``null`` when either side has fewer than 2 segments (no recommendation to
+    difference), the same JSON ``null`` distinction the sibling diff surfaces make.
+    Either result ``None`` → ``{"available": false}`` + install hint. Pure:
+    returns a single JSON string built from the results' attributes.
+    """
+    if result_a is None or result_b is None:
+        return json.dumps(
+            {
+                "available": False,
+                "hint": (
+                    "install 'silero-vad' (pulls torch + torchaudio) to enable "
+                    "offline neural segmentation"
+                ),
+            },
+            indent=2,
+        )
+    payload = {
+        "available": True,
+        "recording_a": label_a,
+        "recording_b": label_b,
+        **vad_gap_recommend_delta(result_a, result_b, bias=bias),
+    }
+    return json.dumps(payload, indent=2)
+
+
+def render_vad_gap_recommend_diff_csv(result_a, result_b, *, label_a, label_b,
+                                      bias=DEFAULT_GAP_RECOMMEND_BIAS):
+    """Render a two-recording recommended-hangover comparison as CSV (iter-384).
+
+    The spreadsheet/plot-friendly twin of :func:`render_vad_gap_recommend_diff_json`,
+    completing the human / ``--json`` / ``--csv`` trio. A diff over two recordings
+    is two recommendations, so the natural CSV is one row per recording — the same
+    flat shape ``gv vad-diff --csv`` uses — with the columns
+    ``recording,bias,num_segments,num_gaps,recommended_ms,grade``. The signed
+    deltas the human/JSON twins surface are trivially derivable from the two rows
+    (b minus a), so they are left out rather than duplicated into a wide row. A
+    side with fewer than 2 segments has no recommendation, so its
+    ``recommended_ms`` cell is empty (the CSV spelling of JSON ``null``). Either
+    result ``None`` (segmenter unavailable) yields a single
+    ``# silero VAD unavailable: ...`` comment line. Pure: built with the stdlib
+    :mod:`csv` writer, trailing terminator stripped.
+    """
+    if result_a is None or result_b is None:
+        return (
+            "# silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        )
+    d = vad_gap_recommend_delta(result_a, result_b, bias=bias)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(
+        ["recording", "bias", "num_segments", "num_gaps", "recommended_ms", "grade"]
+    )
+
+    def _ms_cell(value):
+        return "" if value is None else _format_cut_label(value)
+
+    def _grade_cell(value):
+        return "" if value is None else value
+
+    writer.writerow(
+        [
+            label_a,
+            d["bias"],
+            d["num_segments_a"],
+            d["num_gaps_a"],
+            _ms_cell(d["recommended_ms_a"]),
+            _grade_cell(d["grade_a"]),
+        ]
+    )
+    writer.writerow(
+        [
+            label_b,
+            d["bias"],
+            d["num_segments_b"],
+            d["num_gaps_b"],
+            _ms_cell(d["recommended_ms_b"]),
+            _grade_cell(d["grade_b"]),
+        ]
+    )
+    return buf.getvalue().rstrip("\r\n")
+
+
 def vad_gap_histogram(result, *, bin_width_s=0.5):
     """Bucket the inter-segment silence gaps into a fixed-width histogram (iter-336).
 
@@ -9461,6 +9673,74 @@ def cmd_vad_gap_diff(args, *, log=print, segmenter=None, availability=None):
             log(line)
 
 
+def cmd_vad_gap_recommend_diff(args, *, log=print, segmenter=None, availability=None):
+    """Segment TWO WAVs offline and compare their recommended hangovers side by side.
+
+    iter-384's genuinely new surface, landed once the recommend-knob family went
+    feature-complete (iter-383). Every prior diff compares two SETTINGS of ONE
+    recording: ``gv vad-diff`` / ``gv vad-gap-diff`` segment the SAME WAV under
+    ``--threshold-a`` vs ``--threshold-b``. This compares ONE setting across TWO
+    recordings — ``gv vad-gap-recommend-diff wav_a.wav wav_b.wav`` segments each
+    WAV under the same shared knobs and reports how each one's
+    :func:`vad_gap_recommend` end-of-turn hangover (and its
+    :func:`vad_gap_confidence` grade) differs. The natural "did my tuning change
+    help?" tool: re-record after changing the mic / room / speaker and see whether
+    your preferred ``--min-silence-ms`` still holds.
+
+    Same injected-dependency contract as :func:`cmd_vad_gap_diff`: ``segmenter`` /
+    ``availability`` default to the real :mod:`vad.silero` functions, imported
+    lazily so the parser stays torch-free. The segmenter knobs are shared by both
+    runs so the recommendations are apples-to-apples, and ``--bias`` (iter-351) is
+    shared too (the recommendation is taken at the same point in each WAV's
+    valley). ``--csv`` is mutually exclusive with ``--json``; when ``silero-vad``
+    is absent the handler prints the install hint and returns, never crashing.
+    """
+    if segmenter is None or availability is None:
+        from vad.silero import segment_recording, silero_available
+
+        segmenter = segment_recording if segmenter is None else segmenter
+        availability = silero_available if availability is None else availability
+
+    as_json = getattr(args, "json", False)
+    as_csv = getattr(args, "csv", False)
+    bias = getattr(args, "bias", DEFAULT_GAP_RECOMMEND_BIAS)
+
+    if not availability():
+        if as_json:
+            log(render_vad_gap_recommend_diff_json(
+                None, None, label_a=args.wav_a, label_b=args.wav_b, bias=bias))
+        elif as_csv:
+            log(render_vad_gap_recommend_diff_csv(
+                None, None, label_a=args.wav_a, label_b=args.wav_b, bias=bias))
+        else:
+            for line in render_vad_gap_recommend_diff(
+                None, None, label_a=args.wav_a, label_b=args.wav_b, bias=bias):
+                log(line)
+        return
+
+    from vad.silero import SileroParams
+
+    params = SileroParams(
+        threshold=args.threshold,
+        min_speech_ms=args.min_speech_ms,
+        min_silence_ms=args.min_silence_ms,
+        speech_pad_ms=args.speech_pad_ms,
+        max_speech_s=args.max_speech_s,
+    )
+    result_a = segmenter(args.wav_a, params=params)
+    result_b = segmenter(args.wav_b, params=params)
+    if as_json:
+        log(render_vad_gap_recommend_diff_json(
+            result_a, result_b, label_a=args.wav_a, label_b=args.wav_b, bias=bias))
+    elif as_csv:
+        log(render_vad_gap_recommend_diff_csv(
+            result_a, result_b, label_a=args.wav_a, label_b=args.wav_b, bias=bias))
+    else:
+        for line in render_vad_gap_recommend_diff(
+            result_a, result_b, label_a=args.wav_a, label_b=args.wav_b, bias=bias):
+            log(line)
+
+
 def cmd_vad_sweep(args, *, log=print, segmenter=None, availability=None):
     """Segment one WAV across a swept knob and print a sweep table.
 
@@ -10128,6 +10408,7 @@ DEFAULT_HANDLERS = {
     "vad-gap-percentiles": cmd_vad_gap_percentiles,
     "vad-gap-cdf": cmd_vad_gap_cdf,
     "vad-gap-recommend": cmd_vad_gap_recommend,
+    "vad-gap-recommend-diff": cmd_vad_gap_recommend_diff,
     "vad-gap-recommend-sweep": cmd_vad_gap_recommend_sweep,
     "vad-gap-recommend-knob-sweep": cmd_vad_gap_recommend_knob_sweep,
     "vad-gap-recommend-knob-grid": cmd_vad_gap_recommend_knob_grid,
@@ -12058,6 +12339,92 @@ def build_parser():
         help="Emit a flat threshold,num_segments,num_gaps,min_gap_s,mean_gap_s,"
         "max_gap_s,total_silence_s CSV table (one row per threshold) for "
         "spreadsheets/plots — byte-identical to a two-value vad-gap-sweep --csv; "
+        "mutually exclusive with --json",
+    )
+
+    # gv vad-gap-recommend-diff — segment TWO WAVs under the same knobs and compare
+    # their recommended end-of-turn hangovers + confidence grades side by side
+    # (iter-384). The genuinely new surface after the recommend-knob family went
+    # feature-complete (iter-383). Where vad-diff / vad-gap-diff compare two
+    # SETTINGS of ONE recording, this compares ONE setting across TWO recordings —
+    # the natural "did my tuning change help?" tool: re-record after changing the
+    # mic / room / speaker and see whether the recommended --min-silence-ms still
+    # holds. All segmenter knobs (and --bias) are shared by both runs.
+    vad_gap_rec_diff = sub.add_parser(
+        "vad-gap-recommend-diff",
+        help="Offline Silero VAD — segment two WAVs and compare their recommended "
+        "end-of-turn --min-silence-ms hangovers (and confidence grades) side by "
+        "side (did re-recording / a mic-or-room change move the recommendation?)",
+    )
+    vad_gap_rec_diff.add_argument(
+        "wav_a",
+        metavar="wav-a",
+        help="Path to the first 16-bit PCM WAV file to segment",
+    )
+    vad_gap_rec_diff.add_argument(
+        "wav_b",
+        metavar="wav-b",
+        help="Path to the second 16-bit PCM WAV file to segment",
+    )
+    vad_gap_rec_diff.add_argument(
+        "--threshold",
+        type=unit_interval_type,
+        default=vad_threshold_default,
+        help="P(speech) gate in [0, 1] — shared by both runs "
+        f"(default: {vad_threshold_default})",
+    )
+    vad_gap_rec_diff.add_argument(
+        "--min-speech-ms",
+        type=nonneg_float_type,
+        default=vad_min_speech_default,
+        dest="min_speech_ms",
+        help="Drop speech regions shorter than this, in ms — shared by both "
+        f"runs (default: {vad_min_speech_default})",
+    )
+    vad_gap_rec_diff.add_argument(
+        "--min-silence-ms",
+        type=nonneg_float_type,
+        default=vad_min_silence_default,
+        dest="min_silence_ms",
+        help="Trailing silence before a region ends, in ms — shared by both "
+        f"runs (default: {vad_min_silence_default})",
+    )
+    vad_gap_rec_diff.add_argument(
+        "--speech-pad-ms",
+        type=nonneg_float_type,
+        default=vad_speech_pad_default,
+        dest="speech_pad_ms",
+        help="Symmetric padding added to each region, in ms — shared by both "
+        f"runs (default: {vad_speech_pad_default})",
+    )
+    vad_gap_rec_diff.add_argument(
+        "--max-speech-s",
+        type=max_speech_type,
+        default=vad_max_speech_default,
+        dest="max_speech_s",
+        help="Force-split regions longer than this, in seconds — shared by "
+        "both runs; 'inf'/'none' never splits (default: inf)",
+    )
+    vad_gap_rec_diff.add_argument(
+        "--bias",
+        choices=sorted(GAP_RECOMMEND_BIAS_FRACTIONS),
+        default=DEFAULT_GAP_RECOMMEND_BIAS,
+        help="Where in each WAV's valley the recommended hangover sits "
+        "(short/balanced/long) — shared by both runs so the comparison is "
+        f"apples-to-apples (default: {DEFAULT_GAP_RECOMMEND_BIAS})",
+    )
+    vad_gap_rec_diff_fmt = vad_gap_rec_diff.add_mutually_exclusive_group()
+    vad_gap_rec_diff_fmt.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON (both recordings + signed deltas + "
+        "per-side grades) instead of the human-readable report",
+    )
+    vad_gap_rec_diff_fmt.add_argument(
+        "--csv",
+        action="store_true",
+        help="Emit a flat recording,bias,num_segments,num_gaps,recommended_ms,"
+        "grade CSV table (one row per recording) for spreadsheets/plots; "
         "mutually exclusive with --json",
     )
 

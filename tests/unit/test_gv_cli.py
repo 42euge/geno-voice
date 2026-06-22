@@ -399,6 +399,7 @@ def test_dispatch_default_handlers_are_the_real_cmds():
         "vad-gap-percentiles": gv.cmd_vad_gap_percentiles,
         "vad-gap-cdf": gv.cmd_vad_gap_cdf,
         "vad-gap-recommend": gv.cmd_vad_gap_recommend,
+        "vad-gap-recommend-diff": gv.cmd_vad_gap_recommend_diff,
         "vad-gap-recommend-sweep": gv.cmd_vad_gap_recommend_sweep,
         "vad-gap-recommend-knob-sweep": gv.cmd_vad_gap_recommend_knob_sweep,
         "vad-gap-recommend-knob-grid": gv.cmd_vad_gap_recommend_knob_grid,
