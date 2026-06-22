@@ -37395,3 +37395,96 @@ prints the per-engine table with `← lighten` on the slow engine.
 4. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232, iter-317
    still present) — a future lap could `git worktree prune` / remove merged ones.
    NOTE: this lap correctly removed its own worktree.
+
+## iter-410 — stt-rtf-batch --json/--csv: machine-readable corpus twins
+
+- **Date:** 2026-06-22
+- **Branch:** iter-410-stt-rtf-batch-json-csv (ff-merged to main, worktree removed)
+- **Commit:** 9cda541
+
+**Why.** The iter-409 log's next-item #1 named this lap explicitly: enrich the
+`stt-rtf-batch` surface with the iter-398 analogue — the `--json`/`--csv`
+machine-readable twins. iter-409 landed the human corpus report
+(`render_stt_rtf_batch`), but an operator who wanted to rank STT engines by RTF
+programmatically (feed a chooser, plot the fleet, diff two hosts) had only the
+human table to parse. This closes that gap, bringing the STT-RTF batch surface
+the same human / `--json` / `--csv` trio every calibration and VAD-analysis
+surface already carries — exactly how iter-398 completed the trio for
+`calibrate-base-wpm-batch` one lap after iter-397 shipped its human render.
+
+**What landed (all in `examples/gv.py` + its test — purely additive: the human
+render is still the default, no behavioural change to any existing flag).**
+
+- **`render_stt_rtf_batch_json(batch)`** — the nested/programmatic twin, the
+  STT-side analogue of `render_calibration_batch_json`. Emits a `rows` list (one
+  object per engine — its label, full nested `profile` object,
+  signed `delta_from_median_rtf`, and the iter-407 verdict's `recommend` flag)
+  plus the corpus aggregates (`num_engines` / `num_profiled` / outlier-robust
+  `corpus_median_rtf` / `corpus_min_rtf` / `corpus_max_rtf` / `corpus_spread` /
+  `num_keep_up` / `num_recommend` / the `grade_counts` histogram over all four
+  `STT_RTF_BATCH_GRADE_ORDER` buckets summing to `num_engines`) and the shared
+  verdict gates (`rel_spread_max` / `min_samples`). Each row's nested `profile`
+  is the SAME shape the single-engine `stt-rtf --json` emits, so a row agrees
+  EXACTLY with `gv stt-rtf --json` on that engine's samples (the cross-surface
+  contract, asserted by `test_render_json_row_matches_single_engine_json`).
+  `speed_margin` is `null` for a `"slow"` profile; an unprofiled engine carries
+  `profile`/`delta`/`recommend` all `null` and is excluded from the corpus
+  aggregates, which stay `null` when no engine profiled.
+- **`_stt_rtf_batch_row_obj(row)`** — the per-engine JSON unit (mirrors
+  `_calib_batch_row_obj`), reusing the existing `_round_or_none` helper.
+- **`render_stt_rtf_batch_csv(batch)`** — the spreadsheet/plot-friendly twin: one
+  row per engine
+  (`engine,median_rtf,n_samples,min_rtf,max_rtf,spread,relative_spread,speed_grade,speed_margin,delta_from_median_rtf,recommend`)
+  with the corpus aggregates trailing as `#` comment lines a tool skips by
+  default (pandas `read_csv(comment="#")`), matching the `#`-comment precedent
+  `render_calibration_batch_csv` uses. An unprofiled engine has every numeric
+  cell past the label blank (the CSV spelling of `null`); `recommend` is the
+  lowercase `true`/`false` flag, empty for an unprofiled engine.
+- **`cmd_stt_rtf_batch --json/--csv` dispatch** — folds the batch through the new
+  renderer when the flag is set (json wins if both somehow set, but they are a
+  mutually-exclusive parser group so that cannot happen via the CLI), else the
+  human render. Mirrors `cmd_calibrate_base_wpm_batch`.
+- **`--json` / `--csv` mutually-exclusive group** on the `stt-rtf-batch`
+  subparser, mirroring the single-engine `stt-rtf` command. Updated the
+  module-docstring usage line to mention `--json/--csv for the machine-readable
+  corpus`.
+
+**Tests (+21 net new, file now 39 tests).** `tests/unit/test_gv_stt_rtf_batch.py`:
+parser wiring (`--json`/`--csv` default off, each sets true, mutual exclusion
+exits 2); JSON (corpus aggregates + row order, row-profile-matches-single-engine
+cross-surface contract, unprofiled null contract, empty-corpus null aggregates,
+recommend flag true/false, speed_margin null for slow, gate-override echo); CSV
+(header + one-row-per-engine, unprofiled all-blank cells, corpus aggregates as
+`#` comments, recommend cell true/false, empty-corpus blank aggregates); handler
+dispatch (`--json` emits single JSON payload + matches renderer directly, `--csv`
+matches renderer directly + emits header row).
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **6005 passed**
+(5985 prior + 20 net new), run in the feature worktree before ff-merge;
+re-verified on main post-merge (`test_gv_stt_rtf_batch.py` → 39 passed). Also
+smoke-tested the real CLI:
+`python examples/gv.py stt-rtf-batch --engine heavy 10.0:15.0 10.0:15.2 10.0:14.8 --engine light 10.0:1.0 10.0:1.1 10.0:0.9 --json`
+emits the nested corpus object (heavy `recommend: true`, light `false`), and
+`--csv` emits the per-engine grid with the corpus aggregates as `#` comments.
+- Integration: not run this lap (pure json/csv string-formatting over the
+  injected `profile_stt_rtf_batch` core; no torch, no faster-whisper, no audio
+  I/O — mirrors the iter-398 calib-batch json/csv lap and the iter-405..409 STT
+  laps, which the integration suite never exercised either).
+
+**Next planned items:**
+1. **[gv CLI] continue the stt-rtf-batch surface with the iter-399..402 family** —
+   the human + `--json`/`--csv` trio now exists; the remaining follow-ons mirror
+   the calibration batch's evolution: `--sort-by` (median_rtf / grade / delta) +
+   `--top-n` (iter-399/400) to float the slowest/most-useful engines to the top,
+   a `--min-grade` floor (iter-401) to drop engines below a speed grade, and a
+   `--summary` line (iter-402) naming the single fastest / most-representative
+   engine. Each is a small, well-precedented increment reusing iter-409's engine
+   + iter-410's renderers.
+2. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Prefer a genuinely new signal over an 18th near-clone.
+3. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+4. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232, iter-317
+   still present) — a future lap could `git worktree prune` / remove merged ones.
+   NOTE: this lap correctly removed its own worktree.
