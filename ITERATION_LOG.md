@@ -37760,3 +37760,99 @@ and `# min_grade: fast` comments and a whole-corpus `# num_engines: 3`.
 4. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232, iter-317
    still present) — a future lap could `git worktree prune` / remove merged ones.
    NOTE: this lap correctly removed its own worktree.
+
+## iter-414 — stt-rtf-batch flyers: name corpus-outlier engines (Tukey fence)
+
+- **Date:** 2026-06-22
+- **Branch:** iter-414-stt-rtf-batch-flyers (ff-merged to main, worktree removed)
+- **Commit:** 05cc1af
+
+**Why.** The iter-413 log's next-item #1 noted the `stt-rtf-batch` flag set now
+matches `calibrate-base-wpm-batch` (human / `--json` / `--csv` × sort / top-n /
+min-grade / summary), so the next increment should be a genuinely NEW signal,
+not another flag clone. The calibration batch carries an iter-403 IQR + iter-404
+Tukey-fence flyer line that the STT batch did NOT; an operator scanning a corpus
+of transcribers to pick one had no one-glance read of WHICH engine clocks at a
+speed the rest of the corpus does not. This adds the STT-side analogue: the
+outlier-robust IQR plus a per-engine `flyer` flag and a corpus `flyers:` line.
+
+**What landed.**
+
+Engine (`stt/rtf_profile.py`):
+- `SttRtfBatch` gained `corpus_q1_rtf` / `corpus_q3_rtf` / `corpus_iqr_rtf` (the
+  outlier-robust inter-quartile spread of the per-engine median RTFs),
+  `corpus_fence_lo_rtf` / `corpus_fence_hi_rtf` (the standard Tukey boxplot fence
+  `[Q1 - 1.5·IQR, Q3 + 1.5·IQR]`), and `num_flyers`. Each row gained a `flyer`
+  boolean — `True` when the engine's median RTF falls strictly outside the fence,
+  `False` inside, `None` for an unprofiled engine that carries no median.
+- `_percentile_of_sorted` added locally (R-7 / numpy "linear" convention), the
+  STT-side twin of `session.wpm_mirror._percentile_of_sorted`, kept local so the
+  module stays importable without the calibration pipeline. Degenerate corpora
+  match the calibration batch EXACTLY: an empty corpus has `None` fences / `0`
+  flyers; a single engine (or all-identical engines) has IQR `0` with the fence
+  collapsed to `[Q1, Q3]`, so a lone engine sitting ON the fence is NOT a flyer
+  but a strictly-outside engine still is.
+
+Renderers (`examples/gv.py`, all render-only — the corpus aggregates stay over
+the WHOLE corpus, the iter-401 contract):
+- `_format_stt_rtf_batch_flyers` — the corpus `flyers: N (names) outside [lo, hi]
+  RTF` line (`flyers: none` when the corpus agrees), the STT-side analogue of
+  `_format_calib_batch_flyers`. Reads the WHOLE `batch.rows`, so it is
+  independent of `min_grade` / `sort_by` / `top_n` / `summary`.
+- Human render: a `← flyer` inline marker on each outlier row (after the
+  `← lighten` marker), the IQR folded into the corpus line, and the flyers line
+  added to the shared `_corpus_lines()` tail — so it shows under the full table,
+  the `--summary` verdict, and the empty-floor note.
+- JSON: the `corpus_q1_rtf` / `corpus_q3_rtf` / `corpus_iqr_rtf` / fence /
+  `num_flyers` keys ride alongside the existing corpus aggregates; each row object
+  (and the summary `best`) carries a `flyer` boolean (`null` for unprofiled).
+- CSV: a trailing `flyer` column (`true`/`false`, blank for unprofiled) and the
+  `# corpus_iqr_rtf:` / `# corpus_fence_rtf:` / `# num_flyers:` comment lines
+  (inserted after `# corpus_spread:`, mirroring the calib-batch comment order).
+- Module usage line + all three render docstrings + the `SttRtfBatch` dataclass
+  docstring updated.
+
+**Tests (+17 net new).** Engine (`test_stt_rtf_batch.py`, now 24 → +8): IQR /
+quartiles over per-engine medians, Tukey fence band, flyer naming when one engine
+is an outlier, unprofiled-engine-never-a-flyer, empty-corpus-no-fence,
+single-engine-zero-IQR-no-flyer, identical-engines-one-different-is-flyer. gv
+(`test_gv_stt_rtf_batch.py`, now 135 → +9 net after helper/contract updates):
+human flyer marker + corpus flyers line (+ `none` / whole-corpus-under-top-n /
+under-summary / empty-corpus-no-line), JSON fence keys + per-row flyer (+
+empty-null / summary `best` carries flyer), CSV fence comments + flyer column (+
+unprofiled blank cell). The `_engine_order` test helper now skips the `flyers:`
+line, and the CSV column-count / recommend-cell assertions updated for the new
+12-column contract.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **6108 passed**
+(6091 prior + 17 net new), run in the feature worktree before ff-merge;
+re-verified on main post-merge (`test_gv_stt_rtf_batch.py` + `test_stt_rtf_batch.py`
+→ 159 passed). Also smoke-tested the real CLI:
+`python examples/gv.py stt-rtf-batch --engine a 10.0:1.0 --engine b 10.0:1.1
+--engine c 10.0:1.2 --engine d 10.0:1.3 --engine slow 10.0:50.0` marks the `slow`
+row `← flyer`, the corpus line shows `IQR 0.020`, and the tail reads
+`flyers: 1 (slow) outside [0.080, 0.160] RTF`; `--json` carries the
+`corpus_fence_lo_rtf`/`_hi`/`num_flyers` keys and a `"flyer": true` on the slow
+row; `--csv` emits the trailing `flyer` column and the
+`# corpus_fence_rtf: 0.08 - 0.16` / `# num_flyers: 1` comments.
+- Integration: not run this lap (pure arithmetic + string-formatting over the
+  injected `profile_stt_rtf_batch` core; no torch, no faster-whisper, no audio
+  I/O — mirrors the iter-403/404 calib-batch IQR/flyer laps and the iter-405..413
+  STT laps, which the integration suite never exercised either).
+
+**Next planned items:**
+1. **[gv CLI] the stt-rtf-batch surface now carries the full calibration-batch
+   analysis set** — human / `--json` / `--csv` trio plus
+   `--sort-by`/`--top-n`/`--min-grade`/`--summary` AND the iter-414 IQR + Tukey
+   flyer line. A future STT increment could surface the fence on the SORT side (a
+   `--sort-by flyer` key floating outliers first, or a `--flyers-only` filter to
+   show just the outlier engines) — but check first whether the calibration batch
+   has such a key before cloning, to keep the two surfaces in lockstep.
+2. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Prefer a genuinely new signal over an 18th near-clone.
+3. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+4. **[housekeeping] Stale worktrees accumulating** (iter-026, iter-027, iter-028,
+   iter-232, iter-317 still present) — a future lap could `git worktree prune` /
+   remove merged ones. NOTE: this lap correctly removed its own worktree.
