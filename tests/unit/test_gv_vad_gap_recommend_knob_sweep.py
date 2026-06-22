@@ -1254,3 +1254,233 @@ def test_cmd_top_n_unavailable_json_names_key():
     )
     payload = json.loads("\n".join(lines))
     assert payload["available"] is False
+
+
+# ---- iter-382: --summary single-best-knob verdict ------------------------
+
+
+def test_best_knob_row_none_when_no_recommendation():
+    # All rows ungraded (<2 segments, spread None) → nothing to summarize.
+    rows = [{"grade": None, "spread_ms": None}, {"grade": None, "spread_ms": None}]
+    assert gv._best_knob_row(rows) is None
+
+
+def test_best_knob_row_picks_highest_grade():
+    rows = [
+        {"threshold": 0.1, "grade": "weak", "spread_ms": 50.0},
+        {"threshold": 0.5, "grade": "strong", "spread_ms": 850.0},
+        {"threshold": 0.9, "grade": "none", "spread_ms": 500.0},
+    ]
+    best = gv._best_knob_row(rows)
+    assert best["grade"] == "strong"
+
+
+def test_best_knob_row_ties_break_to_tightest_spread():
+    # Two strong rows → the one with the smaller spread wins.
+    rows = [
+        {"threshold": 0.3, "grade": "strong", "spread_ms": 850.0},
+        {"threshold": 0.7, "grade": "strong", "spread_ms": 200.0},
+    ]
+    best = gv._best_knob_row(rows)
+    assert best["threshold"] == 0.7
+    assert best["spread_ms"] == 200.0
+
+
+def test_best_knob_row_remaining_ties_break_to_earliest():
+    # Identical grade AND spread → the earlier row in the list wins (stable).
+    rows = [
+        {"threshold": 0.3, "grade": "strong", "spread_ms": 200.0},
+        {"threshold": 0.7, "grade": "strong", "spread_ms": 200.0},
+    ]
+    best = gv._best_knob_row(rows)
+    assert best["threshold"] == 0.3
+
+
+def test_best_knob_row_skips_ungraded_rows():
+    # An ungraded row (no recommendation) is never the pick even if listed first.
+    rows = [
+        {"threshold": 0.1, "grade": None, "spread_ms": None},
+        {"threshold": 0.5, "grade": "weak", "spread_ms": 50.0},
+    ]
+    best = gv._best_knob_row(rows)
+    assert best["threshold"] == 0.5
+
+
+def test_render_human_summary_names_best_setting():
+    # weak / strong / none → the strong row (bimodal) is the verdict.
+    res = [_weak(), _bimodal(), _no_valley()]
+    lines = gv.render_vad_gap_recommend_knob_sweep(
+        [0.1, 0.5, 0.9], res, name="rec.wav", summary=True
+    )
+    assert lines[0] == "silero VAD recommended-hangover knob summary — rec.wav"
+    assert len(lines) == 2
+    assert "best: threshold=0.50" in lines[1]
+    assert "confidence strong" in lines[1]
+    # default biases → the headline number is the rightmost (long) recommendation.
+    assert "[long]" in lines[1]
+
+
+def test_render_human_summary_respects_bias_for_headline_number():
+    res = [_weak(), _bimodal(), _no_valley()]
+    lines = gv.render_vad_gap_recommend_knob_sweep(
+        [0.1, 0.5, 0.9], res, name="rec.wav", summary=True, biases=["short"]
+    )
+    assert "[short]" in lines[1]
+
+
+def test_render_human_summary_independent_of_sort_and_top_n():
+    # The verdict is the same regardless of --sort-by / --top-n.
+    res = [_weak(), _bimodal(), _no_valley()]
+    plain = gv.render_vad_gap_recommend_knob_sweep(
+        [0.1, 0.5, 0.9], res, name="rec.wav", summary=True
+    )
+    sorted_capped = gv.render_vad_gap_recommend_knob_sweep(
+        [0.1, 0.5, 0.9], res, name="rec.wav", summary=True,
+        sort_by="spread", top_n=1,
+    )
+    assert plain == sorted_capped
+
+
+def test_render_human_summary_no_recommendation_note():
+    # Only single-segment results → no row carries a recommendation.
+    lines = gv.render_vad_gap_recommend_knob_sweep(
+        [0.3, 0.7], [_single(), _single()], name="rec.wav", summary=True
+    )
+    assert len(lines) == 2
+    assert "no knob setting" in lines[1]
+
+
+def test_render_human_summary_no_recommendation_note_names_floor():
+    # min_grade with no surviving recommendation → the note names the floor.
+    lines = gv.render_vad_gap_recommend_knob_sweep(
+        [0.3, 0.7], [_no_valley(), _no_valley()], name="rec.wav",
+        summary=True, min_grade="strong",
+    )
+    assert "strong" in lines[1]
+
+
+def test_render_json_summary_shape():
+    res = [_weak(), _bimodal(), _no_valley()]
+    text = gv.render_vad_gap_recommend_knob_sweep_json(
+        [0.1, 0.5, 0.9], res, name="rec.wav", summary=True
+    )
+    payload = json.loads(text)
+    assert payload["summary"] is True
+    assert "sweep" not in payload
+    assert payload["best"]["grade"] == "strong"
+    assert payload["best"]["threshold"] == 0.5
+
+
+def test_render_json_summary_default_has_no_summary_or_best_key():
+    text = gv.render_vad_gap_recommend_knob_sweep_json(
+        [0.3, 0.7], [_bimodal(), _no_valley()], name="rec.wav"
+    )
+    payload = json.loads(text)
+    assert "summary" not in payload
+    assert "best" not in payload
+    assert "sweep" in payload
+
+
+def test_render_json_summary_best_null_when_no_recommendation():
+    text = gv.render_vad_gap_recommend_knob_sweep_json(
+        [0.3, 0.7], [_single(), _single()], name="rec.wav", summary=True
+    )
+    payload = json.loads(text)
+    assert payload["summary"] is True
+    assert payload["best"] is None
+
+
+def test_render_json_summary_narrows_best_biases():
+    res = [_weak(), _bimodal(), _no_valley()]
+    text = gv.render_vad_gap_recommend_knob_sweep_json(
+        [0.1, 0.5, 0.9], res, name="rec.wav", summary=True, biases=["short", "long"]
+    )
+    payload = json.loads(text)
+    assert payload["biases"] == ["short", "long"]
+    assert [b["bias"] for b in payload["best"]["biases"]] == ["short", "long"]
+
+
+def test_render_json_summary_composes_with_min_grade():
+    res = [_weak(), _bimodal(), _no_valley()]
+    text = gv.render_vad_gap_recommend_knob_sweep_json(
+        [0.1, 0.5, 0.9], res, name="rec.wav", summary=True, min_grade="moderate"
+    )
+    payload = json.loads(text)
+    assert payload["min_grade"] == "moderate"
+    # only the strong row survives the moderate floor and is the pick.
+    assert payload["best"]["grade"] == "strong"
+
+
+def test_render_csv_summary_one_best_row():
+    res = [_weak(), _bimodal(), _no_valley()]
+    text = gv.render_vad_gap_recommend_knob_sweep_csv(
+        [0.1, 0.5, 0.9], res, name="rec.wav", summary=True
+    )
+    rows = list(csv.reader(io.StringIO(text)))
+    assert rows[0][0] == "threshold"  # header unchanged
+    assert rows[0][7] == "grade"
+    assert len(rows) == 2  # header + the single best row
+    assert rows[1][7] == "strong"
+
+
+def test_render_csv_summary_header_only_when_no_recommendation():
+    text = gv.render_vad_gap_recommend_knob_sweep_csv(
+        [0.3, 0.7], [_single(), _single()], name="rec.wav", summary=True
+    )
+    rows = list(csv.reader(io.StringIO(text)))
+    assert len(rows) == 1  # header only
+    assert rows[0][0] == "threshold"
+
+
+def test_cmd_summary_human_path():
+    lines = _run_handler(
+        [_weak(), _bimodal(), _no_valley()],
+        argv_extra=["--thresholds", "0.1,0.5,0.9", "--summary"],
+    )
+    assert "knob summary" in lines[0]
+    assert "best: threshold=0.50" in lines[1]
+    assert "confidence strong" in lines[1]
+
+
+def test_cmd_summary_json_path():
+    lines = _run_handler(
+        [_weak(), _bimodal(), _no_valley()],
+        argv_extra=["--thresholds", "0.1,0.5,0.9", "--json", "--summary"],
+    )
+    payload = json.loads("\n".join(lines))
+    assert payload["summary"] is True
+    assert payload["best"]["grade"] == "strong"
+
+
+def test_cmd_summary_csv_path():
+    lines = _run_handler(
+        [_weak(), _bimodal(), _no_valley()],
+        argv_extra=["--thresholds", "0.1,0.5,0.9", "--csv", "--summary"],
+    )
+    rows = list(csv.reader(io.StringIO("\n".join(lines))))
+    assert len(rows) == 2
+    assert rows[1][7] == "strong"
+
+
+def test_cmd_summary_default_off_renders_table():
+    lines = _run_handler(
+        [_bimodal(), _no_valley()],
+        argv_extra=["--thresholds", "0.3,0.9", "--json"],
+    )
+    payload = json.loads("\n".join(lines))
+    assert "summary" not in payload
+    assert "sweep" in payload
+
+
+def test_cmd_summary_unavailable_json():
+    # The unavailable branch still threads summary through (graceful degrade).
+    lines: List[str] = []
+    args = gv.build_parser().parse_args(
+        ["vad-gap-recommend-knob-sweep", "rec.wav", "--json", "--summary"]
+    )
+    gv.cmd_vad_gap_recommend_knob_sweep(
+        args, log=lines.append, segmenter=lambda *a, **k: None,
+        availability=lambda: False,
+    )
+    payload = json.loads("\n".join(lines))
+    assert payload["available"] is False
