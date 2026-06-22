@@ -24,6 +24,12 @@ This module is that verdict. It is the **pure measurement core**:
   median) plus spread, ``relative_spread``, a categorical ``speed_grade``
   (``"fast"`` / ``"realtime"`` / ``"slow"``), and a ``speed_margin`` (headroom to
   the next-worse grade knee).
+- :func:`stt_rtf_verdict` folds an :class:`SttRtfProfile` into a data-driven
+  recommend/keep call (iter-407) — the STT-side twin of iter-222's
+  :func:`~session.wpm_mirror.calibration_verdict`. It recommends ACTION (a
+  lighter model or streaming partials) only when the runs are ENOUGH
+  (``n_samples``), AGREE (``relative_spread``), AND the median RTF is genuinely
+  SLOW enough to be the bottleneck; otherwise it says keep the current engine.
 
 Pure arithmetic over injected timings — no torch, no faster-whisper, no audio
 I/O, no clock — so it imports and runs in the unit gate on any platform, the
@@ -241,4 +247,175 @@ def profile_stt_rtf(samples) -> SttRtfProfile | None:
         relative_spread=relative_spread,
         speed_grade=rtf_speed_grade(median),
         speed_margin=rtf_speed_margin(median),
+    )
+
+
+# --------------------------------------------------------------------------
+# iter-407 — data-driven verdict over an STT-RTF profile.
+#
+# iter-405 measured the median RTF and iter-406 surfaced it on the CLI, but both
+# stop at raw numbers (median, spread, grade, margin) and leave the operator to
+# eyeball whether the transcriber is actually too slow to act on. That is the
+# same gap iter-222's ``calibration_verdict`` closed for ``base_wpm``: a verdict,
+# not a bare reading. This is the STT-side twin. Acting on a slow STT (dropping
+# to a lighter model, or wiring streaming partial transcription) is worth doing
+# only when the runs AGREE (small relative_spread ⇒ the median is trustworthy),
+# there are ENOUGH of them (a single timing is not a profile), AND the median
+# RTF is genuinely SLOW enough to be the latency bottleneck (a "fast" or
+# "realtime" engine keeps pace, so swapping it just churns config for no
+# latency win). All three gates must pass to recommend action — otherwise keep
+# the current engine. Pure arithmetic over an existing ``SttRtfProfile``; no
+# I/O, no clock.
+#
+# NOTE the trust gate uses ``relative_spread`` (dimensionless), NOT the absolute
+# ``spread`` iter-222 uses. RTF is rate-dependent — a 0.1 spread is tight at an
+# rtf of 2.0 but wide at 0.15 — so the absolute range is not comparable across
+# engines, whereas relative_spread is (the same reason iter-393 introduced it
+# for the calibration family). The significance gate is the categorical
+# ``speed_grade == "slow"`` rather than an absolute drift, because "slow" is the
+# meaningful threshold for the STT side (the rtf crossed the realtime knee),
+# just as a drift past ``drift_min`` is the meaningful threshold on the TTS side.
+# --------------------------------------------------------------------------
+
+#: ``relative_spread`` at or below which the profile's runs are trusted to AGREE
+#: — the median RTF is a reliable read of the engine's speed. Above this the
+#: timings disagree (thermal throttling, a contended host, variable clip
+#: difficulty), so the median is not trustworthy and the right move is to
+#: re-measure more consistently rather than act on a noisy verdict. 0.15 matches
+#: :data:`~session.wpm_mirror.CALIB_LOOSE_REL_SPREAD` — the calibration family's
+#: "loose but usable" knee — so the STT and TTS sides share one dimensionless
+#: agreement bar.
+DEFAULT_STT_RTF_REL_SPREAD_MAX: float = 0.15
+
+#: Minimum number of samples for the median to be robust. A single transcription
+#: is one timing, not a profile; a couple can still be a fluke. Mirrors
+#: :data:`~session.wpm_mirror.DEFAULT_CALIB_MIN_SAMPLES`.
+DEFAULT_STT_RTF_MIN_SAMPLES: int = 3
+
+
+@dataclass(frozen=True)
+class SttRtfVerdict:
+    """Data-driven recommendation over an :class:`SttRtfProfile`.
+
+    The STT-side twin of :class:`~session.wpm_mirror.CalibrationVerdict`
+    (iter-222). Where that decides whether to re-seed ``base_wpm`` from a TTS
+    calibration, this decides whether the transcriber is slow enough — and the
+    measurement trustworthy enough — to be worth ACTING on (dropping to a
+    lighter model, or wiring streaming partial transcription).
+
+    Attributes:
+      recommend: ``True`` iff all three gates pass — there are enough samples
+        (``n_samples >= min_samples``), the runs agree
+        (``relative_spread <= rel_spread_max``), and the median RTF is genuinely
+        ``"slow"`` (it crossed the realtime knee, so the STT is the latency
+        bottleneck). When ``True`` the operator should lighten the STT path;
+        when ``False`` keep the current engine.
+      reason: a short human-readable explanation of the decision — which gate
+        failed, or that all passed.
+      median_rtf: the profile's measured median RTF (echoed; the value the
+        decision is about).
+      speed_grade: the profile's ``"fast"`` / ``"realtime"`` / ``"slow"`` grade
+        (echoed; the significance gate reads it).
+      relative_spread: the profile's dimensionless coefficient of dispersion
+        (echoed; the trust gate reads it).
+      n_samples: how many samples backed the profile (echoed; the sample gate
+        reads it).
+      rel_spread_max / min_samples: the thresholds the verdict was computed
+        against (echoed so the decision is self-describing).
+    """
+
+    recommend: bool
+    reason: str
+    median_rtf: float
+    speed_grade: str
+    relative_spread: float
+    n_samples: int
+    rel_spread_max: float
+    min_samples: int
+
+
+def stt_rtf_verdict(
+    profile: "SttRtfProfile | None",
+    *,
+    rel_spread_max: float = DEFAULT_STT_RTF_REL_SPREAD_MAX,
+    min_samples: int = DEFAULT_STT_RTF_MIN_SAMPLES,
+) -> SttRtfVerdict | None:
+    """Decide whether a slow STT-RTF profile is worth acting on.
+
+    Folds the three trust/significance gates over an existing
+    :class:`SttRtfProfile` (the iter-405 measurement). Acting on the STT path
+    (a lighter model, streaming partials) is recommended only when **all** of:
+
+    - **enough samples** — ``n_samples >= min_samples`` (a single transcription
+      is one timing, not a profile);
+    - **runs agree** — ``relative_spread <= rel_spread_max`` (a wide dispersion
+      means the median is not trustworthy, so re-measure rather than act);
+    - **genuinely slow** — ``speed_grade == "slow"`` (the median crossed the
+      realtime knee; a ``"fast"`` or ``"realtime"`` engine already keeps pace,
+      so swapping it just churns config for no latency win).
+
+    The gates are checked in that order so ``reason`` names the *first* failure
+    (sample count is the most fundamental, then trust, then significance) —
+    mirroring :func:`~session.wpm_mirror.calibration_verdict`'s ordering.
+
+    Args:
+      profile: an :class:`SttRtfProfile`, or ``None`` (no samples ⇒ nothing to
+        decide ⇒ this function returns ``None``, mirroring
+        :func:`profile_stt_rtf`'s empty contract and
+        :func:`~session.wpm_mirror.calibration_verdict`'s).
+      rel_spread_max: max trusted dimensionless dispersion (defaults to
+        :data:`DEFAULT_STT_RTF_REL_SPREAD_MAX`).
+      min_samples: min sample count for a robust median (defaults to
+        :data:`DEFAULT_STT_RTF_MIN_SAMPLES`).
+
+    Pure — reads only the profile's fields, mutates nothing.
+    """
+    if profile is None:
+        return None
+
+    rel_spread_max = float(rel_spread_max)
+    min_samples = int(min_samples)
+
+    n = profile.n_samples
+    rel_spread = profile.relative_spread
+    grade = profile.speed_grade
+    median = profile.median_rtf
+
+    if n < min_samples:
+        recommend = False
+        reason = (
+            f"only {n} sample(s) — need {min_samples}+ for a robust median; "
+            "keep the current engine"
+        )
+    elif rel_spread > rel_spread_max:
+        recommend = False
+        reason = (
+            f"runs disagree (relative spread {rel_spread:.2f} > "
+            f"{rel_spread_max:.2f}) — the median RTF is not trustworthy; "
+            "re-measure more consistently"
+        )
+    elif grade != "slow":
+        recommend = False
+        reason = (
+            f"median RTF {median:.2f} grades {grade} — the STT keeps pace; "
+            "keep the current engine"
+        )
+    else:
+        recommend = True
+        reason = (
+            f"runs agree (relative spread {rel_spread:.2f} <= "
+            f"{rel_spread_max:.2f}) over {n} samples and median RTF "
+            f"{median:.2f} is slow — lighten the STT path (a smaller model or "
+            "streaming partial transcription)"
+        )
+
+    return SttRtfVerdict(
+        recommend=recommend,
+        reason=reason,
+        median_rtf=median,
+        speed_grade=grade,
+        relative_spread=rel_spread,
+        n_samples=n,
+        rel_spread_max=rel_spread_max,
+        min_samples=min_samples,
     )
