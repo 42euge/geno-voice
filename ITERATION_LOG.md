@@ -36165,3 +36165,119 @@ re-verified on main post-merge (`test_calibrate_base_wpm.py` +
 5. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232,
    iter-317 still present) — a future lap could `git worktree prune` / remove
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-397 — calibrate-base-wpm-batch: calibrate a CORPUS of voices
+
+- **Date:** 2026-06-22
+- **Branch:** iter-397-calib-batch (ff-merged to main, worktree removed)
+- **Commit:** ccc6d6e
+
+**Why.** The iter-396 next-item #1 named this exact follow-on. The per-voice
+calibration surface is now mature (median → spread → relative_spread →
+dispersion grade → margin → verdict); the deferred remaining step was the BATCH
+surface — calibrate N voices and tabulate their base rates, the calibration
+analogue of `gv vad-gap-recommend-batch` (iter-385). An operator picking a
+fleet-wide `DEFAULT_BASE_WPM` across several Kokoro voices had no single surface
+showing which voices agree on a rate and which are outliers; this lap builds it.
+
+**What it is.** `gv calibrate-base-wpm-batch --voice LABEL TRIPLE... --voice ...`
+calibrates a corpus of voices in one call. Each `--voice` group is one voice: a
+LABEL followed by its `words:audio_seconds[:speed]` sample triples (the same
+shape `--samples` takes on the single-voice command). The human report prints a
+per-voice row (implied base_wpm, voice-comparable dispersion grade, iter-396
+margin, drift vs nominal, signed Δ from the corpus median), then a corpus
+summary line (outlier-robust median / range / spread of the per-voice base
+rates) and a `grades:` histogram counting how many voices sit at each dispersion
+grade. Example:
+
+```
+base_wpm calibration batch (3 voices, 2 calibrated)
+  nominal: 165.0
+  af_heart: 164.8 WPM (agree, margin 0.050, drift -0.2, Δmedian +2.4)
+  am_adam: 160.0 WPM (agree, margin 0.050, drift -5.0, Δmedian -2.4)
+  empty: - (uncalibrated — no samples)
+  corpus: median 162.4, range 160.0 – 164.8, spread 4.8 (voices disagree on a fleet base if large)
+  grades: 2 agree, 0 loose, 0 scattered, 1 uncalibrated
+```
+
+**Design — one engine generalising `calibrate_base_wpm` over N voices.**
+- `calibrate_base_wpm_batch(voices, default_base_wpm)` takes an iterable of
+  `(label, samples)` pairs, calibrates each voice INDEPENDENTLY against the
+  shared nominal (so the per-voice drifts are apples-to-apples), and summarises
+  the per-voice `implied_base_wpm` with `statistics.median` — outlier-robust:
+  one wild voice cannot drag the corpus centre the way a mean would. Returns a
+  frozen `BaseWpmCalibrationBatch`.
+- Each row embeds the voice's own `BaseWpmCalibration`, so a row agrees EXACTLY
+  with `gv calibrate-base-wpm` on that voice's samples
+  (`test_each_row_carries_its_own_calibration`). The per-voice dispersion grade
+  inherits `relative_spread`'s voice-independence (iter-393/394): the SAME
+  relative spread at a 100-WPM and a 300-WPM voice grades identically
+  (`test_grade_is_voice_comparable_across_rates`).
+- A voice with no samples calibrates to `None` (the `calibrate_base_wpm` empty
+  contract): it is listed and tagged `uncalibrated`, counted in `num_voices`,
+  but excluded from the corpus median / extremes / spread — mirroring how
+  `vad_gap_recommend_batch` keeps a <2-segment recording in the table with a
+  `None` recommendation rather than dropping it silently.
+- `CALIB_BATCH_GRADE_ORDER = (agree, loose, scattered, uncalibrated)` — the
+  three real grades plus the empty-voice bucket, kept distinct so an empty voice
+  never silently merges into "scattered" (the same `ungraded`-vs-`none`
+  distinction iter-390's `GAP_RECOMMEND_BATCH_GRADE_ORDER` makes). The gv render
+  reads this order from the engine (`_wm_calib_batch_grade_order`) so the two
+  never drift on the bucket set, and the histogram always shows all four buckets
+  summing to `num_voices`.
+- gv side scoped to the HUMAN render only this lap (`render_calibration_batch`),
+  exactly how iter-385 landed the basic VAD batch before iter-390/391/392
+  enriched it with json/csv/flyers. The label-plus-triples shape is parsed in
+  the handler with the SAME `calibration_sample_type` validator the single-voice
+  `--samples` uses, so a malformed triple raises the identical clean error
+  (surfaced as `ArgumentTypeError` in the handler since the shape can't be an
+  argparse `type=`).
+
+**What landed.** `session/wpm_mirror.py` (`BaseWpmCalibrationBatch` frozen
+dataclass, `calibrate_base_wpm_batch`, `CALIB_BATCH_GRADE_ORDER` + `__all__`
+exports); `examples/gv.py` (`cmd_calibrate_base_wpm_batch` handler,
+`render_calibration_batch` + `_wm_calib_batch_grade_order` helper, the parser,
+the dispatch entry, the header usage line).
+
+**Tests (+30 net new).** engine (`test_calibrate_base_wpm_batch`, 14):
+empty-corpus, one-row-per-voice-in-order, per-row-carries-own-calibration,
+robust-corpus-median-vs-outlier, signed Δmedian, single-voice zero spread,
+uncalibrated-excluded, all-uncalibrated, grade-order-canonical,
+histogram-sums-to-num-voices, scattered-bucket, nominal-threads-to-drift,
+default-nominal, voice-comparable-grade. gv side
+(`test_gv_calibrate_base_wpm_batch`, 16): handler-map, parser voice-groups +
+requires-voice + nominal-override, render header/rows/corpus-summary/histogram/
+uncalibrated/all-uncalibrated/Δmedian, handler emits + matches-render +
+malformed-triple clean error + label-only-uncalibrated + default-log.
+`test_gv_cli`'s exhaustive `DEFAULT_HANDLERS` assertion gained the new entry.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5744 passed**
+(5714 prior + 30 net new), run in the feature worktree before ff-merge;
+re-verified on main post-merge (`test_calibrate_base_wpm_batch.py` +
+`test_gv_calibrate_base_wpm_batch.py` + `test_gv_cli.py` → 123 passed).
+- Integration: not run this lap (pure arithmetic/string-formatting over
+  `CalibrationSample` dataclasses; no torch import, no audio I/O — mirrors the
+  iter-220/316/317/393/394/395/396 calibration laps and the iter-338/340..396
+  unit laps).
+
+**Next planned items:**
+1. **[gv CLI] enrich the batch surface with the iter-386..392 batch family** —
+   the human batch render now exists; the natural follow-ons mirror the VAD
+   batch's evolution: `--json`/`--csv` machine-readable twins (iter-390/391),
+   `--sort-by` (implied_base_wpm / grade / drift / Δmedian) + `--top-n`
+   (iter-386/387), a `--min-grade` floor (iter-389), a `--summary` line naming
+   the single most-representative voice (iter-388), and an IQR/Tukey-fence flyer
+   flag naming outlier voices directly (iter-391/392). Each is a small,
+   well-precedented increment reusing iter-397's engine.
+2. **[gv CLI] continue the STT-side frontier** — the TTS-side calibration
+   surface is now rich (single + batch); the STT side (transcription RTF /
+   accuracy) is still unexplored by the gv analysis family. A genuinely new
+   pipeline stage.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Prefer a genuinely new signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232,
+   iter-317 still present) — a future lap could `git worktree prune` / remove
+   merged ones. NOTE: this lap correctly removed its own worktree.
