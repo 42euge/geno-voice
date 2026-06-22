@@ -34995,3 +34995,100 @@ re-verified on main post-merge (`test_gv_vad_gap_recommend_knob_grid.py` +
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    leftover per-iter worktrees. A future lap could `git worktree prune` / remove the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-384 — gv vad-gap-recommend-diff: compare two recordings' recommended hangovers
+
+- **Date:** 2026-06-21
+- **Branch:** iter-384-recommend-diff (ff-merged to main, worktree removed)
+- **Commit:** 413f66d
+
+**Why.** The recommend-knob family went feature-complete at iter-383: `--bias`
+(column filter), `--min-grade` (row threshold), `--sort-by` (ordering), `--top-n`
+(count cap), and `--summary` (single-best verdict) all span BOTH the 1-D
+`vad-gap-recommend-knob-sweep` and 2-D `vad-gap-recommend-knob-grid`. The standing
+iter-383 next-items #1/#2 said the marginal value of an N+1th knob is now low and to
+prefer a genuinely NEW gv surface — specifically naming a
+`vad-gap-recommend-diff comparing two WAVs' recommended hangovers side by side` as
+the natural "did my tuning change help?" tool. This lap lands exactly that. Not an
+18th chat-metrics clone (family complete, iter-328).
+
+**What it is.** `gv vad-gap-recommend-diff wav_a.wav wav_b.wav` segments TWO
+recordings under the same shared knobs (and `--bias`) and reports how each one's
+`vad_gap_recommend` end-of-turn hangover — and its `vad_gap_confidence` grade —
+differs. Where EVERY prior diff (`gv vad-diff` iter-235, `gv vad-gap-diff` iter-334)
+compares two SETTINGS of ONE recording (the SAME WAV under `--threshold-a` vs
+`--threshold-b`), this compares ONE setting across TWO recordings. The headline is
+`recommended_ms_delta` — how far the recommended `--min-silence-ms` moves between
+the two WAVs — so an operator who re-recorded after a mic / room / speaker change
+sees whether their preferred hangover still holds. Each side carries its own
+confidence grade (a valley property, invariant across biases, iter-353): a shift
+that stays `strong` on both sides is a real change, while one where a side reads
+`weak` is mostly noise.
+
+**Design — new pure delta core + the standard human/JSON/CSV renderer trio**,
+mirroring the iter-334 `vad-gap-diff` shape:
+- `vad_gap_recommend_delta(result_a, result_b, *, bias)` — built from
+  `vad_gap_recommend` (once per side, at the shared bias) and `vad_gap_confidence`
+  (once per side), so the per-side numbers and grades agree EXACTLY with
+  `gv vad-gap-recommend` / `gv vad-gap-confidence` on each WAV. Always-present counts
+  (`num_segments`/`num_gaps`) carry integer deltas; a recommendation delta is `None`
+  whenever EITHER side has <2 segments (a missing recommendation cannot be
+  differenced — the same `null` distinction the sibling diffs make). ms delta rounds
+  to 1 place, seconds delta to 3. Pure — no I/O, no torch.
+- `render_vad_gap_recommend_diff` / `_json` / `_csv` — the human report prints the
+  shared `bias`, both labels, segment/gap counts as `A → B (Δ)`, the recommended
+  `--min-silence-ms` per recording with its signed delta (`-` for a missing side,
+  `n/a` for an undefined delta), and each side's grade. JSON carries
+  `recording_a`/`recording_b` + the full delta dict; deltas are `null` when a side
+  is missing. CSV is one row per recording
+  (`recording,bias,num_segments,num_gaps,recommended_ms,grade`) — the same flat shape
+  `vad-diff --csv` uses, deltas trivially derivable from the two rows.
+- `cmd_vad_gap_recommend_diff` — same injected-dependency contract as
+  `cmd_vad_gap_diff` (lazy torch-free `segmenter`/`availability`); shares all
+  segmenter knobs + `--bias` across BOTH runs so the comparison is apples-to-apples;
+  `--csv` mutually exclusive with `--json`; degrades to the install hint when
+  `silero-vad` is absent, never crashing. Registered in `DEFAULT_HANDLERS` and as the
+  `vad-gap-recommend-diff` subparser (positional `wav-a`/`wav-b`), plus a
+  usage-example line in the module header.
+
+**What landed in `examples/gv.py` (+~290).** The four functions above, the dispatch
+entry, the parser, and the header example line.
+
+**Tests (tests/unit, +33 new file `test_gv_vad_gap_recommend_diff.py`; +1 line in
+`test_gv_cli.py` handler-map).** parser registration/defaults/custom-knobs/
+json-csv-mutex/bad-bias/requires-two-wavs; delta core agrees-with-per-side /
+carries-grades / int-deltas / echoes-bias / bias-shifts-number / missing-side-none /
+both-missing; human names-both-recordings+delta / shows-grades / echoes-bias /
+missing-side-dashes+na / unavailable-hint; JSON shape / missing-side-null /
+unavailable; CSV one-row-per-recording / missing-side-empty / unavailable-comment;
+handler human/json/csv / threads-bias / passes-shared-knobs-to-both-runs /
+unavailable ×3.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5480 passed**
+(5447 prior + 33 net new), run in the feature worktree before ff-merge AND
+re-verified on main post-merge (`test_gv_vad_gap_recommend_diff.py` +
+`test_gv_cli.py` → 126 passed).
+- Integration: not run this lap (pure string-formatting/arithmetic/reduction over
+  injected stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..383 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] extend `vad-gap-recommend-diff` toward a sweep over MANY recordings.**
+   This lap diffs TWO WAVs. A natural follow-up is a `vad-gap-recommend-batch` /
+   `-corpus` that tabulates the recommended hangover + grade for N recordings in one
+   table (the recommend analogue of how `vad-gap-sweep` generalises `vad-gap-diff`),
+   so an operator can see at a glance which recordings in a corpus agree on a
+   hangover and which are outliers. Would reuse `vad_gap_recommend` /
+   `vad_gap_confidence` per WAV and a small table renderer.
+2. **[gv CLI] surface the recommend/confidence machinery on the STT/TTS side**
+   (noted iter-381/382/383 #2) — a still-unexplored direction now that the VAD-gap
+   recommend surfaces are mature.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   leftover per-iter worktrees. A future lap could `git worktree prune` / remove the
+   merged ones. NOTE: this lap correctly removed its own worktree.
