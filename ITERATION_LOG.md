@@ -37110,3 +37110,95 @@ existing-file edit — that test enumerates the complete map).
 5. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232, iter-317
    still present) — a future lap could `git worktree prune` / remove merged ones.
    NOTE: this lap correctly removed its own worktree.
+
+## iter-407 — stt/rtf_profile: data-driven STT-RTF verdict (iter-222 analogue)
+
+- **Date:** 2026-06-22
+- **Branch:** iter-407-stt-rtf-verdict (ff-merged to main, worktree removed)
+- **Commit:** 9ef6f9d
+
+**Why.** The iter-406 log's next-item #1 named this lap explicitly: fold an
+`SttRtfProfile` (iter-405) into a recommend/keep **VERDICT** — the STT-side twin
+of iter-222's `calibration_verdict`. iter-405 landed the STT-RTF measurement
+core (measured transcriptions → robust median RTF + speed grade + dispersion +
+headroom) and iter-406 surfaced it on the gv CLI, but both stop at raw numbers
+(median, spread, grade, margin) and leave the operator to eyeball whether the
+transcriber is actually too slow to act on. That is the same gap iter-222 closed
+for `base_wpm` with a verdict rather than a bare reading. This lap lands the STT
+twin — the natural next STT-side step now that the single profile is measured
+(iter-405) and on the CLI (iter-406), mirroring the TTS-side measure→CLI→verdict
+arc (iter-220→221→222).
+
+**What it is.** `stt_rtf_verdict` + `SttRtfVerdict` in `stt/rtf_profile.py`, a
+**pure** fold over an existing `SttRtfProfile` (no I/O, no clock):
+
+- **`SttRtfVerdict`** — frozen dataclass mirroring `CalibrationVerdict`:
+  `recommend` (bool), `reason` (human-readable), the echoed `median_rtf` /
+  `speed_grade` / `relative_spread` / `n_samples` the decision read, and the
+  `rel_spread_max` / `min_samples` thresholds it was computed against (so the
+  verdict is self-describing).
+- **`stt_rtf_verdict(profile, *, rel_spread_max, min_samples)`** — folds three
+  trust/significance gates, checked **in order** so `reason` names the FIRST
+  failure (mirroring `calibration_verdict`'s sample→trust→significance order):
+  1. **enough samples** — `n_samples >= min_samples` (a single transcription is
+     one timing, not a profile);
+  2. **runs agree** — `relative_spread <= rel_spread_max` (a wide dispersion
+     means the median RTF is not trustworthy; re-measure rather than act);
+  3. **genuinely slow** — `speed_grade == "slow"` (the median crossed the
+     realtime knee; a `"fast"`/`"realtime"` engine already keeps pace, so
+     swapping it just churns config for no latency win).
+  All three must pass to recommend lightening the STT path (a smaller model or
+  streaming partial transcription); otherwise keep the current engine. A `None`
+  profile ⇒ `None`, mirroring `profile_stt_rtf`'s empty contract and
+  `calibration_verdict`'s.
+
+**Design notes.** The trust gate reads **`relative_spread`** (dimensionless),
+NOT the absolute `spread` iter-222 uses — RTF is rate-dependent (a 0.1 spread is
+tight at rtf 2.0 but wide at 0.15), so the absolute range is not comparable
+across engines whereas `relative_spread` is (the iter-393 reason it was
+introduced). `DEFAULT_STT_RTF_REL_SPREAD_MAX = 0.15` matches
+`CALIB_LOOSE_REL_SPREAD` so the STT and TTS sides share one dimensionless
+agreement bar; `DEFAULT_STT_RTF_MIN_SAMPLES = 3` mirrors
+`DEFAULT_CALIB_MIN_SAMPLES`. The significance gate is the categorical `"slow"`
+grade rather than an absolute drift — `"slow"` (rtf past the realtime knee) is
+the meaningful STT-side threshold, just as a drift past `drift_min` is the
+meaningful TTS-side one.
+
+**What landed.** `stt/rtf_profile.py` (+177 lines: the verdict core + two module
+constants + the docstring bullet) and `tests/unit/test_stt_rtf_profile.py`
+(+103 lines). No other files touched — purely additive, so it cannot regress any
+prior lap.
+
+**Tests (+9 net new).** `None` profile ⇒ `None`; recommend when
+slow+agree+enough (asserting echoed thresholds + fields); reject too-few-samples
+(sample gate); reject runs-disagree (trust gate); keep when fast; keep when
+realtime (both significance gate); gate-order (2 samples AND wide spread ⇒
+sample gate wins the reason); custom thresholds; rel-spread knee inclusive.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5935 passed**
+(5926 prior + 9 net new), run in the feature worktree before ff-merge; re-
+verified on main post-merge (`test_stt_rtf_profile.py` → 31 passed, 13 of them
+verdict tests).
+- Integration: not run this lap (pure arithmetic over an injected
+  `SttRtfProfile`; no torch, no faster-whisper, no audio I/O — mirrors the
+  iter-222/405/406 STT-/calibration-core laps, which the integration suite never
+  exercised either).
+
+**Next planned items:**
+1. **[gv CLI] surface the STT-RTF verdict on `gv stt-rtf --verdict`** — the
+   iter-316/317 analogue: wire `stt_rtf_verdict` into the iter-406 `gv stt-rtf`
+   command behind a `--verdict` flag (human / `--json` / `--csv`), the way
+   `gv calibrate-base-wpm --verdict` surfaces `calibration_verdict`. Completes
+   the STT-side measure→CLI→verdict→CLI-verdict arc the TTS side walked.
+2. **[gv CLI] an `stt-rtf-batch` corpus command** — the iter-397 analogue on the
+   STT side: profile a CORPUS of engines/models (`--engine label pair pair ...`),
+   tabulate each one's median RTF + grade + verdict, plus the corpus median
+   (which engines keep up?). Would begin the STT-side batch family.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Prefer a genuinely new signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232, iter-317
+   still present) — a future lap could `git worktree prune` / remove merged ones.
+   NOTE: this lap correctly removed its own worktree.
