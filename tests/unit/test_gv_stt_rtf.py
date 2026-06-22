@@ -273,3 +273,152 @@ def test_load_stt_rtf_profile_is_cached():
     assert a is b
     assert hasattr(a, "TranscriptionSample")
     assert hasattr(a, "profile_stt_rtf")
+
+
+# ---- iter-408: --verdict parser wiring ---------------------------------
+
+
+def test_verdict_flag_defaults_off():
+    args = gv.build_parser().parse_args(["stt-rtf", "--samples", "10.0:1.2"])
+    assert args.verdict is False
+
+
+def test_verdict_flag_sets_true():
+    args = gv.build_parser().parse_args(
+        ["stt-rtf", "--samples", "10.0:1.2", "--verdict"]
+    )
+    assert args.verdict is True
+
+
+def test_verdict_gate_defaults_match_core():
+    mod = gv._load_stt_rtf_profile()
+    args = gv.build_parser().parse_args(["stt-rtf", "--samples", "10.0:1.2"])
+    assert args.rel_spread_max == mod.DEFAULT_STT_RTF_REL_SPREAD_MAX
+    assert args.min_samples == mod.DEFAULT_STT_RTF_MIN_SAMPLES
+
+
+def test_verdict_gate_overrides_parse():
+    args = gv.build_parser().parse_args(
+        [
+            "stt-rtf",
+            "--samples",
+            "10.0:1.2",
+            "--rel-spread-max",
+            "0.3",
+            "--min-samples",
+            "5",
+        ]
+    )
+    assert args.rel_spread_max == 0.3
+    assert args.min_samples == 5
+
+
+# ---- iter-408: render_stt_rtf_verdict ----------------------------------
+
+
+def _verdict(*pairs, **kw):
+    """Build an SttRtfVerdict from (audio, transcribe) pairs via the core."""
+    mod = gv._load_stt_rtf_profile()
+    _, profile = _profile(*pairs)
+    return mod.stt_rtf_verdict(profile, **kw)
+
+
+def test_render_verdict_none_is_no_samples():
+    lines = gv.render_stt_rtf_verdict(None)
+    assert lines == ["stt-rtf verdict: no samples (nothing to decide)"]
+
+
+def test_render_verdict_recommend_lightens():
+    # slow + agree + enough samples -> recommend lightening the STT path.
+    verdict = _verdict((5.0, 10.0), (5.0, 10.2), (5.0, 9.8))
+    assert verdict.recommend
+    text = "\n".join(gv.render_stt_rtf_verdict(verdict))
+    assert "STT real-time-factor verdict" in text
+    assert "decision: lighten the STT path" in text
+    assert "reason:" in text
+    assert "grade==slow" in text
+    assert "median RTF 2.000 grades slow" in text
+    assert "a reading aid, not a gate" in text
+
+
+def test_render_verdict_keep_when_fast():
+    # tight + fast: passes the sample and trust gates, fails significance.
+    verdict = _verdict((10.0, 1.40), (10.0, 1.45), (10.0, 1.50))
+    assert not verdict.recommend
+    text = "\n".join(gv.render_stt_rtf_verdict(verdict))
+    assert "decision: keep the current engine" in text
+    assert "keeps pace" in text
+
+
+def test_render_verdict_echoes_gate_thresholds():
+    verdict = _verdict(
+        (5.0, 10.0), (5.0, 10.2), (5.0, 9.8), rel_spread_max=0.2, min_samples=2
+    )
+    text = "\n".join(gv.render_stt_rtf_verdict(verdict))
+    assert "relative_spread<=0.20" in text
+    assert "samples>=2" in text
+
+
+# ---- iter-408: cmd_stt_rtf --verdict dispatch --------------------------
+
+
+def test_handler_verdict_appends_decision():
+    out = _run(["stt-rtf", "--samples", "5.0:10.0", "5.0:10.2", "5.0:9.8", "--verdict"])
+    text = "\n".join(out)
+    # the human profile report still leads...
+    assert "STT real-time-factor profile" in text
+    # ...and the verdict block follows.
+    assert "STT real-time-factor verdict" in text
+    assert "decision: lighten the STT path" in text
+
+
+def test_handler_no_verdict_by_default():
+    out = _run(["stt-rtf", "--samples", "5.0:10.0", "5.0:10.2", "5.0:9.8"])
+    text = "\n".join(out)
+    assert "STT real-time-factor verdict" not in text
+
+
+def test_handler_verdict_keep_when_too_few_samples():
+    out = _run(["stt-rtf", "--samples", "5.0:10.0", "--verdict"])
+    text = "\n".join(out)
+    assert "decision: keep the current engine" in text
+    assert "need 3+" in text
+
+
+def test_handler_verdict_suppressed_under_json():
+    out = _run(
+        ["stt-rtf", "--samples", "5.0:10.0", "5.0:10.2", "5.0:9.8", "--verdict", "--json"]
+    )
+    assert len(out) == 1
+    payload = json.loads(out[0])
+    assert payload["profile"]["speed_grade"] == "slow"
+    assert "verdict" not in out[0]
+
+
+def test_handler_verdict_suppressed_under_csv():
+    out = _run(
+        ["stt-rtf", "--samples", "5.0:10.0", "5.0:10.2", "5.0:9.8", "--verdict", "--csv"]
+    )
+    assert len(out) == 1
+    assert out[0].splitlines()[0] == "sample,audio_seconds,transcribe_seconds,rtf"
+    assert "decision:" not in out[0]
+
+
+def test_handler_verdict_honors_gate_overrides():
+    # rel-spread-max 0.001 is tight enough to fail the trust gate on agreeing
+    # runs, flipping the recommendation to keep.
+    out = _run(
+        [
+            "stt-rtf",
+            "--samples",
+            "5.0:10.0",
+            "5.0:10.2",
+            "5.0:9.8",
+            "--verdict",
+            "--rel-spread-max",
+            "0.001",
+        ]
+    )
+    text = "\n".join(out)
+    assert "decision: keep the current engine" in text
+    assert "runs disagree" in text

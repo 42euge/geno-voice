@@ -9,7 +9,7 @@ Usage:
     gv simulate-mirror …  # offline WPM-mirror trajectory / grid-sweep simulator
     gv calibrate-base-wpm … # offline base_wpm calibration (dispersion grade agree/loose/scattered + margin to next grade; --verdict for an adopt/keep call; --json/--csv for per-sample data)
     gv calibrate-base-wpm-batch --voice af_heart 50:18.2 --voice am_adam 40:15.0  # calibrate a CORPUS of voices — per-voice base_wpm + grade + drift + the corpus median (which voices agree?); --json/--csv for the machine-readable corpus; --sort-by base_wpm/grade/drift/delta to float the most-useful voices to the top; --top-n N to keep only the N most-useful; --min-grade scattered/loose/agree to drop voices below a dispersion floor; --summary to name the single most-representative voice (nearest the corpus median); the flyers: line names outlier voices (outside the Q1-1.5·IQR..Q3+1.5·IQR Tukey fence), also marked ← flyer in the table
-    gv stt-rtf --samples 10.0:1.2 5.0:0.8  # offline STT real-time-factor profile — fold measured transcriptions (audio_seconds:transcribe_seconds) into a robust median RTF + speed grade (fast/realtime/slow); --json/--csv for per-sample data
+    gv stt-rtf --samples 10.0:1.2 5.0:0.8  # offline STT real-time-factor profile — fold measured transcriptions (audio_seconds:transcribe_seconds) into a robust median RTF + speed grade (fast/realtime/slow); --verdict for a lighten/keep call; --json/--csv for per-sample data
     gv vad recording.wav  # offline Silero VAD — segment a WAV into speech regions
     gv vad recording.wav --json # machine-readable segmentation (SileroResult.to_dict shape)
     gv vad-gaps recording.wav  # report the silence gaps BETWEEN speech regions (tune --min-silence-ms)
@@ -2352,6 +2352,46 @@ def render_stt_rtf_json(samples, profile):
         ),
     }
     return json.dumps(payload, indent=2)
+
+
+def render_stt_rtf_verdict(verdict):
+    """Render an ``SttRtfVerdict`` (iter-407) as plain-text report lines.
+
+    The STT-side analogue of :func:`render_calibration_verdict`: iter-405 shipped
+    the measurement (``profile_stt_rtf``), iter-406 surfaced it on the CLI, and
+    iter-407 folded it into a recommend/keep DECISION (``stt_rtf_verdict``). This
+    is that verdict's human face — it turns the raw median/grade/dispersion
+    numbers into an act-or-keep call the operator can read at a glance.
+
+    Pure: returns a list of strings (no I/O, no ANSI) so it is testable in
+    isolation — the handler joins and prints them. ``verdict`` of ``None`` (no
+    samples ⇒ nothing to decide) yields a single "no verdict" line, mirroring
+    :func:`render_calibration_verdict`'s empty contract.
+
+    The ``speed`` line echoes the profile's grade and dimensionless dispersion
+    as a reading aid alongside the gate thresholds — it is not a fourth gate (the
+    significance gate is the categorical ``"slow"`` grade, the trust gate the
+    ``relative_spread`` test), so it is labelled as such, the same way
+    :func:`render_calibration_verdict` labels its ``dispersion`` line.
+    """
+    if verdict is None:
+        return ["stt-rtf verdict: no samples (nothing to decide)"]
+    decision = (
+        "lighten the STT path (a smaller model or streaming partial transcription)"
+        if verdict.recommend
+        else "keep the current engine"
+    )
+    lines = [
+        "STT real-time-factor verdict",
+        f"  decision: {decision}",
+        f"  reason:   {verdict.reason}",
+        f"  gates:    relative_spread<={verdict.rel_spread_max:.2f}, "
+        f"grade==slow, samples>={verdict.min_samples}",
+        f"  speed:    median RTF {verdict.median_rtf:.3f} grades "
+        f"{verdict.speed_grade}, relative spread {verdict.relative_spread:.3f} "
+        f"over {verdict.n_samples} samples (a reading aid, not a gate)",
+    ]
+    return lines
 
 
 def render_trajectory(traj, *, wpms=None):
@@ -10317,6 +10357,14 @@ def cmd_stt_rtf(args, *, log=print):
     ``sample,audio_seconds,transcribe_seconds,rtf`` grid with the aggregate
     profile trailing as ``#`` comment lines (:func:`render_stt_rtf_csv`); either
     is the whole output in that mode. The human report is the default.
+
+    ``--verdict`` (iter-408) additionally folds the profile through the iter-407
+    ``stt_rtf_verdict`` engine and prints the recommend/keep DECISION below the
+    human report — the STT-side twin of ``gv calibrate-base-wpm --verdict``. The
+    verdict is human prose, not a data record, so (like the calibration command)
+    it is suppressed under ``--json`` / ``--csv``: a consumer scripts the action
+    off the ``speed_grade`` / ``relative_spread`` / ``n_samples`` fields the
+    machine-readable output already carries.
     """
     mod = _load_stt_rtf_profile()
     TranscriptionSample = mod.TranscriptionSample
@@ -10337,6 +10385,16 @@ def cmd_stt_rtf(args, *, log=print):
         return
     for line in render_stt_rtf(profile):
         log(line)
+    if getattr(args, "verdict", False):
+        # iter-408: fold the raw profile into the iter-407 recommend/keep verdict
+        # so the operator sees a DECISION, not just the grade/dispersion numbers.
+        verdict = mod.stt_rtf_verdict(
+            profile,
+            rel_spread_max=args.rel_spread_max,
+            min_samples=args.min_samples,
+        )
+        for line in render_stt_rtf_verdict(verdict):
+            log(line)
 
 
 def cmd_vad(args, *, log=print, segmenter=None, availability=None):
@@ -12508,6 +12566,12 @@ _MIRROR_DEFAULT_CALIB_SPREAD_MAX = 10.0
 _MIRROR_DEFAULT_CALIB_DRIFT_MIN = 5.0
 _MIRROR_DEFAULT_CALIB_MIN_SAMPLES = 3
 
+# Fallback defaults for the iter-408 ``gv stt-rtf --verdict`` gates, mirroring the
+# ``DEFAULT_STT_RTF_*`` constants in ``stt/rtf_profile.py`` (iter-407). Used when
+# the profile core can't be loaded so the parser stays importable on any host.
+_STT_RTF_DEFAULT_REL_SPREAD_MAX = 0.15
+_STT_RTF_DEFAULT_MIN_SAMPLES = 3
+
 
 def build_parser():
     """Construct the gv argument parser.
@@ -12542,6 +12606,17 @@ def build_parser():
         calib_spread_max_default = _MIRROR_DEFAULT_CALIB_SPREAD_MAX
         calib_drift_min_default = _MIRROR_DEFAULT_CALIB_DRIFT_MIN
         calib_min_samples_default = _MIRROR_DEFAULT_CALIB_MIN_SAMPLES
+
+    # Source the iter-408 stt-rtf --verdict gate defaults from the profile core so
+    # the CLI tracks the real DEFAULT_STT_RTF_* knobs; fall back to the documented
+    # constants if the (pure-stdlib) core can't be loaded.
+    try:
+        _srp = _load_stt_rtf_profile()
+        stt_rtf_rel_spread_max_default = _srp.DEFAULT_STT_RTF_REL_SPREAD_MAX
+        stt_rtf_min_samples_default = _srp.DEFAULT_STT_RTF_MIN_SAMPLES
+    except Exception:  # pragma: no cover - defensive fallback
+        stt_rtf_rel_spread_max_default = _STT_RTF_DEFAULT_REL_SPREAD_MAX
+        stt_rtf_min_samples_default = _STT_RTF_DEFAULT_MIN_SAMPLES
 
     bench = sub.add_parser("bench", help="Batch mode — transcribe after silence")
     bench.add_argument("--model", type=model_type, default=DEFAULT_MODEL)
@@ -12857,6 +12932,30 @@ def build_parser():
         help="One or more measured transcriptions as "
         "'audio_seconds:transcribe_seconds', e.g. 10.0:1.2 5.0:0.8 (each is one "
         "clip of known duration transcribed in a measured wall-clock time)",
+    )
+    stt_rtf.add_argument(
+        "--verdict",
+        action="store_true",
+        help="Also print the iter-407 recommend/keep verdict (lighten the STT "
+        "path vs keep the current engine) instead of just the raw "
+        "grade/dispersion numbers",
+    )
+    stt_rtf.add_argument(
+        "--rel-spread-max",
+        type=float,
+        default=stt_rtf_rel_spread_max_default,
+        dest="rel_spread_max",
+        help="Verdict gate: max trusted relative spread (dimensionless "
+        "spread/median; above this the runs disagree and the median is not "
+        f"trustworthy) (default: {stt_rtf_rel_spread_max_default})",
+    )
+    stt_rtf.add_argument(
+        "--min-samples",
+        type=int,
+        default=stt_rtf_min_samples_default,
+        dest="min_samples",
+        help="Verdict gate: min sample count for a robust median "
+        f"(default: {stt_rtf_min_samples_default})",
     )
     stt_rtf_fmt = stt_rtf.add_mutually_exclusive_group()
     stt_rtf_fmt.add_argument(
