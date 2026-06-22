@@ -36539,3 +36539,100 @@ main post-merge (`test_gv_calibrate_base_wpm_batch.py` +
 5. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232, iter-317
    still present) — a future lap could `git worktree prune` / remove merged ones.
    NOTE: this lap correctly removed its own worktree.
+
+## iter-401 — calibrate-base-wpm-batch --min-grade: drop voices below a dispersion floor
+
+- **Date:** 2026-06-22
+- **Branch:** iter-401-calib-batch-mingrade (ff-merged to main, worktree removed)
+- **Commit:** 2ef7a2c
+
+**Why.** iter-400's next-item #1 named this exact follow-on: continue the
+iter-386..392 batch-enrichment family on the `calibrate-base-wpm-batch` surface.
+The batch now carries the human / `--json` / `--csv` trio (iter-397/398),
+`--sort-by` (iter-399) and `--top-n` (iter-400), but every CALIBRATED voice is
+always rendered regardless of how dispersed its calibration is — an operator
+picking a fleet `DEFAULT_BASE_WPM` who only wants to read the voices whose base
+rate is trustworthy still has to eyeball each grade. `--min-grade` is the
+calibration analogue of `vad-gap-recommend-batch --min-grade` (iter-389), the
+next-most-precedented increment.
+
+**What it is.** `gv calibrate-base-wpm-batch --min-grade KEY` drops every voice
+that calibrated less tightly than the named dispersion-grade floor, leaving only
+the voices trustworthy enough to act on. Where `--sort-by` (an ORDERING, iter-399)
+and `--top-n` (a COUNT, iter-400) shape the displayed table, `--min-grade` (a
+THRESHOLD) drops rows entirely. The grades form a total order (reusing iter-399's
+`_CALIB_DISPERSION_GRADE_RANK`: agree 2 > loose 1 > scattered 0):
+- `agree` — keep only the tightest voices.
+- `loose` — keep loose-or-better.
+- `scattered` — keep every calibrated voice (the most permissive floor).
+
+An uncalibrated (no-sample) voice has no grade and is ALWAYS dropped when a floor
+is set.
+
+**Design — render-only, applied FIRST, exactly like iter-389.** The core
+`calibrate_base_wpm_batch` engine stays the complete every-voice primitive; the
+filter lives purely in the gv renderers via a new
+`_filter_calib_batch_rows_by_grade` helper (the analogue of
+`_filter_knob_rows_by_grade`) backed by `_calib_grade_meets_min`. The floor is
+applied BEFORE `--sort-by`/`--top-n` in every format, so every later stage sees
+only the surviving voices — but the corpus aggregates (median / range / spread /
+grade-histogram, `num_voices` / `num_calibrated`) ALWAYS describe the WHOLE corpus,
+so the floor narrows which voices you READ without redefining what the corpus
+consensus IS. `calib_batch_min_grade_type` is the case-insensitive argparse type
+(strips, rejects empty / `"uncalibrated"` / unknown) — the analogue of
+`gap_confidence_grade_type`.
+
+`--min-grade` applies across the whole trio:
+- **human** — the nominal line gains a `(min grade KEY)` tag; when the floor
+  removes every voice a single `(no voice calibrated to grade 'KEY' or better)`
+  note replaces the body rows, but the whole-corpus summary + `grades:` histogram
+  are still emitted so the operator sees what the floor filtered against.
+- **`--json`** — a top-level `min_grade` key (omitted when unset).
+- **`--csv`** — a leading `# min_grade: KEY` comment (omitted when unset). Header
+  and column set unchanged, so a filtered run still unions cleanly with a full one.
+
+**What landed.** `examples/gv.py`: `CALIB_BATCH_GRADE_CHOICES`,
+`calib_batch_min_grade_type`, `_calib_grade_meets_min`,
+`_filter_calib_batch_rows_by_grade`; `min_grade=` kwarg threaded through
+`render_calibration_batch` / `render_calibration_batch_json` /
+`render_calibration_batch_csv` (each applying the filter before
+`_sort_calib_batch_rows` + `_truncate_batch_rows`) and the
+`cmd_calibrate_base_wpm_batch` handler; the `--min-grade` parser argument and the
+header usage line. No engine change — the iter-397 `BaseWpmCalibrationBatch` is
+unchanged.
+
+**Tests (+22 net new).** min-grade-type accept/case/strip/reject;
+`_calib_grade_meets_min` total-order; parser parse/default/reject. human render:
+none-keeps-all, scattered/loose/agree floors, applied-before-sort-and-top-n,
+names-floor-in-header, removes-every-voice-note (+corpus/grades still shown),
+corpus-summary-unaffected. json: filters-and-names-key + none-omits-key +
+aggregates-whole-corpus. csv: filters-and-comments-key + none-omits-comment +
+aggregates-whole-corpus. handler: threads-to-human (+tag), threads-to-json,
+matches-render.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5824 passed**
+(5802 prior + 22 net new), run in the feature worktree before ff-merge;
+re-verified on main post-merge (`test_gv_calibrate_base_wpm_batch.py` +
+`test_calibrate_base_wpm_batch.py` + `test_gv_cli.py` → 203 passed).
+- Integration: not run this lap (pure list-filtering / string-formatting over the
+  iter-397 `BaseWpmCalibrationBatch`; no torch import, no audio I/O — mirrors the
+  iter-220/316/317/393..400 calibration laps).
+
+**Next planned items:**
+1. **[gv CLI] continue the iter-386..392 batch enrichment** — `--min-grade` now
+   lands; the remaining VAD-batch follow-ons are a `--summary` line naming the
+   single most-representative voice (iter-388, nearest the corpus median — the
+   INVERSE of `--sort-by delta`) and an IQR/Tukey-fence flyer flag naming outlier
+   voices directly (iter-391/392). Each reuses iter-397..401.
+2. **[gv CLI] continue the STT-side frontier** — the TTS-side calibration surface
+   is now rich (single + batch, all three formats, sortable, top-n-capped,
+   grade-floored); the STT side (transcription RTF / accuracy) is still unexplored
+   by the gv analysis family. A genuinely new pipeline stage.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Prefer a genuinely new signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232, iter-317
+   still present) — a future lap could `git worktree prune` / remove merged ones.
+   NOTE: this lap correctly removed its own worktree.
