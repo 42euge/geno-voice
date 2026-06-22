@@ -35566,3 +35566,89 @@ re-verified on main post-merge (`test_gv_vad_gap_recommend_batch.py` +
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    leftover per-iter worktrees. A future lap could `git worktree prune` / remove the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-390 — gv vad-gap-recommend-batch grade_counts: corpus confidence histogram
+
+- **Date:** 2026-06-21
+- **Branch:** iter-390-batch-grade-counts (ff-merged to main, worktree removed)
+- **Commit:** 5e60844
+
+**Why.** The iter-389 next-item steer asked for "a genuinely new signal over an
+18th near-clone" now that the batch family has borrowed EVERY knob-sweep render
+filter (min-grade / sort / top-n / summary, iter-386..389). This lap lands a fresh
+AGGREGATE — not a filter. The recommend-batch already reports WHERE the corpus
+agrees (median / min / max / spread); this adds the companion that reports HOW
+TRUSTWORTHY the corpus is.
+
+**What it is.** `gv vad-gap-recommend-batch *.wav` now emits a `grades:` line (and a
+`grade_counts` JSON key) counting how many recordings sit at each iter-348
+confidence grade: `grades: 2 strong, 1 moderate, 1 ungraded`. It is the natural
+companion to the iter-389 `--min-grade` filter — before choosing a floor, the
+operator sees how many recordings each floor would keep (2 strong + 1 moderate →
+`--min-grade moderate` keeps 3).
+
+**Design — a whole-corpus aggregate, like median/spread; never a filtered view.**
+- New `_batch_grade_counts(rows)` primitive returns an ordered dict keyed by the
+  canonical descending-trust `GAP_RECOMMEND_BATCH_GRADE_ORDER`
+  (strong/moderate/weak/none/ungraded). The core's `None` grade (a <2-segment
+  recording with no pause to grade) maps to a DISTINCT `ungraded` bucket, kept
+  separate from `"none"` (a graded-but-valley-less recording) so the trust floor an
+  operator would pick is never blurred. Every bucket is always present (zero when
+  empty) so the histogram has a fixed shape; counts always sum to `len(rows)`. A
+  defensive `else` lands any unrecognised future grade in `ungraded` rather than
+  dropping it.
+- `vad_gap_recommend_batch` gains a `grade_counts` key computed over the WHOLE
+  corpus — NOT a grade-filtered view — so the histogram describes the corpus
+  regardless of any render-time `--min-grade` / `--top-n`. CRITICAL property: the
+  floor narrows which recordings you READ; the histogram still tells you what the
+  whole corpus looks like.
+- New `_format_batch_grade_counts(counts)` renders a one-line `grades: 2 strong, 1
+  moderate` body (non-zero buckets only, canonical order; `grades: (none)` for an
+  empty corpus). The human renderer appends it after the corpus median/spread line.
+  JSON carries `grade_counts` automatically via `payload.update(d)` on BOTH the full
+  and summary paths — summary pops `rows` but keeps the whole-corpus histogram so a
+  consumer sees what the representative recording is central within. CSV is
+  unchanged (its aggregates are derivable from the rows, per the iter-385 contract).
+- Docstrings (handler / human / JSON renderers) + a header usage-example line
+  document the new signal and its companionship to `--min-grade`.
+
+**What landed in `examples/gv.py` (+~82/-10).** `GAP_RECOMMEND_BATCH_GRADE_ORDER`,
+`_batch_grade_counts`, `_format_batch_grade_counts`, the `grade_counts` core key, the
+human `grades:` line append, and docstring/header-example updates. JSON/CSV renderers
+needed no code change (JSON inherits the key via `payload.update`; CSV unchanged).
+
+**Tests (tests/unit, +29 in `test_gv_vad_gap_recommend_batch.py`).** primitive
+keys-always-present+ordered / tallies-each-grade / none-maps-to-ungraded /
+unknown-falls-back-to-ungraded / sum-equals-rowcount / no-mutation; formatter
+nonzero-in-order / empty-reads-none; core carries-grade-counts; human
+shows-grades-line / unaffected-by-min-grade / unaffected-by-top-n; JSON carries /
+unaffected-by-min-grade / summary-still-carries / all-missing-all-ungraded; handler
+human-emits-line / json-carries.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5647 passed**
+(run in the feature worktree before ff-merge); re-verified on main post-merge
+(`test_gv_vad_gap_recommend_batch.py` + `test_gv_cli.py` → 260 passed).
+- Integration: not run this lap (pure string-formatting/counting over injected stub
+  `_Result` objects; no torch import, no audio I/O — mirrors the iter-338/340..389
+  unit laps).
+
+**Next planned items:**
+1. **[gv CLI] surface the recommend/confidence machinery on the STT/TTS side**
+   (noted iter-381..389) — the still-unexplored direction now that the VAD-gap
+   recommend surfaces are mature (recommend → confidence → sweep → grid → diff →
+   batch). The batch family's filters (min-grade/sort/top-n/summary) AND its
+   aggregates (median/spread/grade_counts) are now complete; the natural next
+   frontier is a different pipeline stage (STT/TTS), not more batch surface.
+2. **[gv CLI] add a `--biases`-column selector to the batch** like the knob sweep's
+   iter-374 `--biases` — a multi-bias batch column set would let an operator compare
+   short/balanced/long recommendations per recording in one table. (Larger core
+   restructure than this lap; deferred.)
+3. **[chat-metrics] The diversity-check family is declared complete** (17 sentinels,
+   iter-328). Future chat-metrics laps should prefer a genuinely new signal over an
+   18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** — needs a
+   browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   leftover per-iter worktrees. A future lap could `git worktree prune` / remove the
+   merged ones. NOTE: this lap correctly removed its own worktree.
