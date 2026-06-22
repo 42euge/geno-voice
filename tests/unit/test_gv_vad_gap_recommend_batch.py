@@ -425,6 +425,7 @@ def test_csv_one_row_per_recording():
         "recommended_ms",
         "grade",
         "delta_from_median_ms",
+        "flyer",
     ]
     assert len(rows) == 4  # header + 3 recordings
     assert [r[0] for r in rows[1:]] == ["a.wav", "b.wav", "c.wav"]
@@ -2230,3 +2231,240 @@ def test_json_iqr_unaffected_by_min_grade():
     assert full["recommended_ms_iqr"] == floored["recommended_ms_iqr"]
     assert full["recommended_ms_q1"] == floored["recommended_ms_q1"]
     assert full["recommended_ms_q3"] == floored["recommended_ms_q3"]
+
+
+# ============================================================================
+# iter-392 — Tukey-fence flyer flag (per-row ``flyer`` + recommended_ms_fence_lo /
+# _fence_hi / num_flyers). The iter-391 IQR only HINTS that an outlier exists (a
+# tight IQR beside a wide spread); this names WHICH recording is the outlier via the
+# standard boxplot fence ``[Q1 - 1.5*IQR, Q3 + 1.5*IQR]``.
+# ============================================================================
+
+
+def _fence_of(values):
+    """Reference Tukey fence (lo, hi) over a list, via the same primitive the code uses."""
+    srt = sorted(values)
+    q1 = round(gv._percentile_of_sorted(srt, 25), 1)
+    q3 = round(gv._percentile_of_sorted(srt, 75), 1)
+    iqr = round(q3 - q1, 1)
+    return round(q1 - 1.5 * iqr, 1), round(q3 + 1.5 * iqr, 1)
+
+
+# ---- core keys ---------------------------------------------------------
+
+
+def test_batch_core_carries_fence_keys():
+    results = [_clean("a.wav"), _lower("b.wav"), _higher("c.wav")]
+    labels = ["a.wav", "b.wav", "c.wav"]
+    d = gv.vad_gap_recommend_batch(results, labels)
+    recs = [gv.vad_gap_recommend(r)["recommended_ms"] for r in results]
+    lo, hi = _fence_of(recs)
+    assert d["recommended_ms_fence_lo"] == lo
+    assert d["recommended_ms_fence_hi"] == hi
+    assert "num_flyers" in d
+
+
+def test_batch_flyer_names_the_outlier():
+    # Four near-identical clones plus one extreme outlier: the IQR collapses to 0
+    # (middle half is a single value), so the fence is tight and ONLY the outlier
+    # falls outside it.
+    base = [_lower(f"b{i}.wav") for i in range(4)]
+    flyer = _higher("flyer.wav")
+    results = base + [flyer]
+    labels = [r.name for r in results]
+    d = gv.vad_gap_recommend_batch(results, labels)
+    by_name = {r["recording"]: r for r in d["rows"]}
+    assert by_name["flyer.wav"]["flyer"] is True
+    assert all(by_name[f"b{i}.wav"]["flyer"] is False for i in range(4))
+    assert d["num_flyers"] == 1
+
+
+def test_batch_fence_matches_tukey_formula():
+    base = [_lower(f"b{i}.wav") for i in range(4)]
+    flyer = _higher("flyer.wav")
+    results = base + [flyer]
+    labels = [r.name for r in results]
+    d = gv.vad_gap_recommend_batch(results, labels)
+    recs = [gv.vad_gap_recommend(r)["recommended_ms"] for r in results]
+    lo, hi = _fence_of(recs)
+    assert d["recommended_ms_fence_lo"] == lo
+    assert d["recommended_ms_fence_hi"] == hi
+    # Every flagged row really is outside [lo, hi]; every unflagged one is inside.
+    for row in d["rows"]:
+        if row["recommended_ms"] is None:
+            continue
+        outside = row["recommended_ms"] < lo or row["recommended_ms"] > hi
+        assert row["flyer"] is outside
+
+
+def test_batch_no_flyer_when_corpus_agrees():
+    # Three identical recordings: IQR 0, fence collapses to the single value, and
+    # nothing is strictly outside it — no flyer.
+    results = [_lower("a.wav"), _lower("b.wav"), _lower("c.wav")]
+    labels = ["a.wav", "b.wav", "c.wav"]
+    d = gv.vad_gap_recommend_batch(results, labels)
+    assert d["num_flyers"] == 0
+    assert all(r["flyer"] is False for r in d["rows"])
+
+
+def test_batch_flyer_none_for_non_recommending_recording():
+    # A <2-segment recording carries no recommendation, so its flyer flag is None
+    # (the same null distinction recommended_ms / grade / delta make) and it does
+    # not count toward num_flyers.
+    d = gv.vad_gap_recommend_batch(
+        [_clean("a.wav"), _flat("flat.wav")], ["a.wav", "flat.wav"]
+    )
+    by_name = {r["recording"]: r for r in d["rows"]}
+    assert by_name["flat.wav"]["flyer"] is None
+
+
+def test_batch_fence_none_and_no_flyers_when_nothing_recommends():
+    d = gv.vad_gap_recommend_batch([_flat("a.wav"), _flat("b.wav")],
+                                   ["a.wav", "b.wav"])
+    assert d["recommended_ms_fence_lo"] is None
+    assert d["recommended_ms_fence_hi"] is None
+    assert d["num_flyers"] == 0
+
+
+def test_batch_flyer_ignores_non_recommending_in_fence():
+    # A flat recording must not feed the fence — the fence matches the one over the
+    # recommending recordings alone.
+    base = [_lower(f"b{i}.wav") for i in range(4)]
+    flyer = _higher("flyer.wav")
+    results = base + [flyer, _flat("flat.wav")]
+    labels = [r.name for r in results]
+    d = gv.vad_gap_recommend_batch(results, labels)
+    recs = [
+        gv.vad_gap_recommend(r)["recommended_ms"]
+        for r in results
+        if gv.vad_gap_recommend(r)["recommended_ms"] is not None
+    ]
+    lo, hi = _fence_of(recs)
+    assert d["recommended_ms_fence_lo"] == lo
+    assert d["recommended_ms_fence_hi"] == hi
+    assert d["num_flyers"] == 1
+
+
+# ---- human renderer ----------------------------------------------------
+
+
+def test_human_marks_flyer_row_and_names_it():
+    base = [_lower(f"b{i}.wav") for i in range(4)]
+    flyer = _higher("flyer.wav")
+    results = base + [flyer]
+    labels = [r.name for r in results]
+    lines = gv.render_vad_gap_recommend_batch(results, labels)
+    # The flyer's data row carries the trailing marker.
+    flyer_rows = [ln for ln in lines if "flyer.wav" in ln and "← flyer" in ln]
+    assert len(flyer_rows) == 1
+    # The corpus flyers line names it.
+    flyers_line = [ln for ln in lines if "flyers:" in ln][0]
+    assert "flyer.wav" in flyers_line
+    assert "1 (" in flyers_line
+
+
+def test_human_flyers_none_when_corpus_agrees():
+    results = [_lower("a.wav"), _lower("b.wav"), _lower("c.wav")]
+    labels = ["a.wav", "b.wav", "c.wav"]
+    lines = gv.render_vad_gap_recommend_batch(results, labels)
+    flyers_line = [ln for ln in lines if "flyers:" in ln][0]
+    assert "none" in flyers_line
+    assert not any("← flyer" in ln for ln in lines)
+
+
+def test_human_flyers_line_unaffected_by_min_grade_and_top_n():
+    base = [_lower(f"b{i}.wav") for i in range(4)]
+    flyer = _higher("flyer.wav")
+    results = base + [flyer]
+    labels = [r.name for r in results]
+    full = [ln for ln in gv.render_vad_gap_recommend_batch(results, labels)
+            if "flyers:" in ln][0]
+    capped = [ln for ln in gv.render_vad_gap_recommend_batch(
+        results, labels, top_n=1) if "flyers:" in ln][0]
+    floored = [ln for ln in gv.render_vad_gap_recommend_batch(
+        results, labels, min_grade="strong") if "flyers:" in ln][0]
+    assert full == capped == floored
+
+
+def test_human_no_flyers_line_when_nothing_recommends():
+    lines = gv.render_vad_gap_recommend_batch(
+        [_flat("a.wav"), _flat("b.wav")], ["a.wav", "b.wav"]
+    )
+    assert not any("flyers:" in ln for ln in lines)
+
+
+# ---- JSON renderer -----------------------------------------------------
+
+
+def test_json_carries_fence_keys_and_per_row_flyer():
+    base = [_lower(f"b{i}.wav") for i in range(4)]
+    flyer = _higher("flyer.wav")
+    results = base + [flyer]
+    labels = [r.name for r in results]
+    payload = json.loads(
+        gv.render_vad_gap_recommend_batch_json(results, labels)
+    )
+    recs = [gv.vad_gap_recommend(r)["recommended_ms"] for r in results]
+    lo, hi = _fence_of(recs)
+    assert payload["recommended_ms_fence_lo"] == lo
+    assert payload["recommended_ms_fence_hi"] == hi
+    assert payload["num_flyers"] == 1
+    by_name = {r["recording"]: r for r in payload["rows"]}
+    assert by_name["flyer.wav"]["flyer"] is True
+    assert by_name["b0.wav"]["flyer"] is False
+
+
+def test_json_fence_null_and_zero_flyers_when_nothing_recommends():
+    payload = json.loads(
+        gv.render_vad_gap_recommend_batch_json(
+            [_flat("a.wav"), _flat("b.wav")], ["a.wav", "b.wav"]
+        )
+    )
+    assert payload["recommended_ms_fence_lo"] is None
+    assert payload["recommended_ms_fence_hi"] is None
+    assert payload["num_flyers"] == 0
+
+
+def test_json_summary_still_carries_flyer_aggregates():
+    base = [_lower(f"b{i}.wav") for i in range(4)]
+    flyer = _higher("flyer.wav")
+    results = base + [flyer]
+    labels = [r.name for r in results]
+    payload = json.loads(
+        gv.render_vad_gap_recommend_batch_json(results, labels, summary=True)
+    )
+    assert "rows" not in payload
+    assert payload["num_flyers"] == 1
+    assert payload["recommended_ms_fence_hi"] is not None
+
+
+def test_json_flyer_unaffected_by_min_grade():
+    base = [_lower(f"b{i}.wav") for i in range(4)]
+    flyer = _higher("flyer.wav")
+    results = base + [flyer]
+    labels = [r.name for r in results]
+    full = json.loads(gv.render_vad_gap_recommend_batch_json(results, labels))
+    floored = json.loads(
+        gv.render_vad_gap_recommend_batch_json(results, labels, min_grade="strong")
+    )
+    assert full["num_flyers"] == floored["num_flyers"]
+    assert full["recommended_ms_fence_lo"] == floored["recommended_ms_fence_lo"]
+    assert full["recommended_ms_fence_hi"] == floored["recommended_ms_fence_hi"]
+
+
+# ---- CSV renderer ------------------------------------------------------
+
+
+def test_csv_carries_flyer_column():
+    base = [_lower(f"b{i}.wav") for i in range(4)]
+    flyer = _higher("flyer.wav")
+    results = base + [flyer, _flat("flat.wav")]
+    labels = [r.name for r in results]
+    text = gv.render_vad_gap_recommend_batch_csv(results, labels)
+    rows = list(csv.reader(io.StringIO(text)))
+    assert rows[0][-1] == "flyer"
+    by_name = {r[0]: r for r in rows[1:]}
+    assert by_name["flyer.wav"][-1] == "true"
+    assert by_name["b0.wav"][-1] == "false"
+    # The flat recording carries no recommendation -> empty flyer cell.
+    assert by_name["flat.wav"][-1] == ""

@@ -30,6 +30,7 @@ Usage:
     gv vad-gap-recommend-batch *.wav --summary  # name the single most-representative recording (nearest the corpus median)
     gv vad-gap-recommend-batch *.wav --min-grade strong  # drop recordings below a confidence floor (keep only the trustworthy ones)
     gv vad-gap-recommend-batch *.wav  # the grades: line counts how many recordings sit at each confidence grade (how many each --min-grade floor would keep)
+    gv vad-gap-recommend-batch *.wav  # the flyers: line names the outlier recordings (outside the Q1-1.5·IQR..Q3+1.5·IQR Tukey fence), also marked ← flyer in the table
     gv vad-sweep recording.wav --thresholds 0.3,0.5,0.7,0.9  # sweep N gates, tabulate the elbow
     gv vad-sweep recording.wav --min-silences 200,400,800,1600  # sweep the hangover instead
     gv vad-sweep recording.wav --min-speeches 50,100,200,400  # sweep the min-speech floor instead
@@ -5602,7 +5603,13 @@ def vad_gap_recommend_batch(results, labels, *, bias=DEFAULT_GAP_RECOMMEND_BIAS)
     companion to the range-based ``spread``: a lone flyer inflates ``spread`` but
     cannot widen the IQR). Each row carries its signed
     ``delta_from_median_ms`` so the outliers are obvious without re-reading the
-    whole column. Only recordings that actually carry a recommendation
+    whole column, plus (iter-392) a ``flyer`` boolean naming the outliers DIRECTLY:
+    a recording is a flyer when its recommended ms falls outside the standard Tukey
+    fence ``[Q1 - 1.5*IQR, Q3 + 1.5*IQR]`` (carried as
+    ``recommended_ms_fence_lo`` / ``recommended_ms_fence_hi``, with ``num_flyers``
+    counting them). This turns the iter-391 "tight IQR + wide spread => a flyer
+    exists" eyeball comparison into a per-recording flag, so the operator sees WHICH
+    WAV is the outlier rather than inferring one exists. Only recordings that actually carry a recommendation
     (``recommended_ms`` not ``None`` — at least 2 segments) feed the median and the
     aggregates; a recording with fewer than 2 segments has no pause to recommend
     over, so its ``recommended_ms`` / ``grade`` / ``delta_from_median_ms`` are
@@ -5626,8 +5633,9 @@ def vad_gap_recommend_batch(results, labels, *, bias=DEFAULT_GAP_RECOMMEND_BIAS)
                 "recommended_ms": rec["recommended_ms"],
                 "recommended_s": rec["recommended_s"],
                 "grade": conf["grade"],
-                # delta_from_median filled in once the median is known.
+                # delta_from_median + flyer filled in once the median/fences are known.
                 "delta_from_median_ms": None,
+                "flyer": None,
             }
         )
     recommended = [r["recommended_ms"] for r in rows if r["recommended_ms"] is not None]
@@ -5648,11 +5656,28 @@ def vad_gap_recommend_batch(results, labels, *, bias=DEFAULT_GAP_RECOMMEND_BIAS)
         q1 = round(_percentile_of_sorted(srt, 25), 1)
         q3 = round(_percentile_of_sorted(srt, 75), 1)
         iqr = round(q3 - q1, 1)
+        # iter-392 outlier (flyer) flag, naming the recordings the IQR-vs-spread gap
+        # only HINTED at. The standard Tukey boxplot fence: a recording is a flyer
+        # when its recommended ms falls below Q1 - 1.5*IQR or above Q3 + 1.5*IQR.
+        # This turns the iter-391 "tight IQR + wide spread => a flyer exists" eyeball
+        # comparison into a per-recording boolean, so the operator sees WHICH WAV is
+        # the outlier without scanning the Δmedian column. When IQR is 0 (a degenerate
+        # corpus where the middle half is a single value) the fences collapse to
+        # [Q1, Q3] and only recordings strictly outside that band are flyers — a lone
+        # different recording among identical ones is correctly named.
+        fence_lo = round(q1 - 1.5 * iqr, 1)
+        fence_hi = round(q3 + 1.5 * iqr, 1)
         for r in rows:
             if r["recommended_ms"] is not None:
                 r["delta_from_median_ms"] = round(r["recommended_ms"] - median, 1)
+                r["flyer"] = (
+                    r["recommended_ms"] < fence_lo or r["recommended_ms"] > fence_hi
+                )
+        num_flyers = sum(1 for r in rows if r["flyer"])
     else:
         median = lo = hi = spread = q1 = q3 = iqr = None
+        fence_lo = fence_hi = None
+        num_flyers = 0
     return {
         "bias": bias,
         "num_recordings": len(rows),
@@ -5664,6 +5689,9 @@ def vad_gap_recommend_batch(results, labels, *, bias=DEFAULT_GAP_RECOMMEND_BIAS)
         "recommended_ms_q1": q1,
         "recommended_ms_q3": q3,
         "recommended_ms_iqr": iqr,
+        "recommended_ms_fence_lo": fence_lo,
+        "recommended_ms_fence_hi": fence_hi,
+        "num_flyers": num_flyers,
         "grade_counts": _batch_grade_counts(rows),
         "rows": rows,
     }
@@ -5724,6 +5752,34 @@ def _format_batch_grade_counts(counts):
         if counts[g] > 0
     ]
     return "  grades: " + (", ".join(parts) if parts else "(none)")
+
+
+def _format_batch_flyers(d):
+    """Render the iter-392 corpus outlier line, naming the flyer recordings.
+
+    The recommend-batch already carries a per-row ``flyer`` boolean (a recording
+    whose recommended ms falls outside the Tukey fence ``[Q1 - 1.5*IQR, Q3 +
+    1.5*IQR]``); this names them on one line so the operator does not have to scan
+    the table for the ``← flyer`` markers. Reads ``num_flyers`` + the per-row flags
+    over the WHOLE corpus (``rows`` here is the FULL row list, not a
+    sorted/filtered/truncated view), so the line describes the corpus regardless of
+    any render-time ``--min-grade`` / ``--top-n``. The fence bounds are spelled out
+    so the operator can see how far outside the middle half a flyer sits, e.g.
+    ``flyers: 1 (c.wav) outside [200ms, 1600ms]``. ``flyers: none`` when the corpus
+    agrees (no outlier). Pure: returns a single string.
+    """
+
+    def _ms(value):
+        return "-" if value is None else f"{_format_cut_label(value)}ms"
+
+    names = [r["recording"] for r in d["rows"] if r["flyer"]]
+    if not names:
+        return "  flyers: none"
+    return (
+        f"  flyers: {len(names)} ({', '.join(str(n) for n in names)}) "
+        f"outside [{_ms(d['recommended_ms_fence_lo'])}, "
+        f"{_ms(d['recommended_ms_fence_hi'])}]"
+    )
 
 
 # iter-386 ``--sort-by`` ordering for the recommend BATCH. The batch analogue of
@@ -5924,9 +5980,12 @@ def render_vad_gap_recommend_batch(results, labels, *, bias=DEFAULT_GAP_RECOMMEN
     per recording — recommended ``--min-silence-ms``, confidence grade, and signed
     delta from the corpus median — followed by a corpus summary line
     (median / min / max / spread / iter-391 IQR — the outlier-robust spread, the
-    width of the middle half of the corpus) and an iter-390 ``grades:`` histogram line counting
+    width of the middle half of the corpus), an iter-390 ``grades:`` histogram line counting
     how many recordings sit at each confidence grade
-    (strong/moderate/weak/none/ungraded) over the WHOLE corpus. A recording with
+    (strong/moderate/weak/none/ungraded) over the WHOLE corpus, and (iter-392) a
+    ``flyers:`` line naming the recordings outside the Tukey fence
+    ``[Q1 - 1.5*IQR, Q3 + 1.5*IQR]`` (each such row also gets a trailing
+    ``← flyer`` marker), turning the IQR-vs-spread hint into a named outlier. A recording with
     fewer than 2 segments has no recommendation and prints ``-`` for its number /
     grade / delta. Pure: returns a list of strings.
 
@@ -6034,11 +6093,14 @@ def render_vad_gap_recommend_batch(results, labels, *, bias=DEFAULT_GAP_RECOMMEN
         )
         return lines
     for row in rows:
+        # iter-392 trailing flyer marker — names the outlier inline so the operator
+        # spots it while scanning the table, not only in the corpus summary line.
+        flyer_mark = "  ← flyer" if row["flyer"] else ""
         lines.append(
             f"  {str(row['recording']):<{rec_width}}  "
             f"{row['num_segments']:>8}  {row['num_gaps']:>4}  "
             f"{_ms(row['recommended_ms']):>11}  {_grade(row['grade']):>8}  "
-            f"{_delta(row['delta_from_median_ms']):>9}"
+            f"{_delta(row['delta_from_median_ms']):>9}{flyer_mark}"
         )
     if d["num_recommended"] == 0:
         lines.append(
@@ -6060,6 +6122,11 @@ def render_vad_gap_recommend_batch(results, labels, *, bias=DEFAULT_GAP_RECOMMEN
     # min_grade / top_n) — how trustworthy the corpus is, the companion to the
     # median/spread line that shows where it agrees.
     lines.append(_format_batch_grade_counts(d["grade_counts"]))
+    # iter-392 corpus flyer line — names the outlier recordings the IQR-vs-spread
+    # gap hints at. Over the WHOLE corpus (d["rows"] is the full list here), so it
+    # is unaffected by min_grade / top_n like the other corpus aggregates.
+    if d["num_recommended"] > 0:
+        lines.append(_format_batch_flyers(d))
     return lines
 
 
@@ -6074,11 +6141,15 @@ def render_vad_gap_recommend_batch_json(results, labels, *,
     Carries the shared ``bias``, the corpus aggregates (count + median / min / max /
     spread + iter-391 ``recommended_ms_q1`` / ``recommended_ms_q3`` /
     ``recommended_ms_iqr`` — the outlier-robust inter-quartile spread, ``null`` when
-    no recording recommends), the iter-390 ``grade_counts``
+    no recording recommends), the iter-392 Tukey-fence outlier keys
+    (``recommended_ms_fence_lo`` / ``recommended_ms_fence_hi`` = the
+    ``[Q1 - 1.5*IQR, Q3 + 1.5*IQR]`` fence, ``num_flyers`` = how many recordings fall
+    outside it, ``null`` / ``0`` when no recording recommends), the iter-390 ``grade_counts``
     object (how many recordings sit at each confidence grade —
     strong/moderate/weak/none/ungraded, over the WHOLE corpus, always all five keys),
-    and the per-recording ``rows`` (each with its recommendation, grade, and signed
-    delta from the median — ``null`` for a <2-segment recording). Either ``None`` in
+    and the per-recording ``rows`` (each with its recommendation, grade, signed
+    delta from the median, and a ``flyer`` boolean naming the outliers — all ``null``
+    for a <2-segment recording). Either ``None`` in
     ``results`` → ``{"available": false}`` + install hint. Pure: returns a single
     JSON string. The ``grade_counts`` histogram is unaffected by ``min_grade`` /
     ``top_n`` (it always describes the whole corpus, so a consumer sees how many
@@ -6161,9 +6232,10 @@ def render_vad_gap_recommend_batch_csv(results, labels, *,
     completing the human / ``--json`` / ``--csv`` trio. One row per recording — the
     same flat shape ``gv vad-gap-recommend-diff --csv`` uses, extended to N rows —
     with the columns
-    ``recording,bias,num_segments,num_gaps,recommended_ms,grade,delta_from_median_ms``.
+    ``recording,bias,num_segments,num_gaps,recommended_ms,grade,delta_from_median_ms,flyer``
+    (``flyer`` is the iter-392 ``true``/``false`` Tukey-fence outlier flag).
     A recording with fewer than 2 segments has no recommendation, so its
-    ``recommended_ms`` / ``grade`` / ``delta_from_median_ms`` cells are empty (the
+    ``recommended_ms`` / ``grade`` / ``delta_from_median_ms`` / ``flyer`` cells are empty (the
     CSV spelling of JSON ``null``). The corpus aggregates the human/JSON twins
     surface are trivially derivable from the rows, so they are left out rather than
     duplicated into every row. Either ``None`` in ``results`` (segmenter
@@ -6218,6 +6290,7 @@ def render_vad_gap_recommend_batch_csv(results, labels, *,
             "recommended_ms",
             "grade",
             "delta_from_median_ms",
+            "flyer",
         ]
     )
 
@@ -6226,6 +6299,12 @@ def render_vad_gap_recommend_batch_csv(results, labels, *,
 
     def _ms_cell(value):
         return "" if value is None else _format_cut_label(value)
+
+    def _flyer_cell(value):
+        # Per-row Tukey-fence outlier flag (iter-392). Empty for a <2-segment
+        # recording that carries no recommendation (the CSV spelling of null),
+        # otherwise the lowercase ``true`` / ``false`` the other booleans use.
+        return "" if value is None else str(bool(value)).lower()
 
     for row in rows:
         writer.writerow(
@@ -6237,6 +6316,7 @@ def render_vad_gap_recommend_batch_csv(results, labels, *,
                 _ms_cell(row["recommended_ms"]),
                 _cell(row["grade"]),
                 _ms_cell(row["delta_from_median_ms"]),
+                _flyer_cell(row["flyer"]),
             ]
         )
     return buf.getvalue().rstrip("\r\n")
@@ -10438,11 +10518,13 @@ def cmd_vad_gap_recommend_batch(args, *, log=print, segmenter=None, availability
     ``gv vad-gap-sweep`` generalises ``gv vad-gap-diff``. ``gv vad-gap-recommend-batch
     a.wav b.wav c.wav ...`` segments every WAV under the same shared knobs and
     reports each one's :func:`vad_gap_recommend` end-of-turn hangover (and its
-    :func:`vad_gap_confidence` grade) in one table, plus a corpus median / spread
-    and an iter-390 ``grades:`` histogram (how many recordings sit at each confidence
+    :func:`vad_gap_confidence` grade) in one table, plus a corpus median / spread,
+    an iter-390 ``grades:`` histogram (how many recordings sit at each confidence
     grade — the companion to ``--min-grade``: it shows how many recordings each floor
-    would keep), so an operator can see at a glance which recordings agree on a
-    hangover and which are outliers.
+    would keep), and (iter-392) a ``flyers:`` line naming the recordings outside the
+    Tukey fence ``[Q1 - 1.5*IQR, Q3 + 1.5*IQR]`` (each also marked ``← flyer`` in the
+    table), so an operator can see at a glance which recordings agree on a hangover
+    and which one is the outlier.
 
     Same injected-dependency contract as :func:`cmd_vad_gap_recommend_diff`:
     ``segmenter`` / ``availability`` default to the real :mod:`vad.silero`
