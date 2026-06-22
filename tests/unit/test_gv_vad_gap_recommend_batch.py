@@ -1839,3 +1839,214 @@ def test_cmd_unavailable_still_threads_min_grade_json():
         availability=lambda: False,
     )
     assert json.loads("\n".join(lines))["available"] is False
+
+
+# ========================================================================
+# iter-390 — corpus confidence-grade histogram (grade_counts). The batch already
+# reports WHERE the corpus agrees (median/spread); grade_counts reports HOW
+# TRUSTWORTHY it is — how many recordings sit at each iter-348 grade. The companion
+# to the iter-389 --min-grade filter (shows how many recordings each floor keeps),
+# computed over the WHOLE corpus regardless of any render-time filter.
+# ========================================================================
+
+
+# ---- _batch_grade_counts primitive -------------------------------------
+
+
+def test_batch_grade_counts_keys_always_present_and_ordered():
+    counts = gv._batch_grade_counts([])
+    assert list(counts.keys()) == list(gv.GAP_RECOMMEND_BATCH_GRADE_ORDER)
+    assert all(v == 0 for v in counts.values())
+
+
+def test_batch_grade_counts_tallies_each_grade():
+    rows = [
+        {"grade": "strong"},
+        {"grade": "strong"},
+        {"grade": "moderate"},
+        {"grade": "weak"},
+        {"grade": "none"},
+        {"grade": None},  # ungraded (<2 segments)
+    ]
+    counts = gv._batch_grade_counts(rows)
+    assert counts == {
+        "strong": 2,
+        "moderate": 1,
+        "weak": 1,
+        "none": 1,
+        "ungraded": 1,
+    }
+
+
+def test_batch_grade_counts_none_grade_maps_to_ungraded():
+    # The core's None grade is the <2-segment bucket, kept DISTINCT from "none".
+    counts = gv._batch_grade_counts([{"grade": None}, {"grade": "none"}])
+    assert counts["ungraded"] == 1
+    assert counts["none"] == 1
+
+
+def test_batch_grade_counts_unknown_grade_falls_back_to_ungraded():
+    # A future/unrecognised grade must not vanish — counts still sum to len(rows).
+    counts = gv._batch_grade_counts([{"grade": "superb"}])
+    assert counts["ungraded"] == 1
+    assert sum(counts.values()) == 1
+
+
+def test_batch_grade_counts_sum_equals_row_count():
+    rows = [{"grade": g} for g in ["strong", "moderate", None, "none", "weak"]]
+    counts = gv._batch_grade_counts(rows)
+    assert sum(counts.values()) == len(rows)
+
+
+def test_batch_grade_counts_does_not_mutate_rows():
+    rows = [{"grade": "strong"}, {"grade": None}]
+    snapshot = [dict(r) for r in rows]
+    gv._batch_grade_counts(rows)
+    assert rows == snapshot
+
+
+# ---- _format_batch_grade_counts renderer -------------------------------
+
+
+def test_format_grade_counts_names_only_nonzero_in_order():
+    counts = {"strong": 2, "moderate": 0, "weak": 1, "none": 0, "ungraded": 3}
+    line = gv._format_batch_grade_counts(counts)
+    assert line == "  grades: 2 strong, 1 weak, 3 ungraded"
+
+
+def test_format_grade_counts_empty_corpus_reads_none():
+    counts = {g: 0 for g in gv.GAP_RECOMMEND_BATCH_GRADE_ORDER}
+    assert gv._format_batch_grade_counts(counts) == "  grades: (none)"
+
+
+# ---- core key ----------------------------------------------------------
+
+
+def test_batch_core_carries_grade_counts():
+    results = [_clean("a.wav"), _lower("b.wav"), _flat("flat.wav")]
+    labels = ["a.wav", "b.wav", "flat.wav"]
+    d = gv.vad_gap_recommend_batch(results, labels)
+    assert d["grade_counts"]["strong"] == 2
+    assert d["grade_counts"]["ungraded"] == 1
+    assert sum(d["grade_counts"].values()) == 3
+
+
+# ---- human renderer ----------------------------------------------------
+
+
+def test_human_shows_grades_line():
+    results = [_clean("a.wav"), _lower("b.wav"), _flat("flat.wav")]
+    labels = ["a.wav", "b.wav", "flat.wav"]
+    lines = gv.render_vad_gap_recommend_batch(results, labels)
+    grade_line = [ln for ln in lines if "grades:" in ln][0]
+    assert "2 strong" in grade_line
+    assert "1 ungraded" in grade_line
+
+
+def test_human_grades_line_unaffected_by_min_grade():
+    # The histogram describes the WHOLE corpus; the floor narrows which ROWS show.
+    results = [_clean("a.wav"), _lower("b.wav"), _flat("flat.wav")]
+    labels = ["a.wav", "b.wav", "flat.wav"]
+    full = gv.render_vad_gap_recommend_batch(results, labels)
+    filtered = gv.render_vad_gap_recommend_batch(results, labels, min_grade="strong")
+    full_grade = [ln for ln in full if "grades:" in ln][0]
+    filt_grade = [ln for ln in filtered if "grades:" in ln][0]
+    assert full_grade == filt_grade
+    assert "1 ungraded" in filt_grade
+
+
+def test_human_grades_line_unaffected_by_top_n():
+    results = [_clean("a.wav"), _lower("b.wav"), _higher("c.wav")]
+    labels = ["a.wav", "b.wav", "c.wav"]
+    full = gv.render_vad_gap_recommend_batch(results, labels)
+    capped = gv.render_vad_gap_recommend_batch(results, labels, top_n=1)
+    assert [ln for ln in full if "grades:" in ln][0] == (
+        [ln for ln in capped if "grades:" in ln][0]
+    )
+
+
+# ---- JSON renderer -----------------------------------------------------
+
+
+def test_json_carries_grade_counts():
+    payload = json.loads(
+        gv.render_vad_gap_recommend_batch_json(
+            [_clean("a.wav"), _lower("b.wav"), _flat("flat.wav")],
+            ["a.wav", "b.wav", "flat.wav"],
+        )
+    )
+    assert payload["grade_counts"] == {
+        "strong": 2,
+        "moderate": 0,
+        "weak": 0,
+        "none": 0,
+        "ungraded": 1,
+    }
+
+
+def test_json_grade_counts_unaffected_by_min_grade():
+    full = json.loads(
+        gv.render_vad_gap_recommend_batch_json(
+            [_clean("a.wav"), _lower("b.wav"), _flat("flat.wav")],
+            ["a.wav", "b.wav", "flat.wav"],
+        )
+    )
+    filtered = json.loads(
+        gv.render_vad_gap_recommend_batch_json(
+            [_clean("a.wav"), _lower("b.wav"), _flat("flat.wav")],
+            ["a.wav", "b.wav", "flat.wav"],
+            min_grade="strong",
+        )
+    )
+    assert full["grade_counts"] == filtered["grade_counts"]
+
+
+def test_json_summary_still_carries_grade_counts():
+    # Summary pops rows but the whole-corpus histogram stays — a consumer sees
+    # what the representative is central within.
+    payload = json.loads(
+        gv.render_vad_gap_recommend_batch_json(
+            [_clean("a.wav"), _lower("b.wav"), _flat("flat.wav")],
+            ["a.wav", "b.wav", "flat.wav"],
+            summary=True,
+        )
+    )
+    assert "rows" not in payload
+    assert payload["grade_counts"]["strong"] == 2
+    assert payload["grade_counts"]["ungraded"] == 1
+
+
+def test_json_all_missing_grade_counts_all_ungraded():
+    payload = json.loads(
+        gv.render_vad_gap_recommend_batch_json(
+            [_flat("a.wav"), _flat("b.wav")], ["a.wav", "b.wav"]
+        )
+    )
+    assert payload["grade_counts"]["ungraded"] == 2
+    assert sum(payload["grade_counts"].values()) == 2
+
+
+# ---- handler -----------------------------------------------------------
+
+
+def test_cmd_human_emits_grades_line():
+    lines = []
+    gv.cmd_vad_gap_recommend_batch(
+        _args(),
+        log=lines.append,
+        segmenter=_corpus_segmenter(),
+        availability=lambda: True,
+    )
+    assert any("grades:" in ln for ln in lines)
+
+
+def test_cmd_json_carries_grade_counts():
+    lines = []
+    gv.cmd_vad_gap_recommend_batch(
+        _args(json=True),
+        log=lines.append,
+        segmenter=_corpus_segmenter(),
+        availability=lambda: True,
+    )
+    payload = json.loads("\n".join(lines))
+    assert payload["grade_counts"]["strong"] == 3

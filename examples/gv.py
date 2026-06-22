@@ -29,6 +29,7 @@ Usage:
     gv vad-gap-recommend-batch *.wav --sort-by delta --top-n 5  # keep only the 5 biggest outliers
     gv vad-gap-recommend-batch *.wav --summary  # name the single most-representative recording (nearest the corpus median)
     gv vad-gap-recommend-batch *.wav --min-grade strong  # drop recordings below a confidence floor (keep only the trustworthy ones)
+    gv vad-gap-recommend-batch *.wav  # the grades: line counts how many recordings sit at each confidence grade (how many each --min-grade floor would keep)
     gv vad-sweep recording.wav --thresholds 0.3,0.5,0.7,0.9  # sweep N gates, tabulate the elbow
     gv vad-sweep recording.wav --min-silences 200,400,800,1600  # sweep the hangover instead
     gv vad-sweep recording.wav --min-speeches 50,100,200,400  # sweep the min-speech floor instead
@@ -5644,8 +5645,66 @@ def vad_gap_recommend_batch(results, labels, *, bias=DEFAULT_GAP_RECOMMEND_BIAS)
         "recommended_ms_min": lo,
         "recommended_ms_max": hi,
         "recommended_ms_spread": spread,
+        "grade_counts": _batch_grade_counts(rows),
         "rows": rows,
     }
+
+
+# iter-390 corpus confidence-grade histogram. The recommend-batch already reports
+# WHERE the corpus agrees (median / spread); this reports HOW TRUSTWORTHY the corpus
+# is — how many recordings sit at each iter-348 confidence grade. It is the natural
+# companion to the iter-389 ``--min-grade`` filter: before choosing a floor, an
+# operator sees how many recordings would survive each one (e.g. "7 strong, 2
+# moderate, 1 weak" → ``--min-grade moderate`` keeps 9). Computed over the WHOLE
+# corpus like the median / spread aggregates, NOT over a grade-filtered view, so the
+# histogram describes the corpus as a whole regardless of any render-time filter.
+# Canonical descending-trust order; ``ungraded`` is the <2-segment bucket (the core's
+# ``None`` grade), kept distinct from ``none`` (a valley-less recording that WAS
+# graded) so the two never silently merge.
+GAP_RECOMMEND_BATCH_GRADE_ORDER = ("strong", "moderate", "weak", "none", "ungraded")
+
+
+def _batch_grade_counts(rows):
+    """Count how many recording rows sit at each confidence grade (iter-390).
+
+    Returns an ordered dict keyed by :data:`GAP_RECOMMEND_BATCH_GRADE_ORDER`
+    (``strong`` → ``moderate`` → ``weak`` → ``none`` → ``ungraded``), each value the
+    number of rows carrying that grade. The core's ``None`` grade (a <2-segment
+    recording with no pause to grade) maps to the ``ungraded`` bucket, kept distinct
+    from ``"none"`` (a graded-but-valley-less recording) so the trust floor an
+    operator would pick is never blurred. Every bucket is always present (zero when
+    empty) so the histogram has a fixed shape regardless of corpus, and the counts
+    sum to ``len(rows)``. Pure — reads the rows, builds a fresh dict, mutates nothing.
+    """
+    counts = {g: 0 for g in GAP_RECOMMEND_BATCH_GRADE_ORDER}
+    for r in rows:
+        grade = r["grade"]
+        key = "ungraded" if grade is None else grade
+        if key in counts:
+            counts[key] += 1
+        else:
+            # Defensive: an unrecognised future grade lands in ungraded rather than
+            # vanishing from the histogram (the counts must still sum to len(rows)).
+            counts["ungraded"] += 1
+    return counts
+
+
+def _format_batch_grade_counts(counts):
+    """Render the iter-390 corpus grade histogram as a one-line ``grades: ...`` body.
+
+    Names only the NON-ZERO buckets in canonical descending-trust order
+    (``strong``/``moderate``/``weak``/``none``/``ungraded``), e.g.
+    ``grades: 2 strong, 1 moderate``. An all-empty corpus (no rows) reads
+    ``grades: (none)``. The companion to the human corpus median/spread line —
+    where that shows WHERE the corpus agrees, this shows HOW TRUSTWORTHY it is.
+    Pure: returns a single string.
+    """
+    parts = [
+        f"{counts[g]} {g}"
+        for g in GAP_RECOMMEND_BATCH_GRADE_ORDER
+        if counts[g] > 0
+    ]
+    return "  grades: " + (", ".join(parts) if parts else "(none)")
 
 
 # iter-386 ``--sort-by`` ordering for the recommend BATCH. The batch analogue of
@@ -5845,9 +5904,11 @@ def render_vad_gap_recommend_batch(results, labels, *, bias=DEFAULT_GAP_RECOMMEN
     :func:`render_vad_gap_recommend_diff`. Prints the shared ``bias``, then one row
     per recording — recommended ``--min-silence-ms``, confidence grade, and signed
     delta from the corpus median — followed by a corpus summary line
-    (median / min / max / spread). A recording with fewer than 2 segments has no
-    recommendation and prints ``-`` for its number / grade / delta. Pure: returns a
-    list of strings.
+    (median / min / max / spread) and an iter-390 ``grades:`` histogram line counting
+    how many recordings sit at each confidence grade
+    (strong/moderate/weak/none/ungraded) over the WHOLE corpus. A recording with
+    fewer than 2 segments has no recommendation and prints ``-`` for its number /
+    grade / delta. Pure: returns a list of strings.
 
     ``sort_by`` (iter-386) reorders the recording rows so the most-useful read first:
     ``"recommended"`` = shortest hangover first (recommended ms ASCENDING),
@@ -5973,6 +6034,10 @@ def render_vad_gap_recommend_batch(results, labels, *, bias=DEFAULT_GAP_RECOMMEN
             f"({d['num_recommended']}/{d['num_recordings']} recordings recommend) "
             "— a tight spread means the corpus agrees on a hangover"
         )
+    # iter-390 corpus grade histogram (over the WHOLE corpus, unaffected by
+    # min_grade / top_n) — how trustworthy the corpus is, the companion to the
+    # median/spread line that shows where it agrees.
+    lines.append(_format_batch_grade_counts(d["grade_counts"]))
     return lines
 
 
@@ -5985,10 +6050,15 @@ def render_vad_gap_recommend_batch_json(results, labels, *,
     Machine-readable twin of :func:`render_vad_gap_recommend_batch`, mirroring the
     degrade-to-``{"available": false}`` contract the other VAD JSON renderers use.
     Carries the shared ``bias``, the corpus aggregates (count + median / min / max /
-    spread, ``null`` when no recording recommends), and the per-recording ``rows``
-    (each with its recommendation, grade, and signed delta from the median —
-    ``null`` for a <2-segment recording). Either ``None`` in ``results`` →
-    ``{"available": false}`` + install hint. Pure: returns a single JSON string.
+    spread, ``null`` when no recording recommends), the iter-390 ``grade_counts``
+    object (how many recordings sit at each confidence grade —
+    strong/moderate/weak/none/ungraded, over the WHOLE corpus, always all five keys),
+    and the per-recording ``rows`` (each with its recommendation, grade, and signed
+    delta from the median — ``null`` for a <2-segment recording). Either ``None`` in
+    ``results`` → ``{"available": false}`` + install hint. Pure: returns a single
+    JSON string. The ``grade_counts`` histogram is unaffected by ``min_grade`` /
+    ``top_n`` (it always describes the whole corpus, so a consumer sees how many
+    recordings each floor would keep).
 
     ``sort_by`` (iter-386) reorders the ``rows`` list (``"recommended"`` = recommended
     ms ASCENDING, ``"grade"`` = confidence DESCENDING, ``"delta"`` = |Δmedian|
@@ -10344,9 +10414,11 @@ def cmd_vad_gap_recommend_batch(args, *, log=print, segmenter=None, availability
     ``gv vad-gap-sweep`` generalises ``gv vad-gap-diff``. ``gv vad-gap-recommend-batch
     a.wav b.wav c.wav ...`` segments every WAV under the same shared knobs and
     reports each one's :func:`vad_gap_recommend` end-of-turn hangover (and its
-    :func:`vad_gap_confidence` grade) in one table, plus a corpus median / spread,
-    so an operator can see at a glance which recordings agree on a hangover and
-    which are outliers.
+    :func:`vad_gap_confidence` grade) in one table, plus a corpus median / spread
+    and an iter-390 ``grades:`` histogram (how many recordings sit at each confidence
+    grade — the companion to ``--min-grade``: it shows how many recordings each floor
+    would keep), so an operator can see at a glance which recordings agree on a
+    hangover and which are outliers.
 
     Same injected-dependency contract as :func:`cmd_vad_gap_recommend_diff`:
     ``segmenter`` / ``availability`` default to the real :mod:`vad.silero`
