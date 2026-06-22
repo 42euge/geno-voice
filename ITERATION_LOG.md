@@ -34792,3 +34792,109 @@ re-verified on main post-merge (`test_gv_vad_gap_recommend_knob_grid.py` +
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    ~30 leftover per-iter worktrees. A future lap could `git worktree prune` /
    remove the merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-382 — gv vad-gap-recommend-knob-sweep --summary single-best verdict
+
+- **Date:** 2026-06-21
+- **Branch:** iter-382-summary (ff-merged to main, worktree removed)
+- **Commit:** 7ffecd7
+
+**Why.** The standing next-item #1 from iter-381 asked for "a `--summary` that names
+the SINGLE best knob setting (top_n=1 + a one-line verdict — 'trust threshold=0.40,
+min-silence=700ms; confidence strong') rather than a table. Add to the sweep first,
+then the grid." The recommend-knob family is feature-complete on FILTERS (`--bias`
+column iter-374/375, `--min-grade` row iter-376/377), ORDERING (`--sort-by`
+iter-378/379), and COUNT (`--top-n` iter-380/381) across both the 1-D sweep and 2-D
+grid. A `--summary` is the genuinely new operator-facing move: where the filters /
+ordering / count all shape a TABLE the operator still reads, `--summary` answers the
+end question directly — "which setting do I adopt?" — with ONE verdict line.
+Following the iter-376/378/380 cadence (add to the 1-D sweep first, extend to the
+2-D grid next), this lap lands `--summary` on the 1-D `vad-gap-recommend-knob-sweep`.
+Not an 18th chat-metrics clone (family complete, iter-328).
+
+**What it is.** `gv vad-gap-recommend-knob-sweep recording.wav --summary` collapses
+the whole table to ONE verdict naming the single most-actionable knob setting, so an
+operator who just wants the answer gets it without reading rows. "Best" is defined
+OBJECTIVELY and independently of `--sort-by`: among rows carrying a recommendation
+(`spread_ms` not None — >= 2 segments), the HIGHEST confidence grade, ties broken to
+the TIGHTEST short→long spread (the most decisive / least bias-sensitive
+recommendation), remaining ties to the EARLIEST swept value (deterministic; prefers
+the lower swept value). Crucially the pick is a single MAX reduction, NOT a
+sort+truncate, so it is INDEPENDENT of `--sort-by` / `--top-n`: the best setting is
+the best regardless of how (or whether) the table was ordered or capped. Composes
+with `--min-grade` (floor first, then pick) and `--bias` (the human headline number
+uses the operator's preferred/rightmost bias — default triad reports the `long`
+number, `--bias short` reports `short`).
+
+**Design — new selection primitive, render-only.** The core
+`vad_gap_recommend_knob_sweep` is untouched: it stays the always-by-swept-value
+primitive carrying every row. Two new helpers land next to the iter-378/380
+sort/truncate primitives:
+- `_best_knob_row(rows)` — the MAX reduction (highest grade, tightest spread,
+  earliest position via stable `min`). Returns `None` when no row carries a
+  recommendation (nothing to summarize). Pure — reads the rows, mutates nothing. A
+  genuinely new reduction (a single max, not a sort+truncate), so it is robust to
+  whatever ordering/count the operator did or did not request.
+- `_format_knob_summary_verdict(row, axis, biases)` — the one human verdict line
+  (`best: threshold=0.50 → --min-silence-ms 875 [long] (confidence strong, spread
+  250ms)`). The headline bias is the LAST of the selected biases (canonical order),
+  matching the table's rightmost recommendation column. Pure.
+
+**What landed in `examples/gv.py` (+187/-27 incl. parser/handler).**
+- All three sweep renderers (`render_vad_gap_recommend_knob_sweep` / `_json` /
+  `_csv`) gained a `summary=False` kwarg applied to the `min_grade`-filtered rows.
+  Human: header (`... knob summary — <name>`) + one verdict line, or a
+  `(no knob setting [reaching grade '<floor>'] carries a recommendation)` note.
+  JSON: replaces the `sweep` list with a `best` key (the one row, biases-narrowed,
+  or `null`) and sets `summary: true`; the per-format `sort_by`/`top_n` keys are
+  NOT emitted in summary mode (they don't shape the pick). CSV: header + the single
+  best row (header-only when none) so a summary CSV unions cleanly with a full
+  sweep — it is simply the single best row.
+- `cmd_vad_gap_recommend_knob_sweep` resolves `summary = getattr(args, "summary",
+  False)` and threads it through every render call (incl. the unavailable branch).
+- Added `--summary` (store_true) to the sweep parser, after `--top-n`, before the
+  --json/--csv format mutex.
+
+**Tests (tests/unit, +22 — test_gv_vad_gap_recommend_knob_sweep.py).**
+`_best_knob_row`: none-when-no-recommendation / highest-grade / tie-to-tightest-
+spread / tie-to-earliest / skips-ungraded. Human: names-best / respects-bias-
+headline / independent-of-sort+top_n / no-recommendation-note / note-names-floor.
+JSON: summary-shape / default-no-summary-or-best-key / best-null / narrows-best-
+biases / composes-with-min-grade. CSV: one-best-row / header-only-when-none.
+Handler: summary human/json/csv paths / default-off-renders-table / unavailable
+threads through.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5428 passed**
+(5406 prior + 22 net new), run in the feature worktree before ff-merge AND
+re-verified on main post-merge (`test_gv_vad_gap_recommend_knob_sweep.py` +
+`test_gv_cli.py` → 219 passed).
+- Integration: not run this lap (pure string-formatting/arithmetic/reduction over
+  injected stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..381 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] `--summary` — extend to the 2-D knob-grid.** This lap added
+   `--summary` to the 1-D `vad-gap-recommend-knob-sweep`. The 2-D
+   `vad-gap-recommend-knob-grid` (iter-373) tabulates the same grade + spread per
+   CELL; a future lap could collapse the grid to its single best (gate × column)
+   cell, exactly as iter-377/379/381 extended `--min-grade`/`--sort-by`/`--top-n`
+   from sweep to grid. The reusable `_best_knob_row` / `_format_knob_summary_verdict`
+   primitives are already in place — only the grid renderers need the `summary`
+   kwarg (and the verdict line needs both axis labels for a cell).
+2. **[gv CLI] recommend-knob family after the grid `--summary`.** Once #1 lands, the
+   family spans `--bias` (column filter), `--min-grade` (row threshold), `--sort-by`
+   (ordering), `--top-n` (count cap), and `--summary` (single-best verdict) across
+   both surfaces — feature-complete on filters, ordering, count, AND verdict. A
+   further direction (noted iter-381 #2): move on from the recommend-knob family
+   toward a genuinely new gv surface — a `vad-gap-recommend-diff` comparing two
+   WAVs' recommended hangovers side by side, or surfacing the recommend machinery
+   on the STT/TTS side. The marginal value of an N+1th knob is falling.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   ~30 leftover per-iter worktrees. A future lap could `git worktree prune` /
+   remove the merged ones. NOTE: this lap correctly removed its own worktree.
