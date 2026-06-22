@@ -27,6 +27,7 @@ Usage:
     gv vad-gap-recommend-batch a.wav b.wav c.wav  # tabulate N recordings' recommended hangovers + grades + corpus median/spread (which agree, which are outliers?)
     gv vad-gap-recommend-batch a.wav b.wav c.wav --sort-by delta  # float the biggest outliers (|Δmedian| descending) to the top
     gv vad-gap-recommend-batch *.wav --sort-by delta --top-n 5  # keep only the 5 biggest outliers
+    gv vad-gap-recommend-batch *.wav --summary  # name the single most-representative recording (nearest the corpus median)
     gv vad-sweep recording.wav --thresholds 0.3,0.5,0.7,0.9  # sweep N gates, tabulate the elbow
     gv vad-sweep recording.wav --min-silences 200,400,800,1600  # sweep the hangover instead
     gv vad-sweep recording.wav --min-speeches 50,100,200,400  # sweep the min-speech floor instead
@@ -5765,8 +5766,75 @@ def _truncate_batch_rows(rows, top_n):
     return list(rows)[:top_n]
 
 
+def _best_batch_row(rows):
+    """Pick the single most-REPRESENTATIVE recommend-batch recording (iter-388), or ``None``.
+
+    The selection primitive behind ``--summary``: where ``--top-n`` (a COUNT) and
+    ``--sort-by`` (an ORDERING) shape a TABLE the operator still reads, ``--summary``
+    names the ONE recording that best speaks for the corpus — the recording whose
+    recommended hangover sits CLOSEST to the corpus median, so an operator who just
+    wants "which single recording should I trust as the corpus consensus?" gets the
+    answer without reading rows.
+
+    Note the DIRECTION: this is the deliberate INVERSE of ``--sort-by delta``
+    (iter-386), which floats the biggest OUTLIERS to the top. The batch's job is to
+    show agreement-vs-disagreement, so its two reductions sit at opposite ends — the
+    sort surfaces who disagrees most, the summary surfaces who agrees most. "Best" is
+    defined objectively and independently of ``--sort-by`` / ``--top-n``: among rows
+    that carry a recommendation (``delta_from_median_ms`` not ``None`` — i.e. >= 2
+    segments, so there is a pause to recommend over), the row with the SMALLEST
+    |``delta_from_median_ms``| (nearest the corpus median), ties broken toward the
+    HIGHEST confidence grade (the more trustworthy of two equally-central
+    recordings), and remaining ties broken by EARLIEST position in ``rows`` (so the
+    pick is deterministic and prefers the recording the operator listed first).
+    Rows with no recommendation (``delta_from_median_ms`` ``None`` / ungraded,
+    <2 segments) are never picked. Returns ``None`` when no row carries a
+    recommendation (nothing to summarize). Pure: reads the rows, mutates nothing.
+
+    This is a genuinely new reduction — a single MIN, not a sort+truncate — so it is
+    robust to whatever ``--sort-by`` / ``--top-n`` the operator did (or did not)
+    request: the most-representative recording is the same regardless of how the
+    table was ordered or capped. The batch analogue of :func:`_best_knob_row`
+    (which serves the knob sweep), with the distance-to-median twist the batch's
+    corpus question demands.
+    """
+    candidates = [r for r in rows if r.get("delta_from_median_ms") is not None]
+    if not candidates:
+        return None
+    # Nearest the median first (|Δ| ascending), then highest grade (negative rank →
+    # descending); ``min`` over this key is stable so earliest position breaks
+    # remaining ties.
+    return min(
+        candidates,
+        key=lambda r: (
+            abs(r["delta_from_median_ms"]),
+            -_GAP_CONFIDENCE_GRADE_RANK.get(r["grade"], -1),
+        ),
+    )
+
+
+def _format_batch_summary_verdict(row, bias):
+    """One human line naming the single most-representative recording (iter-388).
+
+    The ``--summary`` verdict body: given the row :func:`_best_batch_row` picked,
+    spells the corpus consensus as ``representative: <recording> → --min-silence-ms
+    <n> [bias] (confidence <grade>, Δmedian <±s>ms)``. ``bias`` is the shared
+    recommendation bias echoed back so the headline number is unambiguous (it is the
+    same number the recording's row carries). The signed Δmedian is shown so the
+    reader can confirm the pick really is near the corpus centre (it should be the
+    smallest |Δ| in the table). Pure: returns a single string; the caller owns the
+    surrounding lines.
+    """
+    rec = _format_cut_label(row["recommended_ms"])
+    sign = _signed_float(row["delta_from_median_ms"])
+    return (
+        f"  representative: {row['recording']} → --min-silence-ms {rec} [{bias}] "
+        f"(confidence {row['grade']}, Δmedian {sign}ms)"
+    )
+
+
 def render_vad_gap_recommend_batch(results, labels, *, bias=DEFAULT_GAP_RECOMMEND_BIAS,
-                                   sort_by=None, top_n=None):
+                                   sort_by=None, top_n=None, summary=False):
     """Render a corpus recommended-hangover table as plain text (iter-385).
 
     The human-readable face of :func:`vad_gap_recommend_batch`. ``labels`` name the
@@ -5795,6 +5863,15 @@ def render_vad_gap_recommend_batch(results, labels, *, bias=DEFAULT_GAP_RECOMMEN
     ``None`` shows every recording. When the cap actually drops rows the bias line
     names it (``(top N of M)``) so a reader knows the table is truncated, not the full
     corpus.
+
+    ``summary`` (iter-388) collapses the whole table to ONE verdict line naming the
+    single most-representative recording (:func:`_best_batch_row` — the recording
+    nearest the corpus median, ties to the highest confidence), so an operator who
+    just wants "which one recording speaks for the corpus?" gets the answer without
+    reading rows. It is INDEPENDENT of ``sort_by`` / ``top_n`` (the most-central
+    recording is the same regardless of how — or whether — the table was ordered or
+    capped). When no recording carries a recommendation a single ``(no recording
+    ...)`` note is emitted instead. The default ``False`` renders the full table.
     """
     if any(r is None for r in results):
         return [
@@ -5802,6 +5879,23 @@ def render_vad_gap_recommend_batch(results, labels, *, bias=DEFAULT_GAP_RECOMMEN
             "torchaudio) to enable offline neural segmentation"
         ]
     d = vad_gap_recommend_batch(results, labels, bias=bias)
+    if summary:
+        # The verdict is an objective reduction over the whole corpus —
+        # order/count-independent, so --sort-by / --top-n do not change the pick.
+        best = _best_batch_row(d["rows"])
+        lines = [
+            f"silero VAD recommended-hangover batch summary "
+            f"({d['num_recordings']} recordings)",
+            f"  bias: {d['bias']}",
+        ]
+        if best is None:
+            lines.append(
+                "  (no recording carries a recommendation — every WAV has fewer "
+                "than 2 speech regions)"
+            )
+            return lines
+        lines.append(_format_batch_summary_verdict(best, d["bias"]))
+        return lines
 
     def _ms(value):
         return "-" if value is None else f"{_format_cut_label(value)}ms"
@@ -5851,7 +5945,7 @@ def render_vad_gap_recommend_batch(results, labels, *, bias=DEFAULT_GAP_RECOMMEN
 
 def render_vad_gap_recommend_batch_json(results, labels, *,
                                         bias=DEFAULT_GAP_RECOMMEND_BIAS,
-                                        sort_by=None, top_n=None):
+                                        sort_by=None, top_n=None, summary=False):
     """Render a corpus recommended-hangover table as JSON (iter-385).
 
     Machine-readable twin of :func:`render_vad_gap_recommend_batch`, mirroring the
@@ -5875,6 +5969,15 @@ def render_vad_gap_recommend_batch_json(results, labels, *,
     the N best under the active ordering). The corpus aggregates remain computed over
     the WHOLE corpus and are unaffected. The default ``None`` keeps every row
     (unchanged payload). Composes with ``sort_by``.
+
+    ``summary`` (iter-388) replaces the ``rows`` list with a single ``best`` key
+    holding the one most-representative recording (:func:`_best_batch_row` — nearest
+    the corpus median, ties to highest confidence), or ``null`` when no recording
+    carries a recommendation. A top-level ``summary: true`` flags the mode. The pick
+    is computed over the WHOLE corpus and is INDEPENDENT of ``sort_by`` / ``top_n``;
+    the corpus aggregates (median / min / max / spread / counts) are still carried so
+    a consumer can see what the representative recording is central WITHIN. The
+    default ``False`` carries the full ``rows`` list.
     """
     if any(r is None for r in results):
         return json.dumps(
@@ -5888,6 +5991,13 @@ def render_vad_gap_recommend_batch_json(results, labels, *,
             indent=2,
         )
     d = vad_gap_recommend_batch(results, labels, bias=bias)
+    if summary:
+        best = _best_batch_row(d["rows"])
+        d.pop("rows")
+        payload = {"available": True, "summary": True}
+        payload.update(d)
+        payload["best"] = best
+        return json.dumps(payload, indent=2)
     d["rows"] = _truncate_batch_rows(_sort_batch_rows(d["rows"], sort_by), top_n)
     payload = {"available": True}
     if sort_by is not None:
@@ -5900,7 +6010,7 @@ def render_vad_gap_recommend_batch_json(results, labels, *,
 
 def render_vad_gap_recommend_batch_csv(results, labels, *,
                                        bias=DEFAULT_GAP_RECOMMEND_BIAS,
-                                       sort_by=None, top_n=None):
+                                       sort_by=None, top_n=None, summary=False):
     """Render a corpus recommended-hangover table as CSV (iter-385).
 
     The spreadsheet/plot-friendly twin of :func:`render_vad_gap_recommend_batch_json`,
@@ -5926,6 +6036,13 @@ def render_vad_gap_recommend_batch_csv(results, labels, *,
     ordering — the N most-useful recordings. The header and column set are unchanged
     (a truncated run still unions cleanly with a full one — it just has fewer rows).
     The default ``None`` keeps every row. Composes with ``sort_by``.
+
+    ``summary`` (iter-388) emits just the header plus the ONE most-representative
+    recording row (:func:`_best_batch_row` — nearest the corpus median) — header-only
+    when no recording carries a recommendation. The column set is unchanged, so a
+    summary CSV unions cleanly with a full batch — it is simply the single best row.
+    The pick is computed over the WHOLE corpus and is INDEPENDENT of ``sort_by`` /
+    ``top_n``. The default ``False`` emits every row.
     """
     if any(r is None for r in results):
         return (
@@ -5933,7 +6050,11 @@ def render_vad_gap_recommend_batch_csv(results, labels, *,
             "torchaudio) to enable offline neural segmentation"
         )
     d = vad_gap_recommend_batch(results, labels, bias=bias)
-    rows = _truncate_batch_rows(_sort_batch_rows(d["rows"], sort_by), top_n)
+    if summary:
+        best = _best_batch_row(d["rows"])
+        rows = [best] if best is not None else []
+    else:
+        rows = _truncate_batch_rows(_sort_batch_rows(d["rows"], sort_by), top_n)
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(
@@ -10175,9 +10296,11 @@ def cmd_vad_gap_recommend_batch(args, *, log=print, segmenter=None, availability
     are shared by every run so the recommendations are apples-to-apples, and
     ``--bias`` (iter-351) is shared too. ``--sort-by`` (iter-386) orders the rows
     most-useful-first; ``--top-n`` (iter-387) then keeps only the N most-useful
-    recordings (applied AFTER ``--sort-by``). ``--csv`` is mutually exclusive with
-    ``--json``; when ``silero-vad`` is absent the handler prints the install hint
-    and returns, never crashing.
+    recordings (applied AFTER ``--sort-by``); ``--summary`` (iter-388) collapses the
+    whole corpus to ONE verdict naming the single most-representative recording
+    (nearest the corpus median), independent of ``--sort-by`` / ``--top-n``.
+    ``--csv`` is mutually exclusive with ``--json``; when ``silero-vad`` is absent
+    the handler prints the install hint and returns, never crashing.
     """
     if segmenter is None or availability is None:
         from vad.silero import segment_recording, silero_available
@@ -10190,19 +10313,23 @@ def cmd_vad_gap_recommend_batch(args, *, log=print, segmenter=None, availability
     bias = getattr(args, "bias", DEFAULT_GAP_RECOMMEND_BIAS)
     sort_by = getattr(args, "sort_by", None)
     top_n = getattr(args, "top_n", None)
+    summary = getattr(args, "summary", False)
     labels = args.wavs
 
     if not availability():
         results = [None] * len(labels)
         if as_json:
             log(render_vad_gap_recommend_batch_json(
-                results, labels, bias=bias, sort_by=sort_by, top_n=top_n))
+                results, labels, bias=bias, sort_by=sort_by, top_n=top_n,
+                summary=summary))
         elif as_csv:
             log(render_vad_gap_recommend_batch_csv(
-                results, labels, bias=bias, sort_by=sort_by, top_n=top_n))
+                results, labels, bias=bias, sort_by=sort_by, top_n=top_n,
+                summary=summary))
         else:
             for line in render_vad_gap_recommend_batch(
-                results, labels, bias=bias, sort_by=sort_by, top_n=top_n
+                results, labels, bias=bias, sort_by=sort_by, top_n=top_n,
+                summary=summary
             ):
                 log(line)
         return
@@ -10219,13 +10346,16 @@ def cmd_vad_gap_recommend_batch(args, *, log=print, segmenter=None, availability
     results = [segmenter(label, params=params) for label in labels]
     if as_json:
         log(render_vad_gap_recommend_batch_json(
-            results, labels, bias=bias, sort_by=sort_by, top_n=top_n))
+            results, labels, bias=bias, sort_by=sort_by, top_n=top_n,
+            summary=summary))
     elif as_csv:
         log(render_vad_gap_recommend_batch_csv(
-            results, labels, bias=bias, sort_by=sort_by, top_n=top_n))
+            results, labels, bias=bias, sort_by=sort_by, top_n=top_n,
+            summary=summary))
     else:
         for line in render_vad_gap_recommend_batch(
-            results, labels, bias=bias, sort_by=sort_by, top_n=top_n
+            results, labels, bias=bias, sort_by=sort_by, top_n=top_n,
+            summary=summary
         ):
             log(line)
 
@@ -13006,6 +13136,14 @@ def build_parser():
         "'--sort-by grade --top-n 3' the 3 most-trustworthy); the corpus "
         "median / spread is still computed over the whole corpus "
         "(default: show every recording)",
+    )
+    vad_gap_rec_batch.add_argument(
+        "--summary",
+        action="store_true",
+        help="Collapse the whole corpus to ONE verdict naming the single "
+        "most-representative recording (the one nearest the corpus median, ties "
+        "to highest confidence) — the inverse of '--sort-by delta', which surfaces "
+        "the biggest outliers; independent of --sort-by / --top-n",
     )
     vad_gap_rec_batch_fmt = vad_gap_rec_batch.add_mutually_exclusive_group()
     vad_gap_rec_batch_fmt.add_argument(

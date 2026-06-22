@@ -1197,3 +1197,323 @@ def test_cmd_unavailable_still_threads_top_n_json():
     )
     # Degrades cleanly — no crash — even with a cap requested.
     assert json.loads("\n".join(lines))["available"] is False
+
+
+# ---- iter-388: --summary single most-representative-recording verdict ----
+
+
+def _batch_rows(*specs):
+    """Build a minimal list of batch rows from (recording, recommended_ms, grade,
+    delta_from_median_ms) tuples — enough for the _best_batch_row reduction.
+    """
+    return [
+        {
+            "recording": rec,
+            "num_segments": 7,
+            "num_gaps": 6,
+            "recommended_ms": ms,
+            "recommended_s": None if ms is None else ms / 1000.0,
+            "grade": grade,
+            "delta_from_median_ms": delta,
+        }
+        for rec, ms, grade, delta in specs
+    ]
+
+
+def test_best_batch_row_none_when_no_recommendation():
+    rows = _batch_rows(("a.wav", None, None, None), ("b.wav", None, None, None))
+    assert gv._best_batch_row(rows) is None
+
+
+def test_best_batch_row_empty_is_none():
+    assert gv._best_batch_row([]) is None
+
+
+def test_best_batch_row_picks_nearest_median():
+    # b.wav sits exactly at the median (Δ 0); the others are farther.
+    rows = _batch_rows(
+        ("a.wav", 1350.0, "strong", 500.0),
+        ("b.wav", 850.0, "strong", 0.0),
+        ("c.wav", 550.0, "strong", -300.0),
+    )
+    assert gv._best_batch_row(rows)["recording"] == "b.wav"
+
+
+def test_best_batch_row_uses_absolute_delta():
+    # The nearest by MAGNITUDE wins regardless of sign — -100 beats +250.
+    rows = _batch_rows(
+        ("a.wav", 1100.0, "strong", 250.0),
+        ("b.wav", 750.0, "strong", -100.0),
+    )
+    assert gv._best_batch_row(rows)["recording"] == "b.wav"
+
+
+def test_best_batch_row_ties_break_to_higher_grade():
+    # Equal |Δ|; the more-trustworthy recording wins.
+    rows = _batch_rows(
+        ("a.wav", 950.0, "weak", 100.0),
+        ("b.wav", 750.0, "strong", -100.0),
+    )
+    assert gv._best_batch_row(rows)["recording"] == "b.wav"
+
+
+def test_best_batch_row_full_tie_breaks_to_earliest():
+    # Equal |Δ| AND equal grade -> earliest argument position wins (stable min).
+    rows = _batch_rows(
+        ("a.wav", 950.0, "strong", 100.0),
+        ("b.wav", 750.0, "strong", -100.0),
+    )
+    assert gv._best_batch_row(rows)["recording"] == "a.wav"
+
+
+def test_best_batch_row_skips_missing():
+    # A <2-segment row (delta None) is never picked even if listed first.
+    rows = _batch_rows(
+        ("a.wav", None, None, None),
+        ("b.wav", 850.0, "moderate", 0.0),
+    )
+    assert gv._best_batch_row(rows)["recording"] == "b.wav"
+
+
+def test_best_batch_row_does_not_mutate():
+    rows = _batch_rows(
+        ("a.wav", 1350.0, "strong", 500.0),
+        ("b.wav", 850.0, "strong", 0.0),
+    )
+    before = [dict(r) for r in rows]
+    gv._best_batch_row(rows)
+    assert rows == before
+
+
+def test_best_batch_row_independent_of_order():
+    # Reordering the input does not change the pick (it is a MIN, not a head).
+    specs = [
+        ("a.wav", 1350.0, "strong", 500.0),
+        ("b.wav", 850.0, "strong", 0.0),
+        ("c.wav", 550.0, "strong", -300.0),
+    ]
+    forward = gv._best_batch_row(_batch_rows(*specs))
+    backward = gv._best_batch_row(_batch_rows(*reversed(specs)))
+    assert forward["recording"] == backward["recording"] == "b.wav"
+
+
+def test_format_batch_summary_verdict_spells_the_call():
+    row = _batch_rows(("b.wav", 850.0, "strong", 0.0))[0]
+    line = gv._format_batch_summary_verdict(row, "balanced")
+    assert "representative: b.wav" in line
+    assert "--min-silence-ms 850" in line
+    assert "[balanced]" in line
+    assert "confidence strong" in line
+    assert "Δmedian +0.0ms" in line or "Δmedian 0.0ms" in line
+
+
+def test_format_batch_summary_verdict_signs_negative_delta():
+    row = _batch_rows(("b.wav", 750.0, "moderate", -100.0))[0]
+    line = gv._format_batch_summary_verdict(row, "short")
+    assert "Δmedian -100.0ms" in line
+    assert "[short]" in line
+
+
+# ---- parser: --summary ---------------------------------------------------
+
+
+def test_parser_summary_default_false():
+    parser = gv.build_parser()
+    args = parser.parse_args(["vad-gap-recommend-batch", "a.wav", "b.wav"])
+    assert args.summary is False
+
+
+def test_parser_summary_store_true():
+    parser = gv.build_parser()
+    args = parser.parse_args(
+        ["vad-gap-recommend-batch", "a.wav", "b.wav", "--summary"]
+    )
+    assert args.summary is True
+
+
+# ---- human renderer: --summary -------------------------------------------
+
+
+def _corpus():
+    return [_clean("a.wav"), _lower("b.wav"), _higher("c.wav")]
+
+
+def test_render_human_summary_names_representative():
+    lines = gv.render_vad_gap_recommend_batch(
+        _corpus(), ["a.wav", "b.wav", "c.wav"], summary=True
+    )
+    assert lines[0] == "silero VAD recommended-hangover batch summary (3 recordings)"
+    assert lines[1] == "  bias: balanced"
+    # a.wav sits at the median in this corpus (clean is the central one).
+    assert "representative: a.wav" in lines[2]
+
+
+def test_render_human_summary_independent_of_sort_and_top_n():
+    base = gv.render_vad_gap_recommend_batch(
+        _corpus(), ["a.wav", "b.wav", "c.wav"], summary=True
+    )
+    shaped = gv.render_vad_gap_recommend_batch(
+        _corpus(), ["a.wav", "b.wav", "c.wav"],
+        summary=True, sort_by="delta", top_n=1,
+    )
+    assert base == shaped
+
+
+def test_render_human_summary_no_recommendation_note():
+    lines = gv.render_vad_gap_recommend_batch(
+        [_flat("f.wav")], ["f.wav"], summary=True
+    )
+    assert "no recording carries a recommendation" in lines[-1]
+
+
+def test_render_human_default_is_full_table():
+    lines = gv.render_vad_gap_recommend_batch(
+        _corpus(), ["a.wav", "b.wav", "c.wav"]
+    )
+    # Full table has a header row + one row per recording + corpus line.
+    assert "summary" not in lines[0]
+    assert any("corpus:" in ln for ln in lines)
+
+
+# ---- JSON renderer: --summary --------------------------------------------
+
+
+def test_render_json_summary_shape():
+    payload = json.loads(
+        gv.render_vad_gap_recommend_batch_json(
+            _corpus(), ["a.wav", "b.wav", "c.wav"], summary=True
+        )
+    )
+    assert payload["available"] is True
+    assert payload["summary"] is True
+    assert payload["best"]["recording"] == "a.wav"
+    # The single-best replaces the rows list.
+    assert "rows" not in payload
+
+
+def test_render_json_summary_preserves_corpus_aggregates():
+    payload = json.loads(
+        gv.render_vad_gap_recommend_batch_json(
+            _corpus(), ["a.wav", "b.wav", "c.wav"], summary=True
+        )
+    )
+    # The representative is central WITHIN these aggregates, which are still carried.
+    assert payload["num_recordings"] == 3
+    assert payload["num_recommended"] == 3
+    assert payload["recommended_ms_median"] is not None
+
+
+def test_render_json_summary_default_has_no_summary_or_best_key():
+    payload = json.loads(
+        gv.render_vad_gap_recommend_batch_json(
+            _corpus(), ["a.wav", "b.wav", "c.wav"]
+        )
+    )
+    assert "summary" not in payload
+    assert "best" not in payload
+    assert len(payload["rows"]) == 3
+
+
+def test_render_json_summary_best_null_when_no_recommendation():
+    payload = json.loads(
+        gv.render_vad_gap_recommend_batch_json(
+            [_flat("f.wav")], ["f.wav"], summary=True
+        )
+    )
+    assert payload["summary"] is True
+    assert payload["best"] is None
+
+
+def test_render_json_summary_independent_of_sort_and_top_n():
+    base = gv.render_vad_gap_recommend_batch_json(
+        _corpus(), ["a.wav", "b.wav", "c.wav"], summary=True
+    )
+    shaped = gv.render_vad_gap_recommend_batch_json(
+        _corpus(), ["a.wav", "b.wav", "c.wav"],
+        summary=True, sort_by="delta", top_n=1,
+    )
+    assert base == shaped
+
+
+# ---- CSV renderer: --summary ---------------------------------------------
+
+
+def test_render_csv_summary_one_best_row():
+    text = gv.render_vad_gap_recommend_batch_csv(
+        _corpus(), ["a.wav", "b.wav", "c.wav"], summary=True
+    )
+    rows = list(csv.reader(io.StringIO(text)))
+    # Header + exactly one data row (the most-representative).
+    assert len(rows) == 2
+    assert rows[1][0] == "a.wav"
+
+
+def test_render_csv_summary_header_unchanged():
+    full = gv.render_vad_gap_recommend_batch_csv(
+        _corpus(), ["a.wav", "b.wav", "c.wav"]
+    )
+    summ = gv.render_vad_gap_recommend_batch_csv(
+        _corpus(), ["a.wav", "b.wav", "c.wav"], summary=True
+    )
+    # Same header -> a summary CSV unions cleanly with a full batch.
+    assert full.splitlines()[0] == summ.splitlines()[0]
+
+
+def test_render_csv_summary_header_only_when_no_recommendation():
+    text = gv.render_vad_gap_recommend_batch_csv(
+        [_flat("f.wav")], ["f.wav"], summary=True
+    )
+    assert len(text.splitlines()) == 1  # header only
+
+
+# ---- handler threads summary ---------------------------------------------
+
+
+def test_cmd_summary_human_path():
+    lines = []
+    gv.cmd_vad_gap_recommend_batch(
+        _args(summary=True),
+        log=lines.append,
+        segmenter=_corpus_segmenter(),
+        availability=lambda: True,
+    )
+    text = "\n".join(lines)
+    assert "batch summary" in text
+    assert "representative:" in text
+
+
+def test_cmd_summary_json_path():
+    lines = []
+    gv.cmd_vad_gap_recommend_batch(
+        _args(json=True, summary=True),
+        log=lines.append,
+        segmenter=_corpus_segmenter(),
+        availability=lambda: True,
+    )
+    payload = json.loads("\n".join(lines))
+    assert payload["summary"] is True
+    assert payload["best"]["recording"] == "a.wav"
+
+
+def test_cmd_summary_default_false_shows_full_table():
+    lines = []
+    gv.cmd_vad_gap_recommend_batch(
+        _args(json=True),
+        log=lines.append,
+        segmenter=_corpus_segmenter(),
+        availability=lambda: True,
+    )
+    payload = json.loads("\n".join(lines))
+    assert "summary" not in payload
+    assert len(payload["rows"]) == 3
+
+
+def test_cmd_unavailable_still_threads_summary_json():
+    lines = []
+    gv.cmd_vad_gap_recommend_batch(
+        _args(json=True, summary=True),
+        log=lines.append,
+        segmenter=lambda wav, params=None: None,
+        availability=lambda: False,
+    )
+    assert json.loads("\n".join(lines))["available"] is False
