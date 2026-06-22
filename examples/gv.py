@@ -10,7 +10,7 @@ Usage:
     gv calibrate-base-wpm … # offline base_wpm calibration (dispersion grade agree/loose/scattered + margin to next grade; --verdict for an adopt/keep call; --json/--csv for per-sample data)
     gv calibrate-base-wpm-batch --voice af_heart 50:18.2 --voice am_adam 40:15.0  # calibrate a CORPUS of voices — per-voice base_wpm + grade + drift + the corpus median (which voices agree?); --json/--csv for the machine-readable corpus; --sort-by base_wpm/grade/drift/delta to float the most-useful voices to the top; --top-n N to keep only the N most-useful; --min-grade scattered/loose/agree to drop voices below a dispersion floor; --summary to name the single most-representative voice (nearest the corpus median); --flyers-only to show ONLY the outlier voices; the flyers: line names outlier voices (outside the Q1-1.5·IQR..Q3+1.5·IQR Tukey fence), also marked ← flyer in the table
     gv stt-rtf --samples 10.0:1.2 5.0:0.8  # offline STT real-time-factor profile — fold measured transcriptions (audio_seconds:transcribe_seconds) into a robust median RTF + speed grade (fast/realtime/slow); --verdict for a lighten/keep call; --json/--csv for per-sample data
-    gv stt-rtf-batch --engine mlx-whisper 10.0:1.2 5.0:0.8 --engine faster-whisper 10.0:6.0  # profile a CORPUS of STT engines — per-engine median RTF + speed grade + lighten/keep verdict, plus the outlier-robust corpus median (which engines keep up with realtime?); --json/--csv for the machine-readable corpus; --sort-by median_rtf/grade/delta to float the most-useful engines to the top; --top-n N to keep only the N most-useful; --min-grade slow/realtime/fast to drop engines below a speed floor; --summary to name the single most-representative engine (nearest the corpus median RTF); the flyers: line names outlier engines (median RTF outside the Q1-1.5·IQR..Q3+1.5·IQR Tukey fence), also marked ← flyer in the table
+    gv stt-rtf-batch --engine mlx-whisper 10.0:1.2 5.0:0.8 --engine faster-whisper 10.0:6.0  # profile a CORPUS of STT engines — per-engine median RTF + speed grade + lighten/keep verdict, plus the outlier-robust corpus median (which engines keep up with realtime?); --json/--csv for the machine-readable corpus; --sort-by median_rtf/grade/delta to float the most-useful engines to the top; --top-n N to keep only the N most-useful; --min-grade slow/realtime/fast to drop engines below a speed floor; --summary to name the single most-representative engine (nearest the corpus median RTF); --flyers-only to show ONLY the outlier engines; the flyers: line names outlier engines (median RTF outside the Q1-1.5·IQR..Q3+1.5·IQR Tukey fence), also marked ← flyer in the table
     gv vad recording.wav  # offline Silero VAD — segment a WAV into speech regions
     gv vad recording.wav --json # machine-readable segmentation (SileroResult.to_dict shape)
     gv vad-gaps recording.wav  # report the silence gaps BETWEEN speech regions (tune --min-silence-ms)
@@ -2597,6 +2597,51 @@ def _filter_stt_rtf_batch_rows_by_grade(rows, min_grade):
     ]
 
 
+def _filter_stt_rtf_batch_rows_flyers_only(rows, flyers_only):
+    """Keep only the Tukey-fence outlier (``flyer``) engine rows (iter-416).
+
+    Render-only filter, the row-set companion to the iter-414 ``flyers:`` corpus
+    line: where that line NAMES the outlier engines, this trims the rendered table
+    DOWN to just them, so an operator who only cares "which engines disagree with
+    the corpus?" reads nothing else. A row is a flyer when ``row["flyer"]`` is
+    truthy (its median RTF falls strictly outside
+    ``[Q1 - 1.5*IQR, Q3 + 1.5*IQR]``); an unprofiled engine carries ``flyer``
+    ``None`` (no median RTF to be an outlier) and is always dropped. With
+    ``flyers_only`` ``False`` returns the rows unchanged (a copy — the default batch
+    is byte-identical to the pre-filter output). Pure — builds a new list, never
+    mutates the source rows. The STT-side twin of
+    :func:`_filter_calib_batch_rows_flyers_only` (iter-415); the deliberate INVERSE
+    of the rest of the surface, which shows every engine — here the corpus consensus
+    is the boring part and the outliers are the signal. Composes with
+    :func:`_filter_stt_rtf_batch_rows_by_grade` (apply the grade floor first, then
+    narrow to flyers).
+    """
+    if not flyers_only:
+        return list(rows)
+    return [r for r in rows if r["flyer"]]
+
+
+def _stt_rtf_batch_empty_filter_note(min_grade, flyers_only):
+    """The body of the ``(no engine ...)`` note when a filter empties the table (iter-416).
+
+    A single descriptive clause naming whatever filter(s) narrowed the rows away, so
+    the operator knows WHY the table is empty rather than seeing a bare blank.
+    ``min_grade`` (a speed-grade floor) and ``flyers_only`` (the iter-416
+    outlier-only filter) compose: each contributes a clause, joined when both are
+    active. Pure, side-effect-free — the human render wraps it in ``  (...)`` and the
+    corpus lines still follow. Returns the grade-floor wording unchanged when only
+    ``min_grade`` is set (byte-identical to the pre-iter-416 note), so the existing
+    floor tests are untouched. The STT-side twin of
+    :func:`_calib_batch_empty_filter_note`.
+    """
+    clauses = []
+    if min_grade is not None:
+        clauses.append(f"profiled to grade '{min_grade}' or better")
+    if flyers_only:
+        clauses.append("is a corpus flyer")
+    return "no engine " + " and ".join(clauses)
+
+
 def _sort_stt_rtf_batch_rows(rows, sort_by):
     """Reorder ``stt-rtf-batch`` engine rows by ``sort_by`` (iter-411).
 
@@ -2757,7 +2802,7 @@ def _format_stt_rtf_batch_flyers(batch):
 
 
 def render_stt_rtf_batch(batch, *, min_grade=None, sort_by=None, top_n=None,
-                         summary=False):
+                         summary=False, flyers_only=False):
     """Render an ``stt-rtf-batch`` corpus verdict as plain-text report lines.
 
     The human-readable face of ``profile_stt_rtf_batch`` (iter-409), the STT-side
@@ -2809,6 +2854,20 @@ def render_stt_rtf_batch(batch, *, min_grade=None, sort_by=None, top_n=None,
     ``grades:`` histogram are still emitted so the operator sees the consensus the
     pick is measured against. The default ``False`` renders the full table.
 
+    ``flyers_only`` (iter-416) narrows the table to ONLY the iter-414 Tukey-fence
+    outlier engines (those marked ``← flyer`` — median RTF outside
+    ``[Q1 - 1.5*IQR, Q3 + 1.5*IQR]``), the row-set companion to the ``flyers:``
+    corpus line and the STT-side twin of the iter-415 ``flyers_only`` on
+    ``calibrate-base-wpm-batch``. It is applied alongside ``min_grade`` (the grade
+    floor first, then narrow to flyers) and BEFORE ``sort_by`` / ``top_n``; the
+    header echoes ``(flyers only)``. It is the deliberate INVERSE of ``summary``
+    (which collapses to the most-CENTRAL engine) — ``summary`` answers "which one
+    engine speaks for the corpus?", ``flyers_only`` answers "which engines don't?".
+    When no engine is a flyer a single ``(no engine ...)`` note replaces the body
+    rows. The corpus summary / ``grades:`` / ``flyers:`` lines still describe the
+    WHOLE corpus, so the operator sees how many engines were elided. The default
+    ``False`` shows every engine.
+
     Pure: returns a list of strings (no I/O, no ANSI) so it is testable in
     isolation — the handler joins and prints them.
     """
@@ -2820,10 +2879,12 @@ def render_stt_rtf_batch(batch, *, min_grade=None, sort_by=None, top_n=None,
         f"  gates: relative_spread<={batch.rel_spread_max:.2f}, "
         f"samples>={batch.min_samples}"
     )
-    # The grade floor is applied first: every later stage (summary / sort / top-n)
-    # sees only the surviving engines, while the corpus aggregates below stay over
-    # the WHOLE corpus.
-    kept_rows = _filter_stt_rtf_batch_rows_by_grade(batch.rows, min_grade)
+    # The grade floor is applied first, then the flyers-only narrowing: every later
+    # stage (summary / sort / top-n) sees only the surviving engines, while the
+    # corpus aggregates below stay over the WHOLE corpus.
+    kept_rows = _filter_stt_rtf_batch_rows_flyers_only(
+        _filter_stt_rtf_batch_rows_by_grade(batch.rows, min_grade), flyers_only
+    )
 
     def _corpus_lines():
         # The whole-corpus summary + speed-grade histogram, emitted at the tail of
@@ -2859,6 +2920,8 @@ def render_stt_rtf_batch(batch, *, min_grade=None, sort_by=None, top_n=None,
     header = header_prefix
     if min_grade is not None:
         header += f" (min grade {min_grade})"
+    if flyers_only:
+        header += " (flyers only)"
 
     if summary:
         # The verdict is an objective reduction over the grade-filtered rows —
@@ -2866,11 +2929,12 @@ def render_stt_rtf_batch(batch, *, min_grade=None, sort_by=None, top_n=None,
         best = _best_stt_rtf_batch_row(kept_rows)
         lines = [header, gates_line]
         if best is None:
-            floor = (
-                f" profiled to grade '{min_grade}' or better"
-                if min_grade is not None
-                else ""
-            )
+            clauses = []
+            if min_grade is not None:
+                clauses.append(f"profiled to grade '{min_grade}' or better")
+            if flyers_only:
+                clauses.append("that is a corpus flyer")
+            floor = (" " + " and ".join(clauses)) if clauses else ""
             lines.append(
                 f"  (no engine{floor} carries a median RTF — nothing to summarise)"
             )
@@ -2886,9 +2950,9 @@ def render_stt_rtf_batch(batch, *, min_grade=None, sort_by=None, top_n=None,
     if top_n is not None and len(shown_rows) < len(sorted_rows):
         header += f" (top {len(shown_rows)} of {len(sorted_rows)})"
     lines = [header, gates_line]
-    if min_grade is not None and not shown_rows:
+    if (min_grade is not None or flyers_only) and not shown_rows:
         lines.append(
-            f"  (no engine profiled to grade '{min_grade}' or better)"
+            f"  ({_stt_rtf_batch_empty_filter_note(min_grade, flyers_only)})"
         )
     for r in shown_rows:
         profile = r["profile"]
@@ -2950,7 +3014,7 @@ def _stt_rtf_batch_row_obj(row):
 
 
 def render_stt_rtf_batch_json(batch, *, min_grade=None, sort_by=None, top_n=None,
-                              summary=False):
+                              summary=False, flyers_only=False):
     """Render an ``stt-rtf-batch`` corpus verdict as a JSON string (iter-410).
 
     The nested/programmatic twin of :func:`render_stt_rtf_batch`, the STT-side
@@ -3005,11 +3069,24 @@ def render_stt_rtf_batch_json(batch, *, min_grade=None, sort_by=None, top_n=None
     ``sort_by`` / ``top_n`` (those ``rows``-shaping keys are omitted in summary
     mode) but respects ``min_grade``. The STT-side twin of
     :func:`render_calibration_batch_json`'s ``summary`` mode.
+
+    ``flyers_only`` (iter-416) narrows ``rows`` (or the ``summary`` pick) to ONLY the
+    iter-414 Tukey-fence outlier engines (``flyer`` true), applied alongside
+    ``min_grade`` and BEFORE ``sort_by`` / ``top_n``; when set the payload also
+    carries a top-level ``flyers_only: true`` key. The corpus aggregates always
+    describe the WHOLE corpus, so a flyers-only payload still reports
+    ``num_engines`` / ``num_flyers`` over every engine. The default ``False`` keeps
+    every row (no ``flyers_only`` key). The STT-side twin of
+    :func:`render_calibration_batch_json`'s ``flyers_only`` mode.
     """
-    kept_rows = _filter_stt_rtf_batch_rows_by_grade(batch.rows, min_grade)
+    kept_rows = _filter_stt_rtf_batch_rows_flyers_only(
+        _filter_stt_rtf_batch_rows_by_grade(batch.rows, min_grade), flyers_only
+    )
     payload = {}
     if summary:
         payload["summary"] = True
+    if flyers_only:
+        payload["flyers_only"] = True
     if min_grade is not None:
         payload["min_grade"] = min_grade
     if not summary and sort_by is not None:
@@ -3054,7 +3131,7 @@ def render_stt_rtf_batch_json(batch, *, min_grade=None, sort_by=None, top_n=None
 
 
 def render_stt_rtf_batch_csv(batch, *, min_grade=None, sort_by=None, top_n=None,
-                             summary=False):
+                             summary=False, flyers_only=False):
     """Render an ``stt-rtf-batch`` corpus verdict as CSV text (iter-410).
 
     The spreadsheet/plot-friendly twin of :func:`render_stt_rtf_batch_json`,
@@ -3105,8 +3182,19 @@ def render_stt_rtf_batch_csv(batch, *, min_grade=None, sort_by=None, top_n=None,
     ``# summary: true`` comment flags the mode. The default ``False`` emits every
     row. The STT-side twin of :func:`render_calibration_batch_csv`'s ``summary``
     mode.
+
+    ``flyers_only`` (iter-416) keeps only the iter-414 Tukey-fence outlier
+    (``flyer`` true) data rows, applied alongside ``min_grade`` and BEFORE
+    ``sort_by`` / ``top_n``; when set it is echoed as a leading ``# flyers_only:
+    true`` comment. The header/column set is unchanged (a flyers-only run unions
+    cleanly with a full one — it just has fewer rows), and the corpus aggregates
+    trailing as ``#`` comments still describe the WHOLE corpus. The default
+    ``False`` emits every row. The STT-side twin of
+    :func:`render_calibration_batch_csv`'s ``flyers_only`` mode.
     """
-    kept_rows = _filter_stt_rtf_batch_rows_by_grade(batch.rows, min_grade)
+    kept_rows = _filter_stt_rtf_batch_rows_flyers_only(
+        _filter_stt_rtf_batch_rows_by_grade(batch.rows, min_grade), flyers_only
+    )
     if summary:
         best = _best_stt_rtf_batch_row(kept_rows)
         data_rows = [best] if best is not None else []
@@ -3185,15 +3273,17 @@ def render_stt_rtf_batch_csv(batch, *, min_grade=None, sort_by=None, top_n=None,
         + ", ".join(f"{counts[g]} {g}" for g in _stt_rtf_batch_grade_order()),
     ]
     # Echo the render-only reshaping as leading comments, inserted so they read
-    # summary -> min_grade -> sort_by -> top_n (the order they apply), mirroring
-    # render_calibration_batch_csv. In --summary mode there is exactly one row (the
-    # most-representative engine), so the sort_by/top_n grid-shaping tags are
-    # meaningless and omitted — only min_grade (which scopes the pick) and the
-    # summary flag itself are echoed.
+    # summary -> min_grade -> flyers_only -> sort_by -> top_n (the order they
+    # apply), mirroring render_calibration_batch_csv. In --summary mode there is
+    # exactly one row (the most-representative engine), so the sort_by/top_n
+    # grid-shaping tags are meaningless and omitted — only min_grade / flyers_only
+    # (which scope the pick) and the summary flag itself are echoed.
     if not summary and top_n is not None:
         comments.insert(0, f"# top_n: {top_n}")
     if not summary and sort_by is not None:
         comments.insert(0, f"# sort_by: {sort_by}")
+    if flyers_only:
+        comments.insert(0, "# flyers_only: true")
     if min_grade is not None:
         comments.insert(0, f"# min_grade: {min_grade}")
     if summary:
@@ -11256,7 +11346,12 @@ def cmd_stt_rtf_batch(args, *, log=print):
     the inverse of ``--sort-by delta``); the pick respects ``--min-grade`` but is
     independent of ``--sort-by`` / ``--top-n``, and applies to all three output
     formats (the calibration batch's iter-402 analogue), completing the
-    STT-RTF-batch surface's parity with ``calibrate-base-wpm-batch``.
+    STT-RTF-batch surface's parity with ``calibrate-base-wpm-batch``. iter-416 adds
+    ``--flyers-only`` to narrow the table to ONLY the iter-414 Tukey-fence outlier
+    engines (the row-set companion to the ``flyers:`` line, the inverse of
+    ``--summary``); it composes with ``--min-grade``, applies BEFORE
+    ``--sort-by`` / ``--top-n``, and reaches all three output formats (the
+    calibration batch's iter-415 analogue).
     """
     mod = _load_stt_rtf_profile()
     TranscriptionSample = mod.TranscriptionSample
@@ -11286,11 +11381,12 @@ def cmd_stt_rtf_batch(args, *, log=print):
     sort_by = getattr(args, "sort_by", None)
     top_n = getattr(args, "top_n", None)
     summary = getattr(args, "summary", False)
+    flyers_only = getattr(args, "flyers_only", False)
     if getattr(args, "json", False):
         log(
             render_stt_rtf_batch_json(
                 batch, min_grade=min_grade, sort_by=sort_by, top_n=top_n,
-                summary=summary,
+                summary=summary, flyers_only=flyers_only,
             )
         )
         return
@@ -11298,12 +11394,13 @@ def cmd_stt_rtf_batch(args, *, log=print):
         log(
             render_stt_rtf_batch_csv(
                 batch, min_grade=min_grade, sort_by=sort_by, top_n=top_n,
-                summary=summary,
+                summary=summary, flyers_only=flyers_only,
             )
         )
         return
     for line in render_stt_rtf_batch(
-        batch, min_grade=min_grade, sort_by=sort_by, top_n=top_n, summary=summary
+        batch, min_grade=min_grade, sort_by=sort_by, top_n=top_n, summary=summary,
+        flyers_only=flyers_only,
     ):
         log(line)
 
@@ -13989,6 +14086,18 @@ def build_parser():
         "the corpus median RTF, ties to fastest grade) — the inverse of '--sort-by "
         "delta'. Independent of --sort-by/--top-n but respects --min-grade. Applies "
         "to the human, --json (a 'best' key), and --csv (a single data row) output",
+    )
+    stt_rtf_batch.add_argument(
+        "--flyers-only",
+        action="store_true",
+        dest="flyers_only",
+        help="Show ONLY the Tukey-fence outlier engines (those marked ← flyer — "
+        "median RTF outside the Q1-1.5·IQR..Q3+1.5·IQR fence), the row-set companion "
+        "to the flyers: corpus line. The inverse of --summary (which shows the "
+        "most-central engine). Composes with --min-grade, applied BEFORE "
+        "--sort-by/--top-n. Render-only — the corpus median/aggregates still describe "
+        "the whole corpus. Applies to the human, --json, and --csv output. Default: "
+        "every engine",
     )
 
     # gv vad — offline Silero segmentation of a WAV file. Defaults mirror

@@ -1516,3 +1516,255 @@ def test_render_csv_unprofiled_engine_flyer_cell_blank():
     empty = [l for l in data.splitlines() if l.startswith("empty,")][0]
     # engine label then every numeric cell blank, including the trailing flyer.
     assert empty == "empty,,,,,,,,,,,"
+
+
+# ---- iter-416: --flyers-only (show ONLY the corpus outlier engines) ------
+
+
+def test_filter_flyers_only_false_returns_copy_of_all_rows():
+    # The default (flyers_only=False) keeps every row and returns a fresh list,
+    # never the source object — byte-identical to the pre-filter rows.
+    batch = _flyer_batch()
+    out = gv._filter_stt_rtf_batch_rows_flyers_only(batch.rows, False)
+    assert out == list(batch.rows)
+    assert out is not batch.rows
+
+
+def test_filter_flyers_only_keeps_only_outlier_rows():
+    batch = _flyer_batch()
+    out = gv._filter_stt_rtf_batch_rows_flyers_only(batch.rows, True)
+    assert [r["engine"] for r in out] == ["slow"]
+
+
+def test_filter_flyers_only_drops_unprofiled_engine():
+    # An unprofiled engine carries flyer=None (no median RTF to be an outlier) and
+    # is never kept by the flyers-only filter.
+    batch = _batch(
+        ("a", [(10.0, 1.0)]),
+        ("b", [(10.0, 1.1)]),
+        ("c", [(10.0, 1.2)]),
+        ("d", [(10.0, 1.3)]),
+        ("slow", [(10.0, 50.0)]),
+        ("empty", []),
+    )
+    out = gv._filter_stt_rtf_batch_rows_flyers_only(batch.rows, True)
+    assert [r["engine"] for r in out] == ["slow"]
+
+
+def test_filter_flyers_only_does_not_mutate_source():
+    batch = _flyer_batch()
+    before = list(batch.rows)
+    gv._filter_stt_rtf_batch_rows_flyers_only(batch.rows, True)
+    assert list(batch.rows) == before
+
+
+def test_empty_filter_note_min_grade_only_unchanged():
+    # With only a grade floor the note is byte-identical to the pre-iter-416 wording.
+    assert (
+        gv._stt_rtf_batch_empty_filter_note("fast", False)
+        == "no engine profiled to grade 'fast' or better"
+    )
+
+
+def test_empty_filter_note_flyers_only():
+    assert (
+        gv._stt_rtf_batch_empty_filter_note(None, True)
+        == "no engine is a corpus flyer"
+    )
+
+
+def test_empty_filter_note_both_clauses_joined():
+    assert (
+        gv._stt_rtf_batch_empty_filter_note("fast", True)
+        == "no engine profiled to grade 'fast' or better and is a corpus flyer"
+    )
+
+
+def test_parser_flyers_only_default_false():
+    args = gv.build_parser().parse_args(
+        ["stt-rtf-batch", "--engine", "a", "10.0:1.0"]
+    )
+    assert args.flyers_only is False
+
+
+def test_parser_flyers_only_sets_true():
+    args = gv.build_parser().parse_args(
+        ["stt-rtf-batch", "--engine", "a", "10.0:1.0", "--flyers-only"]
+    )
+    assert args.flyers_only is True
+
+
+def test_render_flyers_only_shows_just_the_outlier_rows():
+    lines = gv.render_stt_rtf_batch(_flyer_batch(), flyers_only=True)
+    text = "\n".join(lines)
+    # The header echoes the mode...
+    assert "(flyers only)" in lines[0]
+    # ...only the outlier engine row is shown (still marked ← flyer)...
+    assert _engine_order(lines) == ["slow"]
+    assert "← flyer" in text
+
+
+def test_render_flyers_only_default_unchanged():
+    batch = _flyer_batch()
+    assert gv.render_stt_rtf_batch(batch, flyers_only=False) == (
+        gv.render_stt_rtf_batch(batch)
+    )
+
+
+def test_render_flyers_only_empty_when_corpus_agrees_emits_note():
+    # A corpus with no outlier yields an empty flyers-only table + a note.
+    batch = _batch(
+        ("a", [(10.0, 1.0)]),
+        ("b", [(10.0, 1.1)]),
+        ("c", [(10.0, 1.2)]),
+    )
+    lines = gv.render_stt_rtf_batch(batch, flyers_only=True)
+    text = "\n".join(lines)
+    assert "(no engine is a corpus flyer)" in text
+    # The corpus / grades / flyers lines still describe the whole corpus.
+    assert any(l.strip().startswith("corpus:") for l in lines)
+    assert "flyers: none" in text
+
+
+def test_render_flyers_only_composes_with_min_grade_note():
+    # A grade floor that empties the table names BOTH clauses in the note.
+    batch = _batch(
+        ("a", [(10.0, 1.0)]),
+        ("b", [(10.0, 1.1)]),
+        ("c", [(10.0, 1.2)]),
+    )
+    text = "\n".join(
+        gv.render_stt_rtf_batch(batch, min_grade="fast", flyers_only=True)
+    )
+    assert (
+        "no engine profiled to grade 'fast' or better and is a corpus flyer"
+        in text
+    )
+
+
+def test_render_flyers_only_does_not_change_corpus_aggregates():
+    batch = _flyer_batch()
+    only = "\n".join(gv.render_stt_rtf_batch(batch, flyers_only=True))
+    full = "\n".join(gv.render_stt_rtf_batch(batch))
+    corpus_only = next(l for l in only.splitlines() if l.strip().startswith("corpus:"))
+    corpus_full = next(l for l in full.splitlines() if l.strip().startswith("corpus:"))
+    assert corpus_only == corpus_full
+    assert "flyers: 1 (slow) outside [0.080, 0.160] RTF" in only
+
+
+def test_render_flyers_only_composes_with_summary_picks_among_flyers():
+    # --summary + --flyers-only: the representative is chosen among the outliers only.
+    text = "\n".join(
+        gv.render_stt_rtf_batch(_flyer_batch(), summary=True, flyers_only=True)
+    )
+    # Only one engine is a flyer, so it is the representative.
+    assert "slow" in text
+    assert "(flyers only)" in text
+
+
+def test_json_flyers_only_filters_rows_and_names_key():
+    import json as _json
+
+    obj = _json.loads(
+        gv.render_stt_rtf_batch_json(_flyer_batch(), flyers_only=True)
+    )
+    assert obj["flyers_only"] is True
+    assert [r["engine"] for r in obj["rows"]] == ["slow"]
+    # The corpus aggregates still describe the whole corpus.
+    assert obj["num_engines"] == 5
+    assert obj["num_flyers"] == 1
+
+
+def test_json_flyers_only_none_omits_key():
+    import json as _json
+
+    obj = _json.loads(gv.render_stt_rtf_batch_json(_flyer_batch()))
+    assert "flyers_only" not in obj
+
+
+def test_json_flyers_only_summary_best_among_flyers():
+    import json as _json
+
+    obj = _json.loads(
+        gv.render_stt_rtf_batch_json(
+            _flyer_batch(), summary=True, flyers_only=True
+        )
+    )
+    assert obj["flyers_only"] is True
+    assert obj["best"]["engine"] == "slow"
+
+
+def test_csv_flyers_only_filters_rows_and_comments_key():
+    import csv as _csv
+    import io as _io
+
+    text = gv.render_stt_rtf_batch_csv(_flyer_batch(), flyers_only=True)
+    assert "# flyers_only: true" in text
+    data = "\n".join(l for l in text.splitlines() if not l.startswith("#"))
+    rows = list(_csv.DictReader(_io.StringIO(data)))
+    assert [r["engine"] for r in rows] == ["slow"]
+    # The whole-corpus num_flyers comment is unchanged.
+    assert "# num_flyers: 1" in text
+
+
+def test_csv_flyers_only_none_omits_comment():
+    text = gv.render_stt_rtf_batch_csv(_flyer_batch())
+    assert "# flyers_only" not in text
+
+
+def test_csv_flyers_only_reads_after_min_grade_comment():
+    # Comment order is min_grade -> flyers_only (the order the filters apply).
+    text = gv.render_stt_rtf_batch_csv(
+        _flyer_batch(), min_grade="slow", flyers_only=True
+    )
+    lines = text.splitlines()
+    mg = next(i for i, ln in enumerate(lines) if ln.startswith("# min_grade:"))
+    fo = next(i for i, ln in enumerate(lines) if ln.startswith("# flyers_only:"))
+    assert mg < fo
+
+
+def test_handler_flyers_only_threads_to_human_render():
+    args = gv.build_parser().parse_args(
+        [
+            "stt-rtf-batch",
+            "--engine", "a", "10.0:1.0",
+            "--engine", "b", "10.0:1.1",
+            "--engine", "c", "10.0:1.2",
+            "--engine", "d", "10.0:1.3",
+            "--engine", "slow", "10.0:50.0",
+            "--flyers-only",
+        ]
+    )
+    lines = []
+    gv.cmd_stt_rtf_batch(args, log=lines.append)
+    text = "\n".join(lines)
+    assert "(flyers only)" in text
+    assert _engine_order(lines) == ["slow"]
+
+
+def test_handler_flyers_only_matches_render_directly():
+    argv = [
+        "stt-rtf-batch",
+        "--engine", "a", "10.0:1.0",
+        "--engine", "b", "10.0:1.1",
+        "--engine", "c", "10.0:1.2",
+        "--engine", "d", "10.0:1.3",
+        "--engine", "slow", "10.0:50.0",
+        "--flyers-only",
+    ]
+    # human
+    args = gv.build_parser().parse_args(argv)
+    lines = []
+    gv.cmd_stt_rtf_batch(args, log=lines.append)
+    batch = _flyer_batch()
+    assert lines == gv.render_stt_rtf_batch(batch, flyers_only=True)
+    # json
+    args = gv.build_parser().parse_args(argv + ["--json"])
+    lines = []
+    gv.cmd_stt_rtf_batch(args, log=lines.append)
+    assert lines == [gv.render_stt_rtf_batch_json(batch, flyers_only=True)]
+    # csv
+    args = gv.build_parser().parse_args(argv + ["--csv"])
+    lines = []
+    gv.cmd_stt_rtf_batch(args, log=lines.append)
+    assert lines == [gv.render_stt_rtf_batch_csv(batch, flyers_only=True)]
