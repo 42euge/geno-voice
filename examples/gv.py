@@ -10,6 +10,7 @@ Usage:
     gv calibrate-base-wpm … # offline base_wpm calibration (dispersion grade agree/loose/scattered + margin to next grade; --verdict for an adopt/keep call; --json/--csv for per-sample data)
     gv calibrate-base-wpm-batch --voice af_heart 50:18.2 --voice am_adam 40:15.0  # calibrate a CORPUS of voices — per-voice base_wpm + grade + drift + the corpus median (which voices agree?); --json/--csv for the machine-readable corpus; --sort-by base_wpm/grade/drift/delta to float the most-useful voices to the top; --top-n N to keep only the N most-useful; --min-grade scattered/loose/agree to drop voices below a dispersion floor; --summary to name the single most-representative voice (nearest the corpus median); the flyers: line names outlier voices (outside the Q1-1.5·IQR..Q3+1.5·IQR Tukey fence), also marked ← flyer in the table
     gv stt-rtf --samples 10.0:1.2 5.0:0.8  # offline STT real-time-factor profile — fold measured transcriptions (audio_seconds:transcribe_seconds) into a robust median RTF + speed grade (fast/realtime/slow); --verdict for a lighten/keep call; --json/--csv for per-sample data
+    gv stt-rtf-batch --engine mlx-whisper 10.0:1.2 5.0:0.8 --engine faster-whisper 10.0:6.0  # profile a CORPUS of STT engines — per-engine median RTF + speed grade + lighten/keep verdict, plus the outlier-robust corpus median (which engines keep up with realtime?)
     gv vad recording.wav  # offline Silero VAD — segment a WAV into speech regions
     gv vad recording.wav --json # machine-readable segmentation (SileroResult.to_dict shape)
     gv vad-gaps recording.wav  # report the silence gaps BETWEEN speech regions (tune --min-silence-ms)
@@ -2391,6 +2392,73 @@ def render_stt_rtf_verdict(verdict):
         f"{verdict.speed_grade}, relative spread {verdict.relative_spread:.3f} "
         f"over {verdict.n_samples} samples (a reading aid, not a gate)",
     ]
+    return lines
+
+
+def _stt_rtf_batch_grade_order():
+    """The STT-RTF batch speed-grade histogram order (iter-409).
+
+    Read from the engine's :data:`stt.rtf_profile.STT_RTF_BATCH_GRADE_ORDER` so
+    the gv render and the engine never drift on the bucket set / order. Loaded
+    lazily by file path like every other ``rtf_profile`` consumer here.
+    """
+    return _load_stt_rtf_profile().STT_RTF_BATCH_GRADE_ORDER
+
+
+def render_stt_rtf_batch(batch):
+    """Render an ``stt-rtf-batch`` corpus verdict as plain-text report lines.
+
+    The human-readable face of ``profile_stt_rtf_batch`` (iter-409), the STT-side
+    twin of :func:`render_calibration_batch` (iter-397). ``batch`` is an
+    ``SttRtfBatch``. One row per engine — its median RTF, speed grade, the
+    recommend/keep verdict marker, and the signed delta from the corpus median —
+    followed by a corpus summary line (median / range / spread of the per-engine
+    median RTFs and how many of the engines keep up with realtime), and a
+    ``grades:`` histogram counting how many engines sit at each speed grade over
+    the WHOLE corpus.
+
+    An engine with no samples prints ``-`` for its numbers and is tagged
+    ``unprofiled`` (excluded from the corpus aggregates but still listed),
+    mirroring how :func:`render_calibration_batch` lists an uncalibrated voice.
+    An engine whose verdict recommends action is marked ``← lighten`` inline so
+    the operator sees which engines are worth swapping without cross-referencing.
+
+    Pure: returns a list of strings (no I/O, no ANSI) so it is testable in
+    isolation — the handler joins and prints them.
+    """
+    lines = [
+        f"STT real-time-factor batch ({batch.num_engines} engines, "
+        f"{batch.num_profiled} profiled)",
+        f"  gates: relative_spread<={batch.rel_spread_max:.2f}, "
+        f"samples>={batch.min_samples}",
+    ]
+    for r in batch.rows:
+        profile = r["profile"]
+        if profile is None:
+            lines.append(f"  {r['engine']}: - (unprofiled — no samples)")
+            continue
+        delta = r["delta_from_median_rtf"]
+        delta_cell = f"{delta:+.3f}" if delta is not None else "-"
+        # The verdict recommends action only for a genuinely-slow AND trustworthy
+        # engine; mark it inline so the operator sees which engines to swap.
+        verdict = r["verdict"]
+        lighten_mark = "  ← lighten" if verdict is not None and verdict.recommend else ""
+        lines.append(
+            f"  {r['engine']}: {profile.median_rtf:.3f} RTF "
+            f"({profile.speed_grade}, Δmedian {delta_cell}){lighten_mark}"
+        )
+    if batch.num_profiled:
+        lines.append(
+            f"  corpus: median {batch.corpus_median_rtf:.3f}, "
+            f"range {batch.corpus_min_rtf:.3f} – {batch.corpus_max_rtf:.3f}, "
+            f"spread {batch.corpus_spread:.3f}, "
+            f"{batch.num_keep_up}/{batch.num_profiled} keep up with realtime"
+        )
+    else:
+        lines.append("  corpus: (no engine profiled — nothing to summarise)")
+    counts = batch.grade_counts
+    grades = ", ".join(f"{counts[g]} {g}" for g in _stt_rtf_batch_grade_order())
+    lines.append(f"  grades: {grades}")
     return lines
 
 
@@ -10397,6 +10465,54 @@ def cmd_stt_rtf(args, *, log=print):
             log(line)
 
 
+def cmd_stt_rtf_batch(args, *, log=print):
+    """Profile a CORPUS of STT engines and print the tabulated RTFs (iter-409).
+
+    The batch generalisation of :func:`cmd_stt_rtf`, the STT-side twin of
+    ``gv calibrate-base-wpm-batch`` (iter-397). Each ``--engine`` group is one
+    engine: its first token is the engine LABEL, the rest are ``--samples``-style
+    ``audio_seconds:transcribe_seconds`` pairs (the same
+    :func:`stt_rtf_sample_type` the single-engine command uses). The handler
+    profiles each engine independently against the shared verdict gates
+    (``--rel-spread-max`` / ``--min-samples``) and prints the per-engine median
+    RTF / speed grade / lighten-or-keep verdict plus an outlier-robust corpus
+    median, so an operator choosing a transcriber for the host sees which engines
+    keep up with realtime and which are the bottleneck.
+
+    An ``--engine`` group with a label but no pairs profiles to ``None`` (no
+    samples): it is listed as ``unprofiled`` and excluded from the corpus
+    aggregates, mirroring the engine's empty contract. The profiling core is
+    pure stdlib loaded lazily by file path (:func:`_load_stt_rtf_profile`) so the
+    parser stays audio-free; ``log`` is injectable for tests.
+    """
+    mod = _load_stt_rtf_profile()
+    TranscriptionSample = mod.TranscriptionSample
+    profile_stt_rtf_batch = mod.profile_stt_rtf_batch
+
+    engines = []
+    for group in args.engine:
+        label = group[0]
+        # The label is consumed raw; every remaining token is a sample pair,
+        # parsed with the SAME validator the single-engine --samples uses so a
+        # malformed pair raises the identical clean CLI error.
+        pairs = [stt_rtf_sample_type(tok) for tok in group[1:]]
+        samples = [
+            TranscriptionSample(
+                audio_seconds=audio_seconds, transcribe_seconds=transcribe_seconds
+            )
+            for (audio_seconds, transcribe_seconds) in pairs
+        ]
+        engines.append((label, samples))
+
+    batch = profile_stt_rtf_batch(
+        engines,
+        rel_spread_max=args.rel_spread_max,
+        min_samples=args.min_samples,
+    )
+    for line in render_stt_rtf_batch(batch):
+        log(line)
+
+
 def cmd_vad(args, *, log=print, segmenter=None, availability=None):
     """Segment a WAV file offline through Silero VAD and print the regions.
 
@@ -12528,6 +12644,7 @@ DEFAULT_HANDLERS = {
     "calibrate-base-wpm": cmd_calibrate_base_wpm,
     "calibrate-base-wpm-batch": cmd_calibrate_base_wpm_batch,
     "stt-rtf": cmd_stt_rtf,
+    "stt-rtf-batch": cmd_stt_rtf_batch,
     "vad": cmd_vad,
     "vad-gaps": cmd_vad_gaps,
     "vad-gap-percentiles": cmd_vad_gap_percentiles,
@@ -12970,6 +13087,43 @@ def build_parser():
         help="Emit per-sample CSV (sample,audio_seconds,transcribe_seconds,rtf) "
         "with the aggregate profile trailing as # comment lines, for "
         "spreadsheets/plots; mutually exclusive with --json",
+    )
+
+    # gv stt-rtf-batch — profile a CORPUS of STT engines (iter-409), the STT-side
+    # analogue of gv calibrate-base-wpm-batch. Each --engine group is one engine:
+    # LABEL followed by its audio_seconds:transcribe_seconds sample pairs.
+    stt_rtf_batch = sub.add_parser(
+        "stt-rtf-batch",
+        help="Offline STT real-time-factor profile over a CORPUS of engines — "
+        "tabulate each engine's median RTF + speed grade + lighten/keep verdict, "
+        "plus the outlier-robust corpus median (which engines keep up?)",
+    )
+    stt_rtf_batch.add_argument(
+        "--engine",
+        action="append",
+        nargs="+",
+        required=True,
+        metavar="LABEL AUDIO:TRANSCRIBE",
+        help="One engine as 'LABEL pair [pair ...]', repeatable, e.g. "
+        "--engine mlx-whisper 10.0:1.2 5.0:0.8 --engine faster-whisper 10.0:6.0 "
+        "(the label is the engine id; the pairs are its measured transcriptions)",
+    )
+    stt_rtf_batch.add_argument(
+        "--rel-spread-max",
+        type=float,
+        default=stt_rtf_rel_spread_max_default,
+        dest="rel_spread_max",
+        help="Per-engine verdict gate: max trusted relative spread (dimensionless "
+        "spread/median; above this the runs disagree and the median is not "
+        f"trustworthy) (default: {stt_rtf_rel_spread_max_default})",
+    )
+    stt_rtf_batch.add_argument(
+        "--min-samples",
+        type=int,
+        default=stt_rtf_min_samples_default,
+        dest="min_samples",
+        help="Per-engine verdict gate: min sample count for a robust median "
+        f"(default: {stt_rtf_min_samples_default})",
     )
 
     # gv vad — offline Silero segmentation of a WAV file. Defaults mirror

@@ -419,3 +419,201 @@ def stt_rtf_verdict(
         rel_spread_max=rel_spread_max,
         min_samples=min_samples,
     )
+
+
+# --------------------------------------------------------------------------
+# iter-409 — profile a CORPUS of STT engines/models in one fold.
+#
+# iter-405 measured one engine's median RTF, iter-406 surfaced it on the CLI,
+# and iter-407/408 folded + surfaced the recommend/keep verdict. All three stop
+# at a SINGLE engine. The deferred remaining step is the BATCH surface — profile
+# N engines/models and tabulate which ones keep up with realtime — the STT-side
+# twin of iter-397's ``calibrate_base_wpm_batch`` (which profiles N TTS voices'
+# base rates). An operator choosing a transcriber for the host (mlx-whisper vs
+# faster-whisper vs a heavier model) had no single surface ranking their RTFs;
+# this builds it. Pure arithmetic over injected timings — no torch, no
+# faster-whisper, no audio I/O — so it runs in the unit gate on any platform,
+# exactly like the single-engine core above.
+# --------------------------------------------------------------------------
+
+#: Histogram bucket order for an STT-RTF batch (iter-409). The three real speed
+#: grades plus an ``"unprofiled"`` bucket for an engine submitted with no
+#: samples — kept DISTINCT from ``"slow"`` so a no-sample engine never silently
+#: merges into the bottleneck count (the same ``uncalibrated``-vs-``scattered``
+#: distinction iter-397's :data:`~session.wpm_mirror.CALIB_BATCH_GRADE_ORDER`
+#: makes). A gv render reads this order so the two never drift on the bucket set,
+#: and the histogram always shows all four buckets summing to ``num_engines``.
+STT_RTF_BATCH_GRADE_ORDER = ("fast", "realtime", "slow", "unprofiled")
+
+
+@dataclass(frozen=True)
+class SttRtfBatch:
+    """Verdict of profiling a CORPUS of STT engines/models (iter-409).
+
+    The batch analogue of :class:`SttRtfProfile`, and the STT-side twin of
+    :class:`~session.wpm_mirror.BaseWpmCalibrationBatch` (iter-397): one
+    :class:`SttRtfProfile` per engine (``rows``), summarised by the
+    outlier-robust corpus median of the per-engine ``median_rtf``.
+
+    Attributes:
+      rows: one entry per engine, in input order, each a dict with keys
+        ``engine`` (the label), ``profile`` (the engine's
+        :class:`SttRtfProfile`, or ``None`` when the engine had no samples),
+        ``verdict`` (the engine's :class:`SttRtfVerdict` — the iter-407
+        recommend/keep call, or ``None`` for an unprofiled engine), and
+        ``delta_from_median_rtf`` (the engine's ``median_rtf`` minus the corpus
+        median, ``None`` for an unprofiled engine). The per-engine grade /
+        margin / spread live on the embedded ``profile`` so each row agrees
+        EXACTLY with ``gv stt-rtf`` on that engine's samples.
+      num_engines: how many engines were submitted (``len(rows)``).
+      num_profiled: how many carried at least one sample (fed the corpus
+        aggregates); an unprofiled engine contributes a row but not a number.
+      corpus_median_rtf: the outlier-robust **median** of the profiled engines'
+        ``median_rtf`` — the representative RTF across the fleet of engines
+        (``None`` when none profiled). Median (not mean) so one pathological
+        engine cannot drag the corpus centre.
+      corpus_min_rtf / corpus_max_rtf: the extremes of the per-engine
+        ``median_rtf`` — the fastest and slowest engine (``None`` when none
+        profiled).
+      corpus_spread: ``corpus_max_rtf - corpus_min_rtf`` — how far apart the
+        engines clock (``None`` when none profiled). A large spread means the
+        engines genuinely differ in speed on this host, so the choice of
+        transcriber matters.
+      grade_counts: how many engines sit at each speed grade, keyed by
+        :data:`STT_RTF_BATCH_GRADE_ORDER` (always all four buckets, summing to
+        ``num_engines``) — at a glance, how many engines keep up with realtime
+        (``fast`` + ``realtime``) versus are the bottleneck (``slow``).
+      num_keep_up: how many engines keep pace with realtime — their
+        ``speed_grade`` is ``"fast"`` or ``"realtime"`` (``median_rtf <= 1.0``).
+        The one-number answer to "which engines keep up?" — the count, with the
+        histogram giving the breakdown.
+      num_recommend: how many engines the iter-407 verdict flags for action
+        (``recommend`` is ``True`` — genuinely slow AND the measurement is
+        trustworthy). ``<= grade_counts["slow"]``: a slow engine measured from
+        too few or disagreeing samples is NOT recommended (the median is not yet
+        trustworthy), so this counts only the engines worth acting on now.
+      rel_spread_max / min_samples: the verdict gate thresholds every per-engine
+        verdict was computed against (echoed so the batch is self-describing and
+        the gv render can name the gates without re-deriving them).
+
+    Pure / frozen; built from :func:`profile_stt_rtf` + :func:`stt_rtf_verdict`
+    per engine.
+    """
+
+    rows: tuple
+    num_engines: int
+    num_profiled: int
+    corpus_median_rtf: float | None
+    corpus_min_rtf: float | None
+    corpus_max_rtf: float | None
+    corpus_spread: float | None
+    grade_counts: dict
+    num_keep_up: int
+    num_recommend: int
+    rel_spread_max: float
+    min_samples: int
+
+
+def profile_stt_rtf_batch(
+    engines,
+    *,
+    rel_spread_max: float = DEFAULT_STT_RTF_REL_SPREAD_MAX,
+    min_samples: int = DEFAULT_STT_RTF_MIN_SAMPLES,
+) -> SttRtfBatch:
+    """Profile a corpus of STT engines and tabulate which ones keep up (iter-409).
+
+    ``engines`` is an iterable of ``(label, samples)`` pairs — one per engine,
+    where ``samples`` is that engine's iterable of :class:`TranscriptionSample`
+    timings (the same input :func:`profile_stt_rtf` takes). Each engine is
+    profiled INDEPENDENTLY and its profile is folded through
+    :func:`stt_rtf_verdict` (against the shared ``rel_spread_max`` /
+    ``min_samples`` gates so the per-engine recommendations are apples-to-apples),
+    and the per-engine ``median_rtf`` values are summarised by their
+    outlier-robust median.
+
+    An engine with no samples profiles to ``None`` (the :func:`profile_stt_rtf`
+    empty contract): it contributes a row tagged ``unprofiled`` (its ``verdict``
+    is ``None``) and is excluded from the corpus median / extremes / spread, but
+    is still counted in ``num_engines``. This mirrors how iter-397's
+    ``calibrate_base_wpm_batch`` keeps a no-sample voice in the table with a
+    ``None`` calibration rather than dropping it silently.
+
+    Args:
+      engines: iterable of ``(label, samples)`` pairs.
+      rel_spread_max: the verdict trust gate, threaded to every per-engine
+        :func:`stt_rtf_verdict` (defaults to
+        :data:`DEFAULT_STT_RTF_REL_SPREAD_MAX`).
+      min_samples: the verdict sample gate, threaded likewise (defaults to
+        :data:`DEFAULT_STT_RTF_MIN_SAMPLES`).
+
+    Returns an :class:`SttRtfBatch`. Pure — no I/O, no clock, no mutation of the
+    inputs.
+    """
+    rel_spread_max = float(rel_spread_max)
+    min_samples = int(min_samples)
+
+    rows = []
+    medians = []
+    for label, samples in engines:
+        profile = profile_stt_rtf(samples)
+        verdict = stt_rtf_verdict(
+            profile, rel_spread_max=rel_spread_max, min_samples=min_samples
+        )
+        rows.append(
+            {
+                "engine": label,
+                "profile": profile,
+                "verdict": verdict,
+                # delta filled in once the corpus median is known.
+                "delta_from_median_rtf": None,
+            }
+        )
+        if profile is not None:
+            medians.append(profile.median_rtf)
+
+    if medians:
+        corpus_median = statistics.median(medians)
+        corpus_min = min(medians)
+        corpus_max = max(medians)
+        corpus_spread = corpus_max - corpus_min
+        for r in rows:
+            profile = r["profile"]
+            if profile is not None:
+                r["delta_from_median_rtf"] = profile.median_rtf - corpus_median
+    else:
+        corpus_median = corpus_min = corpus_max = corpus_spread = None
+
+    counts = {g: 0 for g in STT_RTF_BATCH_GRADE_ORDER}
+    for r in rows:
+        profile = r["profile"]
+        key = "unprofiled" if profile is None else profile.speed_grade
+        if key in counts:
+            counts[key] += 1
+        else:
+            # Defensive: an unrecognised future grade lands in unprofiled rather
+            # than vanishing — the counts must still sum to num_engines.
+            counts["unprofiled"] += 1
+
+    # An engine "keeps up" when its median RTF stays at or under the realtime
+    # knee — i.e. it grades "fast" or "realtime", the two non-bottleneck buckets.
+    num_keep_up = counts["fast"] + counts["realtime"]
+    # The verdict recommends action only for a genuinely-slow AND trustworthy
+    # engine, so num_recommend <= grade_counts["slow"].
+    num_recommend = sum(
+        1 for r in rows if r["verdict"] is not None and r["verdict"].recommend
+    )
+
+    return SttRtfBatch(
+        rows=tuple(rows),
+        num_engines=len(rows),
+        num_profiled=len(medians),
+        corpus_median_rtf=corpus_median,
+        corpus_min_rtf=corpus_min,
+        corpus_max_rtf=corpus_max,
+        corpus_spread=corpus_spread,
+        grade_counts=counts,
+        num_keep_up=num_keep_up,
+        num_recommend=num_recommend,
+        rel_spread_max=rel_spread_max,
+        min_samples=min_samples,
+    )

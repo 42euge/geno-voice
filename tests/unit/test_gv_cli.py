@@ -396,6 +396,7 @@ def test_dispatch_default_handlers_are_the_real_cmds():
         "calibrate-base-wpm": gv.cmd_calibrate_base_wpm,
         "calibrate-base-wpm-batch": gv.cmd_calibrate_base_wpm_batch,
         "stt-rtf": gv.cmd_stt_rtf,
+        "stt-rtf-batch": gv.cmd_stt_rtf_batch,
         "vad": gv.cmd_vad,
         "vad-gaps": gv.cmd_vad_gaps,
         "vad-gap-percentiles": gv.cmd_vad_gap_percentiles,
