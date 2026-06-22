@@ -303,6 +303,30 @@ def test_render_calibration_verdict_keep():
     assert "decision: keep the current nominal" in text
 
 
+def test_render_calibration_verdict_shows_dispersion_grade():
+    # iter-395: the verdict render carries a dispersion line echoing the grade.
+    wm = gv._load_wpm_mirror()
+    samples = [wm.CalibrationSample(words=50, audio_seconds=14.0)] * 3
+    calib = wm.calibrate_base_wpm(samples, default_base_wpm=165.0)
+    verdict = wm.calibration_verdict(calib)
+    lines = gv.render_calibration_verdict(verdict)
+    text = "\n".join(lines)
+    assert "dispersion:" in text
+    assert verdict.dispersion_grade in text
+    assert "reading aid" in text
+
+
+def test_render_calibration_verdict_reason_cites_grade():
+    # iter-395: the recommend reason names the dispersion grade.
+    wm = gv._load_wpm_mirror()
+    samples = [wm.CalibrationSample(words=50, audio_seconds=14.0)] * 3
+    calib = wm.calibrate_base_wpm(samples, default_base_wpm=165.0)
+    verdict = wm.calibration_verdict(calib)
+    assert verdict.recommend is True
+    assert verdict.dispersion_grade in verdict.reason
+    assert "dispersion" in verdict.reason
+
+
 def test_handler_omits_verdict_by_default():
     lines = _run(["calibrate-base-wpm", "--samples", "50:14.0", "50:14.0", "50:14.0"])
     text = "\n".join(lines)

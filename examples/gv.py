@@ -1203,6 +1203,13 @@ def render_calibration_verdict(verdict):
     :func:`render_calibration`'s empty contract. This is the iter-218/221
     CLI-later surface for the iter-222 verdict engine: it turns the raw
     spread/drift numbers into an adopt/keep DECISION the operator can act on.
+
+    iter-395 adds the ``dispersion`` line: the verdict now echoes the iter-394
+    voice-comparable trust grade (``"agree"`` / ``"loose"`` / ``"scattered"``),
+    and the engine cites it in ``reason`` — surfacing it here gives the operator
+    the grade at a glance alongside the absolute gate thresholds. It is a
+    reading aid, not a fourth gate (the trust gate remains the absolute spread
+    test), so the line is labelled as such.
     """
     if verdict is None:
         return ["base_wpm verdict: no samples (nothing to decide)"]
@@ -1217,6 +1224,8 @@ def render_calibration_verdict(verdict):
         f"  reason:   {verdict.reason}",
         f"  gates:    spread<={verdict.spread_max:.1f}, "
         f"|drift|>={verdict.drift_min:.1f}, samples>={verdict.min_samples}",
+        f"  dispersion: {verdict.dispersion_grade} "
+        "(voice-comparable trust grade; a reading aid, not a gate)",
     ]
     return lines
 

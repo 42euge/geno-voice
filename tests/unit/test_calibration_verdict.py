@@ -224,6 +224,42 @@ def test_verdict_echoes_calibration_and_thresholds():
     assert v.min_samples == 2
 
 
+def test_verdict_echoes_dispersion_grade():
+    # iter-395: the verdict echoes the calibration's iter-394 grade.
+    cal = _calibration(180.0, n_samples=5, spread=2.0)
+    v = calibration_verdict(cal)
+    assert v.dispersion_grade == cal.dispersion_grade
+    assert v.dispersion_grade in ("agree", "loose", "scattered")
+
+
+def test_recommend_reason_cites_dispersion_grade():
+    # iter-395: the recommend branch names the grade alongside the spread gate.
+    cal = _calibration(180.0, n_samples=5, spread=2.0)  # tight ⇒ agree
+    v = calibration_verdict(cal)
+    assert v.recommend is True
+    assert v.dispersion_grade == "agree"
+    assert "dispersion agree" in v.reason
+
+
+def test_disagree_reason_cites_dispersion_grade():
+    # iter-395: the spread-fail rejection also names the grade.
+    cal = _calibration(180.0, n_samples=5, spread=DEFAULT_CALIB_SPREAD_MAX + 5.0)
+    v = calibration_verdict(cal)
+    assert v.recommend is False
+    assert "disagree" in v.reason
+    assert f"dispersion {v.dispersion_grade}" in v.reason
+
+
+def test_dispersion_grade_voice_comparable_in_verdict():
+    # iter-395: same relative spread at fast/slow voices ⇒ same grade echoed.
+    slow = _calibration(100.0, n_samples=5, spread=4.0)  # rel 0.04
+    fast = _calibration(300.0, n_samples=5, spread=12.0)  # rel 0.04
+    assert (
+        calibration_verdict(slow).dispersion_grade
+        == calibration_verdict(fast).dispersion_grade
+    )
+
+
 def test_verdict_is_frozen():
     cal = _calibration(180.0, n_samples=5, spread=2.0)
     v = calibration_verdict(cal)

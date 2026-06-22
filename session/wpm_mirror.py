@@ -884,6 +884,15 @@ class CalibrationVerdict:
       drift: the calibration's drift from nominal (echoed).
       spread: the calibration's per-sample range (echoed).
       n_samples: how many samples backed the calibration (echoed).
+      dispersion_grade: the calibration's iter-394 voice-comparable trust grade
+        (``"agree"`` / ``"loose"`` / ``"scattered"``), echoed from the underlying
+        :class:`BaseWpmCalibration`. iter-395 also folds it into ``reason``: the
+        adopt/keep call cites the grade so the decision's trust footing is
+        spelled out in the same line. The grade is a *reading aid*, not a fourth
+        gate — the trust gate is still the absolute ``spread <= spread_max``
+        test (the grade and the gate agree by construction, see
+        :func:`dispersion_grade`); naming it in ``reason`` just makes the
+        voice-independent view of that same trust visible at a glance.
       spread_max / drift_min / min_samples: the thresholds the verdict was
         computed against (echoed so the decision is self-describing).
     """
@@ -894,6 +903,7 @@ class CalibrationVerdict:
     drift: float
     spread: float
     n_samples: int
+    dispersion_grade: str
     spread_max: float
     drift_min: float
     min_samples: int
@@ -922,6 +932,13 @@ def calibration_verdict(
     The gates are checked in that order so ``reason`` names the *first* failure
     (sample count is the most fundamental, then trust, then significance).
 
+    iter-395 echoes the calibration's iter-394 ``dispersion_grade`` on the
+    verdict and cites it in the two trust-themed ``reason`` branches (the
+    spread-pass recommend and the spread-fail rejection), so the adopt/keep call
+    spells out its voice-comparable trust footing. The grade is a reading aid,
+    not a fourth gate — the trust gate remains the absolute ``spread`` test, and
+    the grade agrees with it by construction (see :func:`dispersion_grade`).
+
     Args:
       calibration: a :class:`BaseWpmCalibration`, or ``None`` (no samples ⇒
         nothing to decide ⇒ this function returns ``None``, mirroring
@@ -945,6 +962,7 @@ def calibration_verdict(
     n = calibration.n_samples
     spread = calibration.spread
     drift = calibration.drift
+    grade = calibration.dispersion_grade
 
     if n < min_samples:
         recommend = False
@@ -955,8 +973,9 @@ def calibration_verdict(
     elif spread > spread_max:
         recommend = False
         reason = (
-            f"renders disagree (spread {spread:.1f} > {spread_max:.1f} WPM) — "
-            "the median is not trustworthy; re-render more consistently"
+            f"renders disagree (spread {spread:.1f} > {spread_max:.1f} WPM, "
+            f"dispersion {grade}) — the median is not trustworthy; re-render "
+            "more consistently"
         )
     elif abs(drift) < drift_min:
         recommend = False
@@ -967,9 +986,10 @@ def calibration_verdict(
     else:
         recommend = True
         reason = (
-            f"renders agree (spread {spread:.1f} <= {spread_max:.1f}) over "
-            f"{n} samples and drift {drift:+.1f} WPM is significant — "
-            f"re-seed base_wpm to {calibration.implied_base_wpm:.1f}"
+            f"renders agree (spread {spread:.1f} <= {spread_max:.1f}, "
+            f"dispersion {grade}) over {n} samples and drift {drift:+.1f} WPM "
+            f"is significant — re-seed base_wpm to "
+            f"{calibration.implied_base_wpm:.1f}"
         )
 
     return CalibrationVerdict(
@@ -979,6 +999,7 @@ def calibration_verdict(
         drift=drift,
         spread=spread,
         n_samples=n,
+        dispersion_grade=grade,
         spread_max=spread_max,
         drift_min=drift_min,
         min_samples=min_samples,
