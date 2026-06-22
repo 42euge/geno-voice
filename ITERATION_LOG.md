@@ -37660,3 +37660,103 @@ emits the single-engine grid with `# min_grade: fast` and the whole-corpus
 4. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232, iter-317
    still present) — a future lap could `git worktree prune` / remove merged ones.
    NOTE: this lap correctly removed its own worktree.
+
+## iter-413 — stt-rtf-batch --summary: name the most-representative engine
+
+- **Date:** 2026-06-22
+- **Branch:** iter-413-stt-rtf-batch-summary (ff-merged to main, worktree removed)
+- **Commit:** 42949e3
+
+**Why.** The iter-412 log's next-item #1 named this lap: finish the
+`stt-rtf-batch` surface with the iter-402 analogue — a `--summary` line. iter-409
+landed the human corpus report, iter-410 the `--json`/`--csv` twins, iter-411
+`--sort-by`/`--top-n`, iter-412 `--min-grade`; the only remaining
+calibration-batch follow-on was `--summary`, which collapses the whole per-engine
+table to the ONE engine that best speaks for the corpus — the engine whose median
+RTF sits CLOSEST to the corpus median. An operator who just wants "which single
+transcriber represents the fleet's typical speed?" now gets the answer without
+reading rows. This **completes the STT-RTF-batch surface's parity with
+`calibrate-base-wpm-batch`** (human / `--json` / `--csv` × sort / top-n /
+min-grade / summary).
+
+**What landed (all render-only, in `examples/gv.py`).**
+
+- **`_best_stt_rtf_batch_row(rows)`** — the selection primitive behind
+  `--summary`, the STT-side analogue of `_best_calib_batch_row`. Among rows
+  carrying a recommendation (`delta_from_median_rtf` not `None` — a profiled
+  engine), picks the SMALLEST |`delta_from_median_rtf`| (nearest the corpus
+  median), ties broken toward the HIGHEST speed grade (`_STT_RTF_SPEED_GRADE_RANK`),
+  remaining ties broken by EARLIEST `--engine` position (a stable `min`). The
+  deliberate INVERSE of `--sort-by delta` (iter-411, which floats the biggest
+  OUTLIERS): the sort surfaces who disagrees most, the summary who agrees most. A
+  single MIN — not a sort+truncate — so the pick is robust to whatever
+  `--sort-by`/`--top-n` was (or wasn't) requested. Returns `None` for an
+  empty/all-unprofiled corpus; an unprofiled engine (`delta` `None`) is never
+  picked.
+- **`_format_stt_rtf_batch_summary_verdict(row)`** — the one human verdict line:
+  `representative: <engine> → <n> RTF (grade <grade>, Δmedian <±n>)`, the
+  STT-side twin of `_format_calib_batch_summary_verdict` (signs the Δ via the
+  existing `_signed_float3`).
+- **`render_stt_rtf_batch` / `_json` / `_csv`** all gained a `summary` kwarg
+  (default `False` = byte-identical to the pre-iter-413 output). Human emits the
+  verdict line (or a `(no engine … carries a median RTF — nothing to summarise)`
+  note) plus the whole-corpus summary + `grades:` histogram; JSON replaces the
+  `rows` list with a single `best` key (the same per-engine object shape, so it
+  carries a `delta_from_median_rtf`) and flags `summary: true`; CSV emits the
+  single best data row with a leading `# summary: true` comment. The pick
+  respects `--min-grade` (made over the surviving engines so a floor scopes who
+  can represent the corpus) but is INDEPENDENT of `--sort-by`/`--top-n`, whose
+  ordering/count keys+comments are omitted in summary mode. Every corpus
+  aggregate / histogram still describes the WHOLE corpus (the iter-402 contract).
+  The human render body was refactored to hoist a shared `_corpus_lines()`
+  closure (full-table / empty-floor / summary variants), mirroring
+  `render_calibration_batch`'s shape.
+- **`cmd_stt_rtf_batch`** threads `args.summary` into whichever renderer the
+  format flag selects. `--summary` (`store_true`) added to the `stt-rtf-batch`
+  subparser; handler docstring + module usage line updated.
+
+**Tests (+26 net new, `test_gv_stt_rtf_batch.py` now 125 tests).** Parser wiring
+(summary default False, flag parses True); selection primitive (nearest-median
+pick + delta 0, None on empty corpus, ignores unprofiled engine, grade
+tie-break, earliest-position tie-break); human render (names representative,
+independent of sort/top-n, respects min_grade, empty-corpus note,
+min_grade-empties-pick note, still emits whole-corpus lines); json (best
+replaces rows + summary flag, best null when empty, omits sort/top-n keys,
+respects min_grade, default omits summary key); csv (single data row + comment,
+header-only when empty, omits sort/top-n comments, respects min_grade in
+summary<min_grade comment order, default omits comment); handler threading to
+all three renderers.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **6091 passed**
+(6065 prior + 26 net new), run in the feature worktree before ff-merge;
+re-verified on main post-merge (`test_gv_stt_rtf_batch.py` → 125 passed). Also
+smoke-tested the real CLI:
+`python examples/gv.py stt-rtf-batch --engine a 10.0:1.0 --engine b 10.0:8.0 --engine c 10.0:15.0 --summary`
+prints `representative: b → 0.800 RTF (grade realtime, Δmedian 0.000)` (b's
+median RTF 0.8 is the corpus median) plus the whole-corpus lines; `--json
+--summary` emits `"summary": true` + a `"best"` object (no `rows`); `--csv
+--summary --min-grade fast` emits the single `a` data row with `# summary: true`
+and `# min_grade: fast` comments and a whole-corpus `# num_engines: 3`.
+- Integration: not run this lap (pure selection / string-formatting over the
+  injected `profile_stt_rtf_batch` core; no torch, no faster-whisper, no audio
+  I/O — mirrors the iter-402 calib-batch summary lap and the iter-405..412 STT
+  laps, which the integration suite never exercised either).
+
+**Next planned items:**
+1. **[gv CLI] the stt-rtf-batch surface is now COMPLETE** — it carries the full
+   human / `--json` / `--csv` trio plus `--sort-by`/`--top-n`/`--min-grade`/
+   `--summary`, matching `calibrate-base-wpm-batch`'s entire flag set. The next
+   STT-RTF increment would be a genuinely NEW signal (e.g. an iter-404-style
+   `flyers:` corpus-outlier line naming engines outside the Tukey fence, which
+   the calibration batch has but the STT batch does not yet), not another flag
+   clone. NOTE the STT batch's `corpus_spread` is a plain range-spread, not the
+   IQR/fence the calibration batch carries — a flyer line would need the engine
+   to compute the fence first.
+2. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Prefer a genuinely new signal over an 18th near-clone.
+3. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+4. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232, iter-317
+   still present) — a future lap could `git worktree prune` / remove merged ones.
+   NOTE: this lap correctly removed its own worktree.
