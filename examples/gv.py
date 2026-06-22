@@ -8,6 +8,7 @@ Usage:
     gv chat               # chat mode — STT → LLM (litellm) → TTS
     gv simulate-mirror …  # offline WPM-mirror trajectory / grid-sweep simulator
     gv calibrate-base-wpm … # offline base_wpm calibration (dispersion grade agree/loose/scattered + margin to next grade; --verdict for an adopt/keep call; --json/--csv for per-sample data)
+    gv calibrate-base-wpm-batch --voice af_heart 50:18.2 --voice am_adam 40:15.0  # calibrate a CORPUS of voices — per-voice base_wpm + grade + drift + the corpus median (which voices agree?)
     gv vad recording.wav  # offline Silero VAD — segment a WAV into speech regions
     gv vad recording.wav --json # machine-readable segmentation (SileroResult.to_dict shape)
     gv vad-gaps recording.wav  # report the silence gaps BETWEEN speech regions (tune --min-silence-ms)
@@ -1248,6 +1249,68 @@ def render_calibration_verdict(verdict):
         "(voice-comparable trust grade; a reading aid, not a gate)",
     ]
     return lines
+
+
+def render_calibration_batch(batch):
+    """Render a ``calibrate-base-wpm-batch`` corpus verdict as plain-text lines.
+
+    The human-readable face of :func:`calibrate_base_wpm_batch` (iter-397), the
+    calibration analogue of :func:`render_vad_gap_recommend_batch`. ``batch`` is a
+    ``BaseWpmCalibrationBatch``. One row per voice — its implied base_wpm, the
+    voice-comparable dispersion grade, the iter-396 margin, the drift vs nominal,
+    and the signed delta from the corpus median — followed by a corpus summary
+    line (median / min / max / spread of the per-voice base rates) and a
+    ``grades:`` histogram counting how many voices sit at each dispersion grade
+    over the WHOLE corpus. A voice with no samples prints ``-`` for its numbers
+    and is tagged ``uncalibrated`` (excluded from the corpus aggregates but still
+    listed). Pure: returns a list of strings (no I/O, no ANSI) so it is testable
+    in isolation — the handler joins and prints them.
+    """
+    lines = [
+        f"base_wpm calibration batch ({batch.num_voices} voices, "
+        f"{batch.num_calibrated} calibrated)",
+        f"  nominal: {batch.default_base_wpm:.1f}",
+    ]
+    for r in batch.rows:
+        calib = r["calibration"]
+        if calib is None:
+            lines.append(f"  {r['voice']}: - (uncalibrated — no samples)")
+            continue
+        delta = r["delta_from_median_wpm"]
+        delta_cell = f"{delta:+.1f}" if delta is not None else "-"
+        margin = calib.dispersion_margin
+        margin_cell = f"{margin:.3f}" if margin is not None else "-"
+        lines.append(
+            f"  {r['voice']}: {calib.implied_base_wpm:.1f} WPM "
+            f"({calib.dispersion_grade}, margin {margin_cell}, "
+            f"drift {calib.drift:+.1f}, Δmedian {delta_cell})"
+        )
+    if batch.num_calibrated:
+        lines.append(
+            f"  corpus: median {batch.implied_base_wpm_median:.1f}, "
+            f"range {batch.implied_base_wpm_min:.1f} – "
+            f"{batch.implied_base_wpm_max:.1f}, "
+            f"spread {batch.implied_base_wpm_spread:.1f} "
+            "(voices disagree on a fleet base if large)"
+        )
+    else:
+        lines.append("  corpus: (no voice calibrated — nothing to summarise)")
+    counts = batch.grade_counts
+    grades = ", ".join(
+        f"{counts[g]} {g}" for g in _wm_calib_batch_grade_order()
+    )
+    lines.append(f"  grades: {grades}")
+    return lines
+
+
+def _wm_calib_batch_grade_order():
+    """The batch dispersion-grade histogram order (iter-397).
+
+    Read from the engine's :data:`CALIB_BATCH_GRADE_ORDER` so the gv render and
+    the engine never drift on the bucket set / order. Loaded lazily by file path
+    like every other ``wpm_mirror`` consumer here.
+    """
+    return _load_wpm_mirror().CALIB_BATCH_GRADE_ORDER
 
 
 def render_calibration_csv(samples, calib):
@@ -9208,6 +9271,47 @@ def cmd_calibrate_base_wpm(args, *, log=print):
             log(line)
 
 
+def cmd_calibrate_base_wpm_batch(args, *, log=print):
+    """Calibrate a CORPUS of voices and print the tabulated base rates (iter-397).
+
+    The batch generalisation of :func:`cmd_calibrate_base_wpm`, the calibration
+    analogue of ``gv vad-gap-recommend-batch``. Each ``--voice`` group is one
+    voice: its first token is the voice LABEL, the rest are ``--samples``-style
+    ``words:audio_seconds[:speed]`` triples (the same :func:`calibration_sample_type`
+    the single-voice command uses). The handler calibrates each voice
+    independently against the shared ``--nominal`` seed and prints the per-voice
+    implied base_wpm / dispersion grade / margin / drift plus an outlier-robust
+    corpus median, so an operator picking a fleet-wide ``DEFAULT_BASE_WPM`` sees
+    which voices agree and which are outliers.
+
+    A ``--voice`` group with a label but no triples calibrates to ``None`` (no
+    samples): it is listed as ``uncalibrated`` and excluded from the corpus
+    aggregates, mirroring the engine's empty contract. The engine is loaded
+    lazily by file path so the parser stays audio-free; ``log`` is injectable for
+    tests.
+    """
+    wm = _load_wpm_mirror()
+    CalibrationSample = wm.CalibrationSample
+    calibrate_base_wpm_batch = wm.calibrate_base_wpm_batch
+
+    voices = []
+    for group in args.voice:
+        label = group[0]
+        # The label is consumed raw; every remaining token is a sample triple,
+        # parsed with the SAME validator the single-voice --samples uses so a
+        # malformed triple raises the identical clean CLI error.
+        triples = [calibration_sample_type(tok) for tok in group[1:]]
+        samples = [
+            CalibrationSample(words=int(words), audio_seconds=audio_seconds, speed=speed)
+            for (words, audio_seconds, speed) in triples
+        ]
+        voices.append((label, samples))
+
+    batch = calibrate_base_wpm_batch(voices, default_base_wpm=args.nominal)
+    for line in render_calibration_batch(batch):
+        log(line)
+
+
 def cmd_vad(args, *, log=print, segmenter=None, availability=None):
     """Segment a WAV file offline through Silero VAD and print the regions.
 
@@ -11337,6 +11441,7 @@ DEFAULT_HANDLERS = {
     "chat": cmd_chat,
     "simulate-mirror": cmd_simulate_mirror,
     "calibrate-base-wpm": cmd_calibrate_base_wpm,
+    "calibrate-base-wpm-batch": cmd_calibrate_base_wpm_batch,
     "vad": cmd_vad,
     "vad-gaps": cmd_vad_gaps,
     "vad-gap-percentiles": cmd_vad_gap_percentiles,
@@ -11618,6 +11723,33 @@ def build_parser():
         help="Emit per-sample CSV (sample,words,audio_seconds,speed,bot_wpm,"
         "implied_base_wpm) with the aggregate calibration trailing as # comment "
         "lines, for spreadsheets/plots (suppresses the human report and --verdict)",
+    )
+
+    # gv calibrate-base-wpm-batch — calibrate a CORPUS of voices (iter-397), the
+    # calibration analogue of gv vad-gap-recommend-batch. Each --voice group is one
+    # voice: LABEL followed by its words:audio_seconds[:speed] sample triples.
+    calib_batch = sub.add_parser(
+        "calibrate-base-wpm-batch",
+        help="Offline base_wpm calibration over a CORPUS of voices — tabulate "
+        "each voice's implied base_wpm + dispersion grade + drift, plus the "
+        "outlier-robust corpus median (which voices agree, which are outliers?)",
+    )
+    calib_batch.add_argument(
+        "--voice",
+        action="append",
+        nargs="+",
+        required=True,
+        metavar="LABEL WORDS:SECONDS[:SPEED]",
+        help="One voice as 'LABEL triple [triple ...]', repeatable, e.g. "
+        "--voice af_heart 50:18.2 50:9.1:2.0 --voice am_adam 40:15.0 "
+        "(the label is the voice id; the triples are its rendered samples)",
+    )
+    calib_batch.add_argument(
+        "--nominal",
+        type=float,
+        default=base_wpm_default,
+        help=f"Nominal base_wpm to report per-voice drift against "
+        f"(default: {base_wpm_default})",
     )
 
     # gv vad — offline Silero segmentation of a WAV file. Defaults mirror

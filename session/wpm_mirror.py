@@ -65,6 +65,9 @@ __all__ = [
     "CALIB_LOOSE_REL_SPREAD",
     "CalibrationVerdict",
     "calibration_verdict",
+    "BaseWpmCalibrationBatch",
+    "calibrate_base_wpm_batch",
+    "CALIB_BATCH_GRADE_ORDER",
     "DEFAULT_CALIB_SPREAD_MAX",
     "DEFAULT_CALIB_DRIFT_MIN",
     "DEFAULT_CALIB_MIN_SAMPLES",
@@ -1059,4 +1062,151 @@ def calibration_verdict(
         spread_max=spread_max,
         drift_min=drift_min,
         min_samples=min_samples,
+    )
+
+
+# --------------------------------------------------------------------------
+# iter-397 — batch calibration over a CORPUS of voices.
+#
+# Where :func:`calibrate_base_wpm` folds the renders of ONE voice into a single
+# median, this generalises to N voices: calibrate each voice's renders
+# independently and tabulate their implied_base_wpm / dispersion grade / margin /
+# drift in one structure, plus an outlier-robust corpus median so an operator can
+# see at a glance which voices AGREE on a base rate and which are OUTLIERS. It is
+# the calibration analogue of how ``gv vad-gap-recommend-batch`` (iter-385)
+# generalises ``gv vad-gap-recommend``: the single voice is the one-row special
+# case, the batch is the full corpus. Each row keeps its own voice-comparable
+# dispersion grade (a per-voice property), so a voice whose implied_base_wpm is an
+# outlier but reads ``"scattered"`` is plausibly just a noisy render set while one
+# that reads ``"agree"`` is a real disagreement worth chasing.
+# --------------------------------------------------------------------------
+
+#: Canonical descending-trust order for the batch dispersion-grade histogram. The
+#: three real grades (:func:`dispersion_grade`) plus ``uncalibrated`` — the bucket
+#: for a voice with NO samples (its calibration is ``None``, so it has no grade),
+#: kept distinct from any real grade so an empty voice never silently merges into
+#: ``"scattered"``. Mirrors :data:`GAP_RECOMMEND_BATCH_GRADE_ORDER` in ``gv.py``.
+CALIB_BATCH_GRADE_ORDER = ("agree", "loose", "scattered", "uncalibrated")
+
+
+@dataclass(frozen=True)
+class BaseWpmCalibrationBatch:
+    """Verdict of calibrating a CORPUS of voices (iter-397).
+
+    The batch analogue of :class:`BaseWpmCalibration`: one
+    :class:`BaseWpmCalibration` per voice (``rows``), summarised by the
+    outlier-robust corpus median of the per-voice ``implied_base_wpm``.
+
+    Attributes:
+      rows: one entry per voice, in input order, each a dict with keys
+        ``voice`` (the label), ``calibration`` (the voice's
+        :class:`BaseWpmCalibration`, or ``None`` when the voice had no samples),
+        and ``delta_from_median_wpm`` (the voice's ``implied_base_wpm`` minus the
+        corpus median, ``None`` for an uncalibrated voice). The per-voice grade /
+        margin / drift live on the embedded ``calibration`` so each row agrees
+        EXACTLY with ``gv calibrate-base-wpm`` on that voice.
+      num_voices: how many voices were submitted (``len(rows)``).
+      num_calibrated: how many carried at least one sample (fed the corpus
+        aggregates); an uncalibrated voice contributes a row but not a number.
+      implied_base_wpm_median: the outlier-robust **median** of the calibrated
+        voices' ``implied_base_wpm`` — the rate a fleet-wide default would sit at
+        (``None`` when no voice calibrated). Median (not mean) so one outlier
+        voice cannot drag the corpus centre.
+      implied_base_wpm_min / implied_base_wpm_max: the extremes of the
+        per-voice ``implied_base_wpm`` (``None`` when no voice calibrated).
+      implied_base_wpm_spread: ``max - min`` of the per-voice medians — how far
+        apart the voices clock (``None`` when no voice calibrated). A large
+        spread means the corpus's voices genuinely differ in rate, so a single
+        fleet-wide ``DEFAULT_BASE_WPM`` would mis-serve the extremes.
+      grade_counts: how many voices sit at each dispersion grade, keyed by
+        :data:`CALIB_BATCH_GRADE_ORDER` (always all four buckets, summing to
+        ``num_voices``) — the corpus's trust profile at a glance.
+      default_base_wpm: the nominal seed each voice's drift was measured against
+        (echoed; shared by every voice so the drifts are comparable).
+
+    Pure / frozen; built from :func:`calibrate_base_wpm` per voice.
+    """
+
+    rows: tuple
+    num_voices: int
+    num_calibrated: int
+    implied_base_wpm_median: float | None
+    implied_base_wpm_min: float | None
+    implied_base_wpm_max: float | None
+    implied_base_wpm_spread: float | None
+    grade_counts: dict
+    default_base_wpm: float
+
+
+def calibrate_base_wpm_batch(
+    voices,
+    default_base_wpm: float = DEFAULT_BASE_WPM,
+) -> BaseWpmCalibrationBatch:
+    """Calibrate a corpus of voices and tabulate their base rates (iter-397).
+
+    ``voices`` is an iterable of ``(label, samples)`` pairs — one per voice,
+    where ``samples`` is that voice's iterable of :class:`CalibrationSample`
+    renders (the same input :func:`calibrate_base_wpm` takes). Each voice is
+    calibrated independently against the shared ``default_base_wpm`` so the
+    per-voice drifts are apples-to-apples, and the per-voice ``implied_base_wpm``
+    values are summarised by their outlier-robust median.
+
+    A voice with no samples calibrates to ``None`` (the
+    :func:`calibrate_base_wpm` empty contract): it contributes a row tagged
+    ``uncalibrated`` and is excluded from the corpus median / extremes / spread,
+    but is still counted in ``num_voices``. This mirrors how
+    ``vad_gap_recommend_batch`` keeps a <2-segment recording in the table with a
+    ``None`` recommendation rather than dropping it silently.
+
+    Returns a :class:`BaseWpmCalibrationBatch`. Pure — no I/O, no clock, no
+    mutation of the inputs.
+    """
+    rows = []
+    calibrated = []
+    for label, samples in voices:
+        calib = calibrate_base_wpm(samples, default_base_wpm=default_base_wpm)
+        rows.append(
+            {
+                "voice": label,
+                "calibration": calib,
+                # delta filled in once the corpus median is known.
+                "delta_from_median_wpm": None,
+            }
+        )
+        if calib is not None:
+            calibrated.append(calib.implied_base_wpm)
+
+    if calibrated:
+        median = statistics.median(calibrated)
+        lo = min(calibrated)
+        hi = max(calibrated)
+        spread = hi - lo
+        for r in rows:
+            calib = r["calibration"]
+            if calib is not None:
+                r["delta_from_median_wpm"] = calib.implied_base_wpm - median
+    else:
+        median = lo = hi = spread = None
+
+    counts = {g: 0 for g in CALIB_BATCH_GRADE_ORDER}
+    for r in rows:
+        calib = r["calibration"]
+        key = "uncalibrated" if calib is None else calib.dispersion_grade
+        if key in counts:
+            counts[key] += 1
+        else:
+            # Defensive: an unrecognised future grade lands in uncalibrated rather
+            # than vanishing — the counts must still sum to num_voices.
+            counts["uncalibrated"] += 1
+
+    return BaseWpmCalibrationBatch(
+        rows=tuple(rows),
+        num_voices=len(rows),
+        num_calibrated=len(calibrated),
+        implied_base_wpm_median=median,
+        implied_base_wpm_min=lo,
+        implied_base_wpm_max=hi,
+        implied_base_wpm_spread=spread,
+        grade_counts=counts,
+        default_base_wpm=float(default_base_wpm),
     )
