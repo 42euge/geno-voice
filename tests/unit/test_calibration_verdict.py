@@ -43,13 +43,15 @@ def _calibration(
     default_base_wpm=DEFAULT_BASE_WPM,
 ):
     """Build a BaseWpmCalibration directly, controlling each gate input."""
+    rel = spread / implied_base_wpm if implied_base_wpm else 0.0
     return BaseWpmCalibration(
         implied_base_wpm=implied_base_wpm,
         n_samples=n_samples,
         min_base_wpm=implied_base_wpm - spread / 2.0,
         max_base_wpm=implied_base_wpm + spread / 2.0,
         spread=spread,
-        relative_spread=(spread / implied_base_wpm if implied_base_wpm else 0.0),
+        relative_spread=rel,
+        dispersion_grade=_wm.dispersion_grade(rel),
         default_base_wpm=default_base_wpm,
         drift=implied_base_wpm - default_base_wpm,
     )

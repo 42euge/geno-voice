@@ -155,6 +155,43 @@ def test_render_calibration_all_fields():
     assert f"{calib.relative_spread:.3f}" in text  # iter-393
 
 
+def test_render_calibration_human_shows_dispersion_grade():
+    # iter-394: the dispersion line carries the grade + a trust note.
+    wm = gv._load_wpm_mirror()
+    samples = [
+        wm.CalibrationSample(words=164, audio_seconds=60.0),
+        wm.CalibrationSample(words=165, audio_seconds=60.0),
+        wm.CalibrationSample(words=166, audio_seconds=60.0),
+    ]
+    calib = wm.calibrate_base_wpm(samples)
+    text = "\n".join(gv.render_calibration(calib))
+    assert "dispersion:" in text
+    assert calib.dispersion_grade == "agree"
+    assert "dispersion:       agree" in text
+    assert "cluster tightly" in text  # the "agree" trust note
+
+
+def test_render_calibration_human_dispersion_grade_scattered():
+    wm = gv._load_wpm_mirror()
+    samples = [
+        wm.CalibrationSample(words=130, audio_seconds=60.0),
+        wm.CalibrationSample(words=160, audio_seconds=60.0),
+        wm.CalibrationSample(words=190, audio_seconds=60.0),
+    ]
+    calib = wm.calibrate_base_wpm(samples)
+    text = "\n".join(gv.render_calibration(calib))
+    assert calib.dispersion_grade == "scattered"
+    assert "dispersion:       scattered" in text
+    assert "re-render more consistently" in text
+
+
+def test_calib_dispersion_summary_defensive_fallback():
+    # An unexpected grade never drops the signal silently.
+    assert "unrecognized" in gv._calib_dispersion_summary("bogus")
+    for g in ("agree", "loose", "scattered"):
+        assert "unrecognized" not in gv._calib_dispersion_summary(g)
+
+
 # ---- cmd_calibrate_base_wpm: handler with injected log -----------------
 
 
@@ -411,6 +448,7 @@ def test_render_calibration_csv_summary_comments():
     assert "# range:" in comments
     assert f"# spread: {round(calib.spread, 3)}" in comments
     assert f"# relative_spread: {round(calib.relative_spread, 3)}" in comments  # iter-393
+    assert f"# dispersion_grade: {calib.dispersion_grade}" in comments  # iter-394
     assert f"# nominal: {round(calib.default_base_wpm, 3)}" in comments
     assert f"# drift: {round(calib.drift, 3)}" in comments
 
@@ -532,6 +570,7 @@ def test_render_calibration_json_samples_and_calibration():
     assert cal["n_samples"] == calib.n_samples
     assert cal["spread"] == round(calib.spread, 3)
     assert cal["relative_spread"] == round(calib.relative_spread, 3)  # iter-393
+    assert cal["dispersion_grade"] == calib.dispersion_grade  # iter-394
     assert cal["nominal"] == round(calib.default_base_wpm, 3)
     assert cal["drift"] == round(calib.drift, 3)
 
@@ -573,6 +612,34 @@ def test_render_calibration_json_relative_spread_normalizes_base():
     slow_rel = _json.loads(gv.render_calibration_json([], slow))["calibration"]["relative_spread"]
     fast_rel = _json.loads(gv.render_calibration_json([], fast))["calibration"]["relative_spread"]
     assert slow_rel > fast_rel
+
+
+def test_render_calibration_json_dispersion_grade_present():
+    # iter-394: the grade is carried verbatim (a string, not rounded).
+    wm = gv._load_wpm_mirror()
+    samples = _samples([(50, 18.2), (50, 9.1, 2.0)])  # renders agree ⇒ "agree"
+    calib = wm.calibrate_base_wpm(samples)
+    cal = _json.loads(gv.render_calibration_json(samples, calib))["calibration"]
+    assert cal["dispersion_grade"] == calib.dispersion_grade
+    assert cal["dispersion_grade"] in ("agree", "loose", "scattered")
+
+
+def test_render_calibration_json_dispersion_grade_voice_comparable():
+    # iter-394: equal relative spread at slow/fast voices ⇒ equal grade.
+    wm = gv._load_wpm_mirror()
+    slow = wm.calibrate_base_wpm(
+        [wm.CalibrationSample(words=90, audio_seconds=60.0),
+         wm.CalibrationSample(words=100, audio_seconds=60.0),
+         wm.CalibrationSample(words=110, audio_seconds=60.0)]
+    )
+    fast = wm.calibrate_base_wpm(
+        [wm.CalibrationSample(words=270, audio_seconds=60.0),
+         wm.CalibrationSample(words=300, audio_seconds=60.0),
+         wm.CalibrationSample(words=330, audio_seconds=60.0)]
+    )
+    slow_g = _json.loads(gv.render_calibration_json([], slow))["calibration"]["dispersion_grade"]
+    fast_g = _json.loads(gv.render_calibration_json([], fast))["calibration"]["dispersion_grade"]
+    assert slow_g == fast_g
 
 
 def test_render_calibration_json_nominal_threads_to_drift():

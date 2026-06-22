@@ -59,6 +59,9 @@ __all__ = [
     "CalibrationSample",
     "BaseWpmCalibration",
     "calibrate_base_wpm",
+    "dispersion_grade",
+    "CALIB_AGREE_REL_SPREAD",
+    "CALIB_LOOSE_REL_SPREAD",
     "CalibrationVerdict",
     "calibration_verdict",
     "DEFAULT_CALIB_SPREAD_MAX",
@@ -709,6 +712,17 @@ class BaseWpmCalibration:
         operator judge whether the renders AGREE *independent* of the voice's
         nominal rate. ``0.0`` when the renders agree exactly; larger means more
         disagreement relative to the rate.
+      dispersion_grade: a categorical trust grade (iter-394) bucketing
+        ``relative_spread`` into ``"agree"`` / ``"loose"`` / ``"scattered"`` — the
+        calibration analogue of iter-348's ``vad-gap-confidence`` grade, turning
+        the raw dimensionless dispersion into a one-glance read of how
+        trustworthy the median is. ``"agree"`` (small relative spread ⇒ the
+        renders cluster tightly, the median is solid), ``"loose"`` (moderate ⇒
+        usable but sanity-check), ``"scattered"`` (large ⇒ the renders disagree,
+        re-render more consistently). Computed from ``relative_spread`` alone, so
+        it is voice-comparable the same way ``relative_spread`` is. A
+        single-sample calibration grades ``"agree"`` (zero spread) — see
+        :func:`dispersion_grade` for the boundaries.
       default_base_wpm: the nominal seed the calibration is compared against.
       drift: ``implied_base_wpm - default_base_wpm`` — how far this voice clocks
         from the 165 nominal. Positive ⇒ the voice is faster than nominal at
@@ -722,8 +736,56 @@ class BaseWpmCalibration:
     max_base_wpm: float
     spread: float
     relative_spread: float
+    dispersion_grade: str
     default_base_wpm: float
     drift: float
+
+
+#: ``relative_spread`` at or below which the calibration renders are deemed to
+#: AGREE — the median is trustworthy. 0.05 means the per-sample implied_base_wpm
+#: extremes span at most 5% of the median rate, tight enough that a re-seed rests
+#: on solid ground. Chosen to sit just above the iter-222 ``spread_max`` gate at
+#: a nominal voice (10 WPM / 165 ≈ 0.061), so a calibration that PASSES the
+#: adopt-gate's absolute-spread test typically also reads "agree" here.
+CALIB_AGREE_REL_SPREAD: float = 0.05
+
+#: ``relative_spread`` at or below which the calibration is ``"loose"`` (above it
+#: is ``"scattered"``). 0.15 means the extremes span up to 15% of the median —
+#: usable as a starting point but worth a sanity-check; beyond it the renders
+#: disagree enough that the median is not a reliable base.
+CALIB_LOOSE_REL_SPREAD: float = 0.15
+
+
+def dispersion_grade(relative_spread: float) -> str:
+    """Bucket a calibration's ``relative_spread`` into a categorical trust grade.
+
+    The calibration analogue of iter-348's :func:`vad_gap_confidence` dominance
+    grade: where that grades how dominant a VAD gap valley is, this grades how
+    tightly the calibration renders cluster — turning the iter-393 dimensionless
+    ``relative_spread`` (spread / median) into a one-glance ``"agree"`` /
+    ``"loose"`` / ``"scattered"`` read of how trustworthy the median base is.
+
+    Boundaries (inclusive lower band first, so a render set on the knee grades
+    the more favourable side):
+
+    - ``relative_spread <= CALIB_AGREE_REL_SPREAD`` (0.05) ⇒ ``"agree"`` — the
+      renders cluster within 5% of the median; the median is solid.
+    - ``<= CALIB_LOOSE_REL_SPREAD`` (0.15) ⇒ ``"loose"`` — usable but worth a
+      sanity-check against the per-sample CSV/JSON before re-seeding.
+    - otherwise ⇒ ``"scattered"`` — the renders disagree; re-render more
+      consistently before trusting the median.
+
+    A single-sample calibration has ``relative_spread == 0.0`` and so grades
+    ``"agree"`` — one timing is internally consistent (it cannot disagree with
+    itself); the iter-222 verdict's ``min_samples`` gate, not this grade, is what
+    flags "one render is not a calibration". Pure: a function of one float.
+    """
+    rs = float(relative_spread)
+    if rs <= CALIB_AGREE_REL_SPREAD:
+        return "agree"
+    if rs <= CALIB_LOOSE_REL_SPREAD:
+        return "loose"
+    return "scattered"
 
 
 def calibrate_base_wpm(
@@ -737,7 +799,9 @@ def calibrate_base_wpm(
     speeds are directly comparable. Returns their **median** as the calibrated
     ``base_wpm`` (robust to a single mis-timed render) plus spread and
     drift-vs-nominal diagnostics (including the iter-393 ``relative_spread``, the
-    spread normalized by the median so it can be compared across voices).
+    spread normalized by the median so it can be compared across voices, and the
+    iter-394 ``dispersion_grade`` that buckets it into ``"agree"`` / ``"loose"``
+    / ``"scattered"``).
 
     Args:
       samples: iterable of :class:`CalibrationSample`. Empty ⇒ ``None`` (nothing
@@ -764,6 +828,7 @@ def calibrate_base_wpm(
         max_base_wpm=hi,
         spread=spread,
         relative_spread=relative_spread,
+        dispersion_grade=dispersion_grade(relative_spread),
         default_base_wpm=float(default_base_wpm),
         drift=median - float(default_base_wpm),
     )

@@ -43,6 +43,9 @@ _spec.loader.exec_module(_wm)
 CalibrationSample = _wm.CalibrationSample
 BaseWpmCalibration = _wm.BaseWpmCalibration
 calibrate_base_wpm = _wm.calibrate_base_wpm
+dispersion_grade = _wm.dispersion_grade
+CALIB_AGREE_REL_SPREAD = _wm.CALIB_AGREE_REL_SPREAD
+CALIB_LOOSE_REL_SPREAD = _wm.CALIB_LOOSE_REL_SPREAD
 DEFAULT_BASE_WPM = _wm.DEFAULT_BASE_WPM
 
 
@@ -278,3 +281,97 @@ def test_calibrate_relative_spread_normalizes_base_dependence():
 def test_calibrate_relative_spread_single_sample_is_zero():
     cal = calibrate_base_wpm([CalibrationSample(words=170, audio_seconds=60.0)])
     assert cal.relative_spread == pytest.approx(0.0)
+
+
+# --------------------------------------------------------------------------
+# iter-394 — dispersion_grade: a categorical trust grade over relative_spread
+# --------------------------------------------------------------------------
+
+def test_dispersion_thresholds_are_ordered():
+    # The boundaries must be a strictly increasing, positive sequence so the
+    # three bands are non-empty and well-ordered.
+    assert 0.0 < CALIB_AGREE_REL_SPREAD < CALIB_LOOSE_REL_SPREAD
+
+
+def test_dispersion_grade_agree_for_tight_spread():
+    assert dispersion_grade(0.0) == "agree"
+    assert dispersion_grade(CALIB_AGREE_REL_SPREAD / 2.0) == "agree"
+
+
+def test_dispersion_grade_loose_for_moderate_spread():
+    midpoint = (CALIB_AGREE_REL_SPREAD + CALIB_LOOSE_REL_SPREAD) / 2.0
+    assert dispersion_grade(midpoint) == "loose"
+
+
+def test_dispersion_grade_scattered_for_wide_spread():
+    assert dispersion_grade(CALIB_LOOSE_REL_SPREAD + 0.05) == "scattered"
+    assert dispersion_grade(1.0) == "scattered"
+
+
+def test_dispersion_grade_boundaries_are_inclusive_lower_band():
+    # On each knee the more favourable (lower) band wins.
+    assert dispersion_grade(CALIB_AGREE_REL_SPREAD) == "agree"
+    assert dispersion_grade(CALIB_LOOSE_REL_SPREAD) == "loose"
+
+
+def test_calibrate_carries_dispersion_grade():
+    # A tight 3-render set (spread 2 over median ~165 ⇒ rel ~0.012) is "agree".
+    samples = [
+        CalibrationSample(words=164, audio_seconds=60.0),
+        CalibrationSample(words=165, audio_seconds=60.0),
+        CalibrationSample(words=166, audio_seconds=60.0),
+    ]
+    cal = calibrate_base_wpm(samples)
+    assert cal.relative_spread < CALIB_AGREE_REL_SPREAD
+    assert cal.dispersion_grade == "agree"
+
+
+def test_calibrate_dispersion_grade_matches_helper():
+    # The field is exactly dispersion_grade(relative_spread) — no drift.
+    samples = [
+        CalibrationSample(words=140, audio_seconds=60.0),
+        CalibrationSample(words=165, audio_seconds=60.0),
+        CalibrationSample(words=200, audio_seconds=60.0),
+    ]
+    cal = calibrate_base_wpm(samples)
+    assert cal.dispersion_grade == dispersion_grade(cal.relative_spread)
+
+
+def test_calibrate_dispersion_grade_scattered_for_disagreeing_renders():
+    # Wide spread (60 over median 160 ⇒ 0.375 > 0.15) ⇒ scattered.
+    samples = [
+        CalibrationSample(words=130, audio_seconds=60.0),
+        CalibrationSample(words=160, audio_seconds=60.0),
+        CalibrationSample(words=190, audio_seconds=60.0),
+    ]
+    cal = calibrate_base_wpm(samples)
+    assert cal.relative_spread > CALIB_LOOSE_REL_SPREAD
+    assert cal.dispersion_grade == "scattered"
+
+
+def test_calibrate_dispersion_grade_single_sample_is_agree():
+    # One render has zero spread, so it grades "agree" — it cannot disagree with
+    # itself; the iter-222 min_samples gate, not this grade, flags "too few".
+    cal = calibrate_base_wpm([CalibrationSample(words=170, audio_seconds=60.0)])
+    assert cal.dispersion_grade == "agree"
+
+
+def test_calibrate_dispersion_grade_voice_comparable():
+    # The SAME relative spread at a slow and a fast voice grades the same — the
+    # grade inherits relative_spread's voice-independence.
+    slow = calibrate_base_wpm(
+        [
+            CalibrationSample(words=90, audio_seconds=60.0),
+            CalibrationSample(words=100, audio_seconds=60.0),
+            CalibrationSample(words=110, audio_seconds=60.0),
+        ]
+    )
+    fast = calibrate_base_wpm(
+        [
+            CalibrationSample(words=270, audio_seconds=60.0),
+            CalibrationSample(words=300, audio_seconds=60.0),
+            CalibrationSample(words=330, audio_seconds=60.0),
+        ]
+    )
+    assert slow.relative_spread == pytest.approx(fast.relative_spread)
+    assert slow.dispersion_grade == fast.dispersion_grade == "scattered"

@@ -7,7 +7,7 @@ Usage:
     gv talk               # talk mode — STT → NLP → canned response → TTS
     gv chat               # chat mode — STT → LLM (litellm) → TTS
     gv simulate-mirror …  # offline WPM-mirror trajectory / grid-sweep simulator
-    gv calibrate-base-wpm … # offline base_wpm calibration (--verdict for an adopt/keep call; --json/--csv for per-sample data)
+    gv calibrate-base-wpm … # offline base_wpm calibration (dispersion grade agree/loose/scattered; --verdict for an adopt/keep call; --json/--csv for per-sample data)
     gv vad recording.wav  # offline Silero VAD — segment a WAV into speech regions
     gv vad recording.wav --json # machine-readable segmentation (SileroResult.to_dict shape)
     gv vad-gaps recording.wav  # report the silence gaps BETWEEN speech regions (tune --min-silence-ms)
@@ -1141,12 +1141,40 @@ def calibration_sample_type(raw):
     return tuple(values)
 
 
+def _calib_dispersion_summary(grade):
+    """Map a calibration ``dispersion_grade`` to a one-line trust note (iter-394).
+
+    The calibration analogue of :func:`_gap_confidence_summary`: per-grade text
+    saying how far to trust the median, with a defensive fallback for an
+    unexpected value so a future grade never drops the signal silently.
+    """
+    if grade == "agree":
+        return "the renders cluster tightly — the median is a solid base"
+    if grade == "loose":
+        return (
+            "the renders are loosely clustered — usable, but sanity-check the "
+            "per-sample spread (gv calibrate-base-wpm --csv) before re-seeding"
+        )
+    if grade == "scattered":
+        return (
+            "the renders disagree — re-render more consistently before trusting "
+            "the median (one mis-timed clip can be skewing it)"
+        )
+    return "unrecognized dispersion grade — inspect the per-sample data directly"
+
+
 def render_calibration(calib):
     """Render a ``BaseWpmCalibration`` verdict as plain-text report lines.
 
     Pure: returns a list of strings (no I/O, no ANSI) so it is testable in
     isolation — the handler joins and prints them. ``calib`` of ``None`` (no
     samples) yields a single "no samples" line.
+
+    iter-394 adds the ``dispersion`` line: the iter-393 ``relative_spread``
+    bucketed into an ``"agree"`` / ``"loose"`` / ``"scattered"`` trust grade
+    (the calibration analogue of ``gv vad-gap-confidence``) plus a one-line note
+    on how far to trust the median, so the operator reads the verdict at a glance
+    instead of interpreting the raw dispersion number.
     """
     if calib is None:
         return ["base_wpm calibration: no samples (nothing to calibrate from)"]
@@ -1158,6 +1186,8 @@ def render_calibration(calib):
         f"  spread:           {calib.spread:.1f} (renders disagree if large)",
         f"  relative spread:  {calib.relative_spread:.3f} "
         "(spread/median; comparable across voices)",
+        f"  dispersion:       {calib.dispersion_grade} "
+        f"({_calib_dispersion_summary(calib.dispersion_grade)})",
         f"  nominal:          {calib.default_base_wpm:.1f}",
         f"  drift:            {calib.drift:+.1f} (implied − nominal; + ⇒ voice faster than nominal)",
     ]
@@ -1212,8 +1242,9 @@ def render_calibration_csv(samples, calib):
     over), so the consumer sees both the raw measurement and the comparable
     normalized rate.
 
-    The aggregate verdict (median ``implied_base_wpm``, range, spread, nominal,
-    drift) is a single record describing the whole SET, not a per-sample fact, so
+    The aggregate verdict (median ``implied_base_wpm``, range, spread,
+    relative_spread, dispersion_grade, nominal, drift) is a single record
+    describing the whole SET, not a per-sample fact, so
     duplicating it into every row would bloat the grid (the same reasoning
     :func:`render_trajectory_csv` uses to keep arc-level scalars out of its
     per-turn rows). Instead it trails as ``#`` comment lines — self-describing
@@ -1253,6 +1284,7 @@ def render_calibration_csv(samples, calib):
         f"# range: {round(calib.min_base_wpm, 3)} - {round(calib.max_base_wpm, 3)}",
         f"# spread: {round(calib.spread, 3)}",
         f"# relative_spread: {round(calib.relative_spread, 3)}",
+        f"# dispersion_grade: {calib.dispersion_grade}",
         f"# nominal: {round(calib.default_base_wpm, 3)}",
         f"# drift: {round(calib.drift, 3)}",
     ]
@@ -1270,8 +1302,8 @@ def render_calibration_json(samples, calib):
     spreadsheet's rows stay pure), the JSON nests BOTH in one object: a
     ``samples`` list (one object per render — the per-sample data) AND a
     ``calibration`` object (the aggregate verdict — median / range / spread /
-    relative_spread / nominal / drift). A nested consumer gets the whole record
-    in one parse instead of having to skip comment lines.
+    relative_spread / dispersion_grade / nominal / drift). A nested consumer gets
+    the whole record in one parse instead of having to skip comment lines.
 
     Each sample object is ``{"sample": 1-based int, "words": int,
     "audio_seconds": float, "speed": float, "bot_wpm": float,
@@ -1307,6 +1339,7 @@ def render_calibration_json(samples, calib):
                 "max_base_wpm": round(calib.max_base_wpm, 3),
                 "spread": round(calib.spread, 3),
                 "relative_spread": round(calib.relative_spread, 3),
+                "dispersion_grade": calib.dispersion_grade,
                 "nominal": round(calib.default_base_wpm, 3),
                 "drift": round(calib.drift, 3),
             }
