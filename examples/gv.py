@@ -1156,6 +1156,8 @@ def render_calibration(calib):
         f"  implied base_wpm: {calib.implied_base_wpm:.1f} (median; set DEFAULT_BASE_WPM to this)",
         f"  range:            {calib.min_base_wpm:.1f} – {calib.max_base_wpm:.1f}",
         f"  spread:           {calib.spread:.1f} (renders disagree if large)",
+        f"  relative spread:  {calib.relative_spread:.3f} "
+        "(spread/median; comparable across voices)",
         f"  nominal:          {calib.default_base_wpm:.1f}",
         f"  drift:            {calib.drift:+.1f} (implied − nominal; + ⇒ voice faster than nominal)",
     ]
@@ -1250,6 +1252,7 @@ def render_calibration_csv(samples, calib):
         f"# implied_base_wpm (median): {round(calib.implied_base_wpm, 3)}",
         f"# range: {round(calib.min_base_wpm, 3)} - {round(calib.max_base_wpm, 3)}",
         f"# spread: {round(calib.spread, 3)}",
+        f"# relative_spread: {round(calib.relative_spread, 3)}",
         f"# nominal: {round(calib.default_base_wpm, 3)}",
         f"# drift: {round(calib.drift, 3)}",
     ]
@@ -1267,8 +1270,8 @@ def render_calibration_json(samples, calib):
     spreadsheet's rows stay pure), the JSON nests BOTH in one object: a
     ``samples`` list (one object per render — the per-sample data) AND a
     ``calibration`` object (the aggregate verdict — median / range / spread /
-    nominal / drift). A nested consumer gets the whole record in one parse
-    instead of having to skip comment lines.
+    relative_spread / nominal / drift). A nested consumer gets the whole record
+    in one parse instead of having to skip comment lines.
 
     Each sample object is ``{"sample": 1-based int, "words": int,
     "audio_seconds": float, "speed": float, "bot_wpm": float,
@@ -1303,6 +1306,7 @@ def render_calibration_json(samples, calib):
                 "min_base_wpm": round(calib.min_base_wpm, 3),
                 "max_base_wpm": round(calib.max_base_wpm, 3),
                 "spread": round(calib.spread, 3),
+                "relative_spread": round(calib.relative_spread, 3),
                 "nominal": round(calib.default_base_wpm, 3),
                 "drift": round(calib.drift, 3),
             }

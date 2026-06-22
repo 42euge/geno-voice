@@ -216,3 +216,65 @@ def test_calibrate_even_count_median_averages_middle_two():
     ]
     cal = calibrate_base_wpm(samples)
     assert cal.implied_base_wpm == pytest.approx(170.0)
+
+
+# --------------------------------------------------------------------------
+# iter-393 — relative_spread: spread normalized by the median.
+#
+# The absolute ``spread`` (max − min, in WPM) is base-dependent: a 10 WPM
+# spread is tight at a 300-WPM voice but wide at a 100-WPM voice. The
+# ``relative_spread`` (= spread / implied_base_wpm) is the dimensionless
+# coefficient that lets an operator judge whether the renders AGREE
+# independent of the voice's nominal rate. This mirrors the iter-391 move on
+# the VAD side (an outlier-aware companion sitting beside the absolute number).
+# --------------------------------------------------------------------------
+
+def test_calibrate_relative_spread_is_spread_over_median():
+    # spread 50 over median 160 ⇒ 0.3125.
+    samples = [
+        CalibrationSample(words=150, audio_seconds=60.0),
+        CalibrationSample(words=160, audio_seconds=60.0),
+        CalibrationSample(words=200, audio_seconds=60.0),
+    ]
+    cal = calibrate_base_wpm(samples)
+    assert cal.spread == pytest.approx(50.0)
+    assert cal.relative_spread == pytest.approx(50.0 / 160.0)
+
+
+def test_calibrate_relative_spread_zero_when_renders_agree():
+    samples = [
+        CalibrationSample(words=165, audio_seconds=60.0, speed=1.0),
+        CalibrationSample(words=330, audio_seconds=60.0, speed=2.0),  # 165
+    ]
+    cal = calibrate_base_wpm(samples)
+    assert cal.spread == pytest.approx(0.0)
+    assert cal.relative_spread == pytest.approx(0.0)
+
+
+def test_calibrate_relative_spread_normalizes_base_dependence():
+    # The SAME absolute spread (40 WPM) reads as a much larger relative spread
+    # at a slow voice than at a fast one.
+    slow = calibrate_base_wpm(
+        [
+            CalibrationSample(words=80, audio_seconds=60.0),   # 80
+            CalibrationSample(words=100, audio_seconds=60.0),  # 100 (median)
+            CalibrationSample(words=120, audio_seconds=60.0),  # 120
+        ]
+    )
+    fast = calibrate_base_wpm(
+        [
+            CalibrationSample(words=280, audio_seconds=60.0),  # 280
+            CalibrationSample(words=300, audio_seconds=60.0),  # 300 (median)
+            CalibrationSample(words=320, audio_seconds=60.0),  # 320
+        ]
+    )
+    assert slow.spread == pytest.approx(40.0)
+    assert fast.spread == pytest.approx(40.0)
+    assert slow.relative_spread == pytest.approx(40.0 / 100.0)
+    assert fast.relative_spread == pytest.approx(40.0 / 300.0)
+    assert slow.relative_spread > fast.relative_spread
+
+
+def test_calibrate_relative_spread_single_sample_is_zero():
+    cal = calibrate_base_wpm([CalibrationSample(words=170, audio_seconds=60.0)])
+    assert cal.relative_spread == pytest.approx(0.0)

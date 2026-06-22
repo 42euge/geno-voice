@@ -49,6 +49,7 @@ def _calibration(
         min_base_wpm=implied_base_wpm - spread / 2.0,
         max_base_wpm=implied_base_wpm + spread / 2.0,
         spread=spread,
+        relative_spread=(spread / implied_base_wpm if implied_base_wpm else 0.0),
         default_base_wpm=default_base_wpm,
         drift=implied_base_wpm - default_base_wpm,
     )

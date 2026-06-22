@@ -148,9 +148,11 @@ def test_render_calibration_all_fields():
     assert "implied base_wpm:" in text
     assert "range:" in text
     assert "spread:" in text
+    assert "relative spread:" in text  # iter-393
     assert "nominal:" in text
     assert "drift:" in text
     assert f"{calib.implied_base_wpm:.1f}" in text
+    assert f"{calib.relative_spread:.3f}" in text  # iter-393
 
 
 # ---- cmd_calibrate_base_wpm: handler with injected log -----------------
@@ -408,6 +410,7 @@ def test_render_calibration_csv_summary_comments():
     assert f"# implied_base_wpm (median): {round(calib.implied_base_wpm, 3)}" in comments
     assert "# range:" in comments
     assert f"# spread: {round(calib.spread, 3)}" in comments
+    assert f"# relative_spread: {round(calib.relative_spread, 3)}" in comments  # iter-393
     assert f"# nominal: {round(calib.default_base_wpm, 3)}" in comments
     assert f"# drift: {round(calib.drift, 3)}" in comments
 
@@ -528,6 +531,7 @@ def test_render_calibration_json_samples_and_calibration():
     assert cal["implied_base_wpm"] == round(calib.implied_base_wpm, 3)
     assert cal["n_samples"] == calib.n_samples
     assert cal["spread"] == round(calib.spread, 3)
+    assert cal["relative_spread"] == round(calib.relative_spread, 3)  # iter-393
     assert cal["nominal"] == round(calib.default_base_wpm, 3)
     assert cal["drift"] == round(calib.drift, 3)
 
@@ -550,6 +554,25 @@ def test_render_calibration_json_none_calib_null():
     payload = _json.loads(gv.render_calibration_json([], None))
     assert payload["samples"] == []
     assert payload["calibration"] is None
+
+
+def test_render_calibration_json_relative_spread_normalizes_base():
+    # iter-393: the SAME absolute spread reads as a larger relative spread at a
+    # slow voice than at a fast one — surfaced verbatim through the JSON.
+    wm = gv._load_wpm_mirror()
+    slow = wm.calibrate_base_wpm(
+        [wm.CalibrationSample(words=80, audio_seconds=60.0),
+         wm.CalibrationSample(words=100, audio_seconds=60.0),
+         wm.CalibrationSample(words=120, audio_seconds=60.0)]
+    )
+    fast = wm.calibrate_base_wpm(
+        [wm.CalibrationSample(words=280, audio_seconds=60.0),
+         wm.CalibrationSample(words=300, audio_seconds=60.0),
+         wm.CalibrationSample(words=320, audio_seconds=60.0)]
+    )
+    slow_rel = _json.loads(gv.render_calibration_json([], slow))["calibration"]["relative_spread"]
+    fast_rel = _json.loads(gv.render_calibration_json([], fast))["calibration"]["relative_spread"]
+    assert slow_rel > fast_rel
 
 
 def test_render_calibration_json_nominal_threads_to_drift():

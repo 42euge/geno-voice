@@ -702,6 +702,13 @@ class BaseWpmCalibration:
       spread: ``max_base_wpm - min_base_wpm`` — a large spread means the renders
         disagree (inconsistent synth or a bad sample), so the median is less
         trustworthy.
+      relative_spread: ``spread / implied_base_wpm`` — the spread normalized by
+        the median (iter-393), a dimensionless coefficient of dispersion. The
+        absolute ``spread`` is base-dependent (a 10 WPM range is tight at a
+        300-WPM voice but wide at a 100-WPM voice), so this companion lets an
+        operator judge whether the renders AGREE *independent* of the voice's
+        nominal rate. ``0.0`` when the renders agree exactly; larger means more
+        disagreement relative to the rate.
       default_base_wpm: the nominal seed the calibration is compared against.
       drift: ``implied_base_wpm - default_base_wpm`` — how far this voice clocks
         from the 165 nominal. Positive ⇒ the voice is faster than nominal at
@@ -714,6 +721,7 @@ class BaseWpmCalibration:
     min_base_wpm: float
     max_base_wpm: float
     spread: float
+    relative_spread: float
     default_base_wpm: float
     drift: float
 
@@ -728,7 +736,8 @@ def calibrate_base_wpm(
     back to the ``speed=1.0`` calibration point, so samples taken at *different*
     speeds are directly comparable. Returns their **median** as the calibrated
     ``base_wpm`` (robust to a single mis-timed render) plus spread and
-    drift-vs-nominal diagnostics.
+    drift-vs-nominal diagnostics (including the iter-393 ``relative_spread``, the
+    spread normalized by the median so it can be compared across voices).
 
     Args:
       samples: iterable of :class:`CalibrationSample`. Empty ⇒ ``None`` (nothing
@@ -744,12 +753,17 @@ def calibrate_base_wpm(
     median = statistics.median(bases)
     lo = min(bases)
     hi = max(bases)
+    spread = hi - lo
+    # median is a positive rate (each implied_base_wpm > 0 since bot_wpm and
+    # speed are both positive), so the division is always well-defined.
+    relative_spread = spread / median
     return BaseWpmCalibration(
         implied_base_wpm=median,
         n_samples=len(bases),
         min_base_wpm=lo,
         max_base_wpm=hi,
-        spread=hi - lo,
+        spread=spread,
+        relative_spread=relative_spread,
         default_base_wpm=float(default_base_wpm),
         drift=median - float(default_base_wpm),
     )
