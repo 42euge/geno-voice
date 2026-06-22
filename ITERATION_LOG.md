@@ -37948,3 +37948,94 @@ five; `--json` carries `"flyers_only": true` and a single-row `rows` list;
 4. **[housekeeping] Stale worktrees accumulating** (iter-026, iter-027, iter-028,
    iter-232, iter-317 still present) — a future lap could `git worktree prune` /
    remove merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-416 — stt-rtf-batch --flyers-only: show ONLY corpus-outlier engines
+
+- **Date:** 2026-06-22
+- **Branch:** iter-416-stt-flyers-only (ff-merged to main, worktree removed)
+- **Commit:** ea22b42
+
+**Why.** The iter-415 log's next-item #1 named the lockstep follow-on directly:
+clone the iter-415 `calibrate-base-wpm-batch --flyers-only` filter to the
+`stt-rtf-batch` surface, now that the PARENT calibration-batch surface carries it.
+iter-409..414 all cloned calibration-batch flags onto the STT batch in lockstep;
+iter-415 added `--flyers-only` to the parent first, so this lap completes the pair.
+
+**What it is.** `--flyers-only` is the row-set companion to the iter-414 `flyers:`
+corpus line: where that line NAMES the outlier engines (median RTF strictly outside
+the `[Q1 - 1.5·IQR, Q3 + 1.5·IQR]` Tukey fence, also marked `← flyer`), this
+narrows the rendered engine table DOWN to just them, so an operator triaging "which
+engines disagree with the corpus?" reads nothing else. It is the deliberate INVERSE
+of `--summary` (iter-413), which collapses to the most-CENTRAL engine — `--summary`
+answers "which one engine speaks for the corpus?", `--flyers-only` answers "which
+engines don't?". The STT-side twin of the iter-415 calibration-batch filter.
+
+**What landed (all render-only, in `examples/gv.py`).**
+- **`_filter_stt_rtf_batch_rows_flyers_only(rows, flyers_only)`** — keeps only rows
+  with a truthy `flyer` flag; an unprofiled engine (flyer `None`, no median RTF to
+  be an outlier) is always dropped. With `flyers_only` `False` returns the rows
+  unchanged (a copy — byte-identical default). Pure, never mutates the source. The
+  engine-row analogue of `_filter_calib_batch_rows_flyers_only`.
+- **`_stt_rtf_batch_empty_filter_note(min_grade, flyers_only)`** — composes the
+  `(no engine ...)` note clauses so a `min_grade` floor and the flyers-only filter
+  each contribute wording, joined with `and` when both empty the table. Returns the
+  pre-iter-416 grade-floor wording (`no engine profiled to grade '<g>' or better`)
+  unchanged when only `min_grade` is set, so the existing floor tests are untouched.
+  The STT-side twin of `_calib_batch_empty_filter_note`.
+- **`render_stt_rtf_batch` / `_json` / `_csv`** all gained a `flyers_only` kwarg
+  applied alongside `min_grade` (grade floor FIRST, then narrow to flyers) and
+  BEFORE `sort_by` / `top_n`. The human header echoes `(flyers only)`; JSON adds a
+  top-level `flyers_only: true` (ordered `summary` → `flyers_only` → `min_grade`,
+  matching the calib twin's key order); CSV echoes a leading `# flyers_only: true`
+  comment (inserted after `# min_grade`, before `# sort_by`/`# top_n` — the order
+  the filters apply). It composes with `--summary` (the representative is then
+  picked among the flyers — the most-central OUTLIER). Every corpus aggregate /
+  `grades:` / `flyers:` line still describes the WHOLE corpus (the iter-401
+  contract), so the operator sees how many engines were elided.
+- **`cmd_stt_rtf_batch`** threads `args.flyers_only` into whichever renderer the
+  format flag selects. `--flyers-only` (`store_true`) added to the `stt-rtf-batch`
+  subparser; handler docstring + module usage line updated.
+
+**Tests (+23 net new, `test_gv_stt_rtf_batch.py` now 158).** Filter primitive
+(False returns a copy of all rows, True keeps only outliers, drops unprofiled, does
+not mutate source); empty-filter note (min_grade-only unchanged, flyers-only,
+both-clauses joined); parser wiring (default False, flag sets True); human render
+(shows just the outlier rows + header echo, default byte-identical, empty-corpus
+note, composes-with-min_grade note naming BOTH clauses, corpus aggregates
+unchanged, composes-with-summary picks among flyers); JSON (filters rows + names
+key, none omits key, summary `best` among flyers); CSV (filters rows + comments
+key, none omits comment, reads after `# min_grade`); handler threading to all three
+renderers (human/json/csv match the renderer directly).
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **6151 passed**
+(6128 prior + 23 net new), run in the feature worktree before ff-merge;
+re-verified on main post-merge (`test_gv_stt_rtf_batch.py` → 158 passed). Also
+smoke-tested the real CLI:
+`python examples/gv.py stt-rtf-batch --engine a 10.0:1.0 --engine b 10.0:1.1
+--engine c 10.0:1.2 --engine d 10.0:1.3 --engine slow 10.0:50.0 --flyers-only`
+shows only the `slow: 5.000 RTF ... ← flyer` row with `(flyers only)` in the
+header, the whole-corpus `corpus:`/`grades:`/`flyers:` lines still naming all five;
+`--json` carries `"flyers_only": true` with a single-engine `rows` list and
+`num_engines` 5 / `num_flyers` 1; `--csv` emits the single `slow` data row with
+`# flyers_only: true`.
+- Integration: not run this lap (pure list-filtering / string-formatting over the
+  injected `profile_stt_rtf_batch` core; no torch, no faster-whisper, no audio I/O
+  — mirrors the iter-415 calib flyers-only lap and the iter-405..414 STT laps,
+  which the integration suite never exercised either).
+
+**Next planned items:**
+1. **[gv CLI] the stt-rtf-batch surface now has FULL parity with
+   calibrate-base-wpm-batch** — human / `--json` / `--csv` trio plus `--sort-by` /
+   `--top-n` / `--min-grade` / `--summary` / `--flyers-only` AND the iter-414 IQR +
+   Tukey flyer line. Both surfaces are now in lockstep. A future increment should
+   pick a genuinely NEW signal rather than another flag clone — e.g. a `--sort-by
+   flyer` key (float outliers first) would need adding to the PARENT calibration
+   batch first to keep the two in lockstep (neither has a flyer-sort key yet).
+2. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Prefer a genuinely new signal over an 18th near-clone.
+3. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** — needs
+   a browser + mic, operator-only / non-headless.
+4. **[housekeeping] Stale worktrees accumulating** (iter-026, iter-027, iter-028,
+   iter-232, iter-317 still present) — a future lap could `git worktree prune` /
+   remove merged ones. NOTE: this lap correctly removed its own worktree.
