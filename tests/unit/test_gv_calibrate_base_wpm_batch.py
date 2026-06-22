@@ -125,6 +125,67 @@ def test_render_corpus_summary_carries_iqr():
     assert "IQR 10.0" in text
 
 
+# ---- iter-404: per-voice flyer flag (human render) ---------------------
+
+
+def _flyer_batch():
+    # Four clustered voices + one wild flyer (600 WPM). sorted 160/165/170/175/600
+    # ⇒ q1 165, q3 175, iqr 10 ⇒ fence [150, 190]; only 600 is outside.
+    return _batch(
+        [
+            ("a", [(160, 60.0, 1.0)]),
+            ("b", [(165, 60.0, 1.0)]),
+            ("c", [(170, 60.0, 1.0)]),
+            ("d", [(175, 60.0, 1.0)]),
+            ("wild", [(600, 60.0, 1.0)]),
+        ]
+    )
+
+
+def test_render_marks_flyer_row_and_names_corpus_flyers():
+    text = "\n".join(gv.render_calibration_batch(_flyer_batch()))
+    # The outlier row carries the inline marker; the clustered rows do not.
+    assert "wild: 600.0 WPM" in text
+    flyer_line = next(l for l in text.splitlines() if l.strip().startswith("wild:"))
+    assert "← flyer" in flyer_line
+    a_line = next(l for l in text.splitlines() if l.strip().startswith("a:"))
+    assert "← flyer" not in a_line
+    # The corpus flyers: line names the outlier and the fence bounds.
+    assert "flyers: 1 (wild) outside [150.0, 190.0] WPM" in text
+
+
+def test_render_flyers_none_when_corpus_agrees():
+    batch = _batch(
+        [
+            ("a", [(160, 60.0, 1.0)]),
+            ("b", [(165, 60.0, 1.0)]),
+            ("c", [(170, 60.0, 1.0)]),
+            ("d", [(175, 60.0, 1.0)]),
+            ("e", [(180, 60.0, 1.0)]),
+        ]
+    )
+    text = "\n".join(gv.render_calibration_batch(batch))
+    assert "flyers: none" in text
+    assert "← flyer" not in text
+
+
+def test_render_flyers_line_describes_whole_corpus_under_top_n():
+    # --top-n truncates the displayed rows, but the flyers: line still names the
+    # outlier over the WHOLE corpus even when the flyer row itself is elided.
+    text = "\n".join(
+        gv.render_calibration_batch(_flyer_batch(), sort_by="base_wpm", top_n=2)
+    )
+    # base_wpm ascending keeps the two slowest (a, b) — the flyer row is dropped...
+    assert "wild: 600.0 WPM" not in text
+    # ...but the corpus flyers: line still names it.
+    assert "flyers: 1 (wild) outside [150.0, 190.0] WPM" in text
+
+
+def test_render_empty_corpus_has_no_flyers_line():
+    text = "\n".join(gv.render_calibration_batch(_batch([("a", []), ("b", [])])))
+    assert "flyers:" not in text
+
+
 def test_render_grades_histogram():
     batch = _batch([("tight", [(165, 60.0, 1.0)]), ("empty", [])])
     text = "\n".join(gv.render_calibration_batch(batch))
@@ -308,6 +369,35 @@ def test_json_empty_corpus_iqr_keys_null():
     assert payload["implied_base_wpm_iqr"] is None
 
 
+def test_json_carries_fence_and_per_row_flyer():
+    # iter-404: the Tukey fence + num_flyers ride alongside the IQR, and each row
+    # carries a flyer boolean.
+    payload = _json(
+        [
+            ("a", [(160, 60.0, 1.0)]),
+            ("b", [(165, 60.0, 1.0)]),
+            ("c", [(170, 60.0, 1.0)]),
+            ("d", [(175, 60.0, 1.0)]),
+            ("wild", [(600, 60.0, 1.0)]),
+        ]
+    )
+    assert payload["implied_base_wpm_fence_lo"] == 150.0
+    assert payload["implied_base_wpm_fence_hi"] == 190.0
+    assert payload["num_flyers"] == 1
+    flags = {r["voice"]: r["flyer"] for r in payload["rows"]}
+    assert flags["wild"] is True
+    assert flags["a"] is False
+
+
+def test_json_empty_corpus_fence_null_and_no_flyers():
+    payload = _json([("a", []), ("b", [])])
+    assert payload["implied_base_wpm_fence_lo"] is None
+    assert payload["implied_base_wpm_fence_hi"] is None
+    assert payload["num_flyers"] == 0
+    # An uncalibrated voice's row flyer is null.
+    assert all(r["flyer"] is None for r in payload["rows"])
+
+
 def test_json_grade_counts_has_all_four_buckets_summing_to_num_voices():
     payload = _json([("tight", [(165, 60.0, 1.0)]), ("empty", [])])
     counts = payload["grade_counts"]
@@ -392,7 +482,7 @@ def test_csv_header():
     rows = _csv_rows([("a", [(165, 60.0, 1.0)])])
     assert rows[0] == (
         "voice,implied_base_wpm,n_samples,spread,relative_spread,"
-        "dispersion_grade,dispersion_margin,drift,delta_from_median_wpm"
+        "dispersion_grade,dispersion_margin,drift,delta_from_median_wpm,flyer"
     )
 
 
@@ -407,8 +497,8 @@ def test_csv_one_data_row_per_voice():
 def test_csv_uncalibrated_voice_blank_cells():
     rows = _csv_rows([("real", [(165, 60.0, 1.0)]), ("empty", [])])
     empty = next(r for r in rows if r.startswith("empty,"))
-    # voice label then eight empty cells.
-    assert empty == "empty,,,,,,,,"
+    # voice label then nine empty cells (the flyer column is blank too).
+    assert empty == "empty,,,,,,,,,"
 
 
 def test_csv_summary_comments_carry_aggregates():
@@ -445,6 +535,37 @@ def test_csv_summary_comments_carry_iqr():
     assert "# implied_base_wpm_iqr: 10.0" in text
 
 
+def test_csv_carries_fence_comment_and_per_row_flyer():
+    # iter-404: the fence + num_flyers ride in the trailing # comment block, and
+    # the flyer column carries true/false per voice.
+    import csv as _csv
+    import io as _io
+
+    rows = _csv_rows(
+        [
+            ("a", [(160, 60.0, 1.0)]),
+            ("b", [(165, 60.0, 1.0)]),
+            ("c", [(170, 60.0, 1.0)]),
+            ("d", [(175, 60.0, 1.0)]),
+            ("wild", [(600, 60.0, 1.0)]),
+        ]
+    )
+    text = "\n".join(rows)
+    assert "# implied_base_wpm_fence: 150.0 - 190.0" in text
+    assert "# num_flyers: 1" in text
+    data_lines = [r for r in rows if not r.startswith("#")]
+    reader = {r["voice"]: r for r in _csv.DictReader(_io.StringIO("\n".join(data_lines)))}
+    assert reader["wild"]["flyer"] == "true"
+    assert reader["a"]["flyer"] == "false"
+
+
+def test_csv_uncalibrated_voice_flyer_cell_blank():
+    rows = _csv_rows([("real", [(165, 60.0, 1.0)]), ("empty", [])])
+    empty = next(r for r in rows if r.startswith("empty,"))
+    # The trailing flyer cell is blank for an uncalibrated voice (null spelling).
+    assert empty.endswith(",")
+
+
 def test_csv_empty_corpus_blank_aggregates():
     rows = _csv_rows([("a", []), ("b", [])])
     text = "\n".join(rows)
@@ -452,6 +573,8 @@ def test_csv_empty_corpus_blank_aggregates():
     assert "# implied_base_wpm_median: " in text  # blank value
     assert "# range:  - " in text
     assert "# implied_base_wpm_iqr: " in text  # blank value
+    assert "# implied_base_wpm_fence:  - " in text  # blank fence bounds
+    assert "# num_flyers: 0" in text
 
 
 def test_csv_parses_with_pandas_comment_skip():

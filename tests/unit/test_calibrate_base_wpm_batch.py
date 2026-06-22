@@ -224,6 +224,133 @@ def test_iqr_ignores_uncalibrated_voices():
 
 
 # --------------------------------------------------------------------------
+# iter-404 — per-voice flyer flag (Tukey fence [Q1 - 1.5*IQR, Q3 + 1.5*IQR])
+# --------------------------------------------------------------------------
+
+def test_empty_corpus_has_no_fence_and_no_flyers():
+    batch = calibrate_base_wpm_batch([])
+    assert batch.implied_base_wpm_fence_lo is None
+    assert batch.implied_base_wpm_fence_hi is None
+    assert batch.num_flyers == 0
+
+
+def test_all_uncalibrated_corpus_has_no_fence_and_no_flyers():
+    batch = calibrate_base_wpm_batch([("a", []), ("b", [])])
+    assert batch.implied_base_wpm_fence_lo is None
+    assert batch.implied_base_wpm_fence_hi is None
+    assert batch.num_flyers == 0
+    # An uncalibrated voice carries flyer None (no base rate to test against).
+    assert all(r["flyer"] is None for r in batch.rows)
+
+
+def test_tight_corpus_has_no_flyers():
+    # Five clustered voices: IQR small, fence comfortably contains every voice.
+    batch = calibrate_base_wpm_batch(
+        [
+            ("a", _samples((160, 60.0))),
+            ("b", _samples((165, 60.0))),
+            ("c", _samples((170, 60.0))),
+            ("d", _samples((175, 60.0))),
+            ("e", _samples((180, 60.0))),
+        ]
+    )
+    assert batch.num_flyers == 0
+    assert all(r["flyer"] is False for r in batch.rows)
+
+
+def test_outlier_voice_is_flagged_as_flyer():
+    # Four clustered voices + one wild flyer. sorted: 160,165,170,175,600 ⇒
+    # q1 165, q3 175, iqr 10 ⇒ fence [165 - 15, 175 + 15] = [150, 190]. 600 is
+    # far above 190, the four clustered voices sit inside.
+    batch = calibrate_base_wpm_batch(
+        [
+            ("a", _samples((160, 60.0))),
+            ("b", _samples((165, 60.0))),
+            ("c", _samples((170, 60.0))),
+            ("d", _samples((175, 60.0))),
+            ("wild", _samples((600, 60.0))),
+        ]
+    )
+    assert batch.implied_base_wpm_fence_lo == pytest.approx(150.0)
+    assert batch.implied_base_wpm_fence_hi == pytest.approx(190.0)
+    assert batch.num_flyers == 1
+    flags = {r["voice"]: r["flyer"] for r in batch.rows}
+    assert flags["wild"] is True
+    assert flags["a"] is flags["b"] is flags["c"] is flags["d"] is False
+
+
+def test_low_outlier_voice_is_flagged_as_flyer():
+    # The fence catches a voice far BELOW the cluster too. sorted: 40,160,165,170,175
+    # ⇒ q1 rank 1.0 ⇒ 160, q3 rank 3.0 ⇒ 170, iqr 10 ⇒ fence [145, 185]. 40 is
+    # below 145.
+    batch = calibrate_base_wpm_batch(
+        [
+            ("slow", _samples((40, 60.0))),
+            ("b", _samples((160, 60.0))),
+            ("c", _samples((165, 60.0))),
+            ("d", _samples((170, 60.0))),
+            ("e", _samples((175, 60.0))),
+        ]
+    )
+    assert batch.num_flyers == 1
+    assert {r["voice"] for r in batch.rows if r["flyer"]} == {"slow"}
+
+
+def test_degenerate_iqr_zero_flags_lone_different_voice():
+    # Four identical voices + one different: sorted 165,165,165,165,200 ⇒
+    # q1 165, q3 165, iqr 0 ⇒ fence collapses to [165, 165]; only the voice
+    # strictly outside that band (200) is a flyer.
+    batch = calibrate_base_wpm_batch(
+        [
+            ("a", _samples((165, 60.0))),
+            ("b", _samples((165, 60.0))),
+            ("c", _samples((165, 60.0))),
+            ("d", _samples((165, 60.0))),
+            ("odd", _samples((200, 60.0))),
+        ]
+    )
+    assert batch.implied_base_wpm_iqr == pytest.approx(0.0)
+    assert batch.implied_base_wpm_fence_lo == pytest.approx(165.0)
+    assert batch.implied_base_wpm_fence_hi == pytest.approx(165.0)
+    assert batch.num_flyers == 1
+    assert {r["voice"] for r in batch.rows if r["flyer"]} == {"odd"}
+
+
+def test_uncalibrated_voice_excluded_from_fence_population():
+    # An empty voice contributes no base rate, so the fence (built on the
+    # quartiles) is identical with or without it, and the empty voice is never a
+    # flyer (flyer None).
+    with_empty = calibrate_base_wpm_batch(
+        [
+            ("a", _samples((160, 60.0))),
+            ("b", _samples((165, 60.0))),
+            ("c", _samples((170, 60.0))),
+            ("d", _samples((175, 60.0))),
+            ("wild", _samples((600, 60.0))),
+            ("empty", []),
+        ]
+    )
+    without = calibrate_base_wpm_batch(
+        [
+            ("a", _samples((160, 60.0))),
+            ("b", _samples((165, 60.0))),
+            ("c", _samples((170, 60.0))),
+            ("d", _samples((175, 60.0))),
+            ("wild", _samples((600, 60.0))),
+        ]
+    )
+    assert with_empty.implied_base_wpm_fence_lo == pytest.approx(
+        without.implied_base_wpm_fence_lo
+    )
+    assert with_empty.implied_base_wpm_fence_hi == pytest.approx(
+        without.implied_base_wpm_fence_hi
+    )
+    # The flyer count is the same (the empty voice never counts).
+    assert with_empty.num_flyers == without.num_flyers == 1
+    assert next(r for r in with_empty.rows if r["voice"] == "empty")["flyer"] is None
+
+
+# --------------------------------------------------------------------------
 # uncalibrated voices (no samples)
 # --------------------------------------------------------------------------
 

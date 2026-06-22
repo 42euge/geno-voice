@@ -8,7 +8,7 @@ Usage:
     gv chat               # chat mode — STT → LLM (litellm) → TTS
     gv simulate-mirror …  # offline WPM-mirror trajectory / grid-sweep simulator
     gv calibrate-base-wpm … # offline base_wpm calibration (dispersion grade agree/loose/scattered + margin to next grade; --verdict for an adopt/keep call; --json/--csv for per-sample data)
-    gv calibrate-base-wpm-batch --voice af_heart 50:18.2 --voice am_adam 40:15.0  # calibrate a CORPUS of voices — per-voice base_wpm + grade + drift + the corpus median (which voices agree?); --json/--csv for the machine-readable corpus; --sort-by base_wpm/grade/drift/delta to float the most-useful voices to the top; --top-n N to keep only the N most-useful; --min-grade scattered/loose/agree to drop voices below a dispersion floor; --summary to name the single most-representative voice (nearest the corpus median)
+    gv calibrate-base-wpm-batch --voice af_heart 50:18.2 --voice am_adam 40:15.0  # calibrate a CORPUS of voices — per-voice base_wpm + grade + drift + the corpus median (which voices agree?); --json/--csv for the machine-readable corpus; --sort-by base_wpm/grade/drift/delta to float the most-useful voices to the top; --top-n N to keep only the N most-useful; --min-grade scattered/loose/agree to drop voices below a dispersion floor; --summary to name the single most-representative voice (nearest the corpus median); the flyers: line names outlier voices (outside the Q1-1.5·IQR..Q3+1.5·IQR Tukey fence), also marked ← flyer in the table
     gv vad recording.wav  # offline Silero VAD — segment a WAV into speech regions
     gv vad recording.wav --json # machine-readable segmentation (SileroResult.to_dict shape)
     gv vad-gaps recording.wav  # report the silence gaps BETWEEN speech regions (tune --min-silence-ms)
@@ -1501,6 +1501,32 @@ def _format_calib_batch_summary_verdict(row):
     )
 
 
+def _format_calib_batch_flyers(batch):
+    """Render the iter-404 corpus outlier line, naming the flyer voices.
+
+    The calibration analogue of :func:`_format_batch_flyers` (the iter-392 VAD-batch
+    flyer line). The batch already carries a per-voice ``flyer`` boolean (a voice
+    whose ``implied_base_wpm`` falls outside the Tukey fence
+    ``[Q1 - 1.5*IQR, Q3 + 1.5*IQR]``); this names them on one line so an operator
+    picking a fleet ``DEFAULT_BASE_WPM`` does not have to scan the table for the
+    ``← flyer`` markers. Reads ``num_flyers`` + the per-row flags over the WHOLE
+    corpus (``batch.rows`` is the FULL row list, not a sorted/filtered/truncated
+    view), so the line describes the corpus regardless of any render-time
+    ``min_grade`` / ``sort_by`` / ``top_n`` / ``summary``. The fence bounds are
+    spelled out so the operator can see how far outside the middle half a flyer
+    sits, e.g. ``flyers: 1 (zac) outside [150.0, 180.0] WPM``. ``flyers: none`` when
+    the corpus agrees (no outlier). Pure: returns a single string.
+    """
+    names = [r["voice"] for r in batch.rows if r["flyer"]]
+    if not names:
+        return "  flyers: none"
+    return (
+        f"  flyers: {len(names)} ({', '.join(str(n) for n in names)}) "
+        f"outside [{batch.implied_base_wpm_fence_lo:.1f}, "
+        f"{batch.implied_base_wpm_fence_hi:.1f}] WPM"
+    )
+
+
 def render_calibration_batch(batch, *, min_grade=None, sort_by=None, top_n=None,
                              summary=False):
     """Render a ``calibrate-base-wpm-batch`` corpus verdict as plain-text lines.
@@ -1511,9 +1537,12 @@ def render_calibration_batch(batch, *, min_grade=None, sort_by=None, top_n=None,
     voice-comparable dispersion grade, the iter-396 margin, the drift vs nominal,
     and the signed delta from the corpus median — followed by a corpus summary
     line (median / min / max / spread / iter-403 outlier-robust IQR of the
-    per-voice base rates) and a
+    per-voice base rates), a
     ``grades:`` histogram counting how many voices sit at each dispersion grade
-    over the WHOLE corpus. A voice with no samples prints ``-`` for its numbers
+    over the WHOLE corpus, and (iter-404) a ``flyers:`` line naming the voices
+    outside the Tukey fence ``[Q1 - 1.5*IQR, Q3 + 1.5*IQR]`` (each also marked
+    ``← flyer`` in the table), turning the IQR-vs-spread hint into a named outlier.
+    A voice with no samples prints ``-`` for its numbers
     and is tagged ``uncalibrated`` (excluded from the corpus aggregates but still
     listed). Pure: returns a list of strings (no I/O, no ANSI) so it is testable
     in isolation — the handler joins and prints them.
@@ -1595,6 +1624,10 @@ def render_calibration_batch(batch, *, min_grade=None, sort_by=None, top_n=None,
             f"{counts[g]} {g}" for g in _wm_calib_batch_grade_order()
         )
         out.append(f"  grades: {grades}")
+        # iter-404 corpus flyer line — names the outlier voices the IQR-vs-spread gap
+        # only HINTED at, over the WHOLE corpus (independent of min_grade/sort_by/top_n).
+        if batch.num_calibrated:
+            out.append(_format_calib_batch_flyers(batch))
         return out
 
     if summary:
@@ -1649,10 +1682,13 @@ def render_calibration_batch(batch, *, min_grade=None, sort_by=None, top_n=None,
         delta_cell = f"{delta:+.1f}" if delta is not None else "-"
         margin = calib.dispersion_margin
         margin_cell = f"{margin:.3f}" if margin is not None else "-"
+        # iter-404 trailing flyer marker — names the outlier voice inline so the
+        # operator sees it without cross-referencing the corpus flyers: line.
+        flyer_mark = "  ← flyer" if r["flyer"] else ""
         lines.append(
             f"  {r['voice']}: {calib.implied_base_wpm:.1f} WPM "
             f"({calib.dispersion_grade}, margin {margin_cell}, "
-            f"drift {calib.drift:+.1f}, Δmedian {delta_cell})"
+            f"drift {calib.drift:+.1f}, Δmedian {delta_cell}){flyer_mark}"
         )
     lines.extend(_corpus_lines())
     return lines
@@ -1681,7 +1717,10 @@ def render_calibration_batch_json(batch, *, min_grade=None, sort_by=None, top_n=
     aggregates (``num_voices`` / ``num_calibrated`` / the outlier-robust median /
     min / max / spread / iter-403 ``implied_base_wpm_q1`` / ``implied_base_wpm_q3``
     / ``implied_base_wpm_iqr`` (the outlier-robust inter-quartile spread, ``null``
-    when no voice calibrated) of the per-voice base rates / the ``grade_counts``
+    when no voice calibrated) of the per-voice base rates / the iter-404 Tukey-fence
+    outlier keys (``implied_base_wpm_fence_lo`` / ``implied_base_wpm_fence_hi`` = the
+    ``[Q1 - 1.5*IQR, Q3 + 1.5*IQR]`` fence, ``null`` when no voice calibrated;
+    ``num_flyers`` = how many voices fall outside it) / the ``grade_counts``
     histogram — always all four :data:`CALIB_BATCH_GRADE_ORDER` buckets summing to
     ``num_voices``) and the shared ``nominal``.
 
@@ -1690,11 +1729,13 @@ def render_calibration_batch_json(batch, *, min_grade=None, sort_by=None, top_n=
     dispersion_grade / dispersion_margin / nominal / drift), so a row agrees
     EXACTLY with ``gv calibrate-base-wpm --json`` on that voice's samples.
     ``dispersion_margin`` is ``null`` for a ``"scattered"`` calibration (no worse
-    grade to degrade into). A voice with no samples carries ``"calibration":
-    null`` and ``"delta_from_median_wpm": null`` (the engine's uncalibrated
-    contract) — listed but excluded from the corpus aggregates, which stay
-    ``null`` when no voice calibrated. Floats round to 3 places. Pure: returns a
-    single JSON string (no I/O).
+    grade to degrade into). Each row also carries the iter-404 ``flyer`` boolean
+    (``true`` when the voice's ``implied_base_wpm`` falls outside the Tukey fence,
+    ``null`` for an uncalibrated voice). A voice with no samples carries
+    ``"calibration": null`` and ``"delta_from_median_wpm": null`` (the engine's
+    uncalibrated contract) — listed but excluded from the corpus aggregates, which
+    stay ``null`` when no voice calibrated. Floats round to 3 places. Pure: returns
+    a single JSON string (no I/O).
 
     ``sort_by`` (iter-399) reorders the ``rows`` list (``"base_wpm"`` = implied
     base_wpm ASCENDING, ``"grade"`` = dispersion grade DESCENDING, ``"drift"`` =
@@ -1753,6 +1794,9 @@ def render_calibration_batch_json(batch, *, min_grade=None, sort_by=None, top_n=
             "implied_base_wpm_q1": _round_or_none(batch.implied_base_wpm_q1),
             "implied_base_wpm_q3": _round_or_none(batch.implied_base_wpm_q3),
             "implied_base_wpm_iqr": _round_or_none(batch.implied_base_wpm_iqr),
+            "implied_base_wpm_fence_lo": _round_or_none(batch.implied_base_wpm_fence_lo),
+            "implied_base_wpm_fence_hi": _round_or_none(batch.implied_base_wpm_fence_hi),
+            "num_flyers": batch.num_flyers,
             "grade_counts": {g: batch.grade_counts[g] for g in _wm_calib_batch_grade_order()},
         }
     )
@@ -1810,6 +1854,7 @@ def _calib_batch_row_obj(row):
             }
         ),
         "delta_from_median_wpm": _round_or_none(row["delta_from_median_wpm"]),
+        "flyer": row["flyer"],
     }
 
 
@@ -1823,12 +1868,15 @@ def render_calibration_batch_csv(batch, *, min_grade=None, sort_by=None, top_n=N
     CSV unit is **one row per voice** — the shape a plotter wants (one base rate
     per voice to eyeball which agree) and a spreadsheet wants (one voice per
     line). Columns:
-    ``voice,implied_base_wpm,n_samples,spread,relative_spread,dispersion_grade,dispersion_margin,drift,delta_from_median_wpm``.
+    ``voice,implied_base_wpm,n_samples,spread,relative_spread,dispersion_grade,dispersion_margin,drift,delta_from_median_wpm,flyer``
+    (``flyer`` is the iter-404 ``true``/``false`` Tukey-fence outlier flag, empty for
+    an uncalibrated voice).
 
     A voice with no samples has no calibration, so every numeric cell past
     ``voice`` is empty (the CSV spelling of JSON ``null``) — listed but blank.
     The corpus aggregates the human/JSON twins surface (median / range / spread /
-    iter-403 IQR / grade histogram) trail as ``#`` comment lines — self-describing metadata a
+    iter-403 IQR / iter-404 Tukey fence + ``num_flyers`` / grade histogram) trail as
+    ``#`` comment lines — self-describing metadata a
     plotting/spreadsheet tool skips by default (pandas ``read_csv(comment="#")``),
     matching the ``#``-comment precedent :func:`render_calibration_csv` uses for
     its own non-tabular summary — so the per-voice rows stay a pure, parseable
@@ -1889,12 +1937,20 @@ def render_calibration_batch_csv(batch, *, min_grade=None, sort_by=None, top_n=N
             "dispersion_margin",
             "drift",
             "delta_from_median_wpm",
+            "flyer",
         ]
     )
+
+    def _flyer_cell(value):
+        # Per-row Tukey-fence outlier flag (iter-404). Empty for an uncalibrated
+        # voice that carries no flag (the CSV spelling of null), otherwise the
+        # lowercase ``true`` / ``false`` the other booleans use.
+        return "" if value is None else str(bool(value)).lower()
+
     for r in data_rows:
         calib = r["calibration"]
         if calib is None:
-            writer.writerow([r["voice"], "", "", "", "", "", "", "", ""])
+            writer.writerow([r["voice"], "", "", "", "", "", "", "", "", ""])
             continue
         margin = calib.dispersion_margin
         delta = r["delta_from_median_wpm"]
@@ -1909,6 +1965,7 @@ def render_calibration_batch_csv(batch, *, min_grade=None, sort_by=None, top_n=N
                 "" if margin is None else round(margin, 3),
                 round(calib.drift, 3),
                 "" if delta is None else round(delta, 3),
+                _flyer_cell(r["flyer"]),
             ]
         )
     body = buf.getvalue().rstrip("\r\n")
@@ -1926,6 +1983,9 @@ def render_calibration_batch_csv(batch, *, min_grade=None, sort_by=None, top_n=N
         f"{_agg(batch.implied_base_wpm_max)}",
         f"# implied_base_wpm_spread: {_agg(batch.implied_base_wpm_spread)}",
         f"# implied_base_wpm_iqr: {_agg(batch.implied_base_wpm_iqr)}",
+        f"# implied_base_wpm_fence: {_agg(batch.implied_base_wpm_fence_lo)} - "
+        f"{_agg(batch.implied_base_wpm_fence_hi)}",
+        f"# num_flyers: {batch.num_flyers}",
         "# grades: "
         + ", ".join(f"{counts[g]} {g}" for g in _wm_calib_batch_grade_order()),
     ]

@@ -1120,10 +1120,13 @@ class BaseWpmCalibrationBatch:
       rows: one entry per voice, in input order, each a dict with keys
         ``voice`` (the label), ``calibration`` (the voice's
         :class:`BaseWpmCalibration`, or ``None`` when the voice had no samples),
-        and ``delta_from_median_wpm`` (the voice's ``implied_base_wpm`` minus the
-        corpus median, ``None`` for an uncalibrated voice). The per-voice grade /
-        margin / drift live on the embedded ``calibration`` so each row agrees
-        EXACTLY with ``gv calibrate-base-wpm`` on that voice.
+        ``delta_from_median_wpm`` (the voice's ``implied_base_wpm`` minus the
+        corpus median, ``None`` for an uncalibrated voice), and ``flyer`` (the
+        iter-404 outlier flag: ``True`` when the voice's ``implied_base_wpm``
+        falls outside the Tukey fence ``[Q1 - 1.5*IQR, Q3 + 1.5*IQR]``, ``False``
+        for an in-fence voice, ``None`` for an uncalibrated one). The per-voice
+        grade / margin / drift live on the embedded ``calibration`` so each row
+        agrees EXACTLY with ``gv calibrate-base-wpm`` on that voice.
       num_voices: how many voices were submitted (``len(rows)``).
       num_calibrated: how many carried at least one sample (fed the corpus
         aggregates); an uncalibrated voice contributes a row but not a number.
@@ -1147,6 +1150,15 @@ class BaseWpmCalibrationBatch:
         by one outlier — so a tight ``iqr`` alongside a wide ``spread`` is the
         signature of "the corpus agrees on a fleet base, but one voice is a flyer".
         All ``None`` when no voice calibrated.
+      implied_base_wpm_fence_lo / implied_base_wpm_fence_hi: the standard Tukey
+        boxplot fence ``[Q1 - 1.5*IQR, Q3 + 1.5*IQR]`` (iter-404, the calibration
+        analogue of the iter-392 flyer fence on ``vad_gap_recommend_batch``). A
+        voice whose ``implied_base_wpm`` falls outside this band is a ``flyer`` —
+        the named outlier the iter-403 IQR-vs-spread gap only HINTED at. ``None``
+        when no voice calibrated.
+      num_flyers: how many voices are flyers (base rate outside the Tukey fence);
+        ``0`` when the corpus agrees or no voice calibrated. Turns the
+        IQR-vs-spread eyeball comparison into a count.
       grade_counts: how many voices sit at each dispersion grade, keyed by
         :data:`CALIB_BATCH_GRADE_ORDER` (always all four buckets, summing to
         ``num_voices``) — the corpus's trust profile at a glance.
@@ -1166,6 +1178,9 @@ class BaseWpmCalibrationBatch:
     implied_base_wpm_q1: float | None
     implied_base_wpm_q3: float | None
     implied_base_wpm_iqr: float | None
+    implied_base_wpm_fence_lo: float | None
+    implied_base_wpm_fence_hi: float | None
+    num_flyers: int
     grade_counts: dict
     default_base_wpm: float
 
@@ -1201,8 +1216,9 @@ def calibrate_base_wpm_batch(
             {
                 "voice": label,
                 "calibration": calib,
-                # delta filled in once the corpus median is known.
+                # delta + flyer filled in once the corpus median / fences are known.
                 "delta_from_median_wpm": None,
+                "flyer": None,
             }
         )
         if calib is not None:
@@ -1224,12 +1240,31 @@ def calibrate_base_wpm_batch(
         q1 = _percentile_of_sorted(srt, 25)
         q3 = _percentile_of_sorted(srt, 75)
         iqr = q3 - q1
+        # iter-404 outlier (flyer) flag, naming the voices the iter-403 IQR-vs-spread
+        # gap only HINTED at. The standard Tukey boxplot fence: a voice is a flyer when
+        # its implied_base_wpm falls below Q1 - 1.5*IQR or above Q3 + 1.5*IQR. This
+        # turns "tight IQR + wide spread => a flyer exists" into a per-voice boolean, so
+        # an operator picking a fleet DEFAULT_BASE_WPM sees WHICH voice is the outlier
+        # without scanning the Δmedian column. When IQR is 0 (a degenerate corpus whose
+        # middle half is a single value) the fences collapse to [Q1, Q3] and only voices
+        # strictly outside that band are flyers — a lone different voice among identical
+        # ones is correctly named. The calibration analogue of the iter-392 flyer flag
+        # on ``vad_gap_recommend_batch``.
+        fence_lo = q1 - 1.5 * iqr
+        fence_hi = q3 + 1.5 * iqr
         for r in rows:
             calib = r["calibration"]
             if calib is not None:
                 r["delta_from_median_wpm"] = calib.implied_base_wpm - median
+                r["flyer"] = (
+                    calib.implied_base_wpm < fence_lo
+                    or calib.implied_base_wpm > fence_hi
+                )
+        num_flyers = sum(1 for r in rows if r["flyer"])
     else:
         median = lo = hi = spread = q1 = q3 = iqr = None
+        fence_lo = fence_hi = None
+        num_flyers = 0
 
     counts = {g: 0 for g in CALIB_BATCH_GRADE_ORDER}
     for r in rows:
@@ -1253,6 +1288,9 @@ def calibrate_base_wpm_batch(
         implied_base_wpm_q1=q1,
         implied_base_wpm_q3=q3,
         implied_base_wpm_iqr=iqr,
+        implied_base_wpm_fence_lo=fence_lo,
+        implied_base_wpm_fence_hi=fence_hi,
+        num_flyers=num_flyers,
         grade_counts=counts,
         default_base_wpm=float(default_base_wpm),
     )
