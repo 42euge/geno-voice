@@ -1520,3 +1520,244 @@ def test_handler_summary_matches_render_directly():
         ]
     )
     assert lines == expected
+
+
+# ---- iter-415: --flyers-only (show ONLY the corpus outliers) ------------
+
+
+def test_filter_flyers_only_false_returns_copy_of_all_rows():
+    # The default (flyers_only=False) keeps every row and returns a fresh list,
+    # never the source object — the byte-identical pre-filter contract.
+    batch = _flyer_batch()
+    out = gv._filter_calib_batch_rows_flyers_only(batch.rows, False)
+    assert out == list(batch.rows)
+    assert out is not batch.rows
+
+
+def test_filter_flyers_only_keeps_only_outlier_rows():
+    # Of the five-voice flyer corpus only `wild` sits outside the Tukey fence.
+    batch = _flyer_batch()
+    out = gv._filter_calib_batch_rows_flyers_only(batch.rows, True)
+    assert [r["voice"] for r in out] == ["wild"]
+
+
+def test_filter_flyers_only_drops_uncalibrated_voice():
+    # An uncalibrated voice carries flyer None (no base rate to be an outlier) and
+    # is never kept by the flyers-only filter.
+    batch = _batch(
+        [
+            ("a", [(160, 60.0, 1.0)]),
+            ("b", [(165, 60.0, 1.0)]),
+            ("c", [(170, 60.0, 1.0)]),
+            ("d", [(175, 60.0, 1.0)]),
+            ("wild", [(600, 60.0, 1.0)]),
+            ("empty", []),
+        ]
+    )
+    out = gv._filter_calib_batch_rows_flyers_only(batch.rows, True)
+    assert [r["voice"] for r in out] == ["wild"]
+
+
+def test_filter_flyers_only_does_not_mutate_source():
+    batch = _flyer_batch()
+    before = list(batch.rows)
+    gv._filter_calib_batch_rows_flyers_only(batch.rows, True)
+    assert list(batch.rows) == before
+
+
+def test_parser_flyers_only_default_false():
+    args = gv.build_parser().parse_args(
+        ["calibrate-base-wpm-batch", "--voice", "a", "165:60.0"]
+    )
+    assert args.flyers_only is False
+
+
+def test_parser_flyers_only_sets_true():
+    args = gv.build_parser().parse_args(
+        ["calibrate-base-wpm-batch", "--voice", "a", "165:60.0", "--flyers-only"]
+    )
+    assert args.flyers_only is True
+
+
+def test_render_flyers_only_shows_just_the_outlier_rows():
+    text = "\n".join(gv.render_calibration_batch(_flyer_batch(), flyers_only=True))
+    # Only the outlier row is in the body...
+    assert "wild: 600.0 WPM" in text
+    for clustered in ("a:", "b:", "c:", "d:"):
+        assert not any(
+            ln.strip().startswith(clustered) for ln in text.splitlines()
+        )
+    # ...the header names the mode...
+    assert "(flyers only)" in text
+    # ...and the whole-corpus summary + flyers: line still describe all five.
+    assert "flyers: 1 (wild) outside [150.0, 190.0] WPM" in text
+    assert "corpus: median" in text
+
+
+def test_render_flyers_only_default_unchanged():
+    batch = _flyer_batch()
+    assert gv.render_calibration_batch(batch, flyers_only=False) == (
+        gv.render_calibration_batch(batch)
+    )
+    assert "(flyers only)" not in "\n".join(gv.render_calibration_batch(batch))
+
+
+def test_render_flyers_only_empty_when_corpus_agrees_emits_note():
+    # A corpus with no outlier yields an empty flyers-only table + a note.
+    batch = _batch(
+        [
+            ("a", [(160, 60.0, 1.0)]),
+            ("b", [(165, 60.0, 1.0)]),
+            ("c", [(170, 60.0, 1.0)]),
+            ("d", [(175, 60.0, 1.0)]),
+            ("e", [(180, 60.0, 1.0)]),
+        ]
+    )
+    text = "\n".join(gv.render_calibration_batch(batch, flyers_only=True))
+    assert "no voice is a corpus flyer" in text
+    # corpus summary + histogram still present
+    assert "corpus:" in text
+    assert "grades:" in text
+
+
+def test_render_flyers_only_composes_with_min_grade_note():
+    # Both filters active and empty ⇒ the note names BOTH clauses.
+    batch = _batch(
+        [
+            ("a", [(160, 60.0, 1.0)]),
+            ("b", [(165, 60.0, 1.0)]),
+            ("c", [(170, 60.0, 1.0)]),
+            ("d", [(175, 60.0, 1.0)]),
+            ("e", [(180, 60.0, 1.0)]),
+        ]
+    )
+    text = "\n".join(
+        gv.render_calibration_batch(batch, min_grade="agree", flyers_only=True)
+    )
+    assert "no voice calibrated to grade 'agree' or better and is a corpus flyer" in text
+
+
+def test_render_flyers_only_does_not_change_corpus_aggregates():
+    batch = _flyer_batch()
+    plain = "\n".join(gv.render_calibration_batch(batch))
+    only = "\n".join(gv.render_calibration_batch(batch, flyers_only=True))
+    # The corpus + flyers: lines are byte-identical between the two renders.
+    for line in plain.splitlines():
+        if line.strip().startswith(("corpus:", "flyers:", "grades:")):
+            assert line in only
+
+
+def test_render_flyers_only_composes_with_summary_picks_among_flyers():
+    # --summary + --flyers-only: the representative is chosen among the outliers only.
+    text = "\n".join(
+        gv.render_calibration_batch(_flyer_batch(), summary=True, flyers_only=True)
+    )
+    assert "representative: wild" in text
+
+
+def test_json_flyers_only_filters_rows_and_names_key():
+    import json as _json
+
+    obj = _json.loads(
+        gv.render_calibration_batch_json(_flyer_batch(), flyers_only=True)
+    )
+    assert obj["flyers_only"] is True
+    assert [r["voice"] for r in obj["rows"]] == ["wild"]
+    # aggregates still describe the whole corpus
+    assert obj["num_voices"] == 5
+    assert obj["num_flyers"] == 1
+
+
+def test_json_flyers_only_none_omits_key():
+    import json as _json
+
+    obj = _json.loads(gv.render_calibration_batch_json(_flyer_batch()))
+    assert "flyers_only" not in obj
+    assert len(obj["rows"]) == 5
+
+
+def test_json_flyers_only_summary_best_among_flyers():
+    import json as _json
+
+    obj = _json.loads(
+        gv.render_calibration_batch_json(
+            _flyer_batch(), summary=True, flyers_only=True
+        )
+    )
+    assert obj["flyers_only"] is True
+    assert obj["summary"] is True
+    assert obj["best"]["voice"] == "wild"
+
+
+def test_csv_flyers_only_filters_rows_and_comments_key():
+    text = gv.render_calibration_batch_csv(_flyer_batch(), flyers_only=True)
+    assert "# flyers_only: true" in text
+    data_rows = [
+        ln for ln in text.splitlines() if ln and not ln.startswith("#")
+    ]
+    # header + one data row (the flyer)
+    assert data_rows[0].startswith("voice,")
+    assert len(data_rows) == 2
+    assert data_rows[1].startswith("wild,")
+    # whole-corpus aggregates still present
+    assert "# num_voices: 5" in text
+    assert "# num_flyers: 1" in text
+
+
+def test_csv_flyers_only_none_omits_comment():
+    text = gv.render_calibration_batch_csv(_flyer_batch())
+    assert "# flyers_only" not in text
+
+
+def test_csv_flyers_only_reads_after_min_grade_comment():
+    # Comment order is min_grade -> flyers_only (the order the filters apply).
+    text = gv.render_calibration_batch_csv(
+        _flyer_batch(), min_grade="scattered", flyers_only=True
+    )
+    lines = [ln for ln in text.splitlines() if ln.startswith("#")]
+    mg = next(i for i, ln in enumerate(lines) if ln.startswith("# min_grade:"))
+    fo = next(i for i, ln in enumerate(lines) if ln.startswith("# flyers_only:"))
+    assert mg < fo
+
+
+def test_handler_flyers_only_threads_to_human_render():
+    lines = _run(
+        [
+            "calibrate-base-wpm-batch",
+            "--voice", "a", "160:60.0",
+            "--voice", "b", "165:60.0",
+            "--voice", "c", "170:60.0",
+            "--voice", "d", "175:60.0",
+            "--voice", "wild", "600:60.0",
+            "--flyers-only",
+        ]
+    )
+    text = "\n".join(lines)
+    assert "(flyers only)" in text
+    assert "wild: 600.0 WPM" in text
+
+
+def test_handler_flyers_only_matches_render_directly():
+    batch = _flyer_batch()
+    for kwargs, fmt in (
+        ({"flyers_only": True}, []),
+        ({"flyers_only": True}, ["--json"]),
+        ({"flyers_only": True}, ["--csv"]),
+    ):
+        argv = [
+            "calibrate-base-wpm-batch",
+            "--voice", "a", "160:60.0",
+            "--voice", "b", "165:60.0",
+            "--voice", "c", "170:60.0",
+            "--voice", "d", "175:60.0",
+            "--voice", "wild", "600:60.0",
+            "--flyers-only",
+            *fmt,
+        ]
+        lines = _run(argv)
+        if fmt == ["--json"]:
+            assert lines == [gv.render_calibration_batch_json(batch, **kwargs)]
+        elif fmt == ["--csv"]:
+            assert lines == [gv.render_calibration_batch_csv(batch, **kwargs)]
+        else:
+            assert lines == gv.render_calibration_batch(batch, **kwargs)

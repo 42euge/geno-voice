@@ -8,7 +8,7 @@ Usage:
     gv chat               # chat mode — STT → LLM (litellm) → TTS
     gv simulate-mirror …  # offline WPM-mirror trajectory / grid-sweep simulator
     gv calibrate-base-wpm … # offline base_wpm calibration (dispersion grade agree/loose/scattered + margin to next grade; --verdict for an adopt/keep call; --json/--csv for per-sample data)
-    gv calibrate-base-wpm-batch --voice af_heart 50:18.2 --voice am_adam 40:15.0  # calibrate a CORPUS of voices — per-voice base_wpm + grade + drift + the corpus median (which voices agree?); --json/--csv for the machine-readable corpus; --sort-by base_wpm/grade/drift/delta to float the most-useful voices to the top; --top-n N to keep only the N most-useful; --min-grade scattered/loose/agree to drop voices below a dispersion floor; --summary to name the single most-representative voice (nearest the corpus median); the flyers: line names outlier voices (outside the Q1-1.5·IQR..Q3+1.5·IQR Tukey fence), also marked ← flyer in the table
+    gv calibrate-base-wpm-batch --voice af_heart 50:18.2 --voice am_adam 40:15.0  # calibrate a CORPUS of voices — per-voice base_wpm + grade + drift + the corpus median (which voices agree?); --json/--csv for the machine-readable corpus; --sort-by base_wpm/grade/drift/delta to float the most-useful voices to the top; --top-n N to keep only the N most-useful; --min-grade scattered/loose/agree to drop voices below a dispersion floor; --summary to name the single most-representative voice (nearest the corpus median); --flyers-only to show ONLY the outlier voices; the flyers: line names outlier voices (outside the Q1-1.5·IQR..Q3+1.5·IQR Tukey fence), also marked ← flyer in the table
     gv stt-rtf --samples 10.0:1.2 5.0:0.8  # offline STT real-time-factor profile — fold measured transcriptions (audio_seconds:transcribe_seconds) into a robust median RTF + speed grade (fast/realtime/slow); --verdict for a lighten/keep call; --json/--csv for per-sample data
     gv stt-rtf-batch --engine mlx-whisper 10.0:1.2 5.0:0.8 --engine faster-whisper 10.0:6.0  # profile a CORPUS of STT engines — per-engine median RTF + speed grade + lighten/keep verdict, plus the outlier-robust corpus median (which engines keep up with realtime?); --json/--csv for the machine-readable corpus; --sort-by median_rtf/grade/delta to float the most-useful engines to the top; --top-n N to keep only the N most-useful; --min-grade slow/realtime/fast to drop engines below a speed floor; --summary to name the single most-representative engine (nearest the corpus median RTF); the flyers: line names outlier engines (median RTF outside the Q1-1.5·IQR..Q3+1.5·IQR Tukey fence), also marked ← flyer in the table
     gv vad recording.wav  # offline Silero VAD — segment a WAV into speech regions
@@ -1384,6 +1384,27 @@ def _filter_calib_batch_rows_by_grade(rows, min_grade):
     ]
 
 
+def _filter_calib_batch_rows_flyers_only(rows, flyers_only):
+    """Keep only the Tukey-fence outlier (``flyer``) voice rows (iter-415).
+
+    Render-only filter, the row-set companion to the iter-414 ``flyers:`` corpus
+    line: where that line NAMES the outliers, this trims the rendered table DOWN to
+    just them, so an operator who only cares "which voices disagree with the corpus?"
+    reads nothing else. A row is a flyer when ``row["flyer"]`` is truthy (its implied
+    base_wpm falls strictly outside ``[Q1 - 1.5*IQR, Q3 + 1.5*IQR]``); an uncalibrated
+    voice carries ``flyer`` ``None`` (no base rate to be an outlier) and is always
+    dropped. With ``flyers_only`` ``False`` returns the rows unchanged (a copy — the
+    default batch is byte-identical to the pre-filter output). Pure — builds a new
+    list, never mutates the source rows. The deliberate INVERSE of the rest of the
+    surface, which shows every voice; here the corpus consensus is the boring part and
+    the outliers are the signal. Composes with :func:`_filter_calib_batch_rows_by_grade`
+    (apply the grade floor first, then narrow to flyers).
+    """
+    if not flyers_only:
+        return list(rows)
+    return [r for r in rows if r["flyer"]]
+
+
 def calib_batch_sort_type(raw):
     """Argparse ``type`` for the iter-399 ``calibrate-base-wpm-batch --sort-by`` key.
 
@@ -1574,8 +1595,27 @@ def _format_calib_batch_flyers(batch):
     )
 
 
+def _calib_batch_empty_filter_note(min_grade, flyers_only):
+    """The body of the ``(no voice ...)`` note when a filter empties the table (iter-415).
+
+    A single descriptive clause naming whatever filter(s) narrowed the rows away, so the
+    operator knows WHY the table is empty rather than seeing a bare blank. ``min_grade``
+    (a dispersion floor) and ``flyers_only`` (the iter-415 outlier-only filter) compose:
+    each contributes a clause, joined when both are active. Pure, side-effect-free — the
+    human render wraps it in ``  (...)`` and the corpus lines still follow. Returns the
+    grade-floor wording unchanged when only ``min_grade`` is set (byte-identical to the
+    pre-iter-415 note), so the existing floor tests are untouched.
+    """
+    clauses = []
+    if min_grade is not None:
+        clauses.append(f"calibrated to grade '{min_grade}' or better")
+    if flyers_only:
+        clauses.append("is a corpus flyer")
+    return "no voice " + " and ".join(clauses)
+
+
 def render_calibration_batch(batch, *, min_grade=None, sort_by=None, top_n=None,
-                             summary=False):
+                             summary=False, flyers_only=False):
     """Render a ``calibrate-base-wpm-batch`` corpus verdict as plain-text lines.
 
     The human-readable face of :func:`calibrate_base_wpm_batch` (iter-397), the
@@ -1639,14 +1679,29 @@ def render_calibration_batch(batch, *, min_grade=None, sort_by=None, top_n=None,
     voice ...)`` note replaces the verdict. The calibration-batch analogue of the
     iter-388 ``summary`` on ``vad-gap-recommend-batch``. The default ``False`` renders
     the full table.
+
+    ``flyers_only`` (iter-415) narrows the table to ONLY the Tukey-fence outlier voices
+    (those marked ``← flyer`` — implied base_wpm outside ``[Q1 - 1.5*IQR, Q3 + 1.5*IQR]``),
+    the row-set companion to the iter-404 ``flyers:`` corpus line: where that line NAMES
+    the outliers, this shows nothing else, so an operator triaging "which voices disagree
+    with the corpus?" reads just them. It is applied alongside ``min_grade`` (after the
+    grade floor) and BEFORE ``sort_by`` / ``top_n``, and composes with ``summary`` (the
+    representative is then picked among the flyers). The corpus summary + ``grades:`` +
+    ``flyers:`` lines still describe the WHOLE corpus, so the operator sees how many
+    voices were elided. When the corpus has no flyer a single ``(no voice ...)`` note
+    replaces the body rows. The default ``False`` shows every voice.
     """
     nominal_line = f"  nominal: {batch.default_base_wpm:.1f}"
     if min_grade is not None:
         nominal_line += f" (min grade {min_grade})"
-    # The grade floor is applied first: every later stage (summary / sort / top-n) sees
-    # only the surviving voices, while the corpus aggregates below stay over the WHOLE
-    # corpus.
-    kept_rows = _filter_calib_batch_rows_by_grade(batch.rows, min_grade)
+    if flyers_only:
+        nominal_line += " (flyers only)"
+    # The grade floor is applied first, then the flyers-only narrowing: every later
+    # stage (summary / sort / top-n) sees only the surviving voices, while the corpus
+    # aggregates below stay over the WHOLE corpus.
+    kept_rows = _filter_calib_batch_rows_flyers_only(
+        _filter_calib_batch_rows_by_grade(batch.rows, min_grade), flyers_only
+    )
 
     def _corpus_lines():
         # The whole-corpus summary + dispersion-grade histogram, emitted at the tail of
@@ -1687,11 +1742,12 @@ def render_calibration_batch(batch, *, min_grade=None, sort_by=None, top_n=None,
             nominal_line,
         ]
         if best is None:
-            floor = (
-                f" calibrated to grade '{min_grade}' or better"
-                if min_grade is not None
-                else ""
-            )
+            clauses = []
+            if min_grade is not None:
+                clauses.append(f"calibrated to grade '{min_grade}' or better")
+            if flyers_only:
+                clauses.append("that is a corpus flyer")
+            floor = (" " + " and ".join(clauses)) if clauses else ""
             lines.append(
                 f"  (no voice{floor} carries a base rate — nothing to summarise)"
             )
@@ -1711,12 +1767,10 @@ def render_calibration_batch(batch, *, min_grade=None, sort_by=None, top_n=None,
         f"{batch.num_calibrated} calibrated)",
         nominal_line,
     ]
-    if min_grade is not None and not rows:
-        lines.append(
-            f"  (no voice calibrated to grade '{min_grade}' or better)"
-        )
+    if (min_grade is not None or flyers_only) and not rows:
+        lines.append(f"  ({_calib_batch_empty_filter_note(min_grade, flyers_only)})")
         # Still surface the whole-corpus summary + histogram so the operator sees
-        # what the floor filtered against, mirroring the iter-389 VAD-batch contract
+        # what the filter narrowed against, mirroring the iter-389 VAD-batch contract
         # that the corpus aggregates always describe the full corpus.
         lines.extend(_corpus_lines())
         return lines
@@ -1752,7 +1806,7 @@ def _wm_calib_batch_grade_order():
 
 
 def render_calibration_batch_json(batch, *, min_grade=None, sort_by=None, top_n=None,
-                                  summary=False):
+                                  summary=False, flyers_only=False):
     """Render a ``calibrate-base-wpm-batch`` corpus verdict as a JSON string.
 
     The nested/programmatic twin of :func:`render_calibration_batch` (iter-398),
@@ -1818,11 +1872,22 @@ def render_calibration_batch_json(batch, *, min_grade=None, sort_by=None, top_n=
     ``num_calibrated`` / median / ``grade_counts`` / …) are still carried so a consumer
     can see what the representative voice is central WITHIN. The default ``False`` carries
     the full ``rows`` list.
+
+    ``flyers_only`` (iter-415) narrows ``rows`` (or the ``summary`` pick) to ONLY the
+    Tukey-fence outlier voices (``flyer`` true), applied alongside ``min_grade`` and
+    BEFORE ``sort_by`` / ``top_n``; when set the payload also carries a top-level
+    ``flyers_only: true`` key. The corpus aggregates always describe the WHOLE corpus,
+    so a consumer still sees how many voices were elided. The default ``False`` keeps
+    every row (no ``flyers_only`` key).
     """
-    kept_rows = _filter_calib_batch_rows_by_grade(batch.rows, min_grade)
+    kept_rows = _filter_calib_batch_rows_flyers_only(
+        _filter_calib_batch_rows_by_grade(batch.rows, min_grade), flyers_only
+    )
     payload = {}
     if summary:
         payload["summary"] = True
+    if flyers_only:
+        payload["flyers_only"] = True
     if min_grade is not None:
         payload["min_grade"] = min_grade
     if not summary and sort_by is not None:
@@ -1906,7 +1971,7 @@ def _calib_batch_row_obj(row):
 
 
 def render_calibration_batch_csv(batch, *, min_grade=None, sort_by=None, top_n=None,
-                                 summary=False):
+                                 summary=False, flyers_only=False):
     """Render a ``calibrate-base-wpm-batch`` corpus verdict as CSV text.
 
     The spreadsheet/plot-friendly twin of :func:`render_calibration_batch_json`
@@ -1962,8 +2027,17 @@ def render_calibration_batch_csv(batch, *, min_grade=None, sort_by=None, top_n=N
     with a full batch — it is simply the single best row. The pick is INDEPENDENT of
     ``sort_by`` / ``top_n`` but respects ``min_grade``; a leading ``# summary: true``
     comment flags the mode. The default ``False`` emits every row.
+
+    ``flyers_only`` (iter-415) keeps only the Tukey-fence outlier (``flyer`` true) data
+    rows, applied alongside ``min_grade`` and BEFORE ``sort_by`` / ``top_n``; when set it
+    is echoed as a leading ``# flyers_only: true`` comment. The header/column set is
+    unchanged (a flyers-only run unions cleanly with a full one — it just has fewer rows),
+    and the trailing corpus aggregate comments still describe the WHOLE corpus. The
+    default ``False`` keeps every row.
     """
-    kept_rows = _filter_calib_batch_rows_by_grade(batch.rows, min_grade)
+    kept_rows = _filter_calib_batch_rows_flyers_only(
+        _filter_calib_batch_rows_by_grade(batch.rows, min_grade), flyers_only
+    )
     if summary:
         best = _best_calib_batch_row(kept_rows)
         data_rows = [best] if best is not None else []
@@ -2038,12 +2112,14 @@ def render_calibration_batch_csv(batch, *, min_grade=None, sort_by=None, top_n=N
     ]
     # --sort-by / --top-n shape a TABLE the operator reads; in --summary mode there is
     # exactly one row (the most-representative voice), so those ordering/count tags are
-    # meaningless and omitted — only min_grade (which scopes the pick) and the summary
-    # flag itself are echoed.
+    # meaningless and omitted — only min_grade / flyers_only (which scope the pick) and
+    # the summary flag itself are echoed.
     if not summary and top_n is not None:
         comments.insert(0, f"# top_n: {top_n}")
     if not summary and sort_by is not None:
         comments.insert(0, f"# sort_by: {sort_by}")
+    if flyers_only:
+        comments.insert(0, "# flyers_only: true")
     if min_grade is not None:
         comments.insert(0, f"# min_grade: {min_grade}")
     if summary:
@@ -11028,6 +11104,14 @@ def cmd_calibrate_base_wpm_batch(args, *, log=print):
     three formats (human verdict line / ``best`` JSON key / single CSV data row); the
     corpus aggregates are still carried so the operator sees what the pick is central
     within.
+
+    iter-415 adds ``--flyers-only``: a render-only filter that narrows the table to ONLY
+    the Tukey-fence outlier voices (those marked ``← flyer``), the row-set companion to
+    the iter-404 ``flyers:`` corpus line. Where ``--summary`` collapses to the most
+    CENTRAL voice, this shows only the voices that DISAGREE with the corpus. It composes
+    with ``--min-grade`` (grade floor first, then narrow to flyers) and applies before
+    ``--sort-by`` / ``--top-n`` across all three formats; the corpus aggregates still
+    describe the WHOLE corpus.
     """
     wm = _load_wpm_mirror()
     CalibrationSample = wm.CalibrationSample
@@ -11051,18 +11135,22 @@ def cmd_calibrate_base_wpm_batch(args, *, log=print):
     sort_by = getattr(args, "sort_by", None)
     top_n = getattr(args, "top_n", None)
     summary = getattr(args, "summary", False)
+    flyers_only = getattr(args, "flyers_only", False)
     if getattr(args, "json", False):
         log(render_calibration_batch_json(
-            batch, min_grade=min_grade, sort_by=sort_by, top_n=top_n, summary=summary
+            batch, min_grade=min_grade, sort_by=sort_by, top_n=top_n,
+            summary=summary, flyers_only=flyers_only
         ))
         return
     if getattr(args, "csv", False):
         log(render_calibration_batch_csv(
-            batch, min_grade=min_grade, sort_by=sort_by, top_n=top_n, summary=summary
+            batch, min_grade=min_grade, sort_by=sort_by, top_n=top_n,
+            summary=summary, flyers_only=flyers_only
         ))
         return
     for line in render_calibration_batch(
-        batch, min_grade=min_grade, sort_by=sort_by, top_n=top_n, summary=summary
+        batch, min_grade=min_grade, sort_by=sort_by, top_n=top_n,
+        summary=summary, flyers_only=flyers_only
     ):
         log(line)
 
@@ -13736,6 +13824,17 @@ def build_parser():
         "corpus median, ties to highest grade) — the inverse of '--sort-by delta'. "
         "Independent of --sort-by/--top-n but respects --min-grade. Applies to the "
         "human, --json (a 'best' key), and --csv (a single data row) output",
+    )
+    calib_batch.add_argument(
+        "--flyers-only",
+        action="store_true",
+        dest="flyers_only",
+        help="Show ONLY the Tukey-fence outlier voices (those marked ← flyer — implied "
+        "base_wpm outside the Q1-1.5·IQR..Q3+1.5·IQR fence), the row-set companion to "
+        "the flyers: corpus line. The inverse of --summary (which shows the most-central "
+        "voice). Composes with --min-grade, applied BEFORE --sort-by/--top-n. Render-only "
+        "— the corpus median/aggregates still describe the whole corpus. Applies to the "
+        "human, --json, and --csv output. Default: every voice",
     )
 
     # gv stt-rtf — fold measured STT transcriptions into a robust RTF profile
