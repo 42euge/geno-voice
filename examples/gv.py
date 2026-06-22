@@ -9,6 +9,7 @@ Usage:
     gv simulate-mirror …  # offline WPM-mirror trajectory / grid-sweep simulator
     gv calibrate-base-wpm … # offline base_wpm calibration (dispersion grade agree/loose/scattered + margin to next grade; --verdict for an adopt/keep call; --json/--csv for per-sample data)
     gv calibrate-base-wpm-batch --voice af_heart 50:18.2 --voice am_adam 40:15.0  # calibrate a CORPUS of voices — per-voice base_wpm + grade + drift + the corpus median (which voices agree?); --json/--csv for the machine-readable corpus; --sort-by base_wpm/grade/drift/delta to float the most-useful voices to the top; --top-n N to keep only the N most-useful; --min-grade scattered/loose/agree to drop voices below a dispersion floor; --summary to name the single most-representative voice (nearest the corpus median); the flyers: line names outlier voices (outside the Q1-1.5·IQR..Q3+1.5·IQR Tukey fence), also marked ← flyer in the table
+    gv stt-rtf --samples 10.0:1.2 5.0:0.8  # offline STT real-time-factor profile — fold measured transcriptions (audio_seconds:transcribe_seconds) into a robust median RTF + speed grade (fast/realtime/slow); --json/--csv for per-sample data
     gv vad recording.wav  # offline Silero VAD — segment a WAV into speech regions
     gv vad recording.wav --json # machine-readable segmentation (SileroResult.to_dict shape)
     gv vad-gaps recording.wav  # report the silence gaps BETWEEN speech regions (tune --min-silence-ms)
@@ -1142,6 +1143,51 @@ def calibration_sample_type(raw):
     return tuple(values)
 
 
+def stt_rtf_sample_type(raw):
+    """Argparse ``type`` for one ``stt-rtf --samples`` pair.
+
+    Parses ``"audio_seconds:transcribe_seconds"`` into an ``(audio_seconds,
+    transcribe_seconds)`` tuple of floats. Each pair is one measured offline
+    transcription: a clip of ``audio_seconds`` duration transcribed in a
+    wall-clock ``transcribe_seconds``. The handler builds a
+    :class:`stt.rtf_profile.TranscriptionSample` from each tuple and folds them
+    with ``profile_stt_rtf`` into a robust median RTF.
+
+    The STT-side analogue of :func:`calibration_sample_type` (iter-221): a pure,
+    side-effect-free arg parser. Raises :class:`argparse.ArgumentTypeError`
+    (rendered by argparse as ``SystemExit(2)``) on a malformed shape (not exactly
+    two fields), a non-numeric / NaN field, or a non-positive field — every field
+    must be a usable measurement, and ``TranscriptionSample.__post_init__``
+    rejects ``<= 0`` loudly, so the parser catches the same malformed input early
+    with a clean CLI error instead of forwarding garbage.
+    """
+    if not isinstance(raw, str):
+        raise argparse.ArgumentTypeError(f"sample must be a string, got {raw!r}")
+    fields = [f.strip() for f in raw.split(":")]
+    if len(fields) != 2 or any(not f for f in fields):
+        raise argparse.ArgumentTypeError(
+            "sample must be 'audio_seconds:transcribe_seconds', got "
+            f"{raw!r}"
+        )
+    names = ("audio_seconds", "transcribe_seconds")
+    values = []
+    for name, tok in zip(names, fields):
+        try:
+            value = float(tok)
+        except (TypeError, ValueError):
+            raise argparse.ArgumentTypeError(
+                f"{name} must be a number, got {tok!r}"
+            )
+        if value != value:  # NaN is unordered.
+            raise argparse.ArgumentTypeError(f"{name} must be a number, got nan")
+        if value <= 0:
+            raise argparse.ArgumentTypeError(
+                f"{name} must be positive, got {value}"
+            )
+        values.append(value)
+    return tuple(values)
+
+
 def _calib_dispersion_summary(grade):
     """Map a calibration ``dispersion_grade`` to a one-line trust note (iter-394).
 
@@ -2134,6 +2180,174 @@ def render_calibration_json(samples, calib):
                 ),
                 "nominal": round(calib.default_base_wpm, 3),
                 "drift": round(calib.drift, 3),
+            }
+        ),
+    }
+    return json.dumps(payload, indent=2)
+
+
+def _stt_rtf_grade_summary(grade):
+    """Map an ``stt-rtf`` ``speed_grade`` to a one-line note (iter-406).
+
+    The STT-side analogue of :func:`_calib_dispersion_summary`: per-grade text
+    saying what the grade means for the pipeline, with a defensive fallback for
+    an unexpected value so a future grade never drops the signal silently.
+    """
+    if grade == "fast":
+        return (
+            "transcription runs in well under realtime — end-of-turn STT can be "
+            "invoked inline with no perceptible stall"
+        )
+    if grade == "realtime":
+        return (
+            "transcription keeps pace with a live stream, but with less headroom "
+            "— a heavier clip or a busier host could tip it slow"
+        )
+    if grade == "slow":
+        return (
+            "transcription takes longer than the audio — the STT is the latency "
+            "bottleneck; a smaller model or streaming partials would help"
+        )
+    return "unrecognized speed grade — inspect the per-sample RTFs directly"
+
+
+def _stt_rtf_margin_note(margin):
+    """Phrase an ``stt-rtf`` ``speed_margin`` as a one-line headroom note (iter-406).
+
+    The grade (:func:`_stt_rtf_grade_summary`) says which speed band the median
+    RTF falls in; this says how comfortably it holds it — the RTF headroom before
+    the grade would degrade to the next-worse one. ``None`` (the worst grade,
+    ``"slow"``, has no worse grade to fall into) reads as "no slower grade to fall
+    to"; otherwise the margin is shown to 3 places so the operator can tell a
+    knife-edge grade from a firmly-held one. The STT-side twin of
+    :func:`_calib_dispersion_margin_note`.
+    """
+    if margin is None:
+        return "already the slowest grade — no slower grade to fall to"
+    return f"{margin:.3f} RTF headroom before the grade degrades"
+
+
+def render_stt_rtf(profile):
+    """Render an ``SttRtfProfile`` verdict as plain-text report lines.
+
+    The STT-side analogue of :func:`render_calibration` (iter-405's
+    ``profile_stt_rtf`` is the audio-free core; this is its human face). Pure:
+    returns a list of strings (no I/O, no ANSI) so it is testable in isolation —
+    the handler joins and prints them. ``profile`` of ``None`` (no samples)
+    yields a single "no samples" line, mirroring :func:`render_calibration`'s
+    empty contract.
+    """
+    if profile is None:
+        return ["stt-rtf profile: no samples (nothing to profile from)"]
+    lines = [
+        "STT real-time-factor profile from measured transcriptions",
+        f"  samples:          {profile.n_samples}",
+        f"  median RTF:       {profile.median_rtf:.3f} "
+        "(transcribe/audio; < 1 keeps up with realtime)",
+        f"  range:            {profile.min_rtf:.3f} – {profile.max_rtf:.3f}",
+        f"  spread:           {profile.spread:.3f} (runs disagree if large)",
+        f"  relative spread:  {profile.relative_spread:.3f} "
+        "(spread/median; comparable across engines)",
+        f"  speed:            {profile.speed_grade} "
+        f"({_stt_rtf_grade_summary(profile.speed_grade)}; "
+        f"{_stt_rtf_margin_note(profile.speed_margin)})",
+    ]
+    return lines
+
+
+def render_stt_rtf_csv(samples, profile):
+    """Render an ``stt-rtf`` profile as CSV text (no trailing newline).
+
+    The spreadsheet/plot-friendly twin of :func:`render_stt_rtf`, mirroring
+    :func:`render_calibration_csv`. A profile is a SET of per-transcription
+    samples folded to ONE verdict, so the natural CSV unit is **one row per
+    sample**: ``sample,audio_seconds,transcribe_seconds,rtf``. ``sample`` is
+    1-based, matching how an operator numbers their runs. ``rtf`` is each run's
+    per-sample real-time factor (the values the median is taken over), so a
+    plotter can eyeball the spread.
+
+    The aggregate verdict (median RTF, range, spread, relative_spread,
+    speed_grade, speed_margin) describes the whole SET, not a per-sample fact, so
+    it trails as ``#`` comment lines — self-describing metadata a plotting tool
+    skips by default (pandas ``read_csv(comment="#")``), the same ``#``-comment
+    precedent :func:`render_calibration_csv` uses. ``profile`` of ``None`` (no
+    samples) yields the header alone. Floats round to 3 places. Pure: returns a
+    single string built with the stdlib :mod:`csv` writer.
+    """
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["sample", "audio_seconds", "transcribe_seconds", "rtf"])
+    for i, s in enumerate(samples, start=1):
+        writer.writerow(
+            [
+                i,
+                round(float(s.audio_seconds), 3),
+                round(float(s.transcribe_seconds), 3),
+                round(s.rtf, 3),
+            ]
+        )
+    body = buf.getvalue().rstrip("\r\n")
+    if profile is None:
+        return body
+    summary = [
+        f"# median_rtf: {round(profile.median_rtf, 3)}",
+        f"# range: {round(profile.min_rtf, 3)} - {round(profile.max_rtf, 3)}",
+        f"# spread: {round(profile.spread, 3)}",
+        f"# relative_spread: {round(profile.relative_spread, 3)}",
+        f"# speed_grade: {profile.speed_grade}",
+        f"# speed_margin: "
+        f"{'' if profile.speed_margin is None else round(profile.speed_margin, 3)}",
+    ]
+    return body + "\n" + "\n".join(summary)
+
+
+def render_stt_rtf_json(samples, profile):
+    """Render an ``stt-rtf`` profile as a JSON string.
+
+    The nested/programmatic twin of :func:`render_stt_rtf` /
+    :func:`render_stt_rtf_csv`, bringing the STT-RTF surface the same human /
+    ``--json`` / ``--csv`` trio every calibration and VAD-analysis surface
+    carries. Where the CSV splits the profile into a per-sample data grid plus a
+    trailing ``#``-comment summary, the JSON nests BOTH in one object: a
+    ``samples`` list (one object per transcription) AND a ``profile`` object (the
+    aggregate verdict — median_rtf / n_samples / min_rtf / max_rtf / spread /
+    relative_spread / speed_grade / speed_margin).
+
+    Each sample object is ``{"sample": 1-based int, "audio_seconds": float,
+    "transcribe_seconds": float, "rtf": float}`` — the same fields the CSV row
+    carries. ``profile`` is ``null`` when there were no samples (nothing to
+    profile), mirroring :func:`profile_stt_rtf`'s empty contract and the CSV's
+    header-only output. ``speed_margin`` is ``null`` for a ``"slow"`` profile (no
+    worse grade to degrade into). Floats round to 3 places. Pure: returns a
+    single JSON string (no I/O).
+    """
+    sample_objs = [
+        {
+            "sample": i,
+            "audio_seconds": round(float(s.audio_seconds), 3),
+            "transcribe_seconds": round(float(s.transcribe_seconds), 3),
+            "rtf": round(s.rtf, 3),
+        }
+        for i, s in enumerate(samples, start=1)
+    ]
+    payload = {
+        "samples": sample_objs,
+        "profile": (
+            None
+            if profile is None
+            else {
+                "median_rtf": round(profile.median_rtf, 3),
+                "n_samples": profile.n_samples,
+                "min_rtf": round(profile.min_rtf, 3),
+                "max_rtf": round(profile.max_rtf, 3),
+                "spread": round(profile.spread, 3),
+                "relative_spread": round(profile.relative_spread, 3),
+                "speed_grade": profile.speed_grade,
+                "speed_margin": (
+                    None
+                    if profile.speed_margin is None
+                    else round(profile.speed_margin, 3)
+                ),
             }
         ),
     }
@@ -9804,6 +10018,30 @@ def _load_wpm_mirror():
     return module
 
 
+def _load_stt_rtf_profile():
+    """Load ``stt/rtf_profile.py`` directly by file path.
+
+    ``stt/__init__.py`` eagerly imports the whisper/faster-whisper engines (heavy
+    optional deps not installable everywhere), but the RTF-profile core is pure
+    stdlib. Loading it by path keeps this offline CLI importable on any platform
+    — the same bypass :func:`_load_wpm_mirror` uses for the calibration core and
+    the ``rtf_profile`` unit tests use directly.
+    """
+    import importlib.util
+
+    if "_gv_stt_rtf_profile" in sys.modules:
+        return sys.modules["_gv_stt_rtf_profile"]
+
+    path = Path(__file__).resolve().parent.parent / "stt" / "rtf_profile.py"
+    spec = importlib.util.spec_from_file_location("_gv_stt_rtf_profile", path)
+    module = importlib.util.module_from_spec(spec)
+    # Register before exec so dataclass()'s ``cls.__module__`` lookup resolves
+    # (frozen dataclasses in the module read sys.modules at class-creation).
+    sys.modules["_gv_stt_rtf_profile"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def cmd_simulate_mirror(args, *, log=print):
     """Run the offline WPM-mirror simulator and print the report.
 
@@ -10055,6 +10293,49 @@ def cmd_calibrate_base_wpm_batch(args, *, log=print):
     for line in render_calibration_batch(
         batch, min_grade=min_grade, sort_by=sort_by, top_n=top_n, summary=summary
     ):
+        log(line)
+
+
+def cmd_stt_rtf(args, *, log=print):
+    """Fold measured STT transcriptions into a robust RTF profile and print it.
+
+    The STT-side analogue of :func:`cmd_calibrate_base_wpm` (iter-221): iter-405
+    shipped the audio-free profiling core (``TranscriptionSample`` /
+    ``profile_stt_rtf``); this exposes it on the ``gv`` CLI so an operator can
+    fold a handful of offline-measured transcriptions
+    (``audio_seconds:transcribe_seconds`` pairs) into one robust median RTF and
+    read the speed grade — does the transcriber keep up with realtime, or is it
+    the latency bottleneck?
+
+    The core is pure stdlib loaded by file path (:func:`_load_stt_rtf_profile`)
+    so the parser stays audio-free and importable on any platform. ``log`` is
+    injectable for tests.
+
+    ``--json`` / ``--csv`` are the machine-readable twins (mutually exclusive at
+    the parser): ``--json`` emits the nested ``{samples, profile}`` object
+    (:func:`render_stt_rtf_json`) and ``--csv`` emits the per-sample
+    ``sample,audio_seconds,transcribe_seconds,rtf`` grid with the aggregate
+    profile trailing as ``#`` comment lines (:func:`render_stt_rtf_csv`); either
+    is the whole output in that mode. The human report is the default.
+    """
+    mod = _load_stt_rtf_profile()
+    TranscriptionSample = mod.TranscriptionSample
+    profile_stt_rtf = mod.profile_stt_rtf
+
+    samples = [
+        TranscriptionSample(
+            audio_seconds=audio_seconds, transcribe_seconds=transcribe_seconds
+        )
+        for (audio_seconds, transcribe_seconds) in args.samples
+    ]
+    profile = profile_stt_rtf(samples)
+    if getattr(args, "json", False):
+        log(render_stt_rtf_json(samples, profile))
+        return
+    if getattr(args, "csv", False):
+        log(render_stt_rtf_csv(samples, profile))
+        return
+    for line in render_stt_rtf(profile):
         log(line)
 
 
@@ -12188,6 +12469,7 @@ DEFAULT_HANDLERS = {
     "simulate-mirror": cmd_simulate_mirror,
     "calibrate-base-wpm": cmd_calibrate_base_wpm,
     "calibrate-base-wpm-batch": cmd_calibrate_base_wpm_batch,
+    "stt-rtf": cmd_stt_rtf,
     "vad": cmd_vad,
     "vad-gaps": cmd_vad_gaps,
     "vad-gap-percentiles": cmd_vad_gap_percentiles,
@@ -12555,6 +12837,40 @@ def build_parser():
         "corpus median, ties to highest grade) — the inverse of '--sort-by delta'. "
         "Independent of --sort-by/--top-n but respects --min-grade. Applies to the "
         "human, --json (a 'best' key), and --csv (a single data row) output",
+    )
+
+    # gv stt-rtf — fold measured STT transcriptions into a robust RTF profile
+    # (iter-406), the STT-side analogue of gv calibrate-base-wpm. Each --samples
+    # pair is one offline-measured transcription: audio_seconds:transcribe_seconds.
+    stt_rtf = sub.add_parser(
+        "stt-rtf",
+        help="Offline STT real-time-factor profile — fold measured "
+        "transcriptions (audio_seconds:transcribe_seconds) into a robust median "
+        "RTF + speed grade (does the transcriber keep up with realtime?)",
+    )
+    stt_rtf.add_argument(
+        "--samples",
+        type=stt_rtf_sample_type,
+        nargs="+",
+        required=True,
+        metavar="AUDIO_SECONDS:TRANSCRIBE_SECONDS",
+        help="One or more measured transcriptions as "
+        "'audio_seconds:transcribe_seconds', e.g. 10.0:1.2 5.0:0.8 (each is one "
+        "clip of known duration transcribed in a measured wall-clock time)",
+    )
+    stt_rtf_fmt = stt_rtf.add_mutually_exclusive_group()
+    stt_rtf_fmt.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit nested JSON (samples list + profile object) instead of the "
+        "human report, for programmatic consumers; mutually exclusive with --csv",
+    )
+    stt_rtf_fmt.add_argument(
+        "--csv",
+        action="store_true",
+        help="Emit per-sample CSV (sample,audio_seconds,transcribe_seconds,rtf) "
+        "with the aggregate profile trailing as # comment lines, for "
+        "spreadsheets/plots; mutually exclusive with --json",
     )
 
     # gv vad — offline Silero segmentation of a WAV file. Defaults mirror
