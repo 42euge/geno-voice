@@ -671,3 +671,177 @@ def test_handler_sort_matches_render_directly():
         ]
     )
     assert lines == expected
+
+
+# ---- iter-400: --top-n render-only count cap ---------------------------
+
+
+def test_parser_top_n_parses():
+    args = gv.build_parser().parse_args(
+        ["calibrate-base-wpm-batch", "--voice", "a", "165:60.0", "--top-n", "3"]
+    )
+    assert args.top_n == 3
+
+
+def test_parser_top_n_default_none():
+    args = gv.build_parser().parse_args(
+        ["calibrate-base-wpm-batch", "--voice", "a", "165:60.0"]
+    )
+    assert args.top_n is None
+
+
+def test_parser_top_n_rejects_zero_and_negative():
+    for bad in ("0", "-1"):
+        with pytest.raises(SystemExit) as exc:
+            gv.build_parser().parse_args(
+                ["calibrate-base-wpm-batch", "--voice", "a", "165:60.0",
+                 "--top-n", bad]
+            )
+        assert exc.value.code == 2
+
+
+def test_top_n_none_keeps_every_row():
+    batch = _batch(_SORT_VOICES)
+    assert _row_order(gv.render_calibration_batch(batch, top_n=None)) == [
+        "mid", "fast", "slow", "empty"
+    ]
+
+
+def test_top_n_caps_rows_after_sort():
+    # --sort-by delta floats the biggest outliers up; --top-n 2 keeps only those.
+    batch = _batch(_SORT_VOICES)
+    assert _row_order(
+        gv.render_calibration_batch(batch, sort_by="delta", top_n=2)
+    ) == ["fast", "slow"]
+
+
+def test_top_n_without_sort_keeps_argument_order_prefix():
+    batch = _batch(_SORT_VOICES)
+    assert _row_order(gv.render_calibration_batch(batch, top_n=2)) == [
+        "mid", "fast"
+    ]
+
+
+def test_top_n_larger_than_corpus_keeps_all():
+    batch = _batch(_SORT_VOICES)
+    assert _row_order(gv.render_calibration_batch(batch, top_n=99)) == [
+        "mid", "fast", "slow", "empty"
+    ]
+
+
+def test_top_n_header_names_cap_when_rows_dropped():
+    batch = _batch(_SORT_VOICES)
+    text = "\n".join(gv.render_calibration_batch(batch, top_n=2))
+    assert "(top 2 of 4)" in text
+
+
+def test_top_n_header_silent_when_nothing_dropped():
+    batch = _batch(_SORT_VOICES)
+    text = "\n".join(gv.render_calibration_batch(batch, top_n=4))
+    assert "top 4 of" not in text
+    assert "top " not in text  # no cap tag at all when nothing elided
+
+
+def test_top_n_does_not_change_corpus_summary():
+    # The corpus aggregates describe the WHOLE corpus even when rows are capped.
+    batch = _batch(_SORT_VOICES)
+    text = "\n".join(gv.render_calibration_batch(batch, sort_by="delta", top_n=1))
+    assert "corpus: median 165.0" in text
+    assert "range 150.0 – 180.0" in text
+    assert "spread 30.0" in text
+    # the grade histogram still counts all four voices
+    assert "1 uncalibrated" in text
+
+
+def test_json_top_n_caps_rows_and_names_key():
+    import json as _json
+
+    batch = _batch(_SORT_VOICES)
+    obj = _json.loads(
+        gv.render_calibration_batch_json(batch, sort_by="delta", top_n=2)
+    )
+    assert obj["top_n"] == 2
+    assert [r["voice"] for r in obj["rows"]] == ["fast", "slow"]
+    # aggregates still describe the whole corpus
+    assert obj["num_voices"] == 4
+    assert obj["implied_base_wpm_median"] == 165.0
+
+
+def test_json_top_n_none_omits_key():
+    import json as _json
+
+    batch = _batch(_SORT_VOICES)
+    obj = _json.loads(gv.render_calibration_batch_json(batch))
+    assert "top_n" not in obj
+
+
+def test_csv_top_n_caps_rows_and_comments_key():
+    batch = _batch(_SORT_VOICES)
+    text = gv.render_calibration_batch_csv(batch, sort_by="delta", top_n=2)
+    assert "# top_n: 2" in text
+    data_rows = [
+        ln for ln in text.splitlines()
+        if ln and not ln.startswith("#") and not ln.startswith("voice,")
+    ]
+    voices = [ln.split(",")[0] for ln in data_rows]
+    assert voices == ["fast", "slow"]
+    # corpus aggregate comments still describe the whole corpus
+    assert "# num_voices: 4" in text
+
+
+def test_csv_top_n_none_omits_comment():
+    batch = _batch(_SORT_VOICES)
+    text = gv.render_calibration_batch_csv(batch)
+    assert "# top_n" not in text
+
+
+def test_handler_top_n_threads_to_human_render():
+    lines = _run(
+        [
+            "calibrate-base-wpm-batch",
+            "--voice", "mid", "165:60.0",
+            "--voice", "fast", "180:60.0",
+            "--voice", "slow", "150:60.0",
+            "--sort-by", "delta", "--top-n", "2",
+        ]
+    )
+    assert _row_order(lines) == ["fast", "slow"]
+    assert "(top 2 of 3)" in "\n".join(lines)
+
+
+def test_handler_top_n_threads_to_json():
+    import json as _json
+
+    lines = _run(
+        [
+            "calibrate-base-wpm-batch",
+            "--voice", "mid", "165:60.0",
+            "--voice", "fast", "180:60.0",
+            "--voice", "slow", "150:60.0",
+            "--json", "--sort-by", "delta", "--top-n", "2",
+        ]
+    )
+    obj = _json.loads(lines[0])
+    assert obj["top_n"] == 2
+    assert [r["voice"] for r in obj["rows"]] == ["fast", "slow"]
+
+
+def test_handler_top_n_matches_render_directly():
+    batch = _batch(
+        [
+            ("mid", [(165, 60.0, 1.0)]),
+            ("fast", [(180, 60.0, 1.0)]),
+            ("slow", [(150, 60.0, 1.0)]),
+        ]
+    )
+    expected = gv.render_calibration_batch(batch, sort_by="delta", top_n=2)
+    lines = _run(
+        [
+            "calibrate-base-wpm-batch",
+            "--voice", "mid", "165:60.0",
+            "--voice", "fast", "180:60.0",
+            "--voice", "slow", "150:60.0",
+            "--sort-by", "delta", "--top-n", "2",
+        ]
+    )
+    assert lines == expected

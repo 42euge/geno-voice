@@ -8,7 +8,7 @@ Usage:
     gv chat               # chat mode — STT → LLM (litellm) → TTS
     gv simulate-mirror …  # offline WPM-mirror trajectory / grid-sweep simulator
     gv calibrate-base-wpm … # offline base_wpm calibration (dispersion grade agree/loose/scattered + margin to next grade; --verdict for an adopt/keep call; --json/--csv for per-sample data)
-    gv calibrate-base-wpm-batch --voice af_heart 50:18.2 --voice am_adam 40:15.0  # calibrate a CORPUS of voices — per-voice base_wpm + grade + drift + the corpus median (which voices agree?); --json/--csv for the machine-readable corpus; --sort-by base_wpm/grade/drift/delta to float the most-useful voices to the top
+    gv calibrate-base-wpm-batch --voice af_heart 50:18.2 --voice am_adam 40:15.0  # calibrate a CORPUS of voices — per-voice base_wpm + grade + drift + the corpus median (which voices agree?); --json/--csv for the machine-readable corpus; --sort-by base_wpm/grade/drift/delta to float the most-useful voices to the top; --top-n N to keep only the N most-useful
     gv vad recording.wav  # offline Silero VAD — segment a WAV into speech regions
     gv vad recording.wav --json # machine-readable segmentation (SileroResult.to_dict shape)
     gv vad-gaps recording.wav  # report the silence gaps BETWEEN speech regions (tune --min-silence-ms)
@@ -1358,7 +1358,7 @@ def _sort_calib_batch_rows(rows, sort_by):
     return list(rows)
 
 
-def render_calibration_batch(batch, *, sort_by=None):
+def render_calibration_batch(batch, *, sort_by=None, top_n=None):
     """Render a ``calibrate-base-wpm-batch`` corpus verdict as plain-text lines.
 
     The human-readable face of :func:`calibrate_base_wpm_batch` (iter-397), the
@@ -1382,14 +1382,30 @@ def render_calibration_batch(batch, *, sort_by=None):
     the ordering. The default ``None`` keeps the ``--voice`` argument order
     (byte-identical to the pre-sort render). When set, the nominal line names the
     active ordering so a reader knows the rows are no longer in argument order.
+
+    ``top_n`` (iter-400) keeps only the first ``top_n`` voice rows AFTER the
+    ``sort_by`` ordering, so ``--sort-by delta --top-n 5`` shows the FIVE biggest
+    corpus outliers. The calibration-batch analogue of the VAD batch's iter-387
+    ``--top-n``: where ``sort_by`` (an ORDERING) shapes the whole table, ``top_n``
+    (a COUNT) keeps a fixed number of the rows that floated to the top. It applies
+    to the displayed rows only — the corpus summary and ``grades:`` histogram still
+    describe the WHOLE corpus, so the operator sees how many voices were elided.
+    When a cap actually drops rows the nominal line gains a ``(top K of N)`` tag.
+    The default ``None`` keeps every row.
     """
+    nominal_line = f"  nominal: {batch.default_base_wpm:.1f}"
+    if sort_by is not None:
+        nominal_line += f" (sorted by {sort_by})"
+    sorted_rows = _sort_calib_batch_rows(batch.rows, sort_by)
+    rows = _truncate_batch_rows(sorted_rows, top_n)
+    if top_n is not None and len(rows) < len(sorted_rows):
+        nominal_line += f" (top {len(rows)} of {len(sorted_rows)})"
     lines = [
         f"base_wpm calibration batch ({batch.num_voices} voices, "
         f"{batch.num_calibrated} calibrated)",
-        f"  nominal: {batch.default_base_wpm:.1f}"
-        + (f" (sorted by {sort_by})" if sort_by is not None else ""),
+        nominal_line,
     ]
-    for r in _sort_calib_batch_rows(batch.rows, sort_by):
+    for r in rows:
         calib = r["calibration"]
         if calib is None:
             lines.append(f"  {r['voice']}: - (uncalibrated — no samples)")
@@ -1431,7 +1447,7 @@ def _wm_calib_batch_grade_order():
     return _load_wpm_mirror().CALIB_BATCH_GRADE_ORDER
 
 
-def render_calibration_batch_json(batch, *, sort_by=None):
+def render_calibration_batch_json(batch, *, sort_by=None, top_n=None):
     """Render a ``calibrate-base-wpm-batch`` corpus verdict as a JSON string.
 
     The nested/programmatic twin of :func:`render_calibration_batch` (iter-398),
@@ -1463,10 +1479,20 @@ def render_calibration_batch_json(batch, *, sort_by=None):
     consumer knows the ``rows`` list is no longer in argument order. The corpus
     aggregates are unaffected. The default ``None`` keeps the argument order (unchanged
     payload).
+
+    ``top_n`` (iter-400) keeps only the first ``top_n`` ``rows`` AFTER the
+    ``sort_by`` ordering. When a cap is set the payload also carries a top-level
+    ``top_n`` key naming the requested count, so a consumer knows the ``rows`` list
+    was truncated; the corpus aggregates (``num_voices`` / ``num_calibrated`` /
+    median / ``grade_counts`` / …) always describe the WHOLE corpus regardless of
+    the cap, so the consumer can still see how many voices were elided. The default
+    ``None`` keeps every row (no ``top_n`` key).
     """
     payload = {}
     if sort_by is not None:
         payload["sort_by"] = sort_by
+    if top_n is not None:
+        payload["top_n"] = top_n
     payload.update(
         {
             "nominal": round(batch.default_base_wpm, 3),
@@ -1479,7 +1505,9 @@ def render_calibration_batch_json(batch, *, sort_by=None):
             "grade_counts": {g: batch.grade_counts[g] for g in _wm_calib_batch_grade_order()},
             "rows": [
                 _calib_batch_row_obj(r)
-                for r in _sort_calib_batch_rows(batch.rows, sort_by)
+                for r in _truncate_batch_rows(
+                    _sort_calib_batch_rows(batch.rows, sort_by), top_n
+                )
             ],
         }
     )
@@ -1529,7 +1557,7 @@ def _calib_batch_row_obj(row):
     }
 
 
-def render_calibration_batch_csv(batch, *, sort_by=None):
+def render_calibration_batch_csv(batch, *, sort_by=None, top_n=None):
     """Render a ``calibrate-base-wpm-batch`` corpus verdict as CSV text.
 
     The spreadsheet/plot-friendly twin of :func:`render_calibration_batch_json`
@@ -1559,6 +1587,13 @@ def render_calibration_batch_csv(batch, *, sort_by=None):
     knows the data grid is no longer in argument order. The trailing corpus aggregate
     comments are unaffected. The default ``None`` keeps the argument order
     (byte-identical to the pre-sort grid).
+
+    ``top_n`` (iter-400) keeps only the first ``top_n`` per-voice data rows AFTER
+    the ``sort_by`` ordering; when a cap is set it is echoed as a leading
+    ``# top_n: <count>`` comment so a consumer knows the grid was truncated. The
+    trailing corpus aggregate comments (median / range / spread / grade histogram)
+    still describe the WHOLE corpus, so the consumer can see how many voices were
+    elided. The default ``None`` keeps every row.
     """
     buf = io.StringIO()
     writer = csv.writer(buf)
@@ -1575,7 +1610,7 @@ def render_calibration_batch_csv(batch, *, sort_by=None):
             "delta_from_median_wpm",
         ]
     )
-    for r in _sort_calib_batch_rows(batch.rows, sort_by):
+    for r in _truncate_batch_rows(_sort_calib_batch_rows(batch.rows, sort_by), top_n):
         calib = r["calibration"]
         if calib is None:
             writer.writerow([r["voice"], "", "", "", "", "", "", "", ""])
@@ -1612,6 +1647,8 @@ def render_calibration_batch_csv(batch, *, sort_by=None):
         "# grades: "
         + ", ".join(f"{counts[g]} {g}" for g in _wm_calib_batch_grade_order()),
     ]
+    if top_n is not None:
+        summary.insert(0, f"# top_n: {top_n}")
     if sort_by is not None:
         summary.insert(0, f"# sort_by: {sort_by}")
     return body + "\n" + "\n".join(summary)
@@ -9608,6 +9645,12 @@ def cmd_calibrate_base_wpm_batch(args, *, log=print):
     corpus outliers first), so the most-useful voices read first. It applies across
     all three formats (human / ``--json`` / ``--csv``); the engine and the corpus
     aggregates are unaffected.
+
+    iter-400 adds ``--top-n`` (mirroring ``vad-gap-recommend-batch --top-n``): a
+    render-only count cap that keeps only the first N voice rows AFTER ``--sort-by``,
+    so ``--sort-by delta --top-n 5`` shows the FIVE biggest corpus outliers. It also
+    applies across all three formats; the corpus aggregates always describe the WHOLE
+    corpus so the operator sees how many voices were elided.
     """
     wm = _load_wpm_mirror()
     CalibrationSample = wm.CalibrationSample
@@ -9628,13 +9671,14 @@ def cmd_calibrate_base_wpm_batch(args, *, log=print):
 
     batch = calibrate_base_wpm_batch(voices, default_base_wpm=args.nominal)
     sort_by = getattr(args, "sort_by", None)
+    top_n = getattr(args, "top_n", None)
     if getattr(args, "json", False):
-        log(render_calibration_batch_json(batch, sort_by=sort_by))
+        log(render_calibration_batch_json(batch, sort_by=sort_by, top_n=top_n))
         return
     if getattr(args, "csv", False):
-        log(render_calibration_batch_csv(batch, sort_by=sort_by))
+        log(render_calibration_batch_csv(batch, sort_by=sort_by, top_n=top_n))
         return
-    for line in render_calibration_batch(batch, sort_by=sort_by):
+    for line in render_calibration_batch(batch, sort_by=sort_by, top_n=top_n):
         log(line)
 
 
@@ -12103,6 +12147,17 @@ def build_parser():
         "movers off nominal first), 'delta' (biggest corpus outliers first). "
         "Render-only — the corpus median/aggregates are unaffected. Applies to the "
         "human, --json, and --csv output. Default: --voice argument order",
+    )
+    calib_batch.add_argument(
+        "--top-n",
+        type=positive_int_type,
+        default=None,
+        dest="top_n",
+        metavar="N",
+        help="Keep only the first N voice rows AFTER --sort-by (e.g. '--sort-by "
+        "delta --top-n 5' shows the 5 biggest corpus outliers). Render-only — the "
+        "corpus median/aggregates still describe the whole corpus. Applies to the "
+        "human, --json, and --csv output. Default: every voice",
     )
 
     # gv vad — offline Silero segmentation of a WAV file. Defaults mirror
