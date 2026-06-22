@@ -758,3 +758,313 @@ def test_handler_threads_sort_and_topn_to_csv():
     gv.cmd_stt_rtf_batch(args, log=lines.append)
     batch = _batch(("c", [(10.0, 15.0)]), ("a", [(10.0, 1.0)]))
     assert lines == [gv.render_stt_rtf_batch_csv(batch, sort_by="grade", top_n=1)]
+
+
+# ---- iter-412: --min-grade render-only speed-grade floor ----------------
+#
+# A speed-grade floor drops every engine below it, leaving only the engines
+# that keep up well enough. The grades produced by the fixtures: 0.1 RTF (10:1)
+# -> "fast", 0.8 RTF (10:8) -> "realtime", 1.5 RTF (10:15) -> "slow".
+
+
+# parser wiring -----------------------------------------------------------
+
+
+def test_min_grade_defaults_none():
+    args = gv.build_parser().parse_args(["stt-rtf-batch", "--engine", "a", "10.0:1.0"])
+    assert args.min_grade is None
+
+
+@pytest.mark.parametrize("grade", ["slow", "realtime", "fast"])
+def test_min_grade_parses_each_grade(grade):
+    args = gv.build_parser().parse_args(
+        ["stt-rtf-batch", "--engine", "a", "10.0:1.0", "--min-grade", grade]
+    )
+    assert args.min_grade == grade
+
+
+def test_min_grade_rejects_unknown():
+    with pytest.raises(SystemExit) as exc:
+        gv.build_parser().parse_args(
+            ["stt-rtf-batch", "--engine", "a", "10.0:1.0", "--min-grade", "turbo"]
+        )
+    assert exc.value.code == 2
+
+
+# min-grade type validator ------------------------------------------------
+
+
+def test_min_grade_type_accepts_each_grade():
+    for g in ("slow", "realtime", "fast"):
+        assert gv.stt_rtf_batch_min_grade_type(g) == g
+
+
+def test_min_grade_type_normalizes_case_and_whitespace():
+    assert gv.stt_rtf_batch_min_grade_type("  FAST ") == "fast"
+
+
+def test_min_grade_type_rejects_empty():
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.stt_rtf_batch_min_grade_type("")
+
+
+def test_min_grade_type_rejects_unknown():
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.stt_rtf_batch_min_grade_type("unprofiled")
+
+
+def test_min_grade_type_rejects_non_string():
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.stt_rtf_batch_min_grade_type(2)
+
+
+# filter primitive --------------------------------------------------------
+
+
+def test_filter_none_keeps_every_engine():
+    batch = _batch(("fast", [(10.0, 1.0)]), ("rt", [(10.0, 8.0)]), ("empty", []))
+    rows = gv._filter_stt_rtf_batch_rows_by_grade(batch.rows, None)
+    assert [r["engine"] for r in rows] == ["fast", "rt", "empty"]
+    # A copy, not the source tuple.
+    assert rows is not batch.rows
+
+
+def test_filter_slow_keeps_all_profiled_drops_unprofiled():
+    batch = _batch(
+        ("fast", [(10.0, 1.0)]),
+        ("rt", [(10.0, 8.0)]),
+        ("slow", [(10.0, 15.0)]),
+        ("empty", []),
+    )
+    rows = gv._filter_stt_rtf_batch_rows_by_grade(batch.rows, "slow")
+    assert [r["engine"] for r in rows] == ["fast", "rt", "slow"]
+
+
+def test_filter_realtime_drops_slow_and_unprofiled():
+    batch = _batch(
+        ("fast", [(10.0, 1.0)]),
+        ("rt", [(10.0, 8.0)]),
+        ("slow", [(10.0, 15.0)]),
+        ("empty", []),
+    )
+    rows = gv._filter_stt_rtf_batch_rows_by_grade(batch.rows, "realtime")
+    assert [r["engine"] for r in rows] == ["fast", "rt"]
+
+
+def test_filter_fast_keeps_only_fastest():
+    batch = _batch(
+        ("fast", [(10.0, 1.0)]),
+        ("rt", [(10.0, 8.0)]),
+        ("slow", [(10.0, 15.0)]),
+    )
+    rows = gv._filter_stt_rtf_batch_rows_by_grade(batch.rows, "fast")
+    assert [r["engine"] for r in rows] == ["fast"]
+
+
+def test_grade_meets_min_total_order():
+    # None / unrecognised rank below every floor; the floor itself always passes.
+    assert gv._stt_rtf_grade_meets_min("fast", "slow")
+    assert gv._stt_rtf_grade_meets_min("slow", "slow")
+    assert not gv._stt_rtf_grade_meets_min("slow", "realtime")
+    assert not gv._stt_rtf_grade_meets_min(None, "slow")
+    assert not gv._stt_rtf_grade_meets_min("bogus", "slow")
+    # None min_grade passes everything (no filter requested).
+    assert gv._stt_rtf_grade_meets_min(None, None)
+
+
+# human render ------------------------------------------------------------
+
+
+def test_human_render_min_grade_filters_and_echoes_header():
+    batch = _batch(
+        ("fast", [(10.0, 1.0)]), ("rt", [(10.0, 8.0)]), ("slow", [(10.0, 15.0)])
+    )
+    lines = gv.render_stt_rtf_batch(batch, min_grade="realtime")
+    assert "(min grade realtime)" in lines[0]
+    assert _engine_order(lines) == ["fast", "rt"]
+
+
+def test_human_render_min_grade_applied_before_sort_and_top_n():
+    # Floor keeps fast+rt; sort by median_rtf asc; top-n 1 -> fast only.
+    batch = _batch(
+        ("rt", [(10.0, 8.0)]), ("fast", [(10.0, 1.0)]), ("slow", [(10.0, 15.0)])
+    )
+    lines = gv.render_stt_rtf_batch(
+        batch, min_grade="realtime", sort_by="median_rtf", top_n=1
+    )
+    assert "(min grade realtime)" in lines[0]
+    assert "(sorted by median_rtf)" in lines[0]
+    assert _engine_order(lines) == ["fast"]
+
+
+def test_human_render_min_grade_removes_every_engine_emits_note():
+    batch = _batch(("slow", [(10.0, 15.0)]), ("empty", []))
+    lines = gv.render_stt_rtf_batch(batch, min_grade="fast")
+    text = "\n".join(lines)
+    assert "(no engine profiled to grade 'fast' or better)" in text
+    assert _engine_order(lines) == []
+
+
+def test_human_render_min_grade_does_not_change_corpus_summary():
+    batch = _batch(
+        ("fast", [(10.0, 1.0)]), ("rt", [(10.0, 8.0)]), ("slow", [(10.0, 15.0)])
+    )
+    full = [
+        l
+        for l in gv.render_stt_rtf_batch(batch)
+        if l.strip().startswith(("corpus:", "grades:"))
+    ]
+    floored = [
+        l
+        for l in gv.render_stt_rtf_batch(batch, min_grade="fast")
+        if l.strip().startswith(("corpus:", "grades:"))
+    ]
+    assert full == floored
+
+
+def test_human_render_default_has_no_min_grade_marker():
+    batch = _batch(("fast", [(10.0, 1.0)]), ("rt", [(10.0, 8.0)]))
+    assert "(min grade" not in gv.render_stt_rtf_batch(batch)[0]
+
+
+# json render -------------------------------------------------------------
+
+
+def test_json_min_grade_filters_rows_and_names_key():
+    import json
+
+    batch = _batch(
+        ("fast", [(10.0, 1.0)]), ("rt", [(10.0, 8.0)]), ("slow", [(10.0, 15.0)])
+    )
+    payload = json.loads(gv.render_stt_rtf_batch_json(batch, min_grade="realtime"))
+    assert payload["min_grade"] == "realtime"
+    assert [r["engine"] for r in payload["rows"]] == ["fast", "rt"]
+    # Corpus aggregates still describe the whole corpus.
+    assert payload["num_engines"] == 3
+    assert payload["num_profiled"] == 3
+
+
+def test_json_min_grade_none_omits_key():
+    import json
+
+    batch = _batch(("fast", [(10.0, 1.0)]), ("rt", [(10.0, 8.0)]))
+    payload = json.loads(gv.render_stt_rtf_batch_json(batch))
+    assert "min_grade" not in payload
+
+
+def test_json_min_grade_combines_with_sort_and_topn():
+    import json
+
+    batch = _batch(
+        ("rt", [(10.0, 8.0)]), ("fast", [(10.0, 1.0)]), ("slow", [(10.0, 15.0)])
+    )
+    payload = json.loads(
+        gv.render_stt_rtf_batch_json(
+            batch, min_grade="realtime", sort_by="median_rtf", top_n=1
+        )
+    )
+    assert payload["min_grade"] == "realtime"
+    assert payload["sort_by"] == "median_rtf"
+    assert payload["top_n"] == 1
+    assert [r["engine"] for r in payload["rows"]] == ["fast"]
+
+
+# csv render --------------------------------------------------------------
+
+
+def test_csv_min_grade_filters_rows_and_comments_key():
+    batch = _batch(
+        ("fast", [(10.0, 1.0)]), ("rt", [(10.0, 8.0)]), ("slow", [(10.0, 15.0)])
+    )
+    text = gv.render_stt_rtf_batch_csv(batch, min_grade="realtime")
+    assert "# min_grade: realtime" in text.splitlines()
+    assert _csv_data_engines(text) == ["fast", "rt"]
+    # Corpus comment still names all engines.
+    assert "# num_engines: 3" in text.splitlines()
+
+
+def test_csv_min_grade_none_omits_comment():
+    batch = _batch(("fast", [(10.0, 1.0)]), ("rt", [(10.0, 8.0)]))
+    text = gv.render_stt_rtf_batch_csv(batch)
+    assert "# min_grade:" not in text
+
+
+def test_csv_min_grade_reads_before_sort_and_topn():
+    batch = _batch(
+        ("rt", [(10.0, 8.0)]), ("fast", [(10.0, 1.0)]), ("slow", [(10.0, 15.0)])
+    )
+    text = gv.render_stt_rtf_batch_csv(
+        batch, min_grade="realtime", sort_by="median_rtf", top_n=1
+    )
+    comment_lines = [l for l in text.splitlines() if l.startswith("#")]
+    assert "# min_grade: realtime" in comment_lines
+    assert "# sort_by: median_rtf" in comment_lines
+    assert "# top_n: 1" in comment_lines
+    # min_grade reads before sort_by reads before top_n.
+    assert comment_lines.index("# min_grade: realtime") < comment_lines.index(
+        "# sort_by: median_rtf"
+    )
+    assert comment_lines.index("# sort_by: median_rtf") < comment_lines.index(
+        "# top_n: 1"
+    )
+    assert _csv_data_engines(text) == ["fast"]
+
+
+# handler threading -------------------------------------------------------
+
+
+def test_handler_threads_min_grade_to_human():
+    args = gv.build_parser().parse_args(
+        [
+            "stt-rtf-batch",
+            "--engine", "fast", "10.0:1.0",
+            "--engine", "rt", "10.0:8.0",
+            "--engine", "slow", "10.0:15.0",
+            "--min-grade", "realtime",
+        ]
+    )
+    lines = []
+    gv.cmd_stt_rtf_batch(args, log=lines.append)
+    batch = _batch(
+        ("fast", [(10.0, 1.0)]), ("rt", [(10.0, 8.0)]), ("slow", [(10.0, 15.0)])
+    )
+    assert lines == gv.render_stt_rtf_batch(batch, min_grade="realtime")
+
+
+def test_handler_threads_min_grade_to_json():
+    args = gv.build_parser().parse_args(
+        [
+            "stt-rtf-batch",
+            "--engine", "fast", "10.0:1.0",
+            "--engine", "slow", "10.0:15.0",
+            "--json",
+            "--min-grade", "fast",
+        ]
+    )
+    lines = []
+    gv.cmd_stt_rtf_batch(args, log=lines.append)
+    batch = _batch(("fast", [(10.0, 1.0)]), ("slow", [(10.0, 15.0)]))
+    assert lines == [
+        gv.render_stt_rtf_batch_json(batch, min_grade="fast", sort_by=None, top_n=None)
+    ]
+
+
+def test_handler_threads_min_grade_to_csv():
+    args = gv.build_parser().parse_args(
+        [
+            "stt-rtf-batch",
+            "--engine", "fast", "10.0:1.0",
+            "--engine", "slow", "10.0:15.0",
+            "--csv",
+            "--min-grade", "realtime",
+            "--sort-by", "grade",
+        ]
+    )
+    lines = []
+    gv.cmd_stt_rtf_batch(args, log=lines.append)
+    batch = _batch(("fast", [(10.0, 1.0)]), ("slow", [(10.0, 15.0)]))
+    assert lines == [
+        gv.render_stt_rtf_batch_csv(
+            batch, min_grade="realtime", sort_by="grade", top_n=None
+        )
+    ]
