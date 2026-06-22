@@ -10,7 +10,7 @@ Usage:
     gv calibrate-base-wpm … # offline base_wpm calibration (dispersion grade agree/loose/scattered + margin to next grade; --verdict for an adopt/keep call; --json/--csv for per-sample data)
     gv calibrate-base-wpm-batch --voice af_heart 50:18.2 --voice am_adam 40:15.0  # calibrate a CORPUS of voices — per-voice base_wpm + grade + drift + the corpus median (which voices agree?); --json/--csv for the machine-readable corpus; --sort-by base_wpm/grade/drift/delta to float the most-useful voices to the top; --top-n N to keep only the N most-useful; --min-grade scattered/loose/agree to drop voices below a dispersion floor; --summary to name the single most-representative voice (nearest the corpus median); the flyers: line names outlier voices (outside the Q1-1.5·IQR..Q3+1.5·IQR Tukey fence), also marked ← flyer in the table
     gv stt-rtf --samples 10.0:1.2 5.0:0.8  # offline STT real-time-factor profile — fold measured transcriptions (audio_seconds:transcribe_seconds) into a robust median RTF + speed grade (fast/realtime/slow); --verdict for a lighten/keep call; --json/--csv for per-sample data
-    gv stt-rtf-batch --engine mlx-whisper 10.0:1.2 5.0:0.8 --engine faster-whisper 10.0:6.0  # profile a CORPUS of STT engines — per-engine median RTF + speed grade + lighten/keep verdict, plus the outlier-robust corpus median (which engines keep up with realtime?); --json/--csv for the machine-readable corpus; --sort-by median_rtf/grade/delta to float the most-useful engines to the top; --top-n N to keep only the N most-useful; --min-grade slow/realtime/fast to drop engines below a speed floor; --summary to name the single most-representative engine (nearest the corpus median RTF)
+    gv stt-rtf-batch --engine mlx-whisper 10.0:1.2 5.0:0.8 --engine faster-whisper 10.0:6.0  # profile a CORPUS of STT engines — per-engine median RTF + speed grade + lighten/keep verdict, plus the outlier-robust corpus median (which engines keep up with realtime?); --json/--csv for the machine-readable corpus; --sort-by median_rtf/grade/delta to float the most-useful engines to the top; --top-n N to keep only the N most-useful; --min-grade slow/realtime/fast to drop engines below a speed floor; --summary to name the single most-representative engine (nearest the corpus median RTF); the flyers: line names outlier engines (median RTF outside the Q1-1.5·IQR..Q3+1.5·IQR Tukey fence), also marked ← flyer in the table
     gv vad recording.wav  # offline Silero VAD — segment a WAV into speech regions
     gv vad recording.wav --json # machine-readable segmentation (SileroResult.to_dict shape)
     gv vad-gaps recording.wav  # report the silence gaps BETWEEN speech regions (tune --min-silence-ms)
@@ -2654,6 +2654,32 @@ def _format_stt_rtf_batch_summary_verdict(row):
     )
 
 
+def _format_stt_rtf_batch_flyers(batch):
+    """Render the iter-414 corpus outlier line, naming the flyer engines.
+
+    The STT-side analogue of :func:`_format_calib_batch_flyers` (the iter-404
+    calibration-batch flyer line). The batch already carries a per-engine
+    ``flyer`` boolean (an engine whose ``median_rtf`` falls outside the Tukey
+    fence ``[Q1 - 1.5*IQR, Q3 + 1.5*IQR]``); this names them on one line so an
+    operator picking a transcriber does not have to scan the table for the
+    ``← flyer`` markers. Reads ``num_flyers`` + the per-row flags over the WHOLE
+    corpus (``batch.rows`` is the FULL row list, not a sorted/filtered/truncated
+    view), so the line describes the corpus regardless of any render-time
+    ``min_grade`` / ``sort_by`` / ``top_n`` / ``summary``. The fence bounds are
+    spelled out so the operator can see how far outside the middle half a flyer
+    sits, e.g. ``flyers: 1 (slow) outside [0.080, 0.160] RTF``. ``flyers: none``
+    when the corpus agrees (no outlier). Pure: returns a single string.
+    """
+    names = [r["engine"] for r in batch.rows if r["flyer"]]
+    if not names:
+        return "  flyers: none"
+    return (
+        f"  flyers: {len(names)} ({', '.join(str(n) for n in names)}) "
+        f"outside [{batch.corpus_fence_lo_rtf:.3f}, "
+        f"{batch.corpus_fence_hi_rtf:.3f}] RTF"
+    )
+
+
 def render_stt_rtf_batch(batch, *, min_grade=None, sort_by=None, top_n=None,
                          summary=False):
     """Render an ``stt-rtf-batch`` corpus verdict as plain-text report lines.
@@ -2672,6 +2698,10 @@ def render_stt_rtf_batch(batch, *, min_grade=None, sort_by=None, top_n=None,
     mirroring how :func:`render_calibration_batch` lists an uncalibrated voice.
     An engine whose verdict recommends action is marked ``← lighten`` inline so
     the operator sees which engines are worth swapping without cross-referencing.
+    An engine whose ``median_rtf`` falls outside the iter-414 Tukey fence is
+    marked ``← flyer`` inline, and a corpus ``flyers:`` line names the outliers
+    over the WHOLE corpus (the STT-side analogue of iter-404's flyer line on
+    ``calibrate-base-wpm-batch``).
 
     ``min_grade`` (iter-412) drops every engine row whose speed grade is below the
     floor (``"slow"`` / ``"realtime"`` / ``"fast"``, slowest kept first), leaving
@@ -2731,6 +2761,9 @@ def render_stt_rtf_batch(batch, *, min_grade=None, sort_by=None, top_n=None,
                 f"  corpus: median {batch.corpus_median_rtf:.3f}, "
                 f"range {batch.corpus_min_rtf:.3f} – {batch.corpus_max_rtf:.3f}, "
                 f"spread {batch.corpus_spread:.3f}, "
+                f"IQR {batch.corpus_iqr_rtf:.3f} "
+                "(a tight IQR with a wide spread means the engines agree but one "
+                "is a flyer), "
                 f"{batch.num_keep_up}/{batch.num_profiled} keep up with realtime"
             )
         else:
@@ -2740,6 +2773,11 @@ def render_stt_rtf_batch(batch, *, min_grade=None, sort_by=None, top_n=None,
             f"{counts[g]} {g}" for g in _stt_rtf_batch_grade_order()
         )
         out.append(f"  grades: {grades}")
+        # iter-414 corpus flyer line — names the outlier engines the IQR-vs-spread
+        # gap only HINTED at, over the WHOLE corpus (independent of
+        # min_grade/sort_by/top_n/summary).
+        if batch.num_profiled:
+            out.append(_format_stt_rtf_batch_flyers(batch))
         return out
 
     header = header_prefix
@@ -2787,9 +2825,12 @@ def render_stt_rtf_batch(batch, *, min_grade=None, sort_by=None, top_n=None,
         # engine; mark it inline so the operator sees which engines to swap.
         verdict = r["verdict"]
         lighten_mark = "  ← lighten" if verdict is not None and verdict.recommend else ""
+        # iter-414 trailing flyer marker — names the outlier engine inline so the
+        # operator sees it without cross-referencing the corpus flyers: line.
+        flyer_mark = "  ← flyer" if r["flyer"] else ""
         lines.append(
             f"  {r['engine']}: {profile.median_rtf:.3f} RTF "
-            f"({profile.speed_grade}, Δmedian {delta_cell}){lighten_mark}"
+            f"({profile.speed_grade}, Δmedian {delta_cell}){lighten_mark}{flyer_mark}"
         )
     lines.extend(_corpus_lines())
     return lines
@@ -2828,6 +2869,7 @@ def _stt_rtf_batch_row_obj(row):
         ),
         "delta_from_median_rtf": _round_or_none(row["delta_from_median_rtf"]),
         "recommend": None if verdict is None else verdict.recommend,
+        "flyer": row["flyer"],
     }
 
 
@@ -2843,10 +2885,16 @@ def render_stt_rtf_batch_json(batch, *, min_grade=None, sort_by=None, top_n=None
     and the verdict's ``recommend`` flag) plus the corpus aggregates
     (``num_engines`` / ``num_profiled`` / the outlier-robust ``corpus_median_rtf``
     / ``corpus_min_rtf`` / ``corpus_max_rtf`` / ``corpus_spread`` of the per-engine
-    median RTFs / ``num_keep_up`` / ``num_recommend`` / the ``grade_counts``
-    histogram — always all four :data:`STT_RTF_BATCH_GRADE_ORDER` buckets summing
-    to ``num_engines``) and the shared verdict gates (``rel_spread_max`` /
-    ``min_samples``).
+    median RTFs / the iter-414 ``corpus_q1_rtf`` / ``corpus_q3_rtf`` /
+    ``corpus_iqr_rtf`` (the outlier-robust inter-quartile spread, ``null`` when no
+    engine profiled) / the Tukey-fence outlier keys (``corpus_fence_lo_rtf`` /
+    ``corpus_fence_hi_rtf`` = the ``[Q1 - 1.5*IQR, Q3 + 1.5*IQR]`` fence, ``null``
+    when no engine profiled; ``num_flyers`` = how many engines fall outside it) /
+    ``num_keep_up`` / ``num_recommend`` / the ``grade_counts`` histogram — always
+    all four :data:`STT_RTF_BATCH_GRADE_ORDER` buckets summing to ``num_engines``)
+    and the shared verdict gates (``rel_spread_max`` / ``min_samples``). Each row
+    (and the ``best`` object in summary mode) carries a ``flyer`` boolean
+    (``null`` for an unprofiled engine).
 
     Each row's ``profile`` is the SAME object the single-engine ``--json`` emits
     for that engine (median / range / spread / relative_spread / speed_grade /
@@ -2900,6 +2948,12 @@ def render_stt_rtf_batch_json(batch, *, min_grade=None, sort_by=None, top_n=None
             "corpus_min_rtf": _round_or_none(batch.corpus_min_rtf),
             "corpus_max_rtf": _round_or_none(batch.corpus_max_rtf),
             "corpus_spread": _round_or_none(batch.corpus_spread),
+            "corpus_q1_rtf": _round_or_none(batch.corpus_q1_rtf),
+            "corpus_q3_rtf": _round_or_none(batch.corpus_q3_rtf),
+            "corpus_iqr_rtf": _round_or_none(batch.corpus_iqr_rtf),
+            "corpus_fence_lo_rtf": _round_or_none(batch.corpus_fence_lo_rtf),
+            "corpus_fence_hi_rtf": _round_or_none(batch.corpus_fence_hi_rtf),
+            "num_flyers": batch.num_flyers,
             "num_keep_up": batch.num_keep_up,
             "num_recommend": batch.num_recommend,
             "rel_spread_max": round(batch.rel_spread_max, 3),
@@ -2933,14 +2987,16 @@ def render_stt_rtf_batch_csv(batch, *, min_grade=None, sort_by=None, top_n=None,
     unit is **one row per engine** — the shape a plotter wants (one median RTF per
     engine to eyeball which keep up) and a spreadsheet wants (one engine per
     line). Columns:
-    ``engine,median_rtf,n_samples,min_rtf,max_rtf,spread,relative_spread,speed_grade,speed_margin,delta_from_median_rtf,recommend``
-    (``recommend`` is the iter-407 ``true``/``false`` act-or-keep flag, empty for
-    an unprofiled engine).
+    ``engine,median_rtf,n_samples,min_rtf,max_rtf,spread,relative_spread,speed_grade,speed_margin,delta_from_median_rtf,recommend,flyer``
+    (``recommend`` is the iter-407 ``true``/``false`` act-or-keep flag, ``flyer``
+    is the iter-414 ``true``/``false`` Tukey-fence outlier flag, both empty for an
+    unprofiled engine).
 
     An engine with no samples has no profile, so every numeric cell past
     ``engine`` is empty (the CSV spelling of JSON ``null``) — listed but blank.
     The corpus aggregates the human/JSON twins surface (median / range / spread /
-    num_keep_up / num_recommend / grade histogram) trail as ``#`` comment lines —
+    iter-414 IQR / Tukey fence + ``num_flyers`` / num_keep_up / num_recommend /
+    grade histogram) trail as ``#`` comment lines —
     self-describing metadata a plotting/spreadsheet tool skips by default (pandas
     ``read_csv(comment="#")``), matching the ``#``-comment precedent
     :func:`render_calibration_batch_csv` uses — so the per-engine rows stay a
@@ -2997,12 +3053,20 @@ def render_stt_rtf_batch_csv(batch, *, min_grade=None, sort_by=None, top_n=None,
             "speed_margin",
             "delta_from_median_rtf",
             "recommend",
+            "flyer",
         ]
     )
+
+    def _flyer_cell(value):
+        # Per-row Tukey-fence outlier flag (iter-414). Empty for an unprofiled
+        # engine that carries no flag (the CSV spelling of null), otherwise the
+        # lowercase ``true`` / ``false`` the other booleans use.
+        return "" if value is None else str(bool(value)).lower()
+
     for r in data_rows:
         profile = r["profile"]
         if profile is None:
-            writer.writerow([r["engine"], "", "", "", "", "", "", "", "", "", ""])
+            writer.writerow([r["engine"], "", "", "", "", "", "", "", "", "", "", ""])
             continue
         margin = profile.speed_margin
         delta = r["delta_from_median_rtf"]
@@ -3020,6 +3084,7 @@ def render_stt_rtf_batch_csv(batch, *, min_grade=None, sort_by=None, top_n=None,
                 "" if margin is None else round(margin, 3),
                 "" if delta is None else round(delta, 3),
                 "" if verdict is None else str(bool(verdict.recommend)).lower(),
+                _flyer_cell(r["flyer"]),
             ]
         )
     body = buf.getvalue().rstrip("\r\n")
@@ -3034,6 +3099,10 @@ def render_stt_rtf_batch_csv(batch, *, min_grade=None, sort_by=None, top_n=None,
         f"# corpus_median_rtf: {_agg(batch.corpus_median_rtf)}",
         f"# range: {_agg(batch.corpus_min_rtf)} - {_agg(batch.corpus_max_rtf)}",
         f"# corpus_spread: {_agg(batch.corpus_spread)}",
+        f"# corpus_iqr_rtf: {_agg(batch.corpus_iqr_rtf)}",
+        f"# corpus_fence_rtf: {_agg(batch.corpus_fence_lo_rtf)} - "
+        f"{_agg(batch.corpus_fence_hi_rtf)}",
+        f"# num_flyers: {batch.num_flyers}",
         f"# num_keep_up: {batch.num_keep_up}",
         f"# num_recommend: {batch.num_recommend}",
         "# grades: "

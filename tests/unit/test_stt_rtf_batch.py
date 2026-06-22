@@ -231,6 +231,123 @@ def test_num_recommend_le_slow_count():
 
 
 # --------------------------------------------------------------------------
+# iter-414 — IQR / Tukey-fence flyer detection
+# --------------------------------------------------------------------------
+
+
+def test_iqr_quartiles_over_per_engine_medians():
+    # Five engines with per-engine median RTFs 0.1, 0.2, 0.3, 0.4, 0.5.
+    # R-7 percentile: Q1 = 0.2, Q3 = 0.4, IQR = 0.2.
+    batch = profile_stt_rtf_batch(
+        [
+            ("a", _samples((10.0, 1.0))),  # 0.1
+            ("b", _samples((10.0, 2.0))),  # 0.2
+            ("c", _samples((10.0, 3.0))),  # 0.3
+            ("d", _samples((10.0, 4.0))),  # 0.4
+            ("e", _samples((10.0, 5.0))),  # 0.5
+        ]
+    )
+    assert round(batch.corpus_q1_rtf, 10) == 0.2
+    assert round(batch.corpus_q3_rtf, 10) == 0.4
+    assert round(batch.corpus_iqr_rtf, 10) == 0.2
+
+
+def test_fence_is_tukey_band():
+    # Same five engines: fence = [Q1 - 1.5*IQR, Q3 + 1.5*IQR] = [-0.1, 0.7].
+    batch = profile_stt_rtf_batch(
+        [
+            ("a", _samples((10.0, 1.0))),
+            ("b", _samples((10.0, 2.0))),
+            ("c", _samples((10.0, 3.0))),
+            ("d", _samples((10.0, 4.0))),
+            ("e", _samples((10.0, 5.0))),
+        ]
+    )
+    assert round(batch.corpus_fence_lo_rtf, 10) == -0.1
+    assert round(batch.corpus_fence_hi_rtf, 10) == 0.7
+    # No engine sits outside the fence — a tidy corpus has no flyers.
+    assert batch.num_flyers == 0
+    assert all(r["flyer"] is False for r in batch.rows)
+
+
+def test_flyer_named_when_one_engine_is_an_outlier():
+    # Four tight engines around 0.1 plus one pathological slow one. The middle
+    # half is tight, so the slow engine falls outside the Tukey fence => flyer.
+    batch = profile_stt_rtf_batch(
+        [
+            ("a", _samples((10.0, 1.0))),  # 0.1
+            ("b", _samples((10.0, 1.1))),  # 0.11
+            ("c", _samples((10.0, 1.2))),  # 0.12
+            ("d", _samples((10.0, 1.3))),  # 0.13
+            ("slow", _samples((10.0, 50.0))),  # 5.0 — outlier
+        ]
+    )
+    by = {r["engine"]: r for r in batch.rows}
+    assert by["slow"]["flyer"] is True
+    assert all(by[n]["flyer"] is False for n in ("a", "b", "c", "d"))
+    assert batch.num_flyers == 1
+
+
+def test_unprofiled_engine_is_never_a_flyer():
+    batch = profile_stt_rtf_batch(
+        [
+            ("a", _samples((10.0, 1.0))),
+            ("b", _samples((10.0, 1.1))),
+            ("c", _samples((10.0, 1.2))),
+            ("slow", _samples((10.0, 50.0))),
+            ("empty", []),
+        ]
+    )
+    by = {r["engine"]: r for r in batch.rows}
+    # An unprofiled engine has no median RTF, so it cannot be a flyer (its flag
+    # stays None, like the calibration batch's uncalibrated voice).
+    assert by["empty"]["flyer"] is None
+    assert by["slow"]["flyer"] is True
+    assert batch.num_flyers == 1
+
+
+def test_empty_corpus_has_no_fence():
+    batch = profile_stt_rtf_batch([("a", []), ("b", [])])
+    assert batch.corpus_q1_rtf is None
+    assert batch.corpus_q3_rtf is None
+    assert batch.corpus_iqr_rtf is None
+    assert batch.corpus_fence_lo_rtf is None
+    assert batch.corpus_fence_hi_rtf is None
+    assert batch.num_flyers == 0
+
+
+def test_single_engine_zero_iqr_no_flyer():
+    # One engine: Q1 = Q3 = its median, IQR = 0, fence collapses to [median,
+    # median]. The lone engine sits ON the fence, not strictly outside it, so it
+    # is not a flyer (degenerate-corpus contract).
+    batch = profile_stt_rtf_batch([("only", _samples((10.0, 3.0)))])
+    assert batch.corpus_iqr_rtf == 0.0
+    assert batch.corpus_fence_lo_rtf == 0.3
+    assert batch.corpus_fence_hi_rtf == 0.3
+    assert batch.num_flyers == 0
+    assert batch.rows[0]["flyer"] is False
+
+
+def test_identical_engines_zero_iqr_one_different_is_flyer():
+    # Four identical engines (IQR 0) plus one different: the fence collapses to
+    # the shared value, and only the strictly-outside engine is a flyer.
+    batch = profile_stt_rtf_batch(
+        [
+            ("a", _samples((10.0, 1.0))),  # 0.1
+            ("b", _samples((10.0, 1.0))),  # 0.1
+            ("c", _samples((10.0, 1.0))),  # 0.1
+            ("d", _samples((10.0, 1.0))),  # 0.1
+            ("odd", _samples((10.0, 5.0))),  # 0.5 — strictly outside [0.1, 0.1]
+        ]
+    )
+    assert batch.corpus_iqr_rtf == 0.0
+    by = {r["engine"]: r for r in batch.rows}
+    assert by["odd"]["flyer"] is True
+    assert all(by[n]["flyer"] is False for n in ("a", "b", "c", "d"))
+    assert batch.num_flyers == 1
+
+
+# --------------------------------------------------------------------------
 # gate threading
 # --------------------------------------------------------------------------
 

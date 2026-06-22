@@ -446,6 +446,25 @@ def stt_rtf_verdict(
 STT_RTF_BATCH_GRADE_ORDER = ("fast", "realtime", "slow", "unprofiled")
 
 
+def _percentile_of_sorted(sorted_values, p: float) -> float:
+    """Linear-interpolated percentile ``p`` of an already-SORTED, non-empty list.
+
+    The R-7 / numpy-``"linear"`` convention (iter-414, the STT-RTF-batch twin of
+    :func:`session.wpm_mirror._percentile_of_sorted`, kept local so this module
+    stays self-contained and importable without the calibration pipeline): for
+    ``n`` samples the fractional rank is ``(p / 100) * (n - 1)`` and the value
+    interpolates between the samples at the floor and ceil of that rank. A single
+    sample yields that sample for every percentile. Caller sorts and guards the
+    empty list. Returns the raw (unrounded) value — the caller rounds.
+    """
+    n = len(sorted_values)
+    rank = (p / 100.0) * (n - 1)
+    lo = int(rank)
+    hi = min(lo + 1, n - 1)
+    frac = rank - lo
+    return sorted_values[lo] + frac * (sorted_values[hi] - sorted_values[lo])
+
+
 @dataclass(frozen=True)
 class SttRtfBatch:
     """Verdict of profiling a CORPUS of STT engines/models (iter-409).
@@ -462,9 +481,12 @@ class SttRtfBatch:
         ``verdict`` (the engine's :class:`SttRtfVerdict` — the iter-407
         recommend/keep call, or ``None`` for an unprofiled engine), and
         ``delta_from_median_rtf`` (the engine's ``median_rtf`` minus the corpus
-        median, ``None`` for an unprofiled engine). The per-engine grade /
-        margin / spread live on the embedded ``profile`` so each row agrees
-        EXACTLY with ``gv stt-rtf`` on that engine's samples.
+        median, ``None`` for an unprofiled engine), and ``flyer`` (the iter-414
+        boolean — ``True`` when the engine's ``median_rtf`` falls outside the
+        Tukey fence ``[Q1 - 1.5*IQR, Q3 + 1.5*IQR]``, ``False`` when it sits
+        inside, ``None`` for an unprofiled engine that carries no median). The
+        per-engine grade / margin / spread live on the embedded ``profile`` so
+        each row agrees EXACTLY with ``gv stt-rtf`` on that engine's samples.
       num_engines: how many engines were submitted (``len(rows)``).
       num_profiled: how many carried at least one sample (fed the corpus
         aggregates); an unprofiled engine contributes a row but not a number.
@@ -479,6 +501,25 @@ class SttRtfBatch:
         engines clock (``None`` when none profiled). A large spread means the
         engines genuinely differ in speed on this host, so the choice of
         transcriber matters.
+      corpus_q1_rtf / corpus_q3_rtf: the 25th / 75th percentiles of the
+        per-engine ``median_rtf`` (R-7 interpolation), ``None`` when none
+        profiled. The edges of the middle half of the corpus.
+      corpus_iqr_rtf: ``corpus_q3_rtf - corpus_q1_rtf`` — the outlier-ROBUST
+        spread (iter-414). Where ``corpus_spread`` (max - min) is a single pair
+        of extremes — one pathological engine inflates it — the IQR measures the
+        width of the MIDDLE HALF of the corpus, so a lone outlier engine cannot
+        widen it. A tight IQR alongside a wide spread is the signature of "the
+        engines agree on a typical speed, but one is a flyer". The STT-side twin
+        of iter-403's ``implied_base_wpm_iqr``. ``None`` when none profiled.
+      corpus_fence_lo_rtf / corpus_fence_hi_rtf: the standard Tukey boxplot fence
+        ``[Q1 - 1.5*IQR, Q3 + 1.5*IQR]`` over the per-engine ``median_rtf``
+        (iter-414, the STT-side analogue of iter-404's
+        ``implied_base_wpm_fence_lo``/``_hi``). An engine whose ``median_rtf``
+        falls outside this band is a ``flyer`` — a transcriber clocking at a
+        speed the rest of the corpus does not. ``None`` when none profiled.
+      num_flyers: how many engines are flyers (``median_rtf`` outside the Tukey
+        fence); ``0`` when none profiled. Reading high alongside a tight IQR
+        means one engine is an outlier the corpus median already shrugged off.
       grade_counts: how many engines sit at each speed grade, keyed by
         :data:`STT_RTF_BATCH_GRADE_ORDER` (always all four buckets, summing to
         ``num_engines``) — at a glance, how many engines keep up with realtime
@@ -507,6 +548,12 @@ class SttRtfBatch:
     corpus_min_rtf: float | None
     corpus_max_rtf: float | None
     corpus_spread: float | None
+    corpus_q1_rtf: float | None
+    corpus_q3_rtf: float | None
+    corpus_iqr_rtf: float | None
+    corpus_fence_lo_rtf: float | None
+    corpus_fence_hi_rtf: float | None
+    num_flyers: int
     grade_counts: dict
     num_keep_up: int
     num_recommend: int
@@ -564,8 +611,9 @@ def profile_stt_rtf_batch(
                 "engine": label,
                 "profile": profile,
                 "verdict": verdict,
-                # delta filled in once the corpus median is known.
+                # delta + flyer filled in once the corpus median / fences are known.
                 "delta_from_median_rtf": None,
+                "flyer": None,
             }
         )
         if profile is not None:
@@ -576,12 +624,41 @@ def profile_stt_rtf_batch(
         corpus_min = min(medians)
         corpus_max = max(medians)
         corpus_spread = corpus_max - corpus_min
+        # iter-414 outlier-ROBUST spread: the inter-quartile range (Q3 - Q1) of the
+        # per-engine median RTFs. Where ``corpus_spread`` (max - min) is a single
+        # pair of extremes — one pathological engine inflates it — the IQR measures
+        # the width of the MIDDLE HALF of the corpus, so a lone outlier engine
+        # cannot widen it. The STT-side twin of iter-403's IQR on
+        # ``calibrate_base_wpm_batch``.
+        srt = sorted(medians)
+        corpus_q1 = _percentile_of_sorted(srt, 25)
+        corpus_q3 = _percentile_of_sorted(srt, 75)
+        corpus_iqr = corpus_q3 - corpus_q1
+        # iter-414 outlier (flyer) flag, the STT-side analogue of iter-404's flyer
+        # flag on ``calibrate_base_wpm_batch``. The standard Tukey boxplot fence: an
+        # engine is a flyer when its median RTF falls below Q1 - 1.5*IQR or above
+        # Q3 + 1.5*IQR, so an operator picking a transcriber sees WHICH engine
+        # clocks at a speed the rest of the corpus does not without scanning the
+        # Δmedian column. When IQR is 0 (a degenerate corpus whose middle half is a
+        # single value) the fences collapse to [Q1, Q3] and only engines strictly
+        # outside that band are flyers — a lone different engine among identical
+        # ones is correctly named.
+        fence_lo = corpus_q1 - 1.5 * corpus_iqr
+        fence_hi = corpus_q3 + 1.5 * corpus_iqr
         for r in rows:
             profile = r["profile"]
             if profile is not None:
                 r["delta_from_median_rtf"] = profile.median_rtf - corpus_median
+                r["flyer"] = (
+                    profile.median_rtf < fence_lo
+                    or profile.median_rtf > fence_hi
+                )
+        num_flyers = sum(1 for r in rows if r["flyer"])
     else:
         corpus_median = corpus_min = corpus_max = corpus_spread = None
+        corpus_q1 = corpus_q3 = corpus_iqr = None
+        fence_lo = fence_hi = None
+        num_flyers = 0
 
     counts = {g: 0 for g in STT_RTF_BATCH_GRADE_ORDER}
     for r in rows:
@@ -611,6 +688,12 @@ def profile_stt_rtf_batch(
         corpus_min_rtf=corpus_min,
         corpus_max_rtf=corpus_max,
         corpus_spread=corpus_spread,
+        corpus_q1_rtf=corpus_q1,
+        corpus_q3_rtf=corpus_q3,
+        corpus_iqr_rtf=corpus_iqr,
+        corpus_fence_lo_rtf=fence_lo,
+        corpus_fence_hi_rtf=fence_hi,
+        num_flyers=num_flyers,
         grade_counts=counts,
         num_keep_up=num_keep_up,
         num_recommend=num_recommend,

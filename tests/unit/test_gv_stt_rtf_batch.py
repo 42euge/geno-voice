@@ -372,7 +372,7 @@ def test_render_csv_header_and_per_engine_rows():
     rows = _csv_data_rows(text)
     assert rows[0] == (
         "engine,median_rtf,n_samples,min_rtf,max_rtf,spread,relative_spread,"
-        "speed_grade,speed_margin,delta_from_median_rtf,recommend"
+        "speed_grade,speed_margin,delta_from_median_rtf,recommend,flyer"
     )
     assert rows[1].startswith("fast,0.1,1,")
     assert rows[2].startswith("slow,1.5,1,")
@@ -384,7 +384,7 @@ def test_render_csv_unprofiled_engine_blank_cells():
     batch = _batch(("a", [(10.0, 1.0)]), ("empty", []))
     rows = _csv_data_rows(gv.render_stt_rtf_batch_csv(batch))
     empty = [r for r in rows if r.startswith("empty,")][0]
-    assert empty == "empty,,,,,,,,,,"
+    assert empty == "empty,,,,,,,,,,,"
 
 
 def test_render_csv_corpus_aggregates_as_comments():
@@ -408,8 +408,9 @@ def test_render_csv_recommend_cell():
     rows = _csv_data_rows(gv.render_stt_rtf_batch_csv(batch))
     heavy = [r for r in rows if r.startswith("heavy,")][0]
     light = [r for r in rows if r.startswith("light,")][0]
-    assert heavy.endswith(",true")
-    assert light.endswith(",false")
+    # ...,recommend,flyer — neither engine is a flyer in this 2-engine corpus.
+    assert heavy.endswith(",true,false")
+    assert light.endswith(",false,false")
 
 
 def test_render_csv_empty_corpus_blank_aggregates():
@@ -475,7 +476,7 @@ def _engine_order(lines):
     out = []
     for l in lines:
         s = l.strip()
-        if s.startswith(("STT real-time", "gates:", "corpus:", "grades:")):
+        if s.startswith(("STT real-time", "gates:", "corpus:", "grades:", "flyers:")):
             continue
         if ":" in s:
             out.append(s.split(":", 1)[0])
@@ -1382,3 +1383,136 @@ def test_handler_threads_summary_to_csv():
             batch, min_grade="realtime", sort_by=None, top_n=None, summary=True
         )
     ]
+
+
+# ---- iter-414: per-engine flyer flag + corpus flyers line ----------------
+
+
+def _flyer_batch():
+    # Four tightly-clustered engines (rtf ~0.1) plus one wild flyer (rtf 5.0).
+    # sorted medians: [0.1, 0.11, 0.12, 0.13, 5.0] => Q1 0.11, Q3 0.13, IQR 0.02,
+    # fence [0.080, 0.160]; only ``slow`` falls outside it.
+    return _batch(
+        ("a", [(10.0, 1.0)]),  # 0.1
+        ("b", [(10.0, 1.1)]),  # 0.11
+        ("c", [(10.0, 1.2)]),  # 0.12
+        ("d", [(10.0, 1.3)]),  # 0.13
+        ("slow", [(10.0, 50.0)]),  # 5.0 — flyer
+    )
+
+
+def test_render_marks_flyer_row_and_names_corpus_flyers():
+    text = "\n".join(gv.render_stt_rtf_batch(_flyer_batch()))
+    # The flyer engine's row carries the inline ← flyer marker...
+    slow_line = next(l for l in text.splitlines() if l.strip().startswith("slow:"))
+    assert "← flyer" in slow_line
+    a_line = next(l for l in text.splitlines() if l.strip().startswith("a:"))
+    assert "← flyer" not in a_line
+    # ...and the corpus flyers: line names the outlier and the fence bounds.
+    assert "flyers: 1 (slow) outside [0.080, 0.160] RTF" in text
+
+
+def test_render_flyers_none_when_corpus_agrees():
+    text = "\n".join(
+        gv.render_stt_rtf_batch(
+            _batch(
+                ("a", [(10.0, 1.0)]),
+                ("b", [(10.0, 1.1)]),
+                ("c", [(10.0, 1.2)]),
+            )
+        )
+    )
+    assert "flyers: none" in text
+    assert "← flyer" not in text
+
+
+def test_render_flyers_line_describes_whole_corpus_under_top_n():
+    # --top-n truncates the displayed rows, but the flyers: line still names the
+    # outlier over the WHOLE corpus even when the flyer row itself is elided.
+    text = "\n".join(
+        gv.render_stt_rtf_batch(_flyer_batch(), sort_by="median_rtf", top_n=2)
+    )
+    # median_rtf ascending keeps the two fastest (a, b) — the flyer row is dropped...
+    assert "slow:" not in text
+    # ...but the corpus flyers: line still names it.
+    assert "flyers: 1 (slow) outside [0.080, 0.160] RTF" in text
+
+
+def test_render_flyers_line_present_under_summary():
+    # --summary collapses to one verdict row, but the corpus flyers: line still
+    # describes the whole corpus.
+    text = "\n".join(gv.render_stt_rtf_batch(_flyer_batch(), summary=True))
+    assert "flyers: 1 (slow) outside [0.080, 0.160] RTF" in text
+
+
+def test_render_empty_corpus_has_no_flyers_line():
+    text = "\n".join(gv.render_stt_rtf_batch(_batch(("a", []), ("b", []))))
+    assert "flyers:" not in text
+
+
+def test_render_json_carries_fence_and_per_row_flyer():
+    import json
+
+    payload = json.loads(gv.render_stt_rtf_batch_json(_flyer_batch()))
+    # The IQR / Tukey-fence corpus keys ride alongside the existing aggregates.
+    assert round(payload["corpus_q1_rtf"], 3) == 0.11
+    assert round(payload["corpus_q3_rtf"], 3) == 0.13
+    assert round(payload["corpus_iqr_rtf"], 3) == 0.02
+    assert round(payload["corpus_fence_lo_rtf"], 3) == 0.08
+    assert round(payload["corpus_fence_hi_rtf"], 3) == 0.16
+    assert payload["num_flyers"] == 1
+    flags = {r["engine"]: r["flyer"] for r in payload["rows"]}
+    assert flags["slow"] is True
+    assert flags["a"] is False
+
+
+def test_render_json_empty_corpus_fence_null_and_no_flyers():
+    import json
+
+    payload = json.loads(gv.render_stt_rtf_batch_json(_batch(("a", []), ("b", []))))
+    assert payload["corpus_q1_rtf"] is None
+    assert payload["corpus_q3_rtf"] is None
+    assert payload["corpus_iqr_rtf"] is None
+    assert payload["corpus_fence_lo_rtf"] is None
+    assert payload["corpus_fence_hi_rtf"] is None
+    assert payload["num_flyers"] == 0
+    # An unprofiled engine's row flyer is null.
+    assert all(r["flyer"] is None for r in payload["rows"])
+
+
+def test_render_json_summary_best_carries_flyer():
+    import json
+
+    payload = json.loads(gv.render_stt_rtf_batch_json(_flyer_batch(), summary=True))
+    # The best (most-representative) engine is not the flyer.
+    assert payload["best"]["flyer"] is False
+    # num_flyers still describes the whole corpus in summary mode.
+    assert payload["num_flyers"] == 1
+
+
+def test_render_csv_carries_fence_comment_and_per_row_flyer():
+    import csv as _csv
+    import io as _io
+
+    text = gv.render_stt_rtf_batch_csv(_flyer_batch())
+    # The fence + num_flyers ride in the trailing # comment block...
+    assert "# corpus_iqr_rtf: 0.02" in text
+    assert "# corpus_fence_rtf: 0.08 - 0.16" in text
+    assert "# num_flyers: 1" in text
+    # ...and the flyer column carries true/false per engine.
+    data = "\n".join(l for l in text.splitlines() if not l.startswith("#"))
+    reader = {r["engine"]: r for r in _csv.DictReader(_io.StringIO(data))}
+    assert reader["slow"]["flyer"] == "true"
+    assert reader["a"]["flyer"] == "false"
+    # The flyer column is the last header column.
+    header = data.splitlines()[0]
+    assert header.endswith(",flyer")
+
+
+def test_render_csv_unprofiled_engine_flyer_cell_blank():
+    batch = _batch(("a", [(10.0, 1.0)]), ("empty", []))
+    text = gv.render_stt_rtf_batch_csv(batch)
+    data = "\n".join(l for l in text.splitlines() if not l.startswith("#"))
+    empty = [l for l in data.splitlines() if l.startswith("empty,")][0]
+    # engine label then every numeric cell blank, including the trailing flyer.
+    assert empty == "empty,,,,,,,,,,,"
