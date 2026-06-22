@@ -36832,3 +36832,102 @@ flyer prints `spread 450.0, IQR 10.0` (human) and `implied_base_wpm_iqr: 10.0`
 5. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232, iter-317 still
    present) — a future lap could `git worktree prune` / remove merged ones. NOTE: this
    lap correctly removed its own worktree.
+
+## iter-404 — calibrate-base-wpm-batch: per-voice Tukey-fence flyer flag
+
+- **Date:** 2026-06-22
+- **Branch:** iter-404-calib-batch-flyer (ff-merged to main, worktree removed)
+- **Commit:** a76b93a
+
+**Why.** iter-403's next-item #1 named this exact follow-on: the VAD side reached
+the per-voice flyer flag in TWO laps — iter-391 added the outlier-robust IQR as
+the prerequisite, *then* iter-392 added the flyer flag built on the IQR's
+quartiles + fences. iter-403 landed the IQR analogue on the calibration batch; this
+lap lands the iter-392 analogue — the flyer flag — completing the proven VAD
+two-step. The IQR HINTED at outliers ("a tight IQR with a wide spread means the
+corpus agrees but one voice is a flyer"); this NAMES them, so an operator picking a
+fleet-wide `DEFAULT_BASE_WPM` sees WHICH voice is the outlier without scanning the
+Δmedian column.
+
+**What it is.** A voice is a **flyer** when its `implied_base_wpm` falls outside the
+standard Tukey boxplot fence `[Q1 - 1.5*IQR, Q3 + 1.5*IQR]` (built on the iter-403
+quartiles). The `BaseWpmCalibrationBatch` engine now carries
+`implied_base_wpm_fence_lo` / `implied_base_wpm_fence_hi` (the fence bounds, `None`
+when no voice calibrated) and `num_flyers` (how many voices fall outside it); each
+per-voice row gains a `flyer` boolean (`True`/`False` for a calibrated voice,
+`None` for an uncalibrated one). A degenerate IQR of 0 (a corpus whose middle half
+is a single value) collapses the fence to `[Q1, Q3]`, so a lone different voice
+among identical ones is still correctly named — exactly the iter-392 contract.
+
+**Design — engine carries it, all three renders surface it.** Mirrors the iter-392
+shape exactly. The fences are computed over the SAME calibrated-voices population as
+the median / spread / IQR (an uncalibrated voice contributes no base rate, so it
+never perturbs the fence and is never a flyer). The three renders:
+- **human** — a `flyers:` corpus line names the outlier voices + the fence bounds
+  (`flyers: 1 (wild) outside [150.0, 190.0] WPM`; `flyers: none` when the corpus
+  agrees), via a new `_format_calib_batch_flyers` helper (the calibration twin of
+  iter-392's `_format_batch_flyers`); each flyer row also gains a trailing
+  `  ← flyer` marker. The `flyers:` line + corpus aggregates ALWAYS describe the
+  WHOLE corpus regardless of `--min-grade` / `--sort-by` / `--top-n` / `--summary`,
+  so the outlier is named even when its row is elided by a `--top-n` cap.
+- **`--json`** — `implied_base_wpm_fence_lo` / `_fence_hi` / `num_flyers` ride
+  alongside the IQR keys (`null` / `0` when no voice calibrated, via `_round_or_none`),
+  and each `rows` entry carries a `flyer` boolean.
+- **`--csv`** — a `flyer` column (`true`/`false`, blank for an uncalibrated voice)
+  joins the data grid, plus `# implied_base_wpm_fence:` and `# num_flyers:` comment
+  lines. Header/column set otherwise unchanged, so a summary / sorted / filtered run
+  still unions cleanly with a full one.
+
+No new CLI flag — the flyer flag is an always-on corpus aggregate like the iter-403
+IQR. With this the calibration batch reaches full parity with the VAD recommend
+batch's enrichment surface (single + batch, all three formats, sortable,
+top-n-capped, grade-floored, summarizable, IQR, flyer flag).
+
+**What landed.** `session/wpm_mirror.py`: `BaseWpmCalibrationBatch` gains
+`implied_base_wpm_fence_lo` / `_fence_hi` / `num_flyers` fields (+ docstring);
+`calibrate_base_wpm_batch` computes the fences from the sorted calibrated base
+rates and sets each row's `flyer`. `examples/gv.py`: `_format_calib_batch_flyers`
+helper; the human `_corpus_lines` flyers line + per-row `← flyer` marker, the JSON
+fence/num_flyers keys + per-row `flyer`, and the CSV `flyer` column + fence/num_flyers
+comments (+ docstring updates on all three renders + the top-of-file usage line).
+
+**Tests (+15 net new).** Engine (`test_calibrate_base_wpm_batch.py`):
+empty/all-uncalibrated no-fence-no-flyers, tight-corpus no-flyers, high-outlier
+flagged (+ fence bounds), low-outlier flagged, degenerate-IQR-0 lone-voice flagged,
+uncalibrated-voice excluded-from-fence-population. gv human
+(`test_gv_calibrate_base_wpm_batch.py`): row marker + corpus `flyers:` line,
+`flyers: none` when agreeing, `flyers:` line describes-whole-corpus-under-`--top-n`,
+no `flyers:` line for empty corpus. `--json`: fence keys + per-row flyer,
+empty-corpus null + no flyers. `--csv`: fence comment + per-row flyer column,
+uncalibrated blank cell, empty-corpus blank fence. Two existing CSV tests updated
+for the new column (header + uncalibrated blank-cell count).
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5870 passed**
+(5855 prior + 15 net new), run in the feature worktree before ff-merge; re-verified
+on main post-merge (`test_calibrate_base_wpm_batch.py` +
+`test_gv_calibrate_base_wpm_batch.py` + `test_gv_cli.py` → 249 passed). Also smoke-
+tested the live CLI: `gv calibrate-base-wpm-batch` over a 5-voice corpus with one
+flyer prints `flyers: 1 (flyer) outside [163.0, 171.0] WPM` (human) plus the
+`← flyer` row marker, and `num_flyers` / `implied_base_wpm_fence_lo` / `_fence_hi`
+in `--json` / `--csv`.
+- Integration: not run this lap (pure quartile-fence arithmetic / string-formatting
+  over the iter-397 `BaseWpmCalibrationBatch`; no torch import, no audio I/O —
+  mirrors the iter-220/316/317/393..403 calibration laps).
+
+**Next planned items:**
+1. **[gv CLI] the calibration batch enrichment family is now COMPLETE** — single +
+   batch, all three formats (human / `--json` / `--csv`), `--sort-by`, `--top-n`,
+   `--min-grade`, `--summary`, IQR, and the flyer flag all landed (iter-393..404),
+   reaching full parity with the VAD recommend batch (iter-385..392). Prefer a
+   genuinely new surface over a 9th near-clone enrichment.
+2. **[gv CLI] open the STT-side frontier** — the TTS-side calibration surface is now
+   rich; the STT side (transcription RTF / accuracy) is still unexplored by the gv
+   analysis family. A genuinely new pipeline stage and the highest-value next step.
+3. **[chat-metrics] The diversity-check family is declared complete** (17 sentinels,
+   iter-328). Prefer a genuinely new signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** — needs a
+   browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232, iter-317 still
+   present) — a future lap could `git worktree prune` / remove merged ones. NOTE: this
+   lap correctly removed its own worktree.
