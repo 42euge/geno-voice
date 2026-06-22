@@ -1078,3 +1078,266 @@ def test_handler_min_grade_matches_render_directly():
         ]
     )
     assert lines == expected
+
+
+# ---- iter-402: --summary single most-representative voice --------------
+
+
+def _summary_lines(lines):
+    """The 'representative:' / '(no voice ...)' verdict lines from a summary render."""
+    return [
+        ln.strip()
+        for ln in lines
+        if "representative:" in ln or "nothing to summarise" in ln
+    ]
+
+
+# slow=150, mid=165, fast=180 → corpus median 165, deltas -15 / 0 / +15. "mid" sits
+# exactly on the median, so it is the unambiguous most-representative voice.
+_REP_VOICES = [
+    ("slow", [(150, 60.0, 1.0)]),
+    ("fast", [(180, 60.0, 1.0)]),
+    ("mid", [(165, 60.0, 1.0)]),
+]
+
+
+def test_best_calib_batch_row_picks_nearest_median():
+    batch = _batch(_REP_VOICES)
+    best = gv._best_calib_batch_row(batch.rows)
+    assert best["voice"] == "mid"
+    assert best["delta_from_median_wpm"] == 0.0
+
+
+def test_best_calib_batch_row_none_when_no_delta():
+    batch = _batch([("a", []), ("b", [])])
+    assert gv._best_calib_batch_row(batch.rows) is None
+
+
+def test_best_calib_batch_row_tie_breaks_to_higher_grade():
+    # Two voices, median = (150+180)/2 = 165, both |Δ| = 15. The tie breaks toward the
+    # higher dispersion grade. "lo" is a 2-sample loose calibration at 150; "hi" is a
+    # single-sample agree calibration at 180. Despite "lo" being listed first, the
+    # higher grade (agree) wins.
+    batch = _batch(
+        [
+            ("lo", [(145, 60.0, 1.0), (155, 60.0, 1.0)]),  # 150, loose
+            ("hi", [(180, 60.0, 1.0)]),                     # 180, agree
+        ]
+    )
+    best = gv._best_calib_batch_row(batch.rows)
+    assert best["voice"] == "hi"
+
+
+def test_summary_human_names_representative_voice():
+    batch = _batch(_REP_VOICES)
+    lines = gv.render_calibration_batch(batch, summary=True)
+    text = "\n".join(lines)
+    assert "calibration batch summary" in text
+    assert "representative: mid → base_wpm 165.0" in text
+    assert "Δmedian 0.0" in text
+    # the whole-corpus summary + histogram are still emitted
+    assert "corpus: median 165.0" in text
+    assert "grades:" in text
+    # exactly one verdict line, no per-voice table rows for slow/fast
+    assert _row_order_pair(lines, ("slow", "fast")) == []
+
+
+def test_summary_independent_of_sort_and_top_n():
+    batch = _batch(_REP_VOICES)
+    base = gv.render_calibration_batch(batch, summary=True)
+    # --sort-by / --top-n must NOT change the pick.
+    assert _summary_lines(
+        gv.render_calibration_batch(batch, summary=True, sort_by="delta", top_n=1)
+    ) == _summary_lines(base)
+
+
+def test_summary_respects_min_grade():
+    # Floor out "mid" (the natural representative) by making it scattered; with an
+    # "agree" floor only the tight voices remain, so the pick is chosen among them.
+    batch = _batch(
+        [
+            ("mid", [(120, 60.0, 1.0), (210, 60.0, 1.0)]),  # 165 but scattered
+            ("slow", [(150, 60.0, 1.0)]),                    # agree
+            ("fast", [(180, 60.0, 1.0)]),                    # agree
+        ]
+    )
+    text = "\n".join(
+        gv.render_calibration_batch(batch, summary=True, min_grade="agree")
+    )
+    # mid is filtered out; slow/fast are equidistant (median 165) so earliest wins.
+    assert "representative: slow" in text
+    assert "min grade agree" in text
+
+
+def test_summary_no_voice_emits_note():
+    batch = _batch([("a", []), ("b", [])])
+    text = "\n".join(gv.render_calibration_batch(batch, summary=True))
+    assert "nothing to summarise" in text
+    # corpus + histogram still present
+    assert "grades:" in text
+
+
+def test_summary_no_voice_after_floor_names_floor():
+    # Only a scattered voice survives the corpus; an "agree" floor removes everyone.
+    batch = _batch([("wide", [(120, 60.0, 1.0), (240, 60.0, 1.0)]), ("empty", [])])
+    text = "\n".join(
+        gv.render_calibration_batch(batch, summary=True, min_grade="agree")
+    )
+    assert "no voice calibrated to grade 'agree' or better" in text
+
+
+def test_parser_summary_parses():
+    args = gv.build_parser().parse_args(
+        ["calibrate-base-wpm-batch", "--voice", "a", "165:60.0", "--summary"]
+    )
+    assert args.summary is True
+
+
+def test_parser_summary_default_false():
+    args = gv.build_parser().parse_args(
+        ["calibrate-base-wpm-batch", "--voice", "a", "165:60.0"]
+    )
+    assert args.summary is False
+
+
+# ---- iter-402: --summary in --json -------------------------------------
+
+
+def test_json_summary_replaces_rows_with_best():
+    import json as _json
+
+    batch = _batch(_REP_VOICES)
+    obj = _json.loads(gv.render_calibration_batch_json(batch, summary=True))
+    assert obj["summary"] is True
+    assert "rows" not in obj
+    assert obj["best"]["voice"] == "mid"
+    # corpus aggregates still carried
+    assert obj["num_voices"] == 3
+    assert obj["implied_base_wpm_median"] == 165.0
+
+
+def test_json_summary_best_null_when_no_delta():
+    import json as _json
+
+    batch = _batch([("a", []), ("b", [])])
+    obj = _json.loads(gv.render_calibration_batch_json(batch, summary=True))
+    assert obj["summary"] is True
+    assert obj["best"] is None
+
+
+def test_json_summary_independent_of_sort_and_top_n():
+    import json as _json
+
+    batch = _batch(_REP_VOICES)
+    base = _json.loads(gv.render_calibration_batch_json(batch, summary=True))
+    other = _json.loads(
+        gv.render_calibration_batch_json(batch, summary=True, sort_by="delta", top_n=1)
+    )
+    assert base["best"]["voice"] == other["best"]["voice"] == "mid"
+    # the ordering/count keys are meaningless in summary mode and omitted
+    assert "sort_by" not in other
+    assert "top_n" not in other
+
+
+def test_json_summary_omits_summary_key_when_false():
+    import json as _json
+
+    batch = _batch(_REP_VOICES)
+    obj = _json.loads(gv.render_calibration_batch_json(batch))
+    assert "summary" not in obj
+    assert "best" not in obj
+    assert "rows" in obj
+
+
+# ---- iter-402: --summary in --csv --------------------------------------
+
+
+def _csv_data_rows(text):
+    return [
+        ln for ln in text.splitlines()
+        if ln and not ln.startswith("#") and not ln.startswith("voice,")
+    ]
+
+
+def test_csv_summary_emits_single_best_row():
+    batch = _batch(_REP_VOICES)
+    text = gv.render_calibration_batch_csv(batch, summary=True)
+    assert "# summary: true" in text
+    data = _csv_data_rows(text)
+    assert len(data) == 1
+    assert data[0].split(",")[0] == "mid"
+    # header + corpus comments unchanged
+    assert text.splitlines()[0].startswith("voice,")
+    assert "# num_voices: 3" in text
+
+
+def test_csv_summary_header_only_when_no_delta():
+    batch = _batch([("a", []), ("b", [])])
+    text = gv.render_calibration_batch_csv(batch, summary=True)
+    assert "# summary: true" in text
+    assert _csv_data_rows(text) == []
+
+
+def test_csv_summary_omits_sort_and_top_n_comments():
+    batch = _batch(_REP_VOICES)
+    text = gv.render_calibration_batch_csv(
+        batch, summary=True, sort_by="delta", top_n=1
+    )
+    assert "# sort_by" not in text
+    assert "# top_n" not in text
+    assert _csv_data_rows(text)[0].split(",")[0] == "mid"
+
+
+def test_csv_summary_omits_comment_when_false():
+    batch = _batch(_REP_VOICES)
+    text = gv.render_calibration_batch_csv(batch)
+    assert "# summary" not in text
+
+
+# ---- iter-402: handler threading --------------------------------------
+
+
+def test_handler_summary_threads_to_human_render():
+    lines = _run(
+        [
+            "calibrate-base-wpm-batch",
+            "--voice", "slow", "150:60.0",
+            "--voice", "fast", "180:60.0",
+            "--voice", "mid", "165:60.0",
+            "--summary",
+        ]
+    )
+    text = "\n".join(lines)
+    assert "representative: mid" in text
+
+
+def test_handler_summary_threads_to_json():
+    import json as _json
+
+    lines = _run(
+        [
+            "calibrate-base-wpm-batch",
+            "--voice", "slow", "150:60.0",
+            "--voice", "fast", "180:60.0",
+            "--voice", "mid", "165:60.0",
+            "--json", "--summary",
+        ]
+    )
+    obj = _json.loads(lines[0])
+    assert obj["summary"] is True
+    assert obj["best"]["voice"] == "mid"
+
+
+def test_handler_summary_matches_render_directly():
+    batch = _batch(_REP_VOICES)
+    expected = gv.render_calibration_batch(batch, summary=True)
+    lines = _run(
+        [
+            "calibrate-base-wpm-batch",
+            "--voice", "slow", "150:60.0",
+            "--voice", "fast", "180:60.0",
+            "--voice", "mid", "165:60.0",
+            "--summary",
+        ]
+    )
+    assert lines == expected

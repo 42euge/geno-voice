@@ -8,7 +8,7 @@ Usage:
     gv chat               # chat mode — STT → LLM (litellm) → TTS
     gv simulate-mirror …  # offline WPM-mirror trajectory / grid-sweep simulator
     gv calibrate-base-wpm … # offline base_wpm calibration (dispersion grade agree/loose/scattered + margin to next grade; --verdict for an adopt/keep call; --json/--csv for per-sample data)
-    gv calibrate-base-wpm-batch --voice af_heart 50:18.2 --voice am_adam 40:15.0  # calibrate a CORPUS of voices — per-voice base_wpm + grade + drift + the corpus median (which voices agree?); --json/--csv for the machine-readable corpus; --sort-by base_wpm/grade/drift/delta to float the most-useful voices to the top; --top-n N to keep only the N most-useful; --min-grade scattered/loose/agree to drop voices below a dispersion floor
+    gv calibrate-base-wpm-batch --voice af_heart 50:18.2 --voice am_adam 40:15.0  # calibrate a CORPUS of voices — per-voice base_wpm + grade + drift + the corpus median (which voices agree?); --json/--csv for the machine-readable corpus; --sort-by base_wpm/grade/drift/delta to float the most-useful voices to the top; --top-n N to keep only the N most-useful; --min-grade scattered/loose/agree to drop voices below a dispersion floor; --summary to name the single most-representative voice (nearest the corpus median)
     gv vad recording.wav  # offline Silero VAD — segment a WAV into speech regions
     gv vad recording.wav --json # machine-readable segmentation (SileroResult.to_dict shape)
     gv vad-gaps recording.wav  # report the silence gaps BETWEEN speech regions (tune --min-silence-ms)
@@ -1432,7 +1432,77 @@ def _sort_calib_batch_rows(rows, sort_by):
     return list(rows)
 
 
-def render_calibration_batch(batch, *, min_grade=None, sort_by=None, top_n=None):
+def _best_calib_batch_row(rows):
+    """Pick the single most-REPRESENTATIVE calibrate-base-wpm-batch voice (iter-402), or ``None``.
+
+    The selection primitive behind ``--summary``: where ``--top-n`` (a COUNT) and
+    ``--sort-by`` (an ORDERING) shape a TABLE the operator still reads, ``--summary``
+    names the ONE voice that best speaks for the corpus — the voice whose implied
+    base_wpm sits CLOSEST to the corpus median, so an operator who just wants "which
+    single voice should I trust as the fleet base rate?" gets the answer without
+    reading rows.
+
+    Note the DIRECTION: this is the deliberate INVERSE of ``--sort-by delta``
+    (iter-399), which floats the biggest corpus OUTLIERS to the top. The batch's job
+    is to show agreement-vs-disagreement, so its two reductions sit at opposite ends —
+    the sort surfaces who disagrees most, the summary surfaces who agrees most. "Best"
+    is defined objectively and independently of ``--sort-by`` / ``--top-n``: among rows
+    that carry a recommendation (``delta_from_median_wpm`` not ``None`` — i.e. a
+    calibrated voice with a per-corpus delta), the row with the SMALLEST
+    |``delta_from_median_wpm``| (nearest the corpus median), ties broken toward the
+    HIGHEST dispersion grade (the more trustworthy of two equally-central voices), and
+    remaining ties broken by EARLIEST position in ``rows`` (so the pick is
+    deterministic and prefers the voice the operator listed first). An uncalibrated
+    (no-sample) voice has ``delta_from_median_wpm`` ``None`` and is never picked.
+    Returns ``None`` when no voice carries a delta (nothing to summarize — an empty or
+    all-uncalibrated corpus). Pure: reads the rows, mutates nothing.
+
+    This is a genuinely new reduction — a single MIN, not a sort+truncate — so it is
+    robust to whatever ``--sort-by`` / ``--top-n`` the operator did (or did not)
+    request: the most-representative voice is the same regardless of how the table was
+    ordered or capped. The calibration-batch analogue of :func:`_best_batch_row`
+    (which serves the VAD recommend batch), with ``implied_base_wpm`` / dispersion
+    grade swapped in for the VAD batch's recommended ms / confidence grade.
+    """
+    candidates = [r for r in rows if r["delta_from_median_wpm"] is not None]
+    if not candidates:
+        return None
+    # Nearest the median first (|Δ| ascending), then highest grade (negative rank →
+    # descending); ``min`` over this key is stable so earliest position breaks
+    # remaining ties.
+    return min(
+        candidates,
+        key=lambda r: (
+            abs(r["delta_from_median_wpm"]),
+            -_CALIB_DISPERSION_GRADE_RANK.get(
+                r["calibration"].dispersion_grade
+                if r["calibration"] is not None
+                else None,
+                -1,
+            ),
+        ),
+    )
+
+
+def _format_calib_batch_summary_verdict(row):
+    """One human line naming the single most-representative voice (iter-402).
+
+    The ``--summary`` verdict body: given the row :func:`_best_calib_batch_row` picked,
+    spells the corpus consensus as ``representative: <voice> → base_wpm <n> (grade
+    <grade>, Δmedian <±n>)``. The signed Δmedian is shown so the reader can confirm the
+    pick really is near the corpus centre (it should be the smallest |Δ| in the table).
+    Pure: returns a single string; the caller owns the surrounding lines.
+    """
+    calib = row["calibration"]
+    sign = _signed_float(row["delta_from_median_wpm"])
+    return (
+        f"  representative: {row['voice']} → base_wpm {calib.implied_base_wpm:.1f} "
+        f"(grade {calib.dispersion_grade}, Δmedian {sign})"
+    )
+
+
+def render_calibration_batch(batch, *, min_grade=None, sort_by=None, top_n=None,
+                             summary=False):
     """Render a ``calibrate-base-wpm-batch`` corpus verdict as plain-text lines.
 
     The human-readable face of :func:`calibrate_base_wpm_batch` (iter-397), the
@@ -1478,15 +1548,77 @@ def render_calibration_batch(batch, *, min_grade=None, sort_by=None, top_n=None)
     ``vad-gap-recommend-batch``. When set the nominal line names the floor; when the
     filter removes every voice a single ``(no voice ...)`` note replaces the body rows.
     The default ``None`` keeps every voice (byte-identical to the pre-filter render).
+
+    ``summary`` (iter-402) collapses the whole table to ONE verdict line naming the
+    single most-representative voice (:func:`_best_calib_batch_row` — the voice nearest
+    the corpus median, ties to the highest dispersion grade), so an operator who just
+    wants "which one voice speaks for the fleet base rate?" gets the answer without
+    reading rows. It is INDEPENDENT of ``sort_by`` / ``top_n`` (the most-central voice
+    is the same regardless of how — or whether — the table was ordered or capped) but
+    respects ``min_grade`` (the representative is picked among voices that clear the
+    floor). The whole-corpus summary + ``grades:`` histogram are still emitted so the
+    reader sees what the representative is central WITHIN; when no voice carries a delta
+    (empty / all-uncalibrated corpus, or the floor removed every voice) a single ``(no
+    voice ...)`` note replaces the verdict. The calibration-batch analogue of the
+    iter-388 ``summary`` on ``vad-gap-recommend-batch``. The default ``False`` renders
+    the full table.
     """
     nominal_line = f"  nominal: {batch.default_base_wpm:.1f}"
     if min_grade is not None:
         nominal_line += f" (min grade {min_grade})"
+    # The grade floor is applied first: every later stage (summary / sort / top-n) sees
+    # only the surviving voices, while the corpus aggregates below stay over the WHOLE
+    # corpus.
+    kept_rows = _filter_calib_batch_rows_by_grade(batch.rows, min_grade)
+
+    def _corpus_lines():
+        # The whole-corpus summary + dispersion-grade histogram, emitted at the tail of
+        # every render variant (full table, empty-floor note, and --summary verdict) so
+        # the corpus consensus the rows are measured against is always visible. Computed
+        # over the WHOLE corpus, so it is unaffected by min_grade / sort_by / top_n.
+        out = []
+        if batch.num_calibrated:
+            out.append(
+                f"  corpus: median {batch.implied_base_wpm_median:.1f}, "
+                f"range {batch.implied_base_wpm_min:.1f} – "
+                f"{batch.implied_base_wpm_max:.1f}, "
+                f"spread {batch.implied_base_wpm_spread:.1f} "
+                "(voices disagree on a fleet base if large)"
+            )
+        else:
+            out.append("  corpus: (no voice calibrated — nothing to summarise)")
+        counts = batch.grade_counts
+        grades = ", ".join(
+            f"{counts[g]} {g}" for g in _wm_calib_batch_grade_order()
+        )
+        out.append(f"  grades: {grades}")
+        return out
+
+    if summary:
+        # The verdict is an objective reduction over the grade-filtered rows —
+        # order/count-independent, so --sort-by / --top-n do not change the pick.
+        best = _best_calib_batch_row(kept_rows)
+        lines = [
+            f"base_wpm calibration batch summary ({batch.num_voices} voices, "
+            f"{batch.num_calibrated} calibrated)",
+            nominal_line,
+        ]
+        if best is None:
+            floor = (
+                f" calibrated to grade '{min_grade}' or better"
+                if min_grade is not None
+                else ""
+            )
+            lines.append(
+                f"  (no voice{floor} carries a base rate — nothing to summarise)"
+            )
+        else:
+            lines.append(_format_calib_batch_summary_verdict(best))
+        lines.extend(_corpus_lines())
+        return lines
+
     if sort_by is not None:
         nominal_line += f" (sorted by {sort_by})"
-    # The grade floor is applied first: every later stage (sort / top-n) sees only the
-    # surviving voices, while the corpus aggregates below stay over the WHOLE corpus.
-    kept_rows = _filter_calib_batch_rows_by_grade(batch.rows, min_grade)
     sorted_rows = _sort_calib_batch_rows(kept_rows, sort_by)
     rows = _truncate_batch_rows(sorted_rows, top_n)
     if top_n is not None and len(rows) < len(sorted_rows):
@@ -1503,21 +1635,7 @@ def render_calibration_batch(batch, *, min_grade=None, sort_by=None, top_n=None)
         # Still surface the whole-corpus summary + histogram so the operator sees
         # what the floor filtered against, mirroring the iter-389 VAD-batch contract
         # that the corpus aggregates always describe the full corpus.
-        if batch.num_calibrated:
-            lines.append(
-                f"  corpus: median {batch.implied_base_wpm_median:.1f}, "
-                f"range {batch.implied_base_wpm_min:.1f} – "
-                f"{batch.implied_base_wpm_max:.1f}, "
-                f"spread {batch.implied_base_wpm_spread:.1f} "
-                "(voices disagree on a fleet base if large)"
-            )
-        else:
-            lines.append("  corpus: (no voice calibrated — nothing to summarise)")
-        counts = batch.grade_counts
-        grades = ", ".join(
-            f"{counts[g]} {g}" for g in _wm_calib_batch_grade_order()
-        )
-        lines.append(f"  grades: {grades}")
+        lines.extend(_corpus_lines())
         return lines
     for r in rows:
         calib = r["calibration"]
@@ -1533,21 +1651,7 @@ def render_calibration_batch(batch, *, min_grade=None, sort_by=None, top_n=None)
             f"({calib.dispersion_grade}, margin {margin_cell}, "
             f"drift {calib.drift:+.1f}, Δmedian {delta_cell})"
         )
-    if batch.num_calibrated:
-        lines.append(
-            f"  corpus: median {batch.implied_base_wpm_median:.1f}, "
-            f"range {batch.implied_base_wpm_min:.1f} – "
-            f"{batch.implied_base_wpm_max:.1f}, "
-            f"spread {batch.implied_base_wpm_spread:.1f} "
-            "(voices disagree on a fleet base if large)"
-        )
-    else:
-        lines.append("  corpus: (no voice calibrated — nothing to summarise)")
-    counts = batch.grade_counts
-    grades = ", ".join(
-        f"{counts[g]} {g}" for g in _wm_calib_batch_grade_order()
-    )
-    lines.append(f"  grades: {grades}")
+    lines.extend(_corpus_lines())
     return lines
 
 
@@ -1561,7 +1665,8 @@ def _wm_calib_batch_grade_order():
     return _load_wpm_mirror().CALIB_BATCH_GRADE_ORDER
 
 
-def render_calibration_batch_json(batch, *, min_grade=None, sort_by=None, top_n=None):
+def render_calibration_batch_json(batch, *, min_grade=None, sort_by=None, top_n=None,
+                                  summary=False):
     """Render a ``calibrate-base-wpm-batch`` corpus verdict as a JSON string.
 
     The nested/programmatic twin of :func:`render_calibration_batch` (iter-398),
@@ -1610,13 +1715,26 @@ def render_calibration_batch_json(batch, *, min_grade=None, sort_by=None, top_n=
     ``num_calibrated`` / median / ``grade_counts`` / …) always describe the WHOLE corpus
     regardless of the floor, so the consumer can still see how many voices were filtered.
     The default ``None`` keeps every row (no ``min_grade`` key).
+
+    ``summary`` (iter-402) replaces the ``rows`` list with a single ``best`` key holding
+    the one most-representative voice object (:func:`_best_calib_batch_row` — nearest the
+    corpus median, ties to the highest dispersion grade), or ``null`` when no voice
+    carries a delta. A top-level ``summary: true`` flags the mode. The pick is
+    INDEPENDENT of ``sort_by`` / ``top_n`` but respects ``min_grade`` (chosen among
+    voices that clear the floor); the corpus aggregates (``num_voices`` /
+    ``num_calibrated`` / median / ``grade_counts`` / …) are still carried so a consumer
+    can see what the representative voice is central WITHIN. The default ``False`` carries
+    the full ``rows`` list.
     """
+    kept_rows = _filter_calib_batch_rows_by_grade(batch.rows, min_grade)
     payload = {}
+    if summary:
+        payload["summary"] = True
     if min_grade is not None:
         payload["min_grade"] = min_grade
-    if sort_by is not None:
+    if not summary and sort_by is not None:
         payload["sort_by"] = sort_by
-    if top_n is not None:
+    if not summary and top_n is not None:
         payload["top_n"] = top_n
     payload.update(
         {
@@ -1628,18 +1746,19 @@ def render_calibration_batch_json(batch, *, min_grade=None, sort_by=None, top_n=
             "implied_base_wpm_max": _round_or_none(batch.implied_base_wpm_max),
             "implied_base_wpm_spread": _round_or_none(batch.implied_base_wpm_spread),
             "grade_counts": {g: batch.grade_counts[g] for g in _wm_calib_batch_grade_order()},
-            "rows": [
-                _calib_batch_row_obj(r)
-                for r in _truncate_batch_rows(
-                    _sort_calib_batch_rows(
-                        _filter_calib_batch_rows_by_grade(batch.rows, min_grade),
-                        sort_by,
-                    ),
-                    top_n,
-                )
-            ],
         }
     )
+    if summary:
+        best = _best_calib_batch_row(kept_rows)
+        payload["best"] = None if best is None else _calib_batch_row_obj(best)
+    else:
+        payload["rows"] = [
+            _calib_batch_row_obj(r)
+            for r in _truncate_batch_rows(
+                _sort_calib_batch_rows(kept_rows, sort_by),
+                top_n,
+            )
+        ]
     return json.dumps(payload, indent=2)
 
 
@@ -1686,7 +1805,8 @@ def _calib_batch_row_obj(row):
     }
 
 
-def render_calibration_batch_csv(batch, *, min_grade=None, sort_by=None, top_n=None):
+def render_calibration_batch_csv(batch, *, min_grade=None, sort_by=None, top_n=None,
+                                 summary=False):
     """Render a ``calibrate-base-wpm-batch`` corpus verdict as CSV text.
 
     The spreadsheet/plot-friendly twin of :func:`render_calibration_batch_json`
@@ -1732,7 +1852,22 @@ def render_calibration_batch_csv(batch, *, min_grade=None, sort_by=None, top_n=N
     cleanly with a full one — it just has fewer rows). The trailing corpus aggregate
     comments still describe the WHOLE corpus, so the consumer can see how many voices
     were filtered. The default ``None`` keeps every row.
+
+    ``summary`` (iter-402) emits just the header plus the ONE most-representative voice
+    row (:func:`_best_calib_batch_row` — nearest the corpus median) — header-only when no
+    voice carries a delta. The column set is unchanged, so a summary CSV unions cleanly
+    with a full batch — it is simply the single best row. The pick is INDEPENDENT of
+    ``sort_by`` / ``top_n`` but respects ``min_grade``; a leading ``# summary: true``
+    comment flags the mode. The default ``False`` emits every row.
     """
+    kept_rows = _filter_calib_batch_rows_by_grade(batch.rows, min_grade)
+    if summary:
+        best = _best_calib_batch_row(kept_rows)
+        data_rows = [best] if best is not None else []
+    else:
+        data_rows = _truncate_batch_rows(
+            _sort_calib_batch_rows(kept_rows, sort_by), top_n
+        )
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(
@@ -1748,12 +1883,7 @@ def render_calibration_batch_csv(batch, *, min_grade=None, sort_by=None, top_n=N
             "delta_from_median_wpm",
         ]
     )
-    for r in _truncate_batch_rows(
-        _sort_calib_batch_rows(
-            _filter_calib_batch_rows_by_grade(batch.rows, min_grade), sort_by
-        ),
-        top_n,
-    ):
+    for r in data_rows:
         calib = r["calibration"]
         if calib is None:
             writer.writerow([r["voice"], "", "", "", "", "", "", "", ""])
@@ -1779,7 +1909,7 @@ def render_calibration_batch_csv(batch, *, min_grade=None, sort_by=None, top_n=N
         return "" if value is None else round(value, 3)
 
     counts = batch.grade_counts
-    summary = [
+    comments = [
         f"# nominal: {round(batch.default_base_wpm, 3)}",
         f"# num_voices: {batch.num_voices}",
         f"# num_calibrated: {batch.num_calibrated}",
@@ -1790,13 +1920,19 @@ def render_calibration_batch_csv(batch, *, min_grade=None, sort_by=None, top_n=N
         "# grades: "
         + ", ".join(f"{counts[g]} {g}" for g in _wm_calib_batch_grade_order()),
     ]
-    if top_n is not None:
-        summary.insert(0, f"# top_n: {top_n}")
-    if sort_by is not None:
-        summary.insert(0, f"# sort_by: {sort_by}")
+    # --sort-by / --top-n shape a TABLE the operator reads; in --summary mode there is
+    # exactly one row (the most-representative voice), so those ordering/count tags are
+    # meaningless and omitted — only min_grade (which scopes the pick) and the summary
+    # flag itself are echoed.
+    if not summary and top_n is not None:
+        comments.insert(0, f"# top_n: {top_n}")
+    if not summary and sort_by is not None:
+        comments.insert(0, f"# sort_by: {sort_by}")
     if min_grade is not None:
-        summary.insert(0, f"# min_grade: {min_grade}")
-    return body + "\n" + "\n".join(summary)
+        comments.insert(0, f"# min_grade: {min_grade}")
+    if summary:
+        comments.insert(0, "# summary: true")
+    return body + "\n" + "\n".join(comments)
 
 
 def render_calibration_csv(samples, calib):
@@ -9804,6 +9940,16 @@ def cmd_calibrate_base_wpm_batch(args, *, log=print):
     FIRST (before ``--sort-by`` / ``--top-n``) across all three formats; the corpus
     aggregates still describe the WHOLE corpus so the operator sees how many voices were
     filtered.
+
+    iter-402 adds ``--summary`` (mirroring ``vad-gap-recommend-batch --summary``): a
+    render-only reduction that collapses the whole table to the ONE most-representative
+    voice (:func:`_best_calib_batch_row` — nearest the corpus median, the INVERSE of
+    ``--sort-by delta``), so an operator who just wants "which one voice speaks for the
+    fleet base rate?" gets the answer without reading rows. It is INDEPENDENT of
+    ``--sort-by`` / ``--top-n`` but respects ``--min-grade``, and applies across all
+    three formats (human verdict line / ``best`` JSON key / single CSV data row); the
+    corpus aggregates are still carried so the operator sees what the pick is central
+    within.
     """
     wm = _load_wpm_mirror()
     CalibrationSample = wm.CalibrationSample
@@ -9826,18 +9972,19 @@ def cmd_calibrate_base_wpm_batch(args, *, log=print):
     min_grade = getattr(args, "min_grade", None)
     sort_by = getattr(args, "sort_by", None)
     top_n = getattr(args, "top_n", None)
+    summary = getattr(args, "summary", False)
     if getattr(args, "json", False):
         log(render_calibration_batch_json(
-            batch, min_grade=min_grade, sort_by=sort_by, top_n=top_n
+            batch, min_grade=min_grade, sort_by=sort_by, top_n=top_n, summary=summary
         ))
         return
     if getattr(args, "csv", False):
         log(render_calibration_batch_csv(
-            batch, min_grade=min_grade, sort_by=sort_by, top_n=top_n
+            batch, min_grade=min_grade, sort_by=sort_by, top_n=top_n, summary=summary
         ))
         return
     for line in render_calibration_batch(
-        batch, min_grade=min_grade, sort_by=sort_by, top_n=top_n
+        batch, min_grade=min_grade, sort_by=sort_by, top_n=top_n, summary=summary
     ):
         log(line)
 
@@ -12331,6 +12478,14 @@ def build_parser():
         "dropped. Applied BEFORE --sort-by/--top-n. Render-only — the corpus "
         "median/aggregates still describe the whole corpus. Applies to the human, "
         "--json, and --csv output. Default: keep every voice",
+    )
+    calib_batch.add_argument(
+        "--summary",
+        action="store_true",
+        help="Collapse the table to the ONE most-representative voice (nearest the "
+        "corpus median, ties to highest grade) — the inverse of '--sort-by delta'. "
+        "Independent of --sort-by/--top-n but respects --min-grade. Applies to the "
+        "human, --json (a 'best' key), and --csv (a single data row) output",
     )
 
     # gv vad — offline Silero segmentation of a WAV file. Defaults mirror
