@@ -455,3 +455,219 @@ def test_handler_json_suppresses_human_report():
     )
     text = "\n".join(lines)
     assert "calibration batch" not in text  # the human header is gone
+
+
+# ---- iter-399: --sort-by render-only ordering --------------------------
+
+
+def test_sort_type_accepts_each_key():
+    for key in ("base_wpm", "grade", "drift", "delta"):
+        assert gv.calib_batch_sort_type(key) == key
+
+
+def test_sort_type_is_case_insensitive_and_strips():
+    assert gv.calib_batch_sort_type("  BASE_WPM ") == "base_wpm"
+
+
+def test_sort_type_rejects_unknown():
+    import argparse
+
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.calib_batch_sort_type("nonsense")
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.calib_batch_sort_type("")
+
+
+def test_parser_sort_by_parses():
+    args = gv.build_parser().parse_args(
+        ["calibrate-base-wpm-batch", "--voice", "a", "165:60.0", "--sort-by", "grade"]
+    )
+    assert args.sort_by == "grade"
+
+
+def test_parser_sort_by_default_none():
+    args = gv.build_parser().parse_args(
+        ["calibrate-base-wpm-batch", "--voice", "a", "165:60.0"]
+    )
+    assert args.sort_by is None
+
+
+def test_parser_sort_by_rejects_unknown():
+    with pytest.raises(SystemExit) as exc:
+        gv.build_parser().parse_args(
+            ["calibrate-base-wpm-batch", "--voice", "a", "165:60.0",
+             "--sort-by", "bogus"]
+        )
+    assert exc.value.code == 2
+
+
+# The corpus the ordering tests share: three distinct base rates so every key
+# produces a determinate permutation, plus an uncalibrated voice that must sort
+# last under every ordering.
+_SORT_VOICES = [
+    ("mid", [(165, 60.0, 1.0)]),
+    ("fast", [(180, 60.0, 1.0)]),
+    ("slow", [(150, 60.0, 1.0)]),
+    ("empty", []),
+]
+
+
+def _row_order(lines):
+    """The voice labels in the order their rows appear in a human render."""
+    order = []
+    for line in lines:
+        stripped = line.strip()
+        for v in ("mid", "fast", "slow", "empty"):
+            if stripped.startswith(v + ":"):
+                order.append(v)
+    return order
+
+
+def test_sort_none_keeps_argument_order():
+    batch = _batch(_SORT_VOICES)
+    assert _row_order(gv.render_calibration_batch(batch)) == [
+        "mid", "fast", "slow", "empty"
+    ]
+
+
+def test_sort_base_wpm_ascending_uncalibrated_last():
+    batch = _batch(_SORT_VOICES)
+    assert _row_order(gv.render_calibration_batch(batch, sort_by="base_wpm")) == [
+        "slow", "mid", "fast", "empty"
+    ]
+
+
+def test_sort_delta_biggest_outlier_first():
+    # median is 165 (mid); |Δ| = fast 15, slow 15, mid 0. fast/slow tie on |Δ|,
+    # broken by input order (fast listed before slow). empty last.
+    batch = _batch(_SORT_VOICES)
+    assert _row_order(gv.render_calibration_batch(batch, sort_by="delta")) == [
+        "fast", "slow", "mid", "empty"
+    ]
+
+
+def test_sort_drift_biggest_mover_first():
+    # nominal 165: |drift| = slow 15, fast 15, mid 0. slow/fast tie, input order
+    # keeps fast after... actually input order is mid,fast,slow so fast first.
+    batch = _batch(_SORT_VOICES)
+    assert _row_order(gv.render_calibration_batch(batch, sort_by="drift")) == [
+        "fast", "slow", "mid", "empty"
+    ]
+
+
+def test_sort_grade_most_trustworthy_first():
+    # A wide-spread voice grades worse than tight single-sample voices. Build a
+    # corpus with one scattered voice and two agree voices.
+    batch = _batch(
+        [
+            ("scattered", [(120, 60.0, 1.0), (240, 60.0, 1.0)]),
+            ("tightA", [(165, 60.0, 1.0)]),
+            ("tightB", [(150, 60.0, 1.0)]),
+        ]
+    )
+    order = []
+    for line in gv.render_calibration_batch(batch, sort_by="grade"):
+        s = line.strip()
+        for v in ("scattered", "tightA", "tightB"):
+            if s.startswith(v + ":"):
+                order.append(v)
+    # agree voices (tightA, tightB) before the scattered one; ties keep input order.
+    assert order == ["tightA", "tightB", "scattered"]
+
+
+def test_sort_names_active_ordering_in_header():
+    batch = _batch(_SORT_VOICES)
+    text = "\n".join(gv.render_calibration_batch(batch, sort_by="delta"))
+    assert "sorted by delta" in text
+    # default render does NOT mention sorting
+    assert "sorted by" not in "\n".join(gv.render_calibration_batch(batch))
+
+
+def test_sort_does_not_change_corpus_summary():
+    batch = _batch(_SORT_VOICES)
+    plain = "\n".join(gv.render_calibration_batch(batch))
+    sorted_text = "\n".join(gv.render_calibration_batch(batch, sort_by="base_wpm"))
+    for marker in ("corpus: median 165.0", "range 150.0 – 180.0", "spread 30.0"):
+        assert marker in plain
+        assert marker in sorted_text
+
+
+def test_json_sort_reorders_rows_and_names_key():
+    import json as _json
+
+    batch = _batch(_SORT_VOICES)
+    obj = _json.loads(gv.render_calibration_batch_json(batch, sort_by="base_wpm"))
+    assert obj["sort_by"] == "base_wpm"
+    assert [r["voice"] for r in obj["rows"]] == ["slow", "mid", "fast", "empty"]
+    # aggregates unaffected
+    assert obj["implied_base_wpm_median"] == 165.0
+
+
+def test_json_sort_none_omits_key():
+    import json as _json
+
+    batch = _batch(_SORT_VOICES)
+    obj = _json.loads(gv.render_calibration_batch_json(batch))
+    assert "sort_by" not in obj
+    assert [r["voice"] for r in obj["rows"]] == ["mid", "fast", "slow", "empty"]
+
+
+def test_csv_sort_reorders_rows_and_comments_key():
+    batch = _batch(_SORT_VOICES)
+    text = gv.render_calibration_batch_csv(batch, sort_by="base_wpm")
+    assert "# sort_by: base_wpm" in text
+    data_rows = [
+        ln for ln in text.splitlines()
+        if ln and not ln.startswith("#") and not ln.startswith("voice,")
+    ]
+    voices = [ln.split(",")[0] for ln in data_rows]
+    assert voices == ["slow", "mid", "fast", "empty"]
+
+
+def test_csv_sort_none_omits_comment():
+    batch = _batch(_SORT_VOICES)
+    text = gv.render_calibration_batch_csv(batch)
+    assert "# sort_by" not in text
+
+
+def test_handler_sort_threads_to_human_render():
+    lines = _run(
+        [
+            "calibrate-base-wpm-batch",
+            "--voice", "mid", "165:60.0",
+            "--voice", "fast", "180:60.0",
+            "--voice", "slow", "150:60.0",
+            "--sort-by", "base_wpm",
+        ]
+    )
+    assert _row_order(lines) == ["slow", "mid", "fast"]
+
+
+def test_handler_sort_threads_to_json():
+    import json as _json
+
+    lines = _run(
+        [
+            "calibrate-base-wpm-batch",
+            "--voice", "mid", "165:60.0",
+            "--voice", "slow", "150:60.0",
+            "--json", "--sort-by", "base_wpm",
+        ]
+    )
+    obj = _json.loads(lines[0])
+    assert obj["sort_by"] == "base_wpm"
+    assert [r["voice"] for r in obj["rows"]] == ["slow", "mid"]
+
+
+def test_handler_sort_matches_render_directly():
+    batch = _batch([("mid", [(165, 60.0, 1.0)]), ("slow", [(150, 60.0, 1.0)])])
+    expected = gv.render_calibration_batch(batch, sort_by="base_wpm")
+    lines = _run(
+        [
+            "calibrate-base-wpm-batch",
+            "--voice", "mid", "165:60.0",
+            "--voice", "slow", "150:60.0",
+            "--sort-by", "base_wpm",
+        ]
+    )
+    assert lines == expected

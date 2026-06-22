@@ -8,7 +8,7 @@ Usage:
     gv chat               # chat mode — STT → LLM (litellm) → TTS
     gv simulate-mirror …  # offline WPM-mirror trajectory / grid-sweep simulator
     gv calibrate-base-wpm … # offline base_wpm calibration (dispersion grade agree/loose/scattered + margin to next grade; --verdict for an adopt/keep call; --json/--csv for per-sample data)
-    gv calibrate-base-wpm-batch --voice af_heart 50:18.2 --voice am_adam 40:15.0  # calibrate a CORPUS of voices — per-voice base_wpm + grade + drift + the corpus median (which voices agree?); --json/--csv for the machine-readable corpus
+    gv calibrate-base-wpm-batch --voice af_heart 50:18.2 --voice am_adam 40:15.0  # calibrate a CORPUS of voices — per-voice base_wpm + grade + drift + the corpus median (which voices agree?); --json/--csv for the machine-readable corpus; --sort-by base_wpm/grade/drift/delta to float the most-useful voices to the top
     gv vad recording.wav  # offline Silero VAD — segment a WAV into speech regions
     gv vad recording.wav --json # machine-readable segmentation (SileroResult.to_dict shape)
     gv vad-gaps recording.wav  # report the silence gaps BETWEEN speech regions (tune --min-silence-ms)
@@ -1251,7 +1251,114 @@ def render_calibration_verdict(verdict):
     return lines
 
 
-def render_calibration_batch(batch):
+# Render-only, like iter-386's ``vad-gap-recommend-batch --sort-by``: the core
+# ``calibrate_base_wpm_batch`` engine stays the always-by-input-order primitive, and
+# the ordering lives purely in the gv renderers, so a consumer of the engine data is
+# unaffected.
+CALIB_BATCH_SORT_CHOICES = ("base_wpm", "grade", "drift", "delta")
+
+#: Dispersion-grade rank for ``--sort-by grade`` (iter-399), best first. Higher rank =
+#: more trustworthy calibration. An uncalibrated voice (no grade) ranks below every
+#: graded voice via the ``.get(grade, -1)`` default, so it sorts last.
+_CALIB_DISPERSION_GRADE_RANK = {"agree": 2, "loose": 1, "scattered": 0}
+
+
+def calib_batch_sort_type(raw):
+    """Argparse ``type`` for the iter-399 ``calibrate-base-wpm-batch --sort-by`` key.
+
+    Parses a single sort key (``base_wpm`` / ``grade`` / ``drift`` / ``delta``,
+    case-insensitive) naming how to ORDER the per-voice rows of
+    ``gv calibrate-base-wpm-batch`` — by ascending implied base_wpm (slowest voice
+    first), by descending dispersion grade (most-trustworthy first), by descending
+    |drift| vs nominal (biggest movers first), or by descending |Δmedian| (biggest
+    corpus outliers first) — so the most-useful voices read first instead of in
+    ``--voice`` argument order. The empty string and any other token are rejected.
+    Pure and side-effect-free for direct unit testing — the calibration-batch analogue
+    of :func:`gap_recommend_batch_sort_type` (which serves the VAD batch).
+    """
+    if not isinstance(raw, str):
+        raise argparse.ArgumentTypeError(
+            f"a sort key must be a string, got {raw!r}"
+        )
+    tok = raw.strip().lower()
+    if tok not in CALIB_BATCH_SORT_CHOICES:
+        raise argparse.ArgumentTypeError(
+            f"invalid sort key {raw!r}: choose from "
+            f"{list(CALIB_BATCH_SORT_CHOICES)}"
+        )
+    return tok
+
+
+def _sort_calib_batch_rows(rows, sort_by):
+    """Reorder ``calibrate-base-wpm-batch`` voice rows by ``sort_by`` (iter-399).
+
+    Render-only ordering: the core :func:`calibrate_base_wpm_batch` stays the
+    always-by-input-order primitive; this returns a reordered copy. With ``sort_by``
+    ``None`` (no ordering requested) returns the rows in their original ``--voice``
+    order (a copy, so the default batch is byte-identical to the pre-sort output).
+
+    - ``"base_wpm"`` sorts by implied base_wpm ASCENDING (slowest voice first).
+    - ``"grade"`` sorts by dispersion grade DESCENDING (``agree`` → ``loose`` →
+      ``scattered``; uncalibrated last — matching iter-386's most-trustworthy-first
+      direction).
+    - ``"drift"`` sorts by |drift| vs nominal DESCENDING (biggest movers off the seed
+      first).
+    - ``"delta"`` sorts by |``delta_from_median_wpm``| DESCENDING (biggest corpus
+      outliers first — the calibration analogue of iter-386's ``delta``).
+
+    All four are STABLE — rows tying on the key keep their original ``--voice`` order —
+    so the result is a deterministic permutation. An uncalibrated voice
+    (``calibration`` ``None`` — no samples) has no number/grade to rank, so it sorts
+    LAST under every ordering via a leading ``is None`` key. Pure: never mutates the
+    source rows. An unrecognised ``sort_by`` returns the rows in their original order
+    (defensive: a future key never silently scrambles the table).
+    """
+    if sort_by == "base_wpm":
+        # Ascending implied base_wpm; an uncalibrated voice sorts after every number.
+        return sorted(
+            rows,
+            key=lambda r: (
+                r["calibration"] is None,
+                r["calibration"].implied_base_wpm if r["calibration"] is not None else 0.0,
+            ),
+        )
+    if sort_by == "grade":
+        # Negative rank -> descending; sorted() is stable so input order breaks ties.
+        # An uncalibrated voice ranks below every graded voice (the .get default -1).
+        return sorted(
+            rows,
+            key=lambda r: (
+                r["calibration"] is None,
+                -_CALIB_DISPERSION_GRADE_RANK.get(
+                    r["calibration"].dispersion_grade if r["calibration"] is not None else None,
+                    -1,
+                ),
+            ),
+        )
+    if sort_by == "drift":
+        # Descending |drift| (biggest movers first); an uncalibrated voice sorts last.
+        return sorted(
+            rows,
+            key=lambda r: (
+                r["calibration"] is None,
+                -abs(r["calibration"].drift) if r["calibration"] is not None else 0.0,
+            ),
+        )
+    if sort_by == "delta":
+        # Descending |Δmedian| (biggest corpus outliers first); a None delta sorts last.
+        return sorted(
+            rows,
+            key=lambda r: (
+                r["delta_from_median_wpm"] is None,
+                -abs(r["delta_from_median_wpm"])
+                if r["delta_from_median_wpm"] is not None
+                else 0.0,
+            ),
+        )
+    return list(rows)
+
+
+def render_calibration_batch(batch, *, sort_by=None):
     """Render a ``calibrate-base-wpm-batch`` corpus verdict as plain-text lines.
 
     The human-readable face of :func:`calibrate_base_wpm_batch` (iter-397), the
@@ -1265,13 +1372,24 @@ def render_calibration_batch(batch):
     and is tagged ``uncalibrated`` (excluded from the corpus aggregates but still
     listed). Pure: returns a list of strings (no I/O, no ANSI) so it is testable
     in isolation — the handler joins and prints them.
+
+    ``sort_by`` (iter-399) reorders the per-voice rows so the most-useful read first:
+    ``"base_wpm"`` = slowest voice first (implied base_wpm ASCENDING), ``"grade"`` =
+    most-trustworthy first (dispersion grade DESCENDING), ``"drift"`` = biggest movers
+    off nominal first (|drift| DESCENDING), ``"delta"`` = biggest corpus outliers first
+    (|Δmedian| DESCENDING). An uncalibrated voice always sorts last. The corpus summary
+    and ``grades:`` histogram are computed over the WHOLE corpus and are unaffected by
+    the ordering. The default ``None`` keeps the ``--voice`` argument order
+    (byte-identical to the pre-sort render). When set, the nominal line names the
+    active ordering so a reader knows the rows are no longer in argument order.
     """
     lines = [
         f"base_wpm calibration batch ({batch.num_voices} voices, "
         f"{batch.num_calibrated} calibrated)",
-        f"  nominal: {batch.default_base_wpm:.1f}",
+        f"  nominal: {batch.default_base_wpm:.1f}"
+        + (f" (sorted by {sort_by})" if sort_by is not None else ""),
     ]
-    for r in batch.rows:
+    for r in _sort_calib_batch_rows(batch.rows, sort_by):
         calib = r["calibration"]
         if calib is None:
             lines.append(f"  {r['voice']}: - (uncalibrated — no samples)")
@@ -1313,7 +1431,7 @@ def _wm_calib_batch_grade_order():
     return _load_wpm_mirror().CALIB_BATCH_GRADE_ORDER
 
 
-def render_calibration_batch_json(batch):
+def render_calibration_batch_json(batch, *, sort_by=None):
     """Render a ``calibrate-base-wpm-batch`` corpus verdict as a JSON string.
 
     The nested/programmatic twin of :func:`render_calibration_batch` (iter-398),
@@ -1337,18 +1455,34 @@ def render_calibration_batch_json(batch):
     contract) — listed but excluded from the corpus aggregates, which stay
     ``null`` when no voice calibrated. Floats round to 3 places. Pure: returns a
     single JSON string (no I/O).
+
+    ``sort_by`` (iter-399) reorders the ``rows`` list (``"base_wpm"`` = implied
+    base_wpm ASCENDING, ``"grade"`` = dispersion grade DESCENDING, ``"drift"`` =
+    |drift| DESCENDING, ``"delta"`` = |Δmedian| DESCENDING; uncalibrated last). When a
+    key is set the payload also carries a top-level ``sort_by`` key naming it, so a
+    consumer knows the ``rows`` list is no longer in argument order. The corpus
+    aggregates are unaffected. The default ``None`` keeps the argument order (unchanged
+    payload).
     """
-    payload = {
-        "nominal": round(batch.default_base_wpm, 3),
-        "num_voices": batch.num_voices,
-        "num_calibrated": batch.num_calibrated,
-        "implied_base_wpm_median": _round_or_none(batch.implied_base_wpm_median),
-        "implied_base_wpm_min": _round_or_none(batch.implied_base_wpm_min),
-        "implied_base_wpm_max": _round_or_none(batch.implied_base_wpm_max),
-        "implied_base_wpm_spread": _round_or_none(batch.implied_base_wpm_spread),
-        "grade_counts": {g: batch.grade_counts[g] for g in _wm_calib_batch_grade_order()},
-        "rows": [_calib_batch_row_obj(r) for r in batch.rows],
-    }
+    payload = {}
+    if sort_by is not None:
+        payload["sort_by"] = sort_by
+    payload.update(
+        {
+            "nominal": round(batch.default_base_wpm, 3),
+            "num_voices": batch.num_voices,
+            "num_calibrated": batch.num_calibrated,
+            "implied_base_wpm_median": _round_or_none(batch.implied_base_wpm_median),
+            "implied_base_wpm_min": _round_or_none(batch.implied_base_wpm_min),
+            "implied_base_wpm_max": _round_or_none(batch.implied_base_wpm_max),
+            "implied_base_wpm_spread": _round_or_none(batch.implied_base_wpm_spread),
+            "grade_counts": {g: batch.grade_counts[g] for g in _wm_calib_batch_grade_order()},
+            "rows": [
+                _calib_batch_row_obj(r)
+                for r in _sort_calib_batch_rows(batch.rows, sort_by)
+            ],
+        }
+    )
     return json.dumps(payload, indent=2)
 
 
@@ -1395,7 +1529,7 @@ def _calib_batch_row_obj(row):
     }
 
 
-def render_calibration_batch_csv(batch):
+def render_calibration_batch_csv(batch, *, sort_by=None):
     """Render a ``calibrate-base-wpm-batch`` corpus verdict as CSV text.
 
     The spreadsheet/plot-friendly twin of :func:`render_calibration_batch_json`
@@ -1417,6 +1551,14 @@ def render_calibration_batch_csv(batch):
     empty corpus (no voice calibrated) spells the aggregates as blank comment
     values. Floats round to 3 places. Pure: built with the stdlib :mod:`csv`
     writer (RFC-4180 quoting), trailing terminator stripped.
+
+    ``sort_by`` (iter-399) reorders the per-voice rows (``"base_wpm"`` = implied
+    base_wpm ASCENDING, ``"grade"`` = dispersion grade DESCENDING, ``"drift"`` =
+    |drift| DESCENDING, ``"delta"`` = |Δmedian| DESCENDING; uncalibrated last). When a
+    key is set it is echoed as a leading ``# sort_by: <key>`` comment so a consumer
+    knows the data grid is no longer in argument order. The trailing corpus aggregate
+    comments are unaffected. The default ``None`` keeps the argument order
+    (byte-identical to the pre-sort grid).
     """
     buf = io.StringIO()
     writer = csv.writer(buf)
@@ -1433,7 +1575,7 @@ def render_calibration_batch_csv(batch):
             "delta_from_median_wpm",
         ]
     )
-    for r in batch.rows:
+    for r in _sort_calib_batch_rows(batch.rows, sort_by):
         calib = r["calibration"]
         if calib is None:
             writer.writerow([r["voice"], "", "", "", "", "", "", "", ""])
@@ -1470,6 +1612,8 @@ def render_calibration_batch_csv(batch):
         "# grades: "
         + ", ".join(f"{counts[g]} {g}" for g in _wm_calib_batch_grade_order()),
     ]
+    if sort_by is not None:
+        summary.insert(0, f"# sort_by: {sort_by}")
     return body + "\n" + "\n".join(summary)
 
 
@@ -9457,6 +9601,13 @@ def cmd_calibrate_base_wpm_batch(args, *, log=print):
     grid with the corpus aggregates trailing as ``#`` comments
     (:func:`render_calibration_batch_csv`). They are mutually exclusive at the
     parser; either is the whole output in that mode.
+
+    iter-399 adds ``--sort-by`` (mirroring ``vad-gap-recommend-batch --sort-by``):
+    a render-only ordering of the per-voice rows by ``base_wpm`` (ascending) /
+    ``grade`` (best first) / ``drift`` (biggest movers first) / ``delta`` (biggest
+    corpus outliers first), so the most-useful voices read first. It applies across
+    all three formats (human / ``--json`` / ``--csv``); the engine and the corpus
+    aggregates are unaffected.
     """
     wm = _load_wpm_mirror()
     CalibrationSample = wm.CalibrationSample
@@ -9476,13 +9627,14 @@ def cmd_calibrate_base_wpm_batch(args, *, log=print):
         voices.append((label, samples))
 
     batch = calibrate_base_wpm_batch(voices, default_base_wpm=args.nominal)
+    sort_by = getattr(args, "sort_by", None)
     if getattr(args, "json", False):
-        log(render_calibration_batch_json(batch))
+        log(render_calibration_batch_json(batch, sort_by=sort_by))
         return
     if getattr(args, "csv", False):
-        log(render_calibration_batch_csv(batch))
+        log(render_calibration_batch_csv(batch, sort_by=sort_by))
         return
-    for line in render_calibration_batch(batch):
+    for line in render_calibration_batch(batch, sort_by=sort_by):
         log(line)
 
 
@@ -11940,6 +12092,17 @@ def build_parser():
         "spread,relative_spread,dispersion_grade,dispersion_margin,drift,"
         "delta_from_median_wpm) with the corpus aggregates trailing as # comment "
         "lines, for spreadsheets/plots; mutually exclusive with --json",
+    )
+    calib_batch.add_argument(
+        "--sort-by",
+        type=calib_batch_sort_type,
+        default=None,
+        metavar="{base_wpm,grade,drift,delta}",
+        help="Reorder the per-voice rows so the most-useful read first: 'base_wpm' "
+        "(slowest voice first), 'grade' (most-trustworthy first), 'drift' (biggest "
+        "movers off nominal first), 'delta' (biggest corpus outliers first). "
+        "Render-only — the corpus median/aggregates are unaffected. Applies to the "
+        "human, --json, and --csv output. Default: --voice argument order",
     )
 
     # gv vad — offline Silero segmentation of a WAV file. Defaults mirror
