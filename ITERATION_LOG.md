@@ -36454,3 +36454,88 @@ re-verified on main post-merge (`test_gv_calibrate_base_wpm_batch.py` +
 5. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232, iter-317
    still present) — a future lap could `git worktree prune` / remove merged ones.
    NOTE: this lap correctly removed its own worktree.
+
+## iter-400 — calibrate-base-wpm-batch --top-n: keep only the N most-useful voices
+
+- **Date:** 2026-06-22
+- **Branch:** iter-400-calib-batch-topn (ff-merged to main, worktree removed)
+- **Commit:** badb948
+
+**Why.** iter-399's next-item #1 named this exact follow-on: continue the
+iter-386..392 batch-enrichment family on the `calibrate-base-wpm-batch` surface.
+The batch now carries the human / `--json` / `--csv` trio (iter-397/398) plus
+`--sort-by` (iter-399), but every voice row is always rendered — an operator with
+a 40-voice fleet who sorts by delta to surface the biggest outliers still has to
+scroll the whole table. `--top-n` is the calibration analogue of
+`vad-gap-recommend-batch --top-n` (iter-387), the next-most-precedented increment.
+
+**What it is.** `gv calibrate-base-wpm-batch --top-n N` keeps only the first N
+voice rows AFTER the `--sort-by` ordering, so `--sort-by delta --top-n 5` shows
+the five biggest corpus outliers and `--sort-by base_wpm --top-n 3` the three
+slowest voices. Where `--sort-by` (an ORDERING, iter-399) shapes the whole table,
+`--top-n` (a COUNT) keeps a fixed number of the rows that floated to the top.
+
+**Design — render-only, reusing the iter-387 primitive.** The core
+`calibrate_base_wpm_batch` engine stays the always-every-voice primitive; the cap
+lives purely in the gv renderers, REUSING the existing `_truncate_batch_rows`
+helper (iter-387) rather than cloning it — `_truncate_batch_rows` is already a
+generic "keep first `top_n` of a row list, `None` = all, saturating slice, never
+mutates" primitive, so the calibration batch and the VAD batch now share one
+truncator. `positive_int_type` at the parser guarantees N >= 1, so a cap never
+silently empties the table. A `top_n` larger than the corpus keeps every row.
+
+`--top-n` applies across the whole trio, applied AFTER `--sort-by` in each format:
+- **human** — the nominal line gains a `(top K of N)` tag ONLY when a cap actually
+  drops rows (silent when N >= corpus size), mirroring the iter-387 VAD batch's
+  `(top K of N)` bias-line tag.
+- **`--json`** — a top-level `top_n` key (omitted when uncapped).
+- **`--csv`** — a leading `# top_n: N` comment (omitted when uncapped).
+
+Crucially the corpus aggregates (median / range / spread / grade histogram,
+`num_voices` / `num_calibrated`) ALWAYS describe the WHOLE corpus in every format —
+the cap shapes the displayed rows, not the summary — so the operator always sees
+how many voices were elided. Pinned by `test_top_n_does_not_change_corpus_summary`
+(human) and the `num_voices == 4` / `# num_voices: 4` assertions (json/csv).
+
+**What landed.** `examples/gv.py`: `top_n=` kwarg threaded through
+`render_calibration_batch` / `render_calibration_batch_json` /
+`render_calibration_batch_csv` (each reusing `_truncate_batch_rows` after the
+existing `_sort_calib_batch_rows`) and the `cmd_calibrate_base_wpm_batch` handler;
+the `--top-n` parser argument (`positive_int_type`) and the header usage line. No
+engine change — the iter-397 `BaseWpmCalibrationBatch` is unchanged.
+
+**Tests (+20 net new).** parser: top_n parses / default-none / rejects
+zero+negative. human render: none-keeps-all, caps-after-sort, no-sort-keeps-
+prefix, larger-than-corpus-keeps-all, header-names-cap, header-silent-when-
+nothing-dropped, corpus-summary-unaffected. json: caps-and-names-key +
+aggregates-whole-corpus, none-omits-key. csv: caps-and-comments-key +
+aggregates-whole-corpus, none-omits-comment. handler: threads-to-human (+tag),
+threads-to-json, matches-render.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5802 passed**
+(5785 prior + new), run in the feature worktree before ff-merge; re-verified on
+main post-merge (`test_gv_calibrate_base_wpm_batch.py` +
+`test_calibrate_base_wpm_batch.py` + `test_gv_cli.py` → 181 passed).
+- Integration: not run this lap (pure list-truncation / string-formatting over the
+  iter-397 `BaseWpmCalibrationBatch`; no torch import, no audio I/O — mirrors the
+  iter-220/316/317/393..399 calibration laps).
+
+**Next planned items:**
+1. **[gv CLI] continue the iter-386..392 batch enrichment** — `--top-n` now
+   lands; the remaining VAD-batch follow-ons are a `--min-grade` floor (iter-389,
+   drop voices below a dispersion-grade floor before sort/top-n), a `--summary`
+   line naming the single most-representative voice (iter-388, nearest the corpus
+   median — the INVERSE of `--sort-by delta`), and an IQR/Tukey-fence flyer flag
+   naming outlier voices directly (iter-391/392). Each reuses iter-397/398/399/400.
+2. **[gv CLI] continue the STT-side frontier** — the TTS-side calibration surface
+   is now rich (single + batch, all three formats, sortable, top-n-capped); the
+   STT side (transcription RTF / accuracy) is still unexplored by the gv analysis
+   family. A genuinely new pipeline stage.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Prefer a genuinely new signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232, iter-317
+   still present) — a future lap could `git worktree prune` / remove merged ones.
+   NOTE: this lap correctly removed its own worktree.
