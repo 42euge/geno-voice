@@ -465,3 +465,296 @@ def test_handler_csv_emits_header_row():
     gv.cmd_stt_rtf_batch(args, log=lines.append)
     assert len(lines) == 1
     assert lines[0].splitlines()[0].startswith("engine,median_rtf,n_samples,")
+
+
+# ---- iter-411: --sort-by / --top-n -------------------------------------
+
+
+def _engine_order(lines):
+    """Pull the per-engine label order out of a human-render line list."""
+    out = []
+    for l in lines:
+        s = l.strip()
+        if s.startswith(("STT real-time", "gates:", "corpus:", "grades:")):
+            continue
+        if ":" in s:
+            out.append(s.split(":", 1)[0])
+    return out
+
+
+# parser wiring -----------------------------------------------------------
+
+
+def test_sort_by_defaults_none():
+    args = gv.build_parser().parse_args(["stt-rtf-batch", "--engine", "a", "10.0:1.0"])
+    assert args.sort_by is None
+
+
+def test_top_n_defaults_none():
+    args = gv.build_parser().parse_args(["stt-rtf-batch", "--engine", "a", "10.0:1.0"])
+    assert args.top_n is None
+
+
+@pytest.mark.parametrize("key", ["median_rtf", "grade", "delta"])
+def test_sort_by_parses_each_key(key):
+    args = gv.build_parser().parse_args(
+        ["stt-rtf-batch", "--engine", "a", "10.0:1.0", "--sort-by", key]
+    )
+    assert args.sort_by == key
+
+
+def test_sort_by_rejects_unknown_key():
+    with pytest.raises(SystemExit) as exc:
+        gv.build_parser().parse_args(
+            ["stt-rtf-batch", "--engine", "a", "10.0:1.0", "--sort-by", "nope"]
+        )
+    assert exc.value.code == 2
+
+
+def test_top_n_parses_positive():
+    args = gv.build_parser().parse_args(
+        ["stt-rtf-batch", "--engine", "a", "10.0:1.0", "--top-n", "2"]
+    )
+    assert args.top_n == 2
+
+
+def test_top_n_rejects_zero():
+    with pytest.raises(SystemExit) as exc:
+        gv.build_parser().parse_args(
+            ["stt-rtf-batch", "--engine", "a", "10.0:1.0", "--top-n", "0"]
+        )
+    assert exc.value.code == 2
+
+
+# sort type validator -----------------------------------------------------
+
+
+def test_sort_type_normalizes_case_and_whitespace():
+    assert gv.stt_rtf_batch_sort_type("  Median_RTF ") == "median_rtf"
+
+
+def test_sort_type_rejects_empty():
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.stt_rtf_batch_sort_type("")
+
+
+def test_sort_type_rejects_non_string():
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.stt_rtf_batch_sort_type(3)
+
+
+# sort primitive ----------------------------------------------------------
+
+
+def test_sort_none_preserves_input_order():
+    batch = _batch(("c", [(10.0, 15.0)]), ("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]))
+    rows = gv._sort_stt_rtf_batch_rows(batch.rows, None)
+    assert [r["engine"] for r in rows] == ["c", "a", "b"]
+    # A copy, not the source tuple.
+    assert rows is not batch.rows
+
+
+def test_sort_by_median_rtf_ascending():
+    batch = _batch(("c", [(10.0, 15.0)]), ("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]))
+    rows = gv._sort_stt_rtf_batch_rows(batch.rows, "median_rtf")
+    assert [r["engine"] for r in rows] == ["a", "b", "c"]
+
+
+def test_sort_by_grade_descending():
+    batch = _batch(("slow", [(10.0, 15.0)]), ("fast", [(10.0, 1.0)]), ("rt", [(10.0, 8.0)]))
+    rows = gv._sort_stt_rtf_batch_rows(batch.rows, "grade")
+    assert [r["engine"] for r in rows] == ["fast", "rt", "slow"]
+
+
+def test_sort_by_delta_descending_abs():
+    # corpus median of [0.1, 0.8, 1.5] = 0.8; |delta|: a=0.7, c=0.7, b=0.0.
+    batch = _batch(("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]), ("c", [(10.0, 15.0)]))
+    rows = gv._sort_stt_rtf_batch_rows(batch.rows, "delta")
+    # a and c tie at 0.7 -> stable input order keeps a before c; b (0.0) last.
+    assert [r["engine"] for r in rows] == ["a", "c", "b"]
+
+
+def test_sort_unprofiled_sorts_last_under_every_key():
+    for key in ("median_rtf", "grade", "delta"):
+        batch = _batch(("empty", []), ("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]))
+        rows = gv._sort_stt_rtf_batch_rows(batch.rows, key)
+        assert rows[-1]["engine"] == "empty", key
+
+
+def test_sort_unrecognised_key_preserves_order():
+    batch = _batch(("c", [(10.0, 15.0)]), ("a", [(10.0, 1.0)]))
+    rows = gv._sort_stt_rtf_batch_rows(batch.rows, "bogus")
+    assert [r["engine"] for r in rows] == ["c", "a"]
+
+
+# human render ------------------------------------------------------------
+
+
+def test_human_render_sort_by_reorders_and_echoes_header():
+    batch = _batch(("c", [(10.0, 15.0)]), ("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]))
+    lines = gv.render_stt_rtf_batch(batch, sort_by="median_rtf")
+    assert lines[0].endswith("(sorted by median_rtf)")
+    assert _engine_order(lines) == ["a", "b", "c"]
+
+
+def test_human_render_default_unchanged():
+    batch = _batch(("c", [(10.0, 15.0)]), ("a", [(10.0, 1.0)]))
+    assert gv.render_stt_rtf_batch(batch) == gv.render_stt_rtf_batch(
+        batch, sort_by=None, top_n=None
+    )
+    # No reshaping markers in the header by default.
+    assert "(sorted by" not in gv.render_stt_rtf_batch(batch)[0]
+    assert "(top " not in gv.render_stt_rtf_batch(batch)[0]
+
+
+def test_human_render_top_n_truncates_and_echoes_header():
+    batch = _batch(("c", [(10.0, 15.0)]), ("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]))
+    lines = gv.render_stt_rtf_batch(batch, sort_by="median_rtf", top_n=2)
+    assert "(top 2 of 3)" in lines[0]
+    assert _engine_order(lines) == ["a", "b"]
+
+
+def test_human_render_top_n_ge_count_no_marker():
+    batch = _batch(("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]))
+    lines = gv.render_stt_rtf_batch(batch, top_n=5)
+    assert "(top " not in lines[0]
+    assert _engine_order(lines) == ["a", "b"]
+
+
+def test_human_render_corpus_unaffected_by_top_n():
+    # Aggregates describe the WHOLE corpus even when rows are truncated.
+    batch = _batch(("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]), ("c", [(10.0, 15.0)]))
+    full = [l for l in gv.render_stt_rtf_batch(batch) if l.strip().startswith(("corpus:", "grades:"))]
+    capped = [
+        l
+        for l in gv.render_stt_rtf_batch(batch, sort_by="median_rtf", top_n=1)
+        if l.strip().startswith(("corpus:", "grades:"))
+    ]
+    assert full == capped
+
+
+# json render -------------------------------------------------------------
+
+
+def test_json_sort_by_reorders_rows_and_adds_key():
+    import json
+
+    batch = _batch(("c", [(10.0, 15.0)]), ("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]))
+    payload = json.loads(gv.render_stt_rtf_batch_json(batch, sort_by="median_rtf"))
+    assert payload["sort_by"] == "median_rtf"
+    assert [r["engine"] for r in payload["rows"]] == ["a", "b", "c"]
+
+
+def test_json_top_n_truncates_rows_and_adds_key():
+    import json
+
+    batch = _batch(("c", [(10.0, 15.0)]), ("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]))
+    payload = json.loads(
+        gv.render_stt_rtf_batch_json(batch, sort_by="median_rtf", top_n=2)
+    )
+    assert payload["top_n"] == 2
+    assert [r["engine"] for r in payload["rows"]] == ["a", "b"]
+    # Corpus aggregates still describe the whole corpus.
+    assert payload["num_engines"] == 3
+    assert payload["num_profiled"] == 3
+
+
+def test_json_default_has_no_sort_or_topn_keys():
+    import json
+
+    batch = _batch(("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]))
+    payload = json.loads(gv.render_stt_rtf_batch_json(batch))
+    assert "sort_by" not in payload
+    assert "top_n" not in payload
+
+
+# csv render --------------------------------------------------------------
+
+
+def _csv_data_engines(text):
+    out = []
+    for line in text.splitlines():
+        if line.startswith("#") or line.startswith("engine,"):
+            continue
+        out.append(line.split(",", 1)[0])
+    return out
+
+
+def test_csv_sort_by_reorders_rows_and_comments():
+    batch = _batch(("c", [(10.0, 15.0)]), ("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]))
+    text = gv.render_stt_rtf_batch_csv(batch, sort_by="median_rtf")
+    assert "# sort_by: median_rtf" in text.splitlines()
+    assert _csv_data_engines(text) == ["a", "b", "c"]
+
+
+def test_csv_top_n_truncates_rows_and_comments():
+    batch = _batch(("c", [(10.0, 15.0)]), ("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]))
+    text = gv.render_stt_rtf_batch_csv(batch, sort_by="median_rtf", top_n=2)
+    comment_lines = [l for l in text.splitlines() if l.startswith("#")]
+    assert "# sort_by: median_rtf" in comment_lines
+    assert "# top_n: 2" in comment_lines
+    # sort_by reads before top_n.
+    assert comment_lines.index("# sort_by: median_rtf") < comment_lines.index("# top_n: 2")
+    assert _csv_data_engines(text) == ["a", "b"]
+    # Corpus comment still names all engines.
+    assert "# num_engines: 3" in comment_lines
+
+
+def test_csv_default_has_no_sort_or_topn_comments():
+    batch = _batch(("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]))
+    text = gv.render_stt_rtf_batch_csv(batch)
+    assert "# sort_by:" not in text
+    assert "# top_n:" not in text
+
+
+# handler threading -------------------------------------------------------
+
+
+def test_handler_threads_sort_and_topn_to_human():
+    args = gv.build_parser().parse_args(
+        [
+            "stt-rtf-batch",
+            "--engine", "c", "10.0:15.0",
+            "--engine", "a", "10.0:1.0",
+            "--engine", "b", "10.0:8.0",
+            "--sort-by", "median_rtf",
+            "--top-n", "2",
+        ]
+    )
+    lines = []
+    gv.cmd_stt_rtf_batch(args, log=lines.append)
+    batch = _batch(("c", [(10.0, 15.0)]), ("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]))
+    assert lines == gv.render_stt_rtf_batch(batch, sort_by="median_rtf", top_n=2)
+
+
+def test_handler_threads_sort_and_topn_to_json():
+    args = gv.build_parser().parse_args(
+        [
+            "stt-rtf-batch",
+            "--engine", "c", "10.0:15.0",
+            "--engine", "a", "10.0:1.0",
+            "--json",
+            "--sort-by", "median_rtf",
+        ]
+    )
+    lines = []
+    gv.cmd_stt_rtf_batch(args, log=lines.append)
+    batch = _batch(("c", [(10.0, 15.0)]), ("a", [(10.0, 1.0)]))
+    assert lines == [gv.render_stt_rtf_batch_json(batch, sort_by="median_rtf", top_n=None)]
+
+
+def test_handler_threads_sort_and_topn_to_csv():
+    args = gv.build_parser().parse_args(
+        [
+            "stt-rtf-batch",
+            "--engine", "c", "10.0:15.0",
+            "--engine", "a", "10.0:1.0",
+            "--csv",
+            "--sort-by", "grade",
+            "--top-n", "1",
+        ]
+    )
+    lines = []
+    gv.cmd_stt_rtf_batch(args, log=lines.append)
+    batch = _batch(("c", [(10.0, 15.0)]), ("a", [(10.0, 1.0)]))
+    assert lines == [gv.render_stt_rtf_batch_csv(batch, sort_by="grade", top_n=1)]
