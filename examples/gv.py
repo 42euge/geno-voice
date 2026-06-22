@@ -8,7 +8,7 @@ Usage:
     gv chat               # chat mode — STT → LLM (litellm) → TTS
     gv simulate-mirror …  # offline WPM-mirror trajectory / grid-sweep simulator
     gv calibrate-base-wpm … # offline base_wpm calibration (dispersion grade agree/loose/scattered + margin to next grade; --verdict for an adopt/keep call; --json/--csv for per-sample data)
-    gv calibrate-base-wpm-batch --voice af_heart 50:18.2 --voice am_adam 40:15.0  # calibrate a CORPUS of voices — per-voice base_wpm + grade + drift + the corpus median (which voices agree?); --json/--csv for the machine-readable corpus; --sort-by base_wpm/grade/drift/delta to float the most-useful voices to the top; --top-n N to keep only the N most-useful
+    gv calibrate-base-wpm-batch --voice af_heart 50:18.2 --voice am_adam 40:15.0  # calibrate a CORPUS of voices — per-voice base_wpm + grade + drift + the corpus median (which voices agree?); --json/--csv for the machine-readable corpus; --sort-by base_wpm/grade/drift/delta to float the most-useful voices to the top; --top-n N to keep only the N most-useful; --min-grade scattered/loose/agree to drop voices below a dispersion floor
     gv vad recording.wav  # offline Silero VAD — segment a WAV into speech regions
     gv vad recording.wav --json # machine-readable segmentation (SileroResult.to_dict shape)
     gv vad-gaps recording.wav  # report the silence gaps BETWEEN speech regions (tune --min-silence-ms)
@@ -1262,6 +1262,80 @@ CALIB_BATCH_SORT_CHOICES = ("base_wpm", "grade", "drift", "delta")
 #: graded voice via the ``.get(grade, -1)`` default, so it sorts last.
 _CALIB_DISPERSION_GRADE_RANK = {"agree": 2, "loose": 1, "scattered": 0}
 
+#: Valid ``--min-grade`` floors for ``calibrate-base-wpm-batch`` (iter-401). All three
+#: dispersion grades are valid thresholds (every CALIBRATED voice carries one of them);
+#: ``"scattered"`` is the most permissive floor (keeps every calibrated voice), ``"agree"``
+#: the strictest (keeps only the tightest). An uncalibrated voice (no grade) sits below
+#: every floor and is always dropped when one is set. The calibration analogue of the
+#: iter-389 ``--min-grade`` on ``vad-gap-recommend-batch``.
+CALIB_BATCH_GRADE_CHOICES = ("scattered", "loose", "agree")
+
+
+def calib_batch_min_grade_type(raw):
+    """Argparse ``type`` for the iter-401 ``calibrate-base-wpm-batch --min-grade`` floor.
+
+    Parses a single dispersion-grade floor (``scattered`` / ``loose`` / ``agree``,
+    case-insensitive) naming the LEAST-trustworthy calibration to keep — so an operator
+    can hide every voice whose base_wpm is too dispersed to act on, leaving only the
+    voices that calibrated tightly enough. ``"agree"`` keeps only the tightest voices,
+    ``"loose"`` keeps loose-or-better, ``"scattered"`` keeps every calibrated voice (an
+    uncalibrated voice is always dropped when a floor is set, since it has no grade). The
+    empty string and any other token are rejected. Pure and side-effect-free for direct
+    unit testing — the calibration-batch analogue of :func:`gap_confidence_grade_type`.
+    """
+    if not isinstance(raw, str):
+        raise argparse.ArgumentTypeError(
+            f"a dispersion grade must be a string, got {raw!r}"
+        )
+    tok = raw.strip().lower()
+    if tok not in CALIB_BATCH_GRADE_CHOICES:
+        raise argparse.ArgumentTypeError(
+            f"invalid dispersion grade {raw!r}: choose from "
+            f"{list(CALIB_BATCH_GRADE_CHOICES)}"
+        )
+    return tok
+
+
+def _calib_grade_meets_min(grade, min_grade):
+    """True if dispersion ``grade`` is at least as trustworthy as ``min_grade`` (iter-401).
+
+    Ranks the total order (uncalibrated/``None`` < ``"scattered"`` < ``"loose"`` <
+    ``"agree"``) via :data:`_CALIB_DISPERSION_GRADE_RANK` and compares. With ``min_grade``
+    ``None`` (no filter requested) every voice passes. An uncalibrated voice (grade
+    ``None``) and any unrecognised grade rank below everything (the ``.get(grade, -1)``
+    default), so they never pass a set floor — defensive: a future grade never silently
+    survives a filter.
+    """
+    if min_grade is None:
+        return True
+    return (
+        _CALIB_DISPERSION_GRADE_RANK.get(grade, -1)
+        >= _CALIB_DISPERSION_GRADE_RANK[min_grade]
+    )
+
+
+def _filter_calib_batch_rows_by_grade(rows, min_grade):
+    """Drop ``calibrate-base-wpm-batch`` voice rows below ``min_grade`` (iter-401).
+
+    Render-only filter: the core :func:`calibrate_base_wpm_batch` stays the complete,
+    every-voice primitive; this trims the rendered rows to those whose dispersion grade
+    meets the floor. A row's grade is ``row["calibration"].dispersion_grade`` (or ``None``
+    for an uncalibrated, no-sample voice — always dropped when a floor is set). With
+    ``min_grade`` ``None`` returns the rows unchanged (the default batch is byte-identical
+    to the pre-filter output). Pure — builds a new list, never mutates the source rows.
+    The calibration analogue of :func:`_filter_knob_rows_by_grade`.
+    """
+    if min_grade is None:
+        return list(rows)
+    return [
+        r
+        for r in rows
+        if _calib_grade_meets_min(
+            r["calibration"].dispersion_grade if r["calibration"] is not None else None,
+            min_grade,
+        )
+    ]
+
 
 def calib_batch_sort_type(raw):
     """Argparse ``type`` for the iter-399 ``calibrate-base-wpm-batch --sort-by`` key.
@@ -1358,7 +1432,7 @@ def _sort_calib_batch_rows(rows, sort_by):
     return list(rows)
 
 
-def render_calibration_batch(batch, *, sort_by=None, top_n=None):
+def render_calibration_batch(batch, *, min_grade=None, sort_by=None, top_n=None):
     """Render a ``calibrate-base-wpm-batch`` corpus verdict as plain-text lines.
 
     The human-readable face of :func:`calibrate_base_wpm_batch` (iter-397), the
@@ -1392,11 +1466,28 @@ def render_calibration_batch(batch, *, sort_by=None, top_n=None):
     describe the WHOLE corpus, so the operator sees how many voices were elided.
     When a cap actually drops rows the nominal line gains a ``(top K of N)`` tag.
     The default ``None`` keeps every row.
+
+    ``min_grade`` (iter-401) drops every voice row whose dispersion grade is below the
+    named floor (``"scattered"`` / ``"loose"`` / ``"agree"``), leaving only the voices
+    that calibrated tightly enough to trust; an uncalibrated (no-sample) voice has no
+    grade and is always dropped when a floor is set. It is applied FIRST (before
+    ``sort_by`` / ``top_n``), so every later stage sees only the surviving voices — but
+    the corpus summary and ``grades:`` histogram are still computed over the WHOLE corpus,
+    so the floor narrows which voices you READ without redefining what the corpus
+    consensus IS. The calibration-batch analogue of the iter-389 ``min_grade`` on
+    ``vad-gap-recommend-batch``. When set the nominal line names the floor; when the
+    filter removes every voice a single ``(no voice ...)`` note replaces the body rows.
+    The default ``None`` keeps every voice (byte-identical to the pre-filter render).
     """
     nominal_line = f"  nominal: {batch.default_base_wpm:.1f}"
+    if min_grade is not None:
+        nominal_line += f" (min grade {min_grade})"
     if sort_by is not None:
         nominal_line += f" (sorted by {sort_by})"
-    sorted_rows = _sort_calib_batch_rows(batch.rows, sort_by)
+    # The grade floor is applied first: every later stage (sort / top-n) sees only the
+    # surviving voices, while the corpus aggregates below stay over the WHOLE corpus.
+    kept_rows = _filter_calib_batch_rows_by_grade(batch.rows, min_grade)
+    sorted_rows = _sort_calib_batch_rows(kept_rows, sort_by)
     rows = _truncate_batch_rows(sorted_rows, top_n)
     if top_n is not None and len(rows) < len(sorted_rows):
         nominal_line += f" (top {len(rows)} of {len(sorted_rows)})"
@@ -1405,6 +1496,29 @@ def render_calibration_batch(batch, *, sort_by=None, top_n=None):
         f"{batch.num_calibrated} calibrated)",
         nominal_line,
     ]
+    if min_grade is not None and not rows:
+        lines.append(
+            f"  (no voice calibrated to grade '{min_grade}' or better)"
+        )
+        # Still surface the whole-corpus summary + histogram so the operator sees
+        # what the floor filtered against, mirroring the iter-389 VAD-batch contract
+        # that the corpus aggregates always describe the full corpus.
+        if batch.num_calibrated:
+            lines.append(
+                f"  corpus: median {batch.implied_base_wpm_median:.1f}, "
+                f"range {batch.implied_base_wpm_min:.1f} – "
+                f"{batch.implied_base_wpm_max:.1f}, "
+                f"spread {batch.implied_base_wpm_spread:.1f} "
+                "(voices disagree on a fleet base if large)"
+            )
+        else:
+            lines.append("  corpus: (no voice calibrated — nothing to summarise)")
+        counts = batch.grade_counts
+        grades = ", ".join(
+            f"{counts[g]} {g}" for g in _wm_calib_batch_grade_order()
+        )
+        lines.append(f"  grades: {grades}")
+        return lines
     for r in rows:
         calib = r["calibration"]
         if calib is None:
@@ -1447,7 +1561,7 @@ def _wm_calib_batch_grade_order():
     return _load_wpm_mirror().CALIB_BATCH_GRADE_ORDER
 
 
-def render_calibration_batch_json(batch, *, sort_by=None, top_n=None):
+def render_calibration_batch_json(batch, *, min_grade=None, sort_by=None, top_n=None):
     """Render a ``calibrate-base-wpm-batch`` corpus verdict as a JSON string.
 
     The nested/programmatic twin of :func:`render_calibration_batch` (iter-398),
@@ -1487,8 +1601,19 @@ def render_calibration_batch_json(batch, *, sort_by=None, top_n=None):
     median / ``grade_counts`` / …) always describe the WHOLE corpus regardless of
     the cap, so the consumer can still see how many voices were elided. The default
     ``None`` keeps every row (no ``top_n`` key).
+
+    ``min_grade`` (iter-401) drops every ``rows`` entry whose dispersion grade is below
+    the named floor (``"scattered"`` / ``"loose"`` / ``"agree"``; an uncalibrated voice
+    is always dropped), applied FIRST (before ``sort_by`` / ``top_n``) so every later
+    stage sees only the surviving voices. When set the payload also carries a top-level
+    ``min_grade`` key naming the floor. The corpus aggregates (``num_voices`` /
+    ``num_calibrated`` / median / ``grade_counts`` / …) always describe the WHOLE corpus
+    regardless of the floor, so the consumer can still see how many voices were filtered.
+    The default ``None`` keeps every row (no ``min_grade`` key).
     """
     payload = {}
+    if min_grade is not None:
+        payload["min_grade"] = min_grade
     if sort_by is not None:
         payload["sort_by"] = sort_by
     if top_n is not None:
@@ -1506,7 +1631,11 @@ def render_calibration_batch_json(batch, *, sort_by=None, top_n=None):
             "rows": [
                 _calib_batch_row_obj(r)
                 for r in _truncate_batch_rows(
-                    _sort_calib_batch_rows(batch.rows, sort_by), top_n
+                    _sort_calib_batch_rows(
+                        _filter_calib_batch_rows_by_grade(batch.rows, min_grade),
+                        sort_by,
+                    ),
+                    top_n,
                 )
             ],
         }
@@ -1557,7 +1686,7 @@ def _calib_batch_row_obj(row):
     }
 
 
-def render_calibration_batch_csv(batch, *, sort_by=None, top_n=None):
+def render_calibration_batch_csv(batch, *, min_grade=None, sort_by=None, top_n=None):
     """Render a ``calibrate-base-wpm-batch`` corpus verdict as CSV text.
 
     The spreadsheet/plot-friendly twin of :func:`render_calibration_batch_json`
@@ -1594,6 +1723,15 @@ def render_calibration_batch_csv(batch, *, sort_by=None, top_n=None):
     trailing corpus aggregate comments (median / range / spread / grade histogram)
     still describe the WHOLE corpus, so the consumer can see how many voices were
     elided. The default ``None`` keeps every row.
+
+    ``min_grade`` (iter-401) drops every per-voice data row whose dispersion grade is
+    below the named floor (``"scattered"`` / ``"loose"`` / ``"agree"``; an uncalibrated
+    voice is always dropped), applied FIRST (before ``sort_by`` / ``top_n``); when set it
+    is echoed as a leading ``# min_grade: <grade>`` comment so a consumer knows the grid
+    was filtered. The header and column set are unchanged (a filtered run still unions
+    cleanly with a full one — it just has fewer rows). The trailing corpus aggregate
+    comments still describe the WHOLE corpus, so the consumer can see how many voices
+    were filtered. The default ``None`` keeps every row.
     """
     buf = io.StringIO()
     writer = csv.writer(buf)
@@ -1610,7 +1748,12 @@ def render_calibration_batch_csv(batch, *, sort_by=None, top_n=None):
             "delta_from_median_wpm",
         ]
     )
-    for r in _truncate_batch_rows(_sort_calib_batch_rows(batch.rows, sort_by), top_n):
+    for r in _truncate_batch_rows(
+        _sort_calib_batch_rows(
+            _filter_calib_batch_rows_by_grade(batch.rows, min_grade), sort_by
+        ),
+        top_n,
+    ):
         calib = r["calibration"]
         if calib is None:
             writer.writerow([r["voice"], "", "", "", "", "", "", "", ""])
@@ -1651,6 +1794,8 @@ def render_calibration_batch_csv(batch, *, sort_by=None, top_n=None):
         summary.insert(0, f"# top_n: {top_n}")
     if sort_by is not None:
         summary.insert(0, f"# sort_by: {sort_by}")
+    if min_grade is not None:
+        summary.insert(0, f"# min_grade: {min_grade}")
     return body + "\n" + "\n".join(summary)
 
 
@@ -9651,6 +9796,14 @@ def cmd_calibrate_base_wpm_batch(args, *, log=print):
     so ``--sort-by delta --top-n 5`` shows the FIVE biggest corpus outliers. It also
     applies across all three formats; the corpus aggregates always describe the WHOLE
     corpus so the operator sees how many voices were elided.
+
+    iter-401 adds ``--min-grade`` (mirroring ``vad-gap-recommend-batch --min-grade``): a
+    render-only dispersion-grade floor (``scattered`` / ``loose`` / ``agree``) that drops
+    every voice that calibrated less tightly than the floor (an uncalibrated voice is
+    always dropped), leaving only the voices trustworthy enough to act on. It is applied
+    FIRST (before ``--sort-by`` / ``--top-n``) across all three formats; the corpus
+    aggregates still describe the WHOLE corpus so the operator sees how many voices were
+    filtered.
     """
     wm = _load_wpm_mirror()
     CalibrationSample = wm.CalibrationSample
@@ -9670,15 +9823,22 @@ def cmd_calibrate_base_wpm_batch(args, *, log=print):
         voices.append((label, samples))
 
     batch = calibrate_base_wpm_batch(voices, default_base_wpm=args.nominal)
+    min_grade = getattr(args, "min_grade", None)
     sort_by = getattr(args, "sort_by", None)
     top_n = getattr(args, "top_n", None)
     if getattr(args, "json", False):
-        log(render_calibration_batch_json(batch, sort_by=sort_by, top_n=top_n))
+        log(render_calibration_batch_json(
+            batch, min_grade=min_grade, sort_by=sort_by, top_n=top_n
+        ))
         return
     if getattr(args, "csv", False):
-        log(render_calibration_batch_csv(batch, sort_by=sort_by, top_n=top_n))
+        log(render_calibration_batch_csv(
+            batch, min_grade=min_grade, sort_by=sort_by, top_n=top_n
+        ))
         return
-    for line in render_calibration_batch(batch, sort_by=sort_by, top_n=top_n):
+    for line in render_calibration_batch(
+        batch, min_grade=min_grade, sort_by=sort_by, top_n=top_n
+    ):
         log(line)
 
 
@@ -12158,6 +12318,19 @@ def build_parser():
         "delta --top-n 5' shows the 5 biggest corpus outliers). Render-only — the "
         "corpus median/aggregates still describe the whole corpus. Applies to the "
         "human, --json, and --csv output. Default: every voice",
+    )
+    calib_batch.add_argument(
+        "--min-grade",
+        type=calib_batch_min_grade_type,
+        default=None,
+        dest="min_grade",
+        metavar="{scattered,loose,agree}",
+        help="Drop every voice that calibrated less tightly than this dispersion-grade "
+        "floor: 'agree' (keep only the tightest), 'loose' (keep loose-or-better), "
+        "'scattered' (keep every calibrated voice). Uncalibrated voices are always "
+        "dropped. Applied BEFORE --sort-by/--top-n. Render-only — the corpus "
+        "median/aggregates still describe the whole corpus. Applies to the human, "
+        "--json, and --csv output. Default: keep every voice",
     )
 
     # gv vad — offline Silero segmentation of a WAV file. Defaults mirror

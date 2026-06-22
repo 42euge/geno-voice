@@ -514,10 +514,17 @@ _SORT_VOICES = [
 
 def _row_order(lines):
     """The voice labels in the order their rows appear in a human render."""
+    return _row_order_pair(
+        lines, ("mid", "fast", "slow", "empty", "tight", "loosey", "wide")
+    )
+
+
+def _row_order_pair(lines, labels):
+    """The labels (from ``labels``) in the order their rows appear in a render."""
     order = []
     for line in lines:
         stripped = line.strip()
-        for v in ("mid", "fast", "slow", "empty"):
+        for v in labels:
             if stripped.startswith(v + ":"):
                 order.append(v)
     return order
@@ -842,6 +849,232 @@ def test_handler_top_n_matches_render_directly():
             "--voice", "fast", "180:60.0",
             "--voice", "slow", "150:60.0",
             "--sort-by", "delta", "--top-n", "2",
+        ]
+    )
+    assert lines == expected
+
+
+# ---- iter-401: --min-grade render-only dispersion-grade floor ----------
+
+
+def test_min_grade_type_accepts_each_grade():
+    for g in ("scattered", "loose", "agree"):
+        assert gv.calib_batch_min_grade_type(g) == g
+
+
+def test_min_grade_type_is_case_insensitive_and_strips():
+    assert gv.calib_batch_min_grade_type("  AGREE ") == "agree"
+
+
+def test_min_grade_type_rejects_unknown_and_empty():
+    import argparse
+
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.calib_batch_min_grade_type("uncalibrated")
+    with pytest.raises(argparse.ArgumentTypeError):
+        gv.calib_batch_min_grade_type("")
+
+
+def test_calib_grade_meets_min_total_order():
+    # uncalibrated (None) < scattered < loose < agree
+    assert gv._calib_grade_meets_min("agree", "loose") is True
+    assert gv._calib_grade_meets_min("loose", "loose") is True
+    assert gv._calib_grade_meets_min("scattered", "loose") is False
+    assert gv._calib_grade_meets_min(None, "scattered") is False
+    # None floor passes everything (no filter requested)
+    assert gv._calib_grade_meets_min(None, None) is True
+    assert gv._calib_grade_meets_min("scattered", None) is True
+
+
+def test_parser_min_grade_parses():
+    args = gv.build_parser().parse_args(
+        ["calibrate-base-wpm-batch", "--voice", "a", "165:60.0",
+         "--min-grade", "loose"]
+    )
+    assert args.min_grade == "loose"
+
+
+def test_parser_min_grade_default_none():
+    args = gv.build_parser().parse_args(
+        ["calibrate-base-wpm-batch", "--voice", "a", "165:60.0"]
+    )
+    assert args.min_grade is None
+
+
+def test_parser_min_grade_rejects_unknown():
+    with pytest.raises(SystemExit) as exc:
+        gv.build_parser().parse_args(
+            ["calibrate-base-wpm-batch", "--voice", "a", "165:60.0",
+             "--min-grade", "bogus"]
+        )
+    assert exc.value.code == 2
+
+
+# A corpus with exactly one voice at each grade (agree / loose / scattered) plus an
+# uncalibrated voice, so every floor produces a determinate surviving set.
+_GRADE_VOICES = [
+    ("tight", [(165, 60.0, 1.0)]),                    # agree
+    ("loosey", [(155, 60.0, 1.0), (170, 60.0, 1.0)]),  # loose
+    ("wide", [(120, 60.0, 1.0), (240, 60.0, 1.0)]),    # scattered
+    ("empty", []),                                     # uncalibrated
+]
+
+
+def test_min_grade_none_keeps_every_voice():
+    batch = _batch(_GRADE_VOICES)
+    order = _row_order(gv.render_calibration_batch(batch))
+    assert order == ["tight", "loosey", "wide", "empty"]
+
+
+def test_min_grade_scattered_keeps_all_calibrated_drops_uncalibrated():
+    batch = _batch(_GRADE_VOICES)
+    order = _row_order(gv.render_calibration_batch(batch, min_grade="scattered"))
+    assert order == ["tight", "loosey", "wide"]  # empty dropped
+
+
+def test_min_grade_loose_drops_scattered_and_uncalibrated():
+    batch = _batch(_GRADE_VOICES)
+    order = _row_order(gv.render_calibration_batch(batch, min_grade="loose"))
+    assert order == ["tight", "loosey"]
+
+
+def test_min_grade_agree_keeps_only_tightest():
+    batch = _batch(_GRADE_VOICES)
+    order = _row_order(gv.render_calibration_batch(batch, min_grade="agree"))
+    assert order == ["tight"]
+
+
+def test_min_grade_applied_before_sort_and_top_n():
+    # Floor first (keep agree+loose), then sort by base_wpm ascending: loosey 162.5
+    # before tight 165.0, then cap to 1 → loosey only.
+    batch = _batch(_GRADE_VOICES)
+    order = _row_order(
+        gv.render_calibration_batch(
+            batch, min_grade="loose", sort_by="base_wpm", top_n=1
+        )
+    )
+    assert order == ["loosey"]
+
+
+def test_min_grade_names_floor_in_header():
+    batch = _batch(_GRADE_VOICES)
+    text = "\n".join(gv.render_calibration_batch(batch, min_grade="loose"))
+    assert "min grade loose" in text
+    # default render does NOT mention a floor
+    assert "min grade" not in "\n".join(gv.render_calibration_batch(batch))
+
+
+def test_min_grade_removes_every_voice_emits_note():
+    # Only scattered + uncalibrated voices; an "agree" floor keeps none.
+    batch = _batch(
+        [
+            ("wide", [(120, 60.0, 1.0), (240, 60.0, 1.0)]),
+            ("empty", []),
+        ]
+    )
+    text = "\n".join(gv.render_calibration_batch(batch, min_grade="agree"))
+    assert "no voice calibrated to grade 'agree' or better" in text
+    # but the corpus summary + histogram still describe the whole corpus
+    assert "corpus:" in text
+    assert "grades:" in text
+
+
+def test_min_grade_does_not_change_corpus_summary():
+    batch = _batch(_GRADE_VOICES)
+    plain = "\n".join(gv.render_calibration_batch(batch))
+    floored = "\n".join(gv.render_calibration_batch(batch, min_grade="agree"))
+    # The histogram counts all four voices in both renders.
+    for marker in ("1 agree", "1 loose", "1 scattered", "1 uncalibrated"):
+        assert marker in plain
+        assert marker in floored
+
+
+def test_json_min_grade_filters_rows_and_names_key():
+    import json as _json
+
+    batch = _batch(_GRADE_VOICES)
+    obj = _json.loads(
+        gv.render_calibration_batch_json(batch, min_grade="loose")
+    )
+    assert obj["min_grade"] == "loose"
+    assert [r["voice"] for r in obj["rows"]] == ["tight", "loosey"]
+    # aggregates still describe the whole corpus
+    assert obj["num_voices"] == 4
+    assert obj["grade_counts"]["scattered"] == 1
+
+
+def test_json_min_grade_none_omits_key():
+    import json as _json
+
+    batch = _batch(_GRADE_VOICES)
+    obj = _json.loads(gv.render_calibration_batch_json(batch))
+    assert "min_grade" not in obj
+    assert len(obj["rows"]) == 4
+
+
+def test_csv_min_grade_filters_rows_and_comments_key():
+    batch = _batch(_GRADE_VOICES)
+    text = gv.render_calibration_batch_csv(batch, min_grade="loose")
+    assert "# min_grade: loose" in text
+    data_rows = [
+        ln for ln in text.splitlines()
+        if ln and not ln.startswith("#") and not ln.startswith("voice,")
+    ]
+    voices = [ln.split(",")[0] for ln in data_rows]
+    assert voices == ["tight", "loosey"]
+    # corpus aggregate comments still describe the whole corpus
+    assert "# num_voices: 4" in text
+
+
+def test_csv_min_grade_none_omits_comment():
+    batch = _batch(_GRADE_VOICES)
+    text = gv.render_calibration_batch_csv(batch)
+    assert "# min_grade" not in text
+
+
+def test_handler_min_grade_threads_to_human_render():
+    lines = _run(
+        [
+            "calibrate-base-wpm-batch",
+            "--voice", "tight", "165:60.0",
+            "--voice", "wide", "120:60.0", "240:60.0",
+            "--min-grade", "agree",
+        ]
+    )
+    assert _row_order_pair(lines, ("tight", "wide")) == ["tight"]
+    assert "min grade agree" in "\n".join(lines)
+
+
+def test_handler_min_grade_threads_to_json():
+    import json as _json
+
+    lines = _run(
+        [
+            "calibrate-base-wpm-batch",
+            "--voice", "tight", "165:60.0",
+            "--voice", "wide", "120:60.0", "240:60.0",
+            "--json", "--min-grade", "agree",
+        ]
+    )
+    obj = _json.loads(lines[0])
+    assert obj["min_grade"] == "agree"
+    assert [r["voice"] for r in obj["rows"]] == ["tight"]
+
+
+def test_handler_min_grade_matches_render_directly():
+    batch = _batch(
+        [
+            ("tight", [(165, 60.0, 1.0)]),
+            ("loosey", [(155, 60.0, 1.0), (170, 60.0, 1.0)]),
+        ]
+    )
+    expected = gv.render_calibration_batch(batch, min_grade="loose")
+    lines = _run(
+        [
+            "calibrate-base-wpm-batch",
+            "--voice", "tight", "165:60.0",
+            "--voice", "loosey", "155:60.0", "170:60.0",
+            "--min-grade", "loose",
         ]
     )
     assert lines == expected
