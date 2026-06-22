@@ -36931,3 +36931,101 @@ in `--json` / `--csv`.
 5. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232, iter-317 still
    present) — a future lap could `git worktree prune` / remove merged ones. NOTE: this
    lap correctly removed its own worktree.
+
+## iter-405 — stt/rtf_profile: STT-side RTF profiling core (new pipeline stage)
+
+- **Date:** 2026-06-22
+- **Branch:** iter-405-stt-rtf-profile (ff-merged to main, worktree removed)
+- **Commit:** 0f4cb4c
+
+**Why.** The iter-404 log's next-item #1 declared the TTS-side `base_wpm`
+calibration family COMPLETE (single + batch, all three formats, sort/top-n/
+grade-floor/summary, IQR, flyer flag — iter-393..404, full parity with the VAD
+recommend batch) and item #2 named the highest-value next step explicitly:
+**open the STT-side frontier**. Every prior gv-family analysis lap (iter-220..404)
+lived on the TTS side. The STT side — how fast the transcriber turns audio into
+text — had a live per-turn metric (iter-049 `stt_rtf`, surfaced in the chat
+session summary + the iter-140 `_emit_stt_rtf_consistency_line` sentinel) but no
+way to FOLD a handful of measured transcriptions into one robust verdict the way
+`calibrate_base_wpm` does for the bot's speaking rate. This lap lands that fold —
+the first gv-family analysis surface on the STT pipeline stage, a genuinely new
+surface rather than a near-clone enrichment.
+
+**What it is.** `stt/rtf_profile.py`, the STT-side twin of the iter-220
+`calibrate_base_wpm` measurement core, built as a **pure measurement core** that
+imports and runs on any platform (no torch, no faster-whisper, no audio I/O, no
+clock):
+
+- **`TranscriptionSample(audio_seconds, transcribe_seconds)`** — one measured
+  transcription; derives `rtf = transcribe_seconds / audio_seconds` (the iter-049
+  convention: `< 1` keeps up with realtime, `> 1` is the latency bottleneck).
+  Both fields validated `> 0` in `__post_init__`, the same guard
+  `CalibrationSample` applies to its render fields (a non-positive value is a
+  measurement bug that would divide by zero or yield a nonsensical RTF).
+- **`profile_stt_rtf(samples) -> SttRtfProfile | None`** — folds one-or-more
+  samples into a robust **median** RTF (robust to a single mis-timed run — a cold
+  model load, a GC pause — exactly like `calibrate_base_wpm`'s median), plus
+  `min_rtf`/`max_rtf`/`spread`, `relative_spread` (`spread / median_rtf`, the
+  iter-393 dimensionless coefficient of dispersion so runs can be compared
+  independent of the engine's nominal speed), a categorical `speed_grade`, and a
+  `speed_margin`. Empty iterable ⇒ `None` (nothing to profile from); accepts any
+  iterable, not just a list.
+- **`rtf_speed_grade(rtf)`** — buckets into `"fast"` (`<= 0.5`, end-of-turn STT
+  runs inline with no stall) / `"realtime"` (`<= 1.0`, keeps pace with a live
+  stream) / `"slow"` (`> 1.0`, the latency bottleneck — a smaller model or
+  streaming partials would help). Uses the calibration family's inclusive-lower-
+  band knee convention, so a value landing exactly on a knee grades the more
+  FAVOURABLE side. Shares the iter-140 `_stt_rtf_bucket` band semantics but is a
+  standalone pure grader on the median.
+- **`rtf_speed_margin(rtf)`** — headroom from `rtf` up to the knee where the
+  grade would tip to the next-WORSE grade (the STT twin of iter-396's
+  `dispersion_margin`): `RTF_FAST_MAX - rtf` for `"fast"`, `RTF_REALTIME_MAX -
+  rtf` for `"realtime"`, `None` for `"slow"` (the worst grade has no worse grade
+  to degrade into — spelled `None` the same way the calibration/gap family spells
+  "not measurable"). A value on a knee yields a `0.0` margin on the favourable
+  side.
+
+Module-level knees `RTF_FAST_MAX = 0.5` and `RTF_REALTIME_MAX = 1.0` are exported
+for callers/tests. A future `gv stt-rtf` command (the iter-221
+`gv calibrate-base-wpm` analogue) will wrap a real `STTEngine` to PRODUCE the
+samples; the fold itself never touches hardware.
+
+**What landed.** New `stt/rtf_profile.py` (244 lines) + new
+`tests/unit/test_stt_rtf_profile.py` (177 lines). No existing files touched —
+purely additive, so it cannot regress any prior lap.
+
+**Tests (+22 net new).** `TranscriptionSample`: rtf derivation, realtime
+boundary (transcribe == audio ⇒ 1.0), slower-than-realtime, nonpositive-audio +
+nonpositive-transcribe rejection (parametrized). `rtf_speed_grade`:
+fast/realtime/slow bands + knee-grades-favourable-side. `rtf_speed_margin`:
+fast-band headroom, realtime-band headroom, None-for-slow, zero-on-knee.
+`profile_stt_rtf`: empty ⇒ None, single sample (all fields), median-robust-to-
+outlier (0.2/0.25/5.0 ⇒ median 0.25), spread + relative_spread, grade realtime,
+grade slow (+ margin None), speed_margin matches the helper, accepts a bare
+iterator.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5892 passed**
+(5870 prior + 22 net new), run in the feature worktree before ff-merge; re-
+verified on main post-merge (`test_stt_rtf_profile.py` → 22 passed).
+- Integration: not run this lap (pure timing arithmetic / categorical bucketing;
+  no torch import, no audio I/O — mirrors the iter-220/393..404 calibration-core
+  laps, which the integration suite never exercised either).
+
+**Next planned items:**
+1. **[gv CLI] surface the STT-RTF profile on the CLI** — the iter-221 analogue:
+   a `gv stt-rtf` command that wraps a real `STTEngine` (or a fixture corpus) to
+   produce `TranscriptionSample`s, folds them with `profile_stt_rtf`, and renders
+   the verdict (human / `--json` / `--csv`). This begins growing the STT-side gv
+   surface the way iter-221 began the TTS side, the natural next two-step.
+2. **[stt] a data-driven `stt-rtf` VERDICT** — the iter-222 analogue: once the
+   single profile is on the CLI, fold n_samples + relative_spread + median_rtf
+   into a recommend/keep verdict (enough samples, runs agree, grade is "slow"
+   enough to matter). Mirrors the calibrate→verdict two-step on the STT side.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Prefer a genuinely new signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232, iter-317
+   still present) — a future lap could `git worktree prune` / remove merged ones.
+   NOTE: this lap correctly removed its own worktree.
