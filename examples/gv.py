@@ -5596,7 +5596,11 @@ def vad_gap_recommend_batch(results, labels, *, bias=DEFAULT_GAP_RECOMMEND_BIAS)
 
     The corpus is summarised by the OUTLIER-ROBUST median of the per-recording
     recommended ms (a single misfiring recording cannot drag the median the way it
-    drags a mean), alongside the min / max / spread. Each row carries its signed
+    drags a mean), alongside the min / max / spread and (iter-391) the
+    outlier-robust IQR (``recommended_ms_q1`` / ``recommended_ms_q3`` /
+    ``recommended_ms_iqr`` — the width of the middle half of the corpus, the robust
+    companion to the range-based ``spread``: a lone flyer inflates ``spread`` but
+    cannot widen the IQR). Each row carries its signed
     ``delta_from_median_ms`` so the outliers are obvious without re-reading the
     whole column. Only recordings that actually carry a recommendation
     (``recommended_ms`` not ``None`` — at least 2 segments) feed the median and the
@@ -5632,11 +5636,23 @@ def vad_gap_recommend_batch(results, labels, *, bias=DEFAULT_GAP_RECOMMEND_BIAS)
         lo = round(min(recommended), 1)
         hi = round(max(recommended), 1)
         spread = round(hi - lo, 1)
+        # iter-391 outlier-ROBUST spread: the inter-quartile range (Q3 - Q1), the
+        # robust companion to the median. Where ``spread`` (max - min) is a single
+        # pair of extremes — one misfiring recording inflates it — the IQR measures
+        # the width of the MIDDLE HALF of the corpus, so a lone outlier cannot widen
+        # it. A tight IQR alongside a wide spread is the signature of "the corpus
+        # agrees, but one recording is a flyer". Reuses the iter-338
+        # ``_percentile_of_sorted`` primitive (R-7 linear interpolation) at the 25th
+        # and 75th percentiles of the SORTED recommended ms.
+        srt = sorted(recommended)
+        q1 = round(_percentile_of_sorted(srt, 25), 1)
+        q3 = round(_percentile_of_sorted(srt, 75), 1)
+        iqr = round(q3 - q1, 1)
         for r in rows:
             if r["recommended_ms"] is not None:
                 r["delta_from_median_ms"] = round(r["recommended_ms"] - median, 1)
     else:
-        median = lo = hi = spread = None
+        median = lo = hi = spread = q1 = q3 = iqr = None
     return {
         "bias": bias,
         "num_recordings": len(rows),
@@ -5645,6 +5661,9 @@ def vad_gap_recommend_batch(results, labels, *, bias=DEFAULT_GAP_RECOMMEND_BIAS)
         "recommended_ms_min": lo,
         "recommended_ms_max": hi,
         "recommended_ms_spread": spread,
+        "recommended_ms_q1": q1,
+        "recommended_ms_q3": q3,
+        "recommended_ms_iqr": iqr,
         "grade_counts": _batch_grade_counts(rows),
         "rows": rows,
     }
@@ -5904,7 +5923,8 @@ def render_vad_gap_recommend_batch(results, labels, *, bias=DEFAULT_GAP_RECOMMEN
     :func:`render_vad_gap_recommend_diff`. Prints the shared ``bias``, then one row
     per recording — recommended ``--min-silence-ms``, confidence grade, and signed
     delta from the corpus median — followed by a corpus summary line
-    (median / min / max / spread) and an iter-390 ``grades:`` histogram line counting
+    (median / min / max / spread / iter-391 IQR — the outlier-robust spread, the
+    width of the middle half of the corpus) and an iter-390 ``grades:`` histogram line counting
     how many recordings sit at each confidence grade
     (strong/moderate/weak/none/ungraded) over the WHOLE corpus. A recording with
     fewer than 2 segments has no recommendation and prints ``-`` for its number /
@@ -6031,8 +6051,10 @@ def render_vad_gap_recommend_batch(results, labels, *, bias=DEFAULT_GAP_RECOMMEN
             f"min {_ms(d['recommended_ms_min'])}  "
             f"max {_ms(d['recommended_ms_max'])}  "
             f"spread {_ms(d['recommended_ms_spread'])}  "
+            f"IQR {_ms(d['recommended_ms_iqr'])}  "
             f"({d['num_recommended']}/{d['num_recordings']} recordings recommend) "
-            "— a tight spread means the corpus agrees on a hangover"
+            "— a tight spread means the corpus agrees on a hangover; a tight IQR "
+            "with a wide spread means it agrees but one recording is a flyer"
         )
     # iter-390 corpus grade histogram (over the WHOLE corpus, unaffected by
     # min_grade / top_n) — how trustworthy the corpus is, the companion to the
@@ -6050,7 +6072,9 @@ def render_vad_gap_recommend_batch_json(results, labels, *,
     Machine-readable twin of :func:`render_vad_gap_recommend_batch`, mirroring the
     degrade-to-``{"available": false}`` contract the other VAD JSON renderers use.
     Carries the shared ``bias``, the corpus aggregates (count + median / min / max /
-    spread, ``null`` when no recording recommends), the iter-390 ``grade_counts``
+    spread + iter-391 ``recommended_ms_q1`` / ``recommended_ms_q3`` /
+    ``recommended_ms_iqr`` — the outlier-robust inter-quartile spread, ``null`` when
+    no recording recommends), the iter-390 ``grade_counts``
     object (how many recordings sit at each confidence grade —
     strong/moderate/weak/none/ungraded, over the WHOLE corpus, always all five keys),
     and the per-recording ``rows`` (each with its recommendation, grade, and signed

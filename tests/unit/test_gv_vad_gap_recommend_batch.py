@@ -2050,3 +2050,183 @@ def test_cmd_json_carries_grade_counts():
     )
     payload = json.loads("\n".join(lines))
     assert payload["grade_counts"]["strong"] == 3
+
+
+# ============================================================================
+# iter-391 — corpus outlier-robust IQR (recommended_ms_q1 / _q3 / _iqr).
+# The batch already reports the range-based ``spread`` (max - min), which a single
+# flyer inflates. The IQR (Q3 - Q1) measures the width of the MIDDLE HALF of the
+# corpus, so a lone outlier cannot widen it — the robust companion to the
+# outlier-robust median. Reuses the iter-338 ``_percentile_of_sorted`` primitive.
+# ============================================================================
+
+
+def _iqr_of(values):
+    """Reference IQR (Q3 - Q1) over a list, via the same R-7 primitive the code uses."""
+    srt = sorted(values)
+    q1 = gv._percentile_of_sorted(srt, 25)
+    q3 = gv._percentile_of_sorted(srt, 75)
+    return round(q1, 1), round(q3, 1), round(q3 - q1, 1)
+
+
+# ---- core keys ---------------------------------------------------------
+
+
+def test_batch_core_carries_iqr_keys():
+    results = [_clean("a.wav"), _lower("b.wav"), _higher("c.wav")]
+    labels = ["a.wav", "b.wav", "c.wav"]
+    d = gv.vad_gap_recommend_batch(results, labels)
+    recs = [gv.vad_gap_recommend(r)["recommended_ms"] for r in results]
+    q1, q3, iqr = _iqr_of(recs)
+    assert d["recommended_ms_q1"] == q1
+    assert d["recommended_ms_q3"] == q3
+    assert d["recommended_ms_iqr"] == iqr
+
+
+def test_batch_iqr_matches_percentile_primitive():
+    # Five recordings with known, spread recommended ms — IQR must equal the
+    # R-7 25th/75th percentile difference exactly.
+    results = [
+        _result_from_gaps([0.2, 0.3, 0.25, lo, lo + 0.1, lo - 0.05], name=f"r{i}.wav")
+        for i, lo in enumerate([0.6, 0.9, 1.2, 1.5, 2.4])
+    ]
+    labels = [r.name for r in results]
+    d = gv.vad_gap_recommend_batch(results, labels)
+    recs = [gv.vad_gap_recommend(r)["recommended_ms"] for r in results]
+    q1, q3, iqr = _iqr_of(recs)
+    assert d["recommended_ms_q1"] == q1
+    assert d["recommended_ms_q3"] == q3
+    assert d["recommended_ms_iqr"] == iqr
+    assert iqr >= 0.0
+
+
+def test_batch_iqr_robust_to_single_flyer():
+    # A tight cluster of four plus one extreme outlier. The range-based spread
+    # is dominated by the flyer; the IQR (middle half) is much smaller.
+    base = [_lower(f"b{i}.wav") for i in range(4)]  # four near-identical valleys
+    flyer = _higher("flyer.wav")                    # one much-higher valley
+    results = base + [flyer]
+    labels = [r.name for r in results]
+    d = gv.vad_gap_recommend_batch(results, labels)
+    # The four clones agree, so the middle half is narrow; the flyer blows the
+    # range out, so the IQR is strictly smaller than the spread.
+    assert d["recommended_ms_iqr"] < d["recommended_ms_spread"]
+
+
+def test_batch_iqr_single_recording_is_zero():
+    # One recommending recording: every percentile is that value, so IQR is 0.
+    d = gv.vad_gap_recommend_batch([_clean("a.wav")], ["a.wav"])
+    rec = gv.vad_gap_recommend(_clean("a.wav"))["recommended_ms"]
+    assert d["recommended_ms_q1"] == round(rec, 1)
+    assert d["recommended_ms_q3"] == round(rec, 1)
+    assert d["recommended_ms_iqr"] == 0.0
+
+
+def test_batch_iqr_none_when_no_recording_recommends():
+    d = gv.vad_gap_recommend_batch([_flat("a.wav"), _flat("b.wav")],
+                                   ["a.wav", "b.wav"])
+    assert d["recommended_ms_q1"] is None
+    assert d["recommended_ms_q3"] is None
+    assert d["recommended_ms_iqr"] is None
+
+
+def test_batch_iqr_ignores_non_recommending_recordings():
+    # A flat recording carries no recommendation, so it must not feed the IQR —
+    # the quartiles match those over the recommending recordings alone.
+    results = [_clean("a.wav"), _lower("b.wav"), _higher("c.wav"), _flat("f.wav")]
+    labels = [r.name for r in results]
+    d = gv.vad_gap_recommend_batch(results, labels)
+    recs = [
+        gv.vad_gap_recommend(r)["recommended_ms"]
+        for r in (results[0], results[1], results[2])
+    ]
+    q1, q3, iqr = _iqr_of(recs)
+    assert d["recommended_ms_iqr"] == iqr
+
+
+# ---- human renderer ----------------------------------------------------
+
+
+def test_human_corpus_line_shows_iqr():
+    lines = gv.render_vad_gap_recommend_batch(
+        [_clean("a.wav"), _lower("b.wav"), _higher("c.wav")],
+        ["a.wav", "b.wav", "c.wav"],
+    )
+    corpus = [ln for ln in lines if "corpus:" in ln][0]
+    assert "IQR" in corpus
+    assert "spread" in corpus
+
+
+def test_human_iqr_unaffected_by_min_grade_and_top_n():
+    results = [_clean("a.wav"), _lower("b.wav"), _higher("c.wav")]
+    labels = ["a.wav", "b.wav", "c.wav"]
+    full = [ln for ln in gv.render_vad_gap_recommend_batch(results, labels)
+            if "corpus:" in ln][0]
+    capped = [ln for ln in gv.render_vad_gap_recommend_batch(
+        results, labels, top_n=1) if "corpus:" in ln][0]
+    floored = [ln for ln in gv.render_vad_gap_recommend_batch(
+        results, labels, min_grade="strong") if "corpus:" in ln][0]
+    assert full == capped == floored
+
+
+# ---- JSON renderer -----------------------------------------------------
+
+
+def test_json_carries_iqr_keys():
+    payload = json.loads(
+        gv.render_vad_gap_recommend_batch_json(
+            [_clean("a.wav"), _lower("b.wav"), _higher("c.wav")],
+            ["a.wav", "b.wav", "c.wav"],
+        )
+    )
+    recs = [
+        gv.vad_gap_recommend(r)["recommended_ms"]
+        for r in (_clean("a.wav"), _lower("b.wav"), _higher("c.wav"))
+    ]
+    q1, q3, iqr = _iqr_of(recs)
+    assert payload["recommended_ms_q1"] == q1
+    assert payload["recommended_ms_q3"] == q3
+    assert payload["recommended_ms_iqr"] == iqr
+
+
+def test_json_iqr_null_when_no_recording_recommends():
+    payload = json.loads(
+        gv.render_vad_gap_recommend_batch_json(
+            [_flat("a.wav"), _flat("b.wav")], ["a.wav", "b.wav"]
+        )
+    )
+    assert payload["recommended_ms_q1"] is None
+    assert payload["recommended_ms_q3"] is None
+    assert payload["recommended_ms_iqr"] is None
+
+
+def test_json_summary_still_carries_iqr():
+    # Summary pops rows but keeps the whole-corpus aggregates, IQR included.
+    payload = json.loads(
+        gv.render_vad_gap_recommend_batch_json(
+            [_clean("a.wav"), _lower("b.wav"), _higher("c.wav")],
+            ["a.wav", "b.wav", "c.wav"],
+            summary=True,
+        )
+    )
+    assert "rows" not in payload
+    assert payload["recommended_ms_iqr"] is not None
+
+
+def test_json_iqr_unaffected_by_min_grade():
+    full = json.loads(
+        gv.render_vad_gap_recommend_batch_json(
+            [_clean("a.wav"), _lower("b.wav"), _higher("c.wav")],
+            ["a.wav", "b.wav", "c.wav"],
+        )
+    )
+    floored = json.loads(
+        gv.render_vad_gap_recommend_batch_json(
+            [_clean("a.wav"), _lower("b.wav"), _higher("c.wav")],
+            ["a.wav", "b.wav", "c.wav"],
+            min_grade="strong",
+        )
+    )
+    assert full["recommended_ms_iqr"] == floored["recommended_ms_iqr"]
+    assert full["recommended_ms_q1"] == floored["recommended_ms_q1"]
+    assert full["recommended_ms_q3"] == floored["recommended_ms_q3"]
