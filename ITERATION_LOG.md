@@ -36737,3 +36737,98 @@ on main post-merge (`test_gv_calibrate_base_wpm_batch.py` +
 5. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232, iter-317
    still present) — a future lap could `git worktree prune` / remove merged ones.
    NOTE: this lap correctly removed its own worktree.
+
+## iter-403 — calibrate-base-wpm-batch: outlier-robust IQR (q1/q3/iqr)
+
+- **Date:** 2026-06-22
+- **Branch:** iter-403-calib-batch-iqr (ff-merged to main, worktree removed)
+- **Commit:** 393ad81
+
+**Why.** iter-402's next-item #1 named the last remaining VAD-batch enrichment
+the calibration batch lacks: the iter-392 per-voice Tukey-fence flyer flag. But
+the VAD side reached that in TWO laps — iter-391 added the outlier-robust IQR as
+the prerequisite, *then* iter-392 added the flyer flag built on the IQR's
+quartiles + fences. The calibration batch currently sits at the pre-iter-391
+stage: it summarises the per-voice `implied_base_wpm` dispersion with only the
+range-based `spread` (max - min), which a single wild voice inflates. An operator
+picking a fleet-wide `DEFAULT_BASE_WPM` cannot tell "the voices genuinely differ"
+from "the voices agree but one is a flyer" from `spread` alone. This lap lands the
+iter-391 analogue (the IQR), keeping the change a single clean increment and
+setting up next lap's flyer flag — exactly the proven VAD two-step.
+
+**What it is.** The `BaseWpmCalibrationBatch` engine (iter-397) now carries the
+outlier-ROBUST inter-quartile spread alongside `spread`: `implied_base_wpm_q1` /
+`implied_base_wpm_q3` (the 25th / 75th percentiles of the per-voice base rates,
+R-7 linear interpolation) and `implied_base_wpm_iqr = q3 - q1` (the width of the
+MIDDLE HALF of the corpus). Where `spread` is a pair of extremes that one
+misfiring voice inflates, the IQR cannot be widened by a lone outlier — so a tight
+IQR alongside a wide spread is the signature of "the corpus agrees on a fleet
+base, but one voice is a flyer". All three are `None` when no voice calibrated
+(the existing uncalibrated / empty-corpus contract).
+
+**Design — engine carries it, all three renders surface it.** Mirrors the iter-391
+shape exactly. The quartiles are computed over the SAME calibrated-voices
+population as the median / spread (an uncalibrated voice contributes no base rate,
+so it never perturbs the IQR), via a new module-local `_percentile_of_sorted`
+helper — the self-contained twin of `examples/gv.py`'s same R-7 primitive, kept
+local so `session/wpm_mirror.py` stays importable without the gv CLI (the file-path
+test-load contract the wpm_mirror suite relies on). The three renders:
+- **human** — the corpus line now reads `spread N, IQR M (a tight IQR with a wide
+  spread means the corpus agrees but one voice is a flyer)`.
+- **`--json`** — `implied_base_wpm_q1` / `implied_base_wpm_q3` /
+  `implied_base_wpm_iqr` keys ride alongside median / min / max / spread (`null`
+  when no voice calibrated, via `_round_or_none`).
+- **`--csv`** — a `# implied_base_wpm_iqr:` comment beside `# implied_base_wpm_spread:`
+  (blank value for an empty corpus). Header and column set unchanged, so a filtered
+  / summary / sorted run still unions cleanly with a full one.
+
+The corpus aggregates ALWAYS describe the WHOLE corpus regardless of
+`--min-grade` / `--sort-by` / `--top-n` / `--summary`, exactly like spread.
+
+**What landed.** `session/wpm_mirror.py`: `_percentile_of_sorted` helper;
+`BaseWpmCalibrationBatch` gains `implied_base_wpm_q1` / `_q3` / `_iqr` fields (+
+docstring); `calibrate_base_wpm_batch` computes them from the sorted calibrated
+base rates and threads them into the dataclass. `examples/gv.py`: the human
+`_corpus_lines` summary line, the JSON payload keys, and the CSV comment block all
+gain the IQR (+ docstring updates on all three renders). No new CLI flag — the IQR
+is an always-on corpus aggregate like spread.
+
+**Tests (+10 net new).** Engine (`test_calibrate_base_wpm_batch.py`):
+empty-corpus-None, all-uncalibrated-None, single-voice-zero-IQR, R-7-quartile-
+values (q1 160 / q3 170 / iqr 10 over 150/160/165/170/180), robust-to-outlier-that-
+inflates-spread (spread 440, IQR 10), uncalibrated-voices-excluded-from-population.
+gv (`test_gv_calibrate_base_wpm_batch.py`): human corpus line carries `IQR 10.0`,
+`--json` carries q1/q3/iqr (+ empty-corpus null), `--csv` comment carries IQR (+
+empty-corpus blank).
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5855 passed**
+(5845 prior + 10 net new), run in the feature worktree before ff-merge; re-verified
+on main post-merge (`test_calibrate_base_wpm_batch.py` +
+`test_gv_calibrate_base_wpm_batch.py` + `test_gv_cli.py` → 234 passed). Also smoke-
+tested the live CLI: `gv calibrate-base-wpm-batch` over a 5-voice corpus with one
+flyer prints `spread 450.0, IQR 10.0` (human) and `implied_base_wpm_iqr: 10.0`
+(`--json`), surfacing the flyer signature directly.
+- Integration: not run this lap (pure quartile arithmetic / string-formatting over
+  the iter-397 `BaseWpmCalibrationBatch`; no torch import, no audio I/O — mirrors
+  the iter-220/316/317/393..402 calibration laps).
+
+**Next planned items:**
+1. **[gv CLI] land the iter-392 flyer flag on the calibration batch** — now that the
+   IQR + quartiles ride on `BaseWpmCalibrationBatch`, the flyer flag is the direct
+   iter-392 analogue: a per-voice `flyer` boolean (base rate outside the Tukey fence
+   `[Q1 - 1.5*IQR, Q3 + 1.5*IQR]`, carried as `implied_base_wpm_fence_lo` /
+   `_fence_hi` with `num_flyers`), a `← flyer` row marker, and a `flyers:` corpus
+   line naming the outlier voices. With that the calibration batch reaches full
+   parity with the VAD recommend batch's enrichment surface.
+2. **[gv CLI] continue the STT-side frontier** — the TTS-side calibration surface is
+   now rich (single + batch, all three formats, sortable, top-n-capped, grade-floored,
+   summarizable, IQR); the STT side (transcription RTF / accuracy) is still unexplored
+   by the gv analysis family. A genuinely new pipeline stage.
+3. **[chat-metrics] The diversity-check family is declared complete** (17 sentinels,
+   iter-328). Prefer a genuinely new signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** — needs a
+   browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232, iter-317 still
+   present) — a future lap could `git worktree prune` / remove merged ones. NOTE: this
+   lap correctly removed its own worktree.
