@@ -35998,3 +35998,81 @@ re-verified on main post-merge (`test_calibrate_base_wpm.py` +
 5. **[housekeeping] Stale worktrees accumulating** — a future lap could
    `git worktree prune` / remove merged ones. NOTE: this lap correctly removed
    its own worktree.
+
+## iter-395 — calibration_verdict cites the iter-394 dispersion grade
+
+- **Date:** 2026-06-21
+- **Branch:** iter-395-verdict-dispgrade (ff-merged to main, worktree removed)
+- **Commit:** 0b4991d
+
+**Why.** The iter-394 next-item #1(a) named this exact gap: iter-394 added the
+voice-comparable `dispersion_grade` (agree/loose/scattered) to
+`BaseWpmCalibration` — bucketing the iter-393 `relative_spread` into a
+voice-independent trust grade — but the iter-222 `--verdict` adopt/keep call
+still reasoned purely off the ABSOLUTE spread number. An operator reading
+"renders agree (spread 2.0 <= 10.0)" had to cross-reference the separate
+calibration report to learn whether that absolute spread also read as tight in
+voice-comparable terms. This lap folds the grade into the verdict so the
+decision cites its trust footing in the same line.
+
+**What it is.** `CalibrationVerdict` gains a `dispersion_grade: str` field
+echoed from the underlying calibration, and the two TRUST-themed `reason`
+branches now cite it: the recommend branch reads "renders agree (spread 2.0
+<= 10.0, dispersion agree) ...", and the spread-fail rejection reads "renders
+disagree (spread ..., dispersion scattered) ...". The human face
+(`render_calibration_verdict`) gains a `dispersion:` line echoing the grade,
+labelled "a reading aid, not a gate".
+
+**Design — echo + cite, the grade is a reading aid not a fourth gate.**
+- The drift and sample-count `reason` branches are UNCHANGED: the grade is a
+  trust signal, so it appears only in the two branches where trust is the
+  subject (the spread-pass recommend and the spread-fail rejection). Citing it
+  in a drift-noise rejection ("drift +2 is below 5") would be noise.
+- The grade is NOT a new gate (the same stance iter-393/394 took). The trust
+  gate is still the absolute `spread <= spread_max` test; the grade agrees with
+  it by construction (`CALIB_AGREE_REL_SPREAD` 0.05 sits just below the
+  adopt-gate's nominal relative spread, iter-394). So a calibration that PASSES
+  the absolute-spread gate typically also reads `agree` in the cited grade —
+  the gate and the reading aid agree.
+- The field inherits the iter-394 grade's voice-independence: the SAME relative
+  spread at a 100-WPM and a 300-WPM voice echoes the same grade on the verdict
+  (pinned by `test_dispersion_grade_voice_comparable_in_verdict`).
+- No new constructor sites for `CalibrationVerdict` existed outside the engine,
+  so adding the required field touched only the one `return` in
+  `calibration_verdict`.
+
+**What landed.** `session/wpm_mirror.py` (the `dispersion_grade` field on the
+frozen `CalibrationVerdict` + its docstring, the grade read + two cited
+`reason` branches + the function docstring note); `examples/gv.py` (the
+`dispersion:` line in `render_calibration_verdict` + its docstring).
+
+**Tests (+6 net new).** engine (`test_calibration_verdict`): echoes-grade,
+recommend-reason-cites-grade, disagree-reason-cites-grade,
+voice-comparable-grade-in-verdict. gv side (`test_gv_calibrate_base_wpm`):
+render-shows-dispersion-line + reading-aid label, render-reason-cites-grade.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5701 passed**
+(5695 prior + 6 net new), run in the feature worktree before ff-merge;
+re-verified on main post-merge (`test_calibration_verdict.py` +
+`test_gv_calibrate_base_wpm.py` → 106 passed).
+- Integration: not run this lap (pure arithmetic/string-formatting over
+  `CalibrationSample` dataclasses; no torch import, no audio I/O — mirrors the
+  iter-220/316/317/393/394 calibration laps and the iter-338/340..394 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] the calibration-verdict surface is now rich** (median → spread →
+   relative_spread → dispersion grade → verdict citing the grade). A natural
+   follow-on is item #1(b) from iter-394: a BATCH surface that calibrates N
+   voices and tabulates their grades + verdicts (the calibration analogue of
+   `vad-gap-recommend-batch`). Larger restructure; reuses iter-394/395.
+2. **[gv CLI] continue the STT-side frontier** — the TTS-side calibration
+   surface is now mature; the STT side (transcription RTF / accuracy) is still
+   unexplored by the gv analysis family. A genuinely new pipeline stage.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Prefer a genuinely new signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — a future lap could
+   `git worktree prune` / remove merged ones. NOTE: this lap correctly removed
+   its own worktree.
