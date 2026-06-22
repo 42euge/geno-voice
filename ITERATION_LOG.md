@@ -35824,3 +35824,83 @@ re-verified on main post-merge (`test_gv_vad_gap_recommend_batch.py` +
 5. **[housekeeping] Stale worktrees accumulating** — a future lap could
    `git worktree prune` / remove merged ones. NOTE: this lap correctly removed
    its own worktree.
+
+## iter-393 — calibrate-base-wpm relative_spread: voice-comparable dispersion
+
+- **Date:** 2026-06-21
+- **Branch:** iter-393-calib-relspread (ff-merged to main, worktree removed)
+- **Commit:** 10ac0ad
+
+**Why.** The iter-381..392 next-item steer (#1, repeated nine laps) asked to
+move OFF the now-mature VAD-gap recommend family (recommend → confidence →
+sweep → grid → diff → batch, whose filters AND aggregates —
+median/spread/grade_counts/IQR/flyer — are all complete) and onto a different
+pipeline stage. The TTS-side `gv calibrate-base-wpm` surface (iter-220/316/317)
+reports an ABSOLUTE `spread` (max − min implied base_wpm, in WPM), but absolute
+spread is base-dependent: a 10 WPM range is tight at a 300-WPM voice yet wide at
+a 100-WPM voice, so the bare number can't tell an operator whether the renders
+AGREE without first knowing the voice's nominal rate. This is the SAME gap the
+iter-391 IQR closed beside the VAD median — a normalized companion that makes the
+absolute number interpretable on its own.
+
+**What it is.** `BaseWpmCalibration` gains a `relative_spread` field
+(= `spread / implied_base_wpm`), the dimensionless coefficient of dispersion.
+`gv calibrate-base-wpm` now surfaces it on all three faces: the human report
+prints a `relative spread: 0.312 (spread/median; comparable across voices)` line
+beside `spread:`, the CSV trailing `#`-comment block gains
+`# relative_spread: <n>`, and the JSON `calibration` object gains a
+`relative_spread` key. A 0.04 relative spread at any voice reads the same
+"renders agree to within 4% of the rate", where the raw WPM spread does not.
+
+**Design — one derived field reusing the existing median.**
+- `calibrate_base_wpm` computes `relative_spread = spread / median`. The median
+  is always a positive rate (each `implied_base_wpm > 0` since `bot_wpm` and
+  `speed` are both positive and validated in `CalibrationSample.__post_init__`),
+  so the division is always well-defined — `0.0` exactly when the renders agree
+  (`spread == 0`), larger as they disagree relative to the rate.
+- Placed as a whole-SET aggregate, the same scope as `spread`: it trails in the
+  CSV `#`-comment summary (not the per-sample rows) and nests in the JSON
+  `calibration` object (not the `samples` list), mirroring the iter-316/317
+  contract. CSV per-sample rows and the adopt/keep `--verdict` are unchanged (the
+  verdict still gates on the absolute `spread_max`, an intentional WPM-denominated
+  threshold; `relative_spread` is a reading aid, not a new gate).
+
+**What landed.** `session/wpm_mirror.py` (+the field on the frozen dataclass +
+its docstring + the computation in `calibrate_base_wpm`); `examples/gv.py`
+(`render_calibration` human line, `render_calibration_csv` summary comment,
+`render_calibration_json` calibration key + JSON docstring field list).
+
+**Tests (+5 net new behaviors; the verdict helper updated for the new required
+field).** core (`test_calibrate_base_wpm`): is-spread-over-median,
+zero-when-renders-agree, normalizes-base-dependence (the SAME absolute 40 WPM
+spread reads as a larger relative spread at a 100-WPM voice than a 300-WPM voice),
+single-sample-is-zero. gv side (`test_gv_calibrate_base_wpm`): human / CSV-comment
+/ JSON each assert the field is present and matches the engine, plus a JSON
+normalize-across-voices check. `test_calibration_verdict`'s direct
+`BaseWpmCalibration(...)` constructor helper gained the new field.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5680 passed**
+(5675 prior + 5 net new), run in the feature worktree before ff-merge;
+re-verified on main post-merge (`test_calibrate_base_wpm.py` +
+`test_calibration_verdict.py` + `test_gv_calibrate_base_wpm.py` → 123 passed).
+- Integration: not run this lap (pure arithmetic/string-formatting over
+  `CalibrationSample` dataclasses; no torch import, no audio I/O — mirrors the
+  iter-220/316/317 calibration laps and the iter-338/340..392 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] continue the STT/TTS-frontier push** — `calibrate-base-wpm` is the
+   richest TTS-side analysis surface; a natural follow-on is a CONFIDENCE-grade
+   over the calibration (analogous to iter-348 `vad-gap-confidence`): bucket
+   `relative_spread` into agree/loose/scattered and emit a one-line trust note,
+   reusing the iter-393 normalized dispersion as the driver. Small, mirrors a
+   proven pattern, stays on the frontier the steer asked for.
+2. **[gv CLI] add a `--biases`-column selector to the vad-gap-recommend-batch**
+   like the knob sweep's iter-374 `--biases` (larger core restructure; deferred).
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Prefer a genuinely new signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — a future lap could
+   `git worktree prune` / remove merged ones. NOTE: this lap correctly removed
+   its own worktree.
