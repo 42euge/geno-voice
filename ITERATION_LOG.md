@@ -36076,3 +36076,92 @@ re-verified on main post-merge (`test_calibration_verdict.py` +
 5. **[housekeeping] Stale worktrees accumulating** — a future lap could
    `git worktree prune` / remove merged ones. NOTE: this lap correctly removed
    its own worktree.
+
+## iter-396 — calibrate-base-wpm dispersion_margin: headroom before the grade degrades
+
+- **Date:** 2026-06-22
+- **Branch:** iter-396-disp-margin (ff-merged to main, worktree removed)
+- **Commit:** fb93b4a
+
+**Why.** The iter-395 next-item #1 named two follow-ons: a batch surface
+(larger restructure, deferred) or further enrichment of the now-rich
+calibration chain (median → spread → relative_spread → dispersion grade →
+verdict). iter-394 added the voice-comparable `dispersion_grade`
+(agree/loose/scattered) and iter-395 folded it into the verdict — but the grade
+is *categorical*: it says WHICH trust band the renders fall in, not HOW
+COMFORTABLY they hold it. An "agree" at `relative_spread` 0.049 is one noisy
+render from "loose"; one at 0.005 is rock-solid. Both read "agree". This lap
+closes that gap with a robustness measure, the calibration analogue of
+iter-348's `separation_ratio` (which grades how robustly the VAD valley is
+earned rather than just which grade it gets).
+
+**What it is.** `BaseWpmCalibration` gains a `dispersion_margin: float | None` —
+the `relative_spread` headroom before the grade would degrade to the next-worse
+grade. The human report appends it to the `dispersion` line ("… ; 0.045
+relative-spread headroom before the grade degrades"), the CSV gains a
+`# dispersion_margin` comment, and the JSON `calibration` object gains a
+`dispersion_margin` key.
+
+**Design — one derived field + a pure function, reusing iter-393/394.**
+- New pure `dispersion_margin(relative_spread)` engine function driven by the
+  SAME two thresholds the grade uses (`CALIB_AGREE_REL_SPREAD` 0.05 /
+  `CALIB_LOOSE_REL_SPREAD` 0.15), so the margin and grade can never disagree
+  about where the knees are. "agree" ⇒ distance to the 0.05 knee; "loose" ⇒
+  distance to the 0.15 knee; "scattered" (the worst grade, no worse grade to
+  fall into) ⇒ `None`, the same way the gap family spells "not measurable"
+  (cf. iter-348's `separation_ratio`).
+- A value sitting exactly on a knee grades the lower band with a `0.0` margin
+  (the iter-394 inclusive-lower-band convention: in the better band, but one
+  hair from leaving it).
+- Driven by `relative_spread` alone ⇒ inherits that field's voice-independence:
+  the SAME relative spread at a 100-WPM and a 300-WPM voice yields the same
+  margin (pinned on the engine, the JSON, and the field).
+- A reading aid, NOT a new gate (the same stance iter-393/394/395 took) — the
+  adopt/keep `--verdict` still gates on the absolute `spread`. The verdict
+  surface was deliberately NOT touched this lap (it already cites the grade; the
+  margin is a per-calibration reading aid, not a decision input).
+- The human note lives in a new `_calib_dispersion_margin_note(margin)` helper
+  with a `None` branch reading "no lower grade to fall to". CSV/JSON spell the
+  `None` as a blank comment value / JSON `null` respectively.
+
+**What landed.** `session/wpm_mirror.py` (the field on the frozen dataclass + its
+docstring, the `dispersion_margin` function + `__all__` export, the computation
+wired into `calibrate_base_wpm` + its docstring); `examples/gv.py` (the
+`_calib_dispersion_margin_note` helper, the human `dispersion` line, the CSV
+comment + docstring, the JSON key + docstring, the header usage line).
+
+**Tests (+13 net new; the verdict helper updated for the new required field).**
+engine (`test_calibrate_base_wpm`): agree/loose headroom, scattered-is-none,
+zero-on-each-knee, larger-for-tighter-agree, field-carries,
+field-none-for-scattered, matches-helper, voice-comparable. gv side
+(`test_gv_calibrate_base_wpm`): human shows-margin + scattered-none-note, margin
+note finite/none, CSV comment carries margin + blank-for-scattered, JSON carries
+margin + null-for-scattered + voice-comparable. `test_calibration_verdict`'s
+direct `BaseWpmCalibration(...)` helper gained the new `dispersion_margin` field.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5714 passed**
+(5701 prior + 13 net new), run in the feature worktree before ff-merge;
+re-verified on main post-merge (`test_calibrate_base_wpm.py` +
+`test_calibration_verdict.py` + `test_gv_calibrate_base_wpm.py` → 157 passed).
+- Integration: not run this lap (pure arithmetic/string-formatting over
+  `CalibrationSample` dataclasses; no torch import, no audio I/O — mirrors the
+  iter-220/316/317/393/394/395 calibration laps and the iter-338/340..395 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] the per-calibration analysis surface is now mature** (median →
+   spread → relative_spread → dispersion grade → margin → verdict). The natural
+   remaining follow-on is the deferred BATCH surface: calibrate N voices and
+   tabulate their implied_base_wpm / grade / margin / verdict (the calibration
+   analogue of `vad-gap-recommend-batch`). Larger restructure; reuses
+   iter-394/395/396.
+2. **[gv CLI] continue the STT-side frontier** — the TTS-side calibration
+   surface is rich; the STT side (transcription RTF / accuracy) is still
+   unexplored by the gv analysis family. A genuinely new pipeline stage.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Prefer a genuinely new signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232,
+   iter-317 still present) — a future lap could `git worktree prune` / remove
+   merged ones. NOTE: this lap correctly removed its own worktree.
