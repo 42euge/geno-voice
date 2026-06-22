@@ -37856,3 +37856,95 @@ row; `--csv` emits the trailing `flyer` column and the
 4. **[housekeeping] Stale worktrees accumulating** (iter-026, iter-027, iter-028,
    iter-232, iter-317 still present) — a future lap could `git worktree prune` /
    remove merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-415 — calibrate-base-wpm-batch --flyers-only: show ONLY corpus outliers
+
+- **Date:** 2026-06-22
+- **Branch:** iter-415-calib-flyers-only (ff-merged to main, worktree removed)
+- **Commit:** e730ef7
+
+**Why.** The iter-414 log's next-item #1 noted the `stt-rtf-batch` surface now
+carries the full calibration-batch analysis set and suggested a future increment
+could surface the Tukey fence on the FILTER side (a `--flyers-only` filter) — but
+advised checking whether the calibration batch has such a key FIRST, to keep the
+two surfaces in lockstep. It does not. By the established convention the
+calibration batch is the PARENT surface every `stt-rtf-batch` flag was cloned
+from (iter-409..414 all cloned calibration-batch flags), so the lockstep move is
+to add `--flyers-only` to `calibrate-base-wpm-batch` first; a later lap clones it
+to `stt-rtf-batch`.
+
+**What it is.** `--flyers-only` is the row-set companion to the iter-404
+`flyers:` corpus line: where that line NAMES the outliers (voices whose implied
+base_wpm falls strictly outside the `[Q1 - 1.5·IQR, Q3 + 1.5·IQR]` Tukey fence,
+also marked `← flyer`), this narrows the rendered table DOWN to just them, so an
+operator triaging "which voices disagree with the corpus?" reads nothing else. It
+is the deliberate INVERSE of `--summary` (iter-402), which collapses to the most
+CENTRAL voice — `--summary` answers "which one voice speaks for the fleet?",
+`--flyers-only` answers "which voices don't?".
+
+**What landed (all render-only, in `examples/gv.py`).**
+- **`_filter_calib_batch_rows_flyers_only(rows, flyers_only)`** — keeps only rows
+  with a truthy `flyer` flag; an uncalibrated voice (flyer `None`, no base rate to
+  be an outlier) is always dropped. With `flyers_only` `False` returns the rows
+  unchanged (a copy — byte-identical default). Pure, never mutates the source.
+  The row-set analogue of `_filter_calib_batch_rows_by_grade`.
+- **`_calib_batch_empty_filter_note(min_grade, flyers_only)`** — composes the
+  `(no voice ...)` note clauses so a `min_grade` floor and the flyers-only filter
+  each contribute wording, joined with `and` when both empty the table. Returns
+  the pre-iter-415 grade-floor wording (`no voice calibrated to grade '<g>' or
+  better`) unchanged when only `min_grade` is set, so the existing floor tests are
+  untouched.
+- **`render_calibration_batch` / `_json` / `_csv`** all gained a `flyers_only`
+  kwarg applied alongside `min_grade` (grade floor FIRST, then narrow to flyers)
+  and BEFORE `sort_by` / `top_n`. The human header echoes `(flyers only)`; JSON
+  adds a top-level `flyers_only: true`; CSV echoes a leading `# flyers_only: true`
+  comment (inserted after `# min_grade`, before `# sort_by`/`# top_n` — the order
+  the filters apply). It composes with `--summary` (the representative is then
+  picked among the flyers — the most-central OUTLIER). Every corpus aggregate /
+  `grades:` / `flyers:` line still describes the WHOLE corpus (the iter-401
+  contract), so the operator sees how many voices were elided.
+- **`cmd_calibrate_base_wpm_batch`** threads `args.flyers_only` into whichever
+  renderer the format flag selects. `--flyers-only` (`store_true`) added to the
+  `calibrate-base-wpm-batch` subparser; handler docstring + module usage line
+  updated.
+
+**Tests (+20 net new, `test_gv_calibrate_base_wpm_batch.py` now 149).** Filter
+primitive (False returns a copy of all rows, True keeps only outliers, drops
+uncalibrated, does not mutate source); parser wiring (default False, flag sets
+True); human render (shows just the outlier rows + header echo, default
+byte-identical + no marker, empty-corpus note, composes-with-min_grade note
+naming BOTH clauses, corpus aggregates unchanged, composes-with-summary picks
+among flyers); JSON (filters rows + names key, none omits key, summary `best`
+among flyers); CSV (filters rows + comments key, none omits comment, reads after
+`# min_grade`); handler threading to all three renderers (human/json/csv match
+the renderer directly).
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **6128 passed**
+(6108 prior + 20 net new), run in the feature worktree before ff-merge;
+re-verified on main post-merge (`test_gv_calibrate_base_wpm_batch.py` → 149
+passed). Also smoke-tested the real CLI:
+`python examples/gv.py calibrate-base-wpm-batch --voice a 160:60.0 --voice b 165:60.0 --voice c 170:60.0 --voice d 175:60.0 --voice wild 600:60.0 --flyers-only`
+shows only the `wild: 600.0 WPM ... ← flyer` row with `(flyers only)` in the
+header, the whole-corpus `corpus:`/`grades:`/`flyers:` lines still naming all
+five; `--json` carries `"flyers_only": true` and a single-row `rows` list;
+`--csv` emits the single `wild` data row with `# flyers_only: true`.
+- Integration: not run this lap (pure list-filtering / string-formatting over the
+  injected `calibrate_base_wpm_batch` core; no torch, no audio I/O — mirrors the
+  iter-401 min-grade lap and the iter-397..414 batch laps, which the integration
+  suite never exercised either).
+
+**Next planned items:**
+1. **[gv CLI] clone `--flyers-only` to `stt-rtf-batch`** — now that the PARENT
+   `calibrate-base-wpm-batch` surface carries it, the lockstep follow-on is the
+   STT-side twin: `_filter_stt_rtf_batch_rows_flyers_only` + a `--flyers-only`
+   flag on `stt-rtf-batch`, narrowing the engine table to the iter-414 Tukey-fence
+   outlier engines only. A small, well-precedented increment reusing iter-414's
+   per-engine `flyer` flag.
+2. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Prefer a genuinely new signal over an 18th near-clone.
+3. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+4. **[housekeeping] Stale worktrees accumulating** (iter-026, iter-027, iter-028,
+   iter-232, iter-317 still present) — a future lap could `git worktree prune` /
+   remove merged ones. NOTE: this lap correctly removed its own worktree.
