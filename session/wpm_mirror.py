@@ -60,6 +60,7 @@ __all__ = [
     "BaseWpmCalibration",
     "calibrate_base_wpm",
     "dispersion_grade",
+    "dispersion_margin",
     "CALIB_AGREE_REL_SPREAD",
     "CALIB_LOOSE_REL_SPREAD",
     "CalibrationVerdict",
@@ -723,6 +724,18 @@ class BaseWpmCalibration:
         it is voice-comparable the same way ``relative_spread`` is. A
         single-sample calibration grades ``"agree"`` (zero spread) — see
         :func:`dispersion_grade` for the boundaries.
+      dispersion_margin: how much ``relative_spread`` HEADROOM the calibration
+        has before its ``dispersion_grade`` would degrade to the next-worse grade
+        (iter-396). The grade says *which* trust band the renders fall in;
+        ``dispersion_margin`` says *how comfortably* — an ``"agree"`` at
+        ``relative_spread`` 0.049 (margin 0.001) is one noisy render from
+        ``"loose"``, while one at 0.005 (margin 0.045) is rock-solid. It is the
+        calibration analogue of iter-348's ``separation_ratio`` (how robustly the
+        VAD valley is earned, not just which grade it gets). ``0.0`` means the
+        calibration sits exactly on a grade knee; ``"scattered"`` (the worst
+        grade) has no worse grade to degrade to, so its margin is ``None``.
+        Computed from ``relative_spread`` alone, so it inherits that field's
+        voice-independence — see :func:`dispersion_margin`.
       default_base_wpm: the nominal seed the calibration is compared against.
       drift: ``implied_base_wpm - default_base_wpm`` — how far this voice clocks
         from the 165 nominal. Positive ⇒ the voice is faster than nominal at
@@ -737,6 +750,7 @@ class BaseWpmCalibration:
     spread: float
     relative_spread: float
     dispersion_grade: str
+    dispersion_margin: float | None
     default_base_wpm: float
     drift: float
 
@@ -788,6 +802,46 @@ def dispersion_grade(relative_spread: float) -> str:
     return "scattered"
 
 
+def dispersion_margin(relative_spread: float) -> float | None:
+    """How much ``relative_spread`` headroom is left before the grade degrades.
+
+    The iter-394 :func:`dispersion_grade` answers *which* trust band a
+    calibration falls in (``"agree"`` / ``"loose"`` / ``"scattered"``); this
+    answers *how comfortably* it holds that band — the distance from
+    ``relative_spread`` up to the knee where it would tip into the next-WORSE
+    grade. It is the calibration analogue of iter-348's ``separation_ratio``,
+    which grades how robustly the VAD valley is earned rather than just which
+    grade it gets: an ``"agree"`` at ``relative_spread`` 0.049 (margin 0.001) is
+    one noisy render away from ``"loose"``, while one at 0.005 (margin 0.045)
+    sits firmly inside the band.
+
+    Returns, by grade:
+
+    - ``"agree"`` ⇒ ``CALIB_AGREE_REL_SPREAD - relative_spread`` — headroom to
+      the agree/loose knee (0.05).
+    - ``"loose"`` ⇒ ``CALIB_LOOSE_REL_SPREAD - relative_spread`` — headroom to
+      the loose/scattered knee (0.15).
+    - ``"scattered"`` ⇒ ``None``. The worst grade has no worse grade to degrade
+      into, so "headroom to the next-worse grade" is undefined — spelled
+      ``None`` the same way the rest of the calibration/gap family spells "not
+      measurable" (cf. :func:`vad_gap_confidence`'s ``separation_ratio``).
+
+    A value sitting exactly on a knee grades the more favourable side (the
+    iter-394 inclusive-lower-band convention) with a ``0.0`` margin — it is in
+    the better band, but one hair from leaving it. Because the result is purely
+    a function of ``relative_spread`` (itself voice-independent, iter-393), the
+    margin is voice-comparable: the SAME relative spread at a 100-WPM and a
+    300-WPM voice yields the same margin. Pure: a function of one float.
+    """
+    rs = float(relative_spread)
+    grade = dispersion_grade(rs)
+    if grade == "agree":
+        return CALIB_AGREE_REL_SPREAD - rs
+    if grade == "loose":
+        return CALIB_LOOSE_REL_SPREAD - rs
+    return None
+
+
 def calibrate_base_wpm(
     samples,
     default_base_wpm: float = DEFAULT_BASE_WPM,
@@ -801,7 +855,8 @@ def calibrate_base_wpm(
     drift-vs-nominal diagnostics (including the iter-393 ``relative_spread``, the
     spread normalized by the median so it can be compared across voices, and the
     iter-394 ``dispersion_grade`` that buckets it into ``"agree"`` / ``"loose"``
-    / ``"scattered"``).
+    / ``"scattered"``, and the iter-396 ``dispersion_margin`` saying how much
+    relative-spread headroom is left before that grade would degrade).
 
     Args:
       samples: iterable of :class:`CalibrationSample`. Empty ⇒ ``None`` (nothing
@@ -829,6 +884,7 @@ def calibrate_base_wpm(
         spread=spread,
         relative_spread=relative_spread,
         dispersion_grade=dispersion_grade(relative_spread),
+        dispersion_margin=dispersion_margin(relative_spread),
         default_base_wpm=float(default_base_wpm),
         drift=median - float(default_base_wpm),
     )

@@ -52,6 +52,7 @@ def _calibration(
         spread=spread,
         relative_spread=rel,
         dispersion_grade=_wm.dispersion_grade(rel),
+        dispersion_margin=_wm.dispersion_margin(rel),
         default_base_wpm=default_base_wpm,
         drift=implied_base_wpm - default_base_wpm,
     )

@@ -7,7 +7,7 @@ Usage:
     gv talk               # talk mode — STT → NLP → canned response → TTS
     gv chat               # chat mode — STT → LLM (litellm) → TTS
     gv simulate-mirror …  # offline WPM-mirror trajectory / grid-sweep simulator
-    gv calibrate-base-wpm … # offline base_wpm calibration (dispersion grade agree/loose/scattered; --verdict for an adopt/keep call; --json/--csv for per-sample data)
+    gv calibrate-base-wpm … # offline base_wpm calibration (dispersion grade agree/loose/scattered + margin to next grade; --verdict for an adopt/keep call; --json/--csv for per-sample data)
     gv vad recording.wav  # offline Silero VAD — segment a WAV into speech regions
     gv vad recording.wav --json # machine-readable segmentation (SileroResult.to_dict shape)
     gv vad-gaps recording.wav  # report the silence gaps BETWEEN speech regions (tune --min-silence-ms)
@@ -1163,6 +1163,21 @@ def _calib_dispersion_summary(grade):
     return "unrecognized dispersion grade — inspect the per-sample data directly"
 
 
+def _calib_dispersion_margin_note(margin):
+    """Phrase a calibration ``dispersion_margin`` as a one-line headroom note (iter-396).
+
+    The grade (``_calib_dispersion_summary``) says which trust band the renders
+    fall in; this says how comfortably they hold it — the relative-spread
+    headroom before the grade would degrade to the next-worse one. ``None`` (the
+    worst grade, ``"scattered"``, has no worse grade to fall into) reads as "no
+    lower grade to fall to"; otherwise the margin is shown to 3 places so the
+    operator can tell a knife-edge grade from a firmly-held one.
+    """
+    if margin is None:
+        return "already the lowest grade — no lower grade to fall to"
+    return f"{margin:.3f} relative-spread headroom before the grade degrades"
+
+
 def render_calibration(calib):
     """Render a ``BaseWpmCalibration`` verdict as plain-text report lines.
 
@@ -1174,7 +1189,11 @@ def render_calibration(calib):
     bucketed into an ``"agree"`` / ``"loose"`` / ``"scattered"`` trust grade
     (the calibration analogue of ``gv vad-gap-confidence``) plus a one-line note
     on how far to trust the median, so the operator reads the verdict at a glance
-    instead of interpreting the raw dispersion number.
+    instead of interpreting the raw dispersion number. iter-396 appends the
+    grade's MARGIN — how much relative-spread headroom is left before the grade
+    would degrade — so the operator sees not just which trust band the renders
+    fall in but how comfortably they hold it (a knife-edge ``"agree"`` vs a
+    firmly-held one).
     """
     if calib is None:
         return ["base_wpm calibration: no samples (nothing to calibrate from)"]
@@ -1187,7 +1206,8 @@ def render_calibration(calib):
         f"  relative spread:  {calib.relative_spread:.3f} "
         "(spread/median; comparable across voices)",
         f"  dispersion:       {calib.dispersion_grade} "
-        f"({_calib_dispersion_summary(calib.dispersion_grade)})",
+        f"({_calib_dispersion_summary(calib.dispersion_grade)}; "
+        f"{_calib_dispersion_margin_note(calib.dispersion_margin)})",
         f"  nominal:          {calib.default_base_wpm:.1f}",
         f"  drift:            {calib.drift:+.1f} (implied − nominal; + ⇒ voice faster than nominal)",
     ]
@@ -1252,8 +1272,8 @@ def render_calibration_csv(samples, calib):
     normalized rate.
 
     The aggregate verdict (median ``implied_base_wpm``, range, spread,
-    relative_spread, dispersion_grade, nominal, drift) is a single record
-    describing the whole SET, not a per-sample fact, so
+    relative_spread, dispersion_grade, dispersion_margin, nominal, drift) is a
+    single record describing the whole SET, not a per-sample fact, so
     duplicating it into every row would bloat the grid (the same reasoning
     :func:`render_trajectory_csv` uses to keep arc-level scalars out of its
     per-turn rows). Instead it trails as ``#`` comment lines — self-describing
@@ -1294,6 +1314,8 @@ def render_calibration_csv(samples, calib):
         f"# spread: {round(calib.spread, 3)}",
         f"# relative_spread: {round(calib.relative_spread, 3)}",
         f"# dispersion_grade: {calib.dispersion_grade}",
+        f"# dispersion_margin: "
+        f"{'' if calib.dispersion_margin is None else round(calib.dispersion_margin, 3)}",
         f"# nominal: {round(calib.default_base_wpm, 3)}",
         f"# drift: {round(calib.drift, 3)}",
     ]
@@ -1311,8 +1333,10 @@ def render_calibration_json(samples, calib):
     spreadsheet's rows stay pure), the JSON nests BOTH in one object: a
     ``samples`` list (one object per render — the per-sample data) AND a
     ``calibration`` object (the aggregate verdict — median / range / spread /
-    relative_spread / dispersion_grade / nominal / drift). A nested consumer gets
-    the whole record in one parse instead of having to skip comment lines.
+    relative_spread / dispersion_grade / dispersion_margin / nominal / drift). A
+    nested consumer gets the whole record in one parse instead of having to skip
+    comment lines. ``dispersion_margin`` is ``null`` for a ``"scattered"``
+    calibration (no worse grade to degrade into).
 
     Each sample object is ``{"sample": 1-based int, "words": int,
     "audio_seconds": float, "speed": float, "bot_wpm": float,
@@ -1349,6 +1373,11 @@ def render_calibration_json(samples, calib):
                 "spread": round(calib.spread, 3),
                 "relative_spread": round(calib.relative_spread, 3),
                 "dispersion_grade": calib.dispersion_grade,
+                "dispersion_margin": (
+                    None
+                    if calib.dispersion_margin is None
+                    else round(calib.dispersion_margin, 3)
+                ),
                 "nominal": round(calib.default_base_wpm, 3),
                 "drift": round(calib.drift, 3),
             }

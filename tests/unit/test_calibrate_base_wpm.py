@@ -44,6 +44,7 @@ CalibrationSample = _wm.CalibrationSample
 BaseWpmCalibration = _wm.BaseWpmCalibration
 calibrate_base_wpm = _wm.calibrate_base_wpm
 dispersion_grade = _wm.dispersion_grade
+dispersion_margin = _wm.dispersion_margin
 CALIB_AGREE_REL_SPREAD = _wm.CALIB_AGREE_REL_SPREAD
 CALIB_LOOSE_REL_SPREAD = _wm.CALIB_LOOSE_REL_SPREAD
 DEFAULT_BASE_WPM = _wm.DEFAULT_BASE_WPM
@@ -375,3 +376,104 @@ def test_calibrate_dispersion_grade_voice_comparable():
     )
     assert slow.relative_spread == pytest.approx(fast.relative_spread)
     assert slow.dispersion_grade == fast.dispersion_grade == "scattered"
+
+
+# --------------------------------------------------------------------------
+# iter-396 — dispersion_margin: headroom before the grade degrades
+# --------------------------------------------------------------------------
+
+def test_dispersion_margin_agree_is_headroom_to_agree_knee():
+    # Inside "agree", the margin is the distance up to the agree/loose knee.
+    rs = CALIB_AGREE_REL_SPREAD / 2.0
+    assert dispersion_grade(rs) == "agree"
+    assert dispersion_margin(rs) == pytest.approx(CALIB_AGREE_REL_SPREAD - rs)
+
+
+def test_dispersion_margin_loose_is_headroom_to_loose_knee():
+    # Inside "loose", the margin is the distance up to the loose/scattered knee.
+    rs = (CALIB_AGREE_REL_SPREAD + CALIB_LOOSE_REL_SPREAD) / 2.0
+    assert dispersion_grade(rs) == "loose"
+    assert dispersion_margin(rs) == pytest.approx(CALIB_LOOSE_REL_SPREAD - rs)
+
+
+def test_dispersion_margin_scattered_is_none():
+    # The worst grade has no worse grade to fall to ⇒ margin is None.
+    rs = CALIB_LOOSE_REL_SPREAD + 0.1
+    assert dispersion_grade(rs) == "scattered"
+    assert dispersion_margin(rs) is None
+
+
+def test_dispersion_margin_zero_on_each_knee():
+    # A value sitting exactly on a knee grades the lower band with a 0.0 margin —
+    # in the better band, but one hair from leaving it (inclusive-lower-band).
+    assert dispersion_grade(CALIB_AGREE_REL_SPREAD) == "agree"
+    assert dispersion_margin(CALIB_AGREE_REL_SPREAD) == pytest.approx(0.0)
+    assert dispersion_grade(CALIB_LOOSE_REL_SPREAD) == "loose"
+    assert dispersion_margin(CALIB_LOOSE_REL_SPREAD) == pytest.approx(0.0)
+
+
+def test_dispersion_margin_larger_for_tighter_agree():
+    # A rock-solid "agree" (tiny relative spread) has more headroom than a
+    # knife-edge one near the knee — the whole point of the margin.
+    solid = dispersion_margin(0.005)
+    knife_edge = dispersion_margin(0.049)
+    assert solid > knife_edge > 0.0
+
+
+def test_calibrate_carries_dispersion_margin():
+    # A tight 3-render set is "agree" and carries a positive headroom.
+    samples = [
+        CalibrationSample(words=164, audio_seconds=60.0),
+        CalibrationSample(words=165, audio_seconds=60.0),
+        CalibrationSample(words=166, audio_seconds=60.0),
+    ]
+    cal = calibrate_base_wpm(samples)
+    assert cal.dispersion_grade == "agree"
+    assert cal.dispersion_margin == pytest.approx(dispersion_margin(cal.relative_spread))
+    assert cal.dispersion_margin > 0.0
+
+
+def test_calibrate_dispersion_margin_none_for_scattered():
+    # A scattered calibration carries dispersion_margin None on the field.
+    samples = [
+        CalibrationSample(words=130, audio_seconds=60.0),
+        CalibrationSample(words=160, audio_seconds=60.0),
+        CalibrationSample(words=190, audio_seconds=60.0),
+    ]
+    cal = calibrate_base_wpm(samples)
+    assert cal.dispersion_grade == "scattered"
+    assert cal.dispersion_margin is None
+
+
+def test_calibrate_dispersion_margin_matches_helper():
+    # The field is exactly dispersion_margin(relative_spread) — no drift.
+    samples = [
+        CalibrationSample(words=150, audio_seconds=60.0),
+        CalibrationSample(words=165, audio_seconds=60.0),
+        CalibrationSample(words=178, audio_seconds=60.0),
+    ]
+    cal = calibrate_base_wpm(samples)
+    assert cal.dispersion_margin == pytest.approx(
+        dispersion_margin(cal.relative_spread)
+    )
+
+
+def test_dispersion_margin_voice_comparable():
+    # The SAME relative spread at a slow and a fast voice yields the same margin
+    # — it inherits relative_spread's voice-independence (a function of rel only).
+    slow = calibrate_base_wpm(
+        [
+            CalibrationSample(words=98, audio_seconds=60.0),
+            CalibrationSample(words=100, audio_seconds=60.0),
+            CalibrationSample(words=102, audio_seconds=60.0),
+        ]
+    )
+    fast = calibrate_base_wpm(
+        [
+            CalibrationSample(words=294, audio_seconds=60.0),
+            CalibrationSample(words=300, audio_seconds=60.0),
+            CalibrationSample(words=306, audio_seconds=60.0),
+        ]
+    )
+    assert slow.relative_spread == pytest.approx(fast.relative_spread)
+    assert slow.dispersion_margin == pytest.approx(fast.dispersion_margin)

@@ -169,6 +169,8 @@ def test_render_calibration_human_shows_dispersion_grade():
     assert calib.dispersion_grade == "agree"
     assert "dispersion:       agree" in text
     assert "cluster tightly" in text  # the "agree" trust note
+    # iter-396: the margin note rides alongside the grade.
+    assert f"{calib.dispersion_margin:.3f} relative-spread headroom" in text
 
 
 def test_render_calibration_human_dispersion_grade_scattered():
@@ -183,6 +185,9 @@ def test_render_calibration_human_dispersion_grade_scattered():
     assert calib.dispersion_grade == "scattered"
     assert "dispersion:       scattered" in text
     assert "re-render more consistently" in text
+    # iter-396: a scattered calibration has no lower grade to fall to.
+    assert calib.dispersion_margin is None
+    assert "no lower grade to fall to" in text
 
 
 def test_calib_dispersion_summary_defensive_fallback():
@@ -190,6 +195,12 @@ def test_calib_dispersion_summary_defensive_fallback():
     assert "unrecognized" in gv._calib_dispersion_summary("bogus")
     for g in ("agree", "loose", "scattered"):
         assert "unrecognized" not in gv._calib_dispersion_summary(g)
+
+
+def test_calib_dispersion_margin_note_finite_and_none():
+    # iter-396: a finite margin shows headroom; None reads as "lowest grade".
+    assert "0.030 relative-spread headroom" in gv._calib_dispersion_margin_note(0.03)
+    assert "no lower grade to fall to" in gv._calib_dispersion_margin_note(None)
 
 
 # ---- cmd_calibrate_base_wpm: handler with injected log -----------------
@@ -473,8 +484,26 @@ def test_render_calibration_csv_summary_comments():
     assert f"# spread: {round(calib.spread, 3)}" in comments
     assert f"# relative_spread: {round(calib.relative_spread, 3)}" in comments  # iter-393
     assert f"# dispersion_grade: {calib.dispersion_grade}" in comments  # iter-394
+    # iter-396: the margin trails as its own comment (finite for a non-scattered set).
+    assert calib.dispersion_margin is not None
+    assert f"# dispersion_margin: {round(calib.dispersion_margin, 3)}" in comments
     assert f"# nominal: {round(calib.default_base_wpm, 3)}" in comments
     assert f"# drift: {round(calib.drift, 3)}" in comments
+
+
+def test_render_calibration_csv_dispersion_margin_blank_for_scattered():
+    # iter-396: a scattered calibration has margin None ⇒ the comment is blank.
+    wm = gv._load_wpm_mirror()
+    samples = _samples([(130, 60.0), (160, 60.0), (190, 60.0)])
+    calib = wm.calibrate_base_wpm(samples)
+    assert calib.dispersion_grade == "scattered"
+    assert calib.dispersion_margin is None
+    comments = "\n".join(_comments(gv.render_calibration_csv(samples, calib)))
+    assert "# dispersion_margin:" in comments
+    # The value after the label is empty (no finite headroom to show).
+    for line in comments.splitlines():
+        if line.startswith("# dispersion_margin:"):
+            assert line.strip() == "# dispersion_margin:"
 
 
 def test_render_calibration_csv_none_calib_header_only():
@@ -595,6 +624,9 @@ def test_render_calibration_json_samples_and_calibration():
     assert cal["spread"] == round(calib.spread, 3)
     assert cal["relative_spread"] == round(calib.relative_spread, 3)  # iter-393
     assert cal["dispersion_grade"] == calib.dispersion_grade  # iter-394
+    # iter-396: the margin rounds to 3 places (finite for a non-scattered set).
+    assert calib.dispersion_margin is not None
+    assert cal["dispersion_margin"] == round(calib.dispersion_margin, 3)
     assert cal["nominal"] == round(calib.default_base_wpm, 3)
     assert cal["drift"] == round(calib.drift, 3)
 
@@ -664,6 +696,34 @@ def test_render_calibration_json_dispersion_grade_voice_comparable():
     slow_g = _json.loads(gv.render_calibration_json([], slow))["calibration"]["dispersion_grade"]
     fast_g = _json.loads(gv.render_calibration_json([], fast))["calibration"]["dispersion_grade"]
     assert slow_g == fast_g
+
+
+def test_render_calibration_json_dispersion_margin_null_for_scattered():
+    # iter-396: a scattered calibration carries dispersion_margin null.
+    wm = gv._load_wpm_mirror()
+    samples = _samples([(130, 60.0), (160, 60.0), (190, 60.0)])
+    calib = wm.calibrate_base_wpm(samples)
+    assert calib.dispersion_grade == "scattered"
+    cal = _json.loads(gv.render_calibration_json(samples, calib))["calibration"]
+    assert cal["dispersion_margin"] is None
+
+
+def test_render_calibration_json_dispersion_margin_voice_comparable():
+    # iter-396: equal relative spread at slow/fast voices ⇒ equal margin.
+    wm = gv._load_wpm_mirror()
+    slow = wm.calibrate_base_wpm(
+        [wm.CalibrationSample(words=98, audio_seconds=60.0),
+         wm.CalibrationSample(words=100, audio_seconds=60.0),
+         wm.CalibrationSample(words=102, audio_seconds=60.0)]
+    )
+    fast = wm.calibrate_base_wpm(
+        [wm.CalibrationSample(words=294, audio_seconds=60.0),
+         wm.CalibrationSample(words=300, audio_seconds=60.0),
+         wm.CalibrationSample(words=306, audio_seconds=60.0)]
+    )
+    slow_m = _json.loads(gv.render_calibration_json([], slow))["calibration"]["dispersion_margin"]
+    fast_m = _json.loads(gv.render_calibration_json([], fast))["calibration"]["dispersion_margin"]
+    assert slow_m == fast_m
 
 
 def test_render_calibration_json_nominal_threads_to_drift():
