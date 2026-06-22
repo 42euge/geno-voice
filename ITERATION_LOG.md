@@ -37488,3 +37488,89 @@ emits the nested corpus object (heavy `recommend: true`, light `false`), and
 4. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232, iter-317
    still present) — a future lap could `git worktree prune` / remove merged ones.
    NOTE: this lap correctly removed its own worktree.
+
+## iter-411 — stt-rtf-batch --sort-by/--top-n: float the most-useful engines
+
+- **Date:** 2026-06-22
+- **Branch:** iter-411-stt-rtf-batch-sort-topn (ff-merged to main, worktree removed)
+- **Commit:** 8d32590
+
+**Why.** The iter-410 log's next-item #1 named this lap: enrich the
+`stt-rtf-batch` surface with the iter-399/400 analogue — `--sort-by` + `--top-n`.
+iter-409 landed the human corpus report, iter-410 the `--json`/`--csv` twins, but
+every engine listed in `--engine` argument order; an operator scanning a corpus
+for "which transcriber is fastest / which is the bottleneck" had to eyeball N
+rows. This floats the most-useful engines to the top and caps the table, exactly
+how iter-399/400 did for `calibrate-base-wpm-batch`.
+
+**What landed (all render-only, in `examples/gv.py`).**
+
+- **`STT_RTF_BATCH_SORT_CHOICES = ("median_rtf", "grade", "delta")`** — three keys
+  like the iter-386 VAD batch (STT has no nominal seed, so no `"drift"` key like
+  the calibration batch's four). **`stt_rtf_batch_sort_type`** validates /
+  normalizes the key (case-insensitive, rejects empty / non-string / unknown), the
+  STT analogue of `calib_batch_sort_type`.
+- **`_sort_stt_rtf_batch_rows(rows, sort_by)`** — render-only reorder of a COPY:
+  `median_rtf` ASCENDING (fastest engine first — lower RTF is better, the inverse
+  of the histogram's worst-last order), `grade` DESCENDING (`fast`→`realtime`→
+  `slow` via the new `_STT_RTF_SPEED_GRADE_RANK`), `delta` DESCENDING |Δmedian|
+  (biggest corpus outliers first). All three STABLE; an unprofiled engine (no
+  profile / grade) sorts LAST under every key via a leading `is None` key; an
+  unrecognised key returns input order (defensive — a future key never silently
+  scrambles the table).
+- **`render_stt_rtf_batch` / `_json` / `_csv`** all gained `sort_by`/`top_n`
+  kwargs (default `None` = byte-identical to the pre-iter-411 output). The human
+  header echoes `(sorted by <key>)` and `(top N of M)`; JSON adds top-level
+  `sort_by`/`top_n` keys; CSV echoes leading `# sort_by:` / `# top_n:` comments
+  (sort_by inserted first so it reads before top_n). `--top-n` reuses the shared
+  `_truncate_batch_rows` (iter-387). Every corpus aggregate / histogram still
+  describes the WHOLE corpus — sort/cap are render-only, matching the iter-399/400
+  calibration-batch contract.
+- **`cmd_stt_rtf_batch`** threads `args.sort_by` / `args.top_n` into whichever
+  renderer the format flag selects. `--sort-by` (`stt_rtf_batch_sort_type`) +
+  `--top-n` (`positive_int_type`, >=1) added to the `stt-rtf-batch` subparser;
+  handler docstring + module usage line updated.
+
+**Tests (+31 net new, `test_gv_stt_rtf_batch.py` now 70 tests).** Parser wiring
+(sort_by/top_n default None, each key parses, unknown key + `--top-n 0` exit 2);
+sort type validator (case/whitespace normalize, reject empty/non-string); sort
+primitive (None preserves order + returns a copy, median_rtf ascending, grade
+descending, delta descending-abs with stable tie, unprofiled-last under every
+key, unrecognised key preserves order); human render (sort reorders + header
+echo, default unchanged + no markers, top_n truncates + header echo, top_n>=count
+no marker, corpus unaffected by top_n); json (sort reorders rows + adds key,
+top_n truncates + adds key + corpus still whole, default omits keys); csv (sort
+reorders + comment, top_n truncates + both comments in sort<top order + corpus
+comment still whole, default omits comments); handler threading to all three
+renderers.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **6036 passed**
+(6005 prior + 31 net new), run in the feature worktree before ff-merge;
+re-verified on main post-merge (`test_gv_stt_rtf_batch.py` → 70 passed). Also
+smoke-tested the real CLI:
+`python examples/gv.py stt-rtf-batch --engine heavy 10.0:15.0 10.0:15.2 10.0:14.8 --engine light 10.0:1.0 10.0:1.1 10.0:0.9 --engine mid 10.0:8.0 --sort-by median_rtf --top-n 2`
+prints the header with `(sorted by median_rtf) (top 2 of 3)`, the two fastest
+engines (light, mid), and a corpus line still describing all 3; `--csv --sort-by
+grade` emits the reordered grid with `# sort_by: grade` and the whole-corpus
+`# num_engines` comment.
+- Integration: not run this lap (pure list-reordering / string-formatting over
+  the injected `profile_stt_rtf_batch` core; no torch, no faster-whisper, no
+  audio I/O — mirrors the iter-399/400 calib-batch sort/top-n lap and the
+  iter-405..410 STT laps, which the integration suite never exercised either).
+
+**Next planned items:**
+1. **[gv CLI] finish the stt-rtf-batch surface with the iter-401/402 family** —
+   the human + `--json`/`--csv` trio plus `--sort-by`/`--top-n` now exist; the
+   remaining follow-ons mirror the calibration batch's evolution: a `--min-grade`
+   floor (iter-401) to drop engines below a speed grade (`fast`/`realtime`/`slow`),
+   and a `--summary` line (iter-402) naming the single fastest / most-representative
+   engine (nearest the corpus median). Each is a small, well-precedented increment
+   reusing iter-409's engine + iter-410/411's renderers.
+2. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Prefer a genuinely new signal over an 18th near-clone.
+3. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+4. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232, iter-317
+   still present) — a future lap could `git worktree prune` / remove merged ones.
+   NOTE: this lap correctly removed its own worktree.
