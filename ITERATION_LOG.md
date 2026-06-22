@@ -37285,3 +37285,113 @@ prints the profile then the "lighten the STT path" decision.
 4. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232, iter-317
    still present) — a future lap could `git worktree prune` / remove merged ones.
    NOTE: this lap correctly removed its own worktree.
+
+## iter-409 — stt-rtf-batch: profile a CORPUS of STT engines
+
+- **Date:** 2026-06-22
+- **Branch:** iter-409-stt-rtf-batch (ff-merged to main, worktree removed)
+- **Commit:** b8f6719
+
+**Why.** The iter-408 log's next-item #1 named this lap explicitly: the
+`stt-rtf-batch` corpus command — the STT-side twin of iter-397's
+`calibrate-base-wpm-batch`. iter-405 profiled ONE engine's median RTF,
+iter-406 surfaced that profile on the CLI, and iter-407/408 folded + surfaced a
+recommend/keep verdict — but all of those stop at a SINGLE engine. An operator
+choosing a transcriber for the host (mlx-whisper vs faster-whisper vs a heavier
+model) had no single surface ranking their RTFs; they'd have to run `gv stt-rtf`
+N times and eyeball. This lap builds the batch surface, beginning the STT-side
+batch family the way iter-397 began the TTS one.
+
+**What it is.** `gv stt-rtf-batch --engine LABEL PAIR... --engine ...` profiles
+a corpus of engines in one call. Each `--engine` group is one engine: a LABEL
+followed by its `audio_seconds:transcribe_seconds` sample pairs (the same shape
+`--samples` takes on the single-engine command). The human report prints a
+per-engine row (median RTF, speed grade, signed Δ from the corpus median, a
+`← lighten` marker when the verdict recommends action), then a corpus summary
+line (outlier-robust median / range / spread of the per-engine median RTFs, plus
+how many keep up with realtime) and a `grades:` histogram. Example:
+
+```
+STT real-time-factor batch (3 engines, 2 profiled)
+  gates: relative_spread<=0.15, samples>=3
+  mlx-whisper: 0.120 RTF (fast, Δmedian -0.240)
+  faster-whisper: 0.600 RTF (realtime, Δmedian +0.240)
+  empty: - (unprofiled — no samples)
+  corpus: median 0.360, range 0.120 – 0.600, spread 0.480, 2/2 keep up with realtime
+  grades: 1 fast, 1 realtime, 0 slow, 1 unprofiled
+```
+
+**Design — one engine generalising `profile_stt_rtf` over N engines.**
+- `profile_stt_rtf_batch(engines, *, rel_spread_max, min_samples)` takes an
+  iterable of `(label, samples)` pairs, profiles each engine INDEPENDENTLY, and
+  folds each profile through the iter-407 `stt_rtf_verdict` against the SHARED
+  gates (so the per-engine recommendations are apples-to-apples). Per-engine
+  `median_rtf` is summarised with `statistics.median` — outlier-robust: one
+  pathological engine cannot drag the corpus centre.
+- Each row embeds the engine's own `SttRtfProfile` + `SttRtfVerdict`, so a row
+  agrees EXACTLY with `gv stt-rtf` on that engine's samples
+  (`test_each_row_carries_its_own_profile`).
+- A no-sample engine profiles to `None`: listed + tagged `unprofiled`, counted
+  in `num_engines` but excluded from the corpus median / extremes / spread —
+  mirroring how `calibrate_base_wpm_batch` keeps an uncalibrated voice.
+- `STT_RTF_BATCH_GRADE_ORDER = (fast, realtime, slow, unprofiled)` — the three
+  real speed grades plus the empty-engine bucket, kept distinct so a no-sample
+  engine never silently merges into `slow` (the iter-397 ungraded-vs-none
+  distinction). The gv render reads this order (`_stt_rtf_batch_grade_order`) so
+  the two never drift; the histogram always shows all four buckets summing to
+  `num_engines`.
+- `num_keep_up` (fast + realtime engines) answers "which engines keep up?";
+  `num_recommend` counts engines the verdict flags for action (genuinely slow
+  AND trustworthy, so `<= grade_counts["slow"]` — `test_num_recommend_le_slow_count`).
+- gv side scoped to the HUMAN render this lap (`render_stt_rtf_batch`), exactly
+  how iter-397 landed the calibration batch before json/csv/sort/etc. The
+  label-plus-pairs shape is parsed in the handler with the SAME
+  `stt_rtf_sample_type` validator the single-engine `--samples` uses, so a
+  malformed pair raises the identical clean `ArgumentTypeError`.
+
+**What landed.** `stt/rtf_profile.py` (`SttRtfBatch` frozen dataclass,
+`profile_stt_rtf_batch`, `STT_RTF_BATCH_GRADE_ORDER`); `examples/gv.py`
+(`cmd_stt_rtf_batch` handler, `render_stt_rtf_batch` + `_stt_rtf_batch_grade_order`
+helper, the `stt-rtf-batch` parser, the dispatch entry, the docstring usage line).
+
+**Tests (+36 net new).** engine (`test_stt_rtf_batch.py`, 18): empty corpus,
+one-row-per-engine-in-order, per-row-carries-own-profile, robust-median-vs-
+outlier, single-engine zero spread, signed Δmedian, unprofiled excluded,
+all-unprofiled, grade-order-canonical, histogram-sums-to-num-engines,
+num_keep_up counts fast+realtime, verdict recommends slow+trustworthy,
+slow-but-too-few not recommended, num_recommend <= slow count, gate defaults
+echoed, gates threaded to per-engine verdict (min_samples + rel_spread). gv side
+(`test_gv_stt_rtf_batch.py`, 18): handler-map, parser engine-groups +
+requires-engine + gate defaults match core + gate overrides, render
+header/rows/lighten-marker/corpus/histogram/unprofiled/all-unprofiled/
+grade-order-from-engine, handler emits + matches-render + malformed-pair clean
+error + label-only-unprofiled + min-samples override + default-log.
+`test_gv_cli`'s exhaustive `DEFAULT_HANDLERS` assertion gained the new entry.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5985 passed**
+(5949 prior + 36 net new), run in the feature worktree before ff-merge;
+re-verified on main post-merge (`test_stt_rtf_batch.py` +
+`test_gv_stt_rtf_batch.py` → 36 passed). Also smoke-tested the real CLI:
+`python examples/gv.py stt-rtf-batch --engine heavy 10.0:15.0 10.0:15.2 10.0:14.8 --engine light 10.0:1.0 10.0:1.1 10.0:0.9`
+prints the per-engine table with `← lighten` on the slow engine.
+- Integration: not run this lap (pure arithmetic/string-formatting over
+  injected `TranscriptionSample` timings; no torch, no faster-whisper, no audio
+  I/O — mirrors the iter-397 calib-batch lap and the iter-405..408 STT laps,
+  which the integration suite never exercised either).
+
+**Next planned items:**
+1. **[gv CLI] enrich the stt-rtf-batch surface with the iter-398..402 family** —
+   the human batch render now exists; the natural follow-ons mirror the
+   calibration batch's evolution: `--json`/`--csv` machine-readable twins
+   (iter-398), `--sort-by` (median_rtf / grade / delta) + `--top-n` (iter-399/400),
+   a `--min-grade` floor and a `--summary` line naming the single fastest /
+   most-representative engine (iter-401/402). Each is a small, well-precedented
+   increment reusing iter-409's engine.
+2. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Prefer a genuinely new signal over an 18th near-clone.
+3. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+4. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232, iter-317
+   still present) — a future lap could `git worktree prune` / remove merged ones.
+   NOTE: this lap correctly removed its own worktree.
