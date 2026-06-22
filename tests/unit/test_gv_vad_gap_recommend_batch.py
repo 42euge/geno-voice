@@ -920,3 +920,280 @@ def test_cmd_unavailable_still_threads_sort_by_json():
     )
     # Degrades cleanly — no crash — even with a sort requested.
     assert json.loads("\n".join(lines))["available"] is False
+
+
+# ========================================================================
+# iter-387 — --top-n: keep only the N most-useful recordings.
+# ========================================================================
+# The count companion of iter-386's --sort-by (an ORDERING): --top-n N keeps a
+# FIXED COUNT of recordings, applied AFTER --sort-by, so "--sort-by delta --top-n 3"
+# shows the 3 biggest outliers and "--sort-by grade --top-n 3" the 3 most-trustworthy.
+# The batch analogue of iter-380's knob-sweep --top-n. Render-only: the core
+# vad_gap_recommend_batch stays the full-corpus primitive; the three renderers gain a
+# top_n kwarg threaded by the handler from args.top_n. The corpus aggregates stay
+# computed over the WHOLE corpus and are unaffected. The default None shows every
+# recording (byte-identical to the pre-cap output).
+
+
+# ---- parser wiring -----------------------------------------------------
+
+
+def test_parser_vad_gap_recommend_batch_top_n_default_none():
+    parser = gv.build_parser()
+    args = parser.parse_args(["vad-gap-recommend-batch", "a.wav", "b.wav"])
+    assert args.top_n is None
+
+
+def test_parser_vad_gap_recommend_batch_top_n_value():
+    parser = gv.build_parser()
+    args = parser.parse_args(
+        ["vad-gap-recommend-batch", "a.wav", "b.wav", "--top-n", "2"]
+    )
+    assert args.top_n == 2
+
+
+def test_parser_vad_gap_recommend_batch_top_n_rejects_zero_and_negative():
+    parser = gv.build_parser()
+    for bad in ["0", "-1"]:
+        with pytest.raises(SystemExit):
+            parser.parse_args(
+                ["vad-gap-recommend-batch", "a.wav", "b.wav", "--top-n", bad]
+            )
+
+
+def test_parser_vad_gap_recommend_batch_top_n_composes_with_sort_by():
+    parser = gv.build_parser()
+    args = parser.parse_args(
+        [
+            "vad-gap-recommend-batch",
+            "a.wav",
+            "b.wav",
+            "c.wav",
+            "--sort-by",
+            "delta",
+            "--top-n",
+            "2",
+        ]
+    )
+    assert args.sort_by == "delta"
+    assert args.top_n == 2
+
+
+# ---- pure helper: _truncate_batch_rows ---------------------------------
+
+
+def test_truncate_batch_rows_none_keeps_all_and_copies():
+    rows = _rows(("a", 300.0, "weak", 50.0), ("b", 100.0, "strong", -150.0))
+    out = gv._truncate_batch_rows(rows, None)
+    assert [r["recording"] for r in out] == ["a", "b"]
+    # A copy — the source is not aliased.
+    assert out is not rows
+
+
+def test_truncate_batch_rows_keeps_first_n():
+    rows = _rows(
+        ("a", 300.0, "weak", 0.0),
+        ("b", 100.0, "strong", -200.0),
+        ("d", 500.0, "moderate", 200.0),
+    )
+    out = gv._truncate_batch_rows(rows, 2)
+    assert [r["recording"] for r in out] == ["a", "b"]
+
+
+def test_truncate_batch_rows_n_larger_than_rows_keeps_all():
+    rows = _rows(("a", 300.0, "weak", 0.0), ("b", 100.0, "strong", -200.0))
+    out = gv._truncate_batch_rows(rows, 99)
+    assert [r["recording"] for r in out] == ["a", "b"]
+
+
+def test_truncate_batch_rows_does_not_mutate_source():
+    rows = _rows(
+        ("a", 300.0, "weak", 0.0),
+        ("b", 100.0, "strong", -200.0),
+        ("d", 500.0, "moderate", 200.0),
+    )
+    gv._truncate_batch_rows(rows, 1)
+    assert [r["recording"] for r in rows] == ["a", "b", "d"]
+
+
+def test_truncate_batch_rows_applied_after_sort():
+    # Sort by recommended ASC then keep the 2 shortest hangovers.
+    rows = _rows(
+        ("a", 300.0, "weak", 0.0),
+        ("b", 100.0, "strong", -200.0),
+        ("d", 500.0, "moderate", 200.0),
+    )
+    out = gv._truncate_batch_rows(gv._sort_batch_rows(rows, "recommended"), 2)
+    assert [r["recording"] for r in out] == ["b", "a"]
+
+
+# ---- human renderer with top_n -----------------------------------------
+
+
+def test_human_top_n_keeps_first_n_after_sort():
+    labels = ["a.wav", "b.wav", "c.wav"]
+    results = [_clean("a.wav"), _lower("b.wav"), _higher("c.wav")]
+    lines = gv.render_vad_gap_recommend_batch(
+        results, labels, sort_by="recommended", top_n=2
+    )
+    body = [ln for ln in lines if any(w in ln for w in labels)]
+    order = [next(w for w in labels if w in ln) for ln in body]
+    # lower(550) < clean(850) < higher(1350); keep the 2 shortest.
+    assert order == ["b.wav", "a.wav"]
+
+
+def test_human_top_n_default_shows_every_recording():
+    labels = ["a.wav", "b.wav", "c.wav"]
+    results = [_clean("a.wav"), _lower("b.wav"), _higher("c.wav")]
+    lines = gv.render_vad_gap_recommend_batch(results, labels)
+    body = [ln for ln in lines if any(w in ln for w in labels)]
+    assert len(body) == 3
+
+
+def test_human_top_n_names_the_cap_when_truncating():
+    labels = ["a.wav", "b.wav", "c.wav"]
+    results = [_clean("a.wav"), _lower("b.wav"), _higher("c.wav")]
+    lines = gv.render_vad_gap_recommend_batch(results, labels, top_n=2)
+    assert any("top 2 of 3" in ln for ln in lines)
+
+
+def test_human_top_n_omits_note_when_cap_drops_nothing():
+    labels = ["a.wav", "b.wav"]
+    results = [_clean("a.wav"), _lower("b.wav")]
+    # top_n >= row count: every row kept, so no truncation note.
+    lines = gv.render_vad_gap_recommend_batch(results, labels, top_n=5)
+    assert not any("top " in ln and " of " in ln for ln in lines)
+
+
+def test_human_top_n_does_not_change_corpus_summary():
+    labels = ["a.wav", "b.wav", "c.wav"]
+    results = [_clean("a.wav"), _lower("b.wav"), _higher("c.wav")]
+    full = gv.render_vad_gap_recommend_batch(results, labels)
+    capped = gv.render_vad_gap_recommend_batch(
+        results, labels, sort_by="delta", top_n=1
+    )
+    summary_full = [ln for ln in full if "corpus:" in ln][0]
+    summary_capped = [ln for ln in capped if "corpus:" in ln][0]
+    assert summary_full == summary_capped
+
+
+# ---- JSON renderer with top_n ------------------------------------------
+
+
+def test_json_top_n_truncates_rows_and_echoes_key():
+    labels = ["a.wav", "b.wav", "c.wav"]
+    results = [_clean("a.wav"), _lower("b.wav"), _higher("c.wav")]
+    payload = json.loads(
+        gv.render_vad_gap_recommend_batch_json(
+            results, labels, sort_by="recommended", top_n=2
+        )
+    )
+    assert payload["top_n"] == 2
+    order = [r["recording"] for r in payload["rows"]]
+    assert order == ["b.wav", "a.wav"]
+
+
+def test_json_no_top_n_omits_key():
+    payload = json.loads(
+        gv.render_vad_gap_recommend_batch_json(
+            [_clean("a.wav"), _lower("b.wav")], ["a.wav", "b.wav"]
+        )
+    )
+    assert "top_n" not in payload
+    assert len(payload["rows"]) == 2
+
+
+def test_json_top_n_preserves_corpus_aggregates():
+    labels = ["a.wav", "b.wav", "c.wav"]
+    results = [_clean("a.wav"), _lower("b.wav"), _higher("c.wav")]
+    base = json.loads(gv.render_vad_gap_recommend_batch_json(results, labels))
+    capped = json.loads(
+        gv.render_vad_gap_recommend_batch_json(
+            results, labels, sort_by="delta", top_n=1
+        )
+    )
+    for key in (
+        "recommended_ms_median",
+        "recommended_ms_min",
+        "recommended_ms_max",
+        "recommended_ms_spread",
+        "num_recommended",
+        "num_recordings",
+    ):
+        assert base[key] == capped[key]
+    # Aggregates span the whole corpus even though only 1 row is shown.
+    assert len(capped["rows"]) == 1
+
+
+# ---- CSV renderer with top_n -------------------------------------------
+
+
+def test_csv_top_n_truncates_data_rows_same_header():
+    labels = ["a.wav", "b.wav", "c.wav"]
+    results = [_clean("a.wav"), _lower("b.wav"), _higher("c.wav")]
+    base = list(csv.reader(io.StringIO(
+        gv.render_vad_gap_recommend_batch_csv(results, labels)
+    )))
+    capped = list(csv.reader(io.StringIO(
+        gv.render_vad_gap_recommend_batch_csv(
+            results, labels, sort_by="recommended", top_n=2
+        )
+    )))
+    # Header unchanged; truncated run unions cleanly with the full one.
+    assert base[0] == capped[0]
+    assert [row[0] for row in capped[1:]] == ["b.wav", "a.wav"]
+
+
+# ---- handler threads top_n ---------------------------------------------
+
+
+def test_cmd_threads_top_n_human():
+    lines = []
+    gv.cmd_vad_gap_recommend_batch(
+        _args(sort_by="recommended", top_n=2),
+        log=lines.append,
+        segmenter=_corpus_segmenter(),
+        availability=lambda: True,
+    )
+    body = [ln for ln in lines if any(w in ln for w in ("a.wav", "b.wav", "c.wav"))]
+    order = [next(w for w in ("a.wav", "b.wav", "c.wav") if w in ln) for ln in body]
+    assert order == ["b.wav", "a.wav"]
+    assert any("top 2 of 3" in ln for ln in lines)
+
+
+def test_cmd_threads_top_n_json():
+    lines = []
+    gv.cmd_vad_gap_recommend_batch(
+        _args(json=True, sort_by="delta", top_n=1),
+        log=lines.append,
+        segmenter=_corpus_segmenter(),
+        availability=lambda: True,
+    )
+    payload = json.loads("\n".join(lines))
+    assert payload["top_n"] == 1
+    assert len(payload["rows"]) == 1
+
+
+def test_cmd_top_n_default_none_shows_every_recording():
+    lines = []
+    gv.cmd_vad_gap_recommend_batch(
+        _args(json=True),
+        log=lines.append,
+        segmenter=_corpus_segmenter(),
+        availability=lambda: True,
+    )
+    payload = json.loads("\n".join(lines))
+    assert "top_n" not in payload
+    assert len(payload["rows"]) == 3
+
+
+def test_cmd_unavailable_still_threads_top_n_json():
+    lines = []
+    gv.cmd_vad_gap_recommend_batch(
+        _args(json=True, top_n=2),
+        log=lines.append,
+        segmenter=lambda wav, params=None: None,
+        availability=lambda: False,
+    )
+    # Degrades cleanly — no crash — even with a cap requested.
+    assert json.loads("\n".join(lines))["available"] is False

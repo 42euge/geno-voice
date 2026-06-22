@@ -26,6 +26,7 @@ Usage:
     gv vad-gap-recommend-diff before.wav after.wav  # compare two recordings' recommended hangovers + grades (did re-recording move it?)
     gv vad-gap-recommend-batch a.wav b.wav c.wav  # tabulate N recordings' recommended hangovers + grades + corpus median/spread (which agree, which are outliers?)
     gv vad-gap-recommend-batch a.wav b.wav c.wav --sort-by delta  # float the biggest outliers (|Δmedian| descending) to the top
+    gv vad-gap-recommend-batch *.wav --sort-by delta --top-n 5  # keep only the 5 biggest outliers
     gv vad-sweep recording.wav --thresholds 0.3,0.5,0.7,0.9  # sweep N gates, tabulate the elbow
     gv vad-sweep recording.wav --min-silences 200,400,800,1600  # sweep the hangover instead
     gv vad-sweep recording.wav --min-speeches 50,100,200,400  # sweep the min-speech floor instead
@@ -5743,8 +5744,29 @@ def _sort_batch_rows(rows, sort_by):
     return list(rows)
 
 
+def _truncate_batch_rows(rows, top_n):
+    """Keep only the first ``top_n`` recommend-batch recording rows (iter-387).
+
+    The batch analogue of :func:`_truncate_knob_rows` (which caps the knob sweep):
+    where ``--sort-by`` (an ORDERING, iter-386) shapes the whole table the operator
+    still reads, ``--top-n N`` keeps a FIXED COUNT — "show me only the N most-useful
+    recordings" — so it composes naturally with ``sort_by`` and is applied AFTER it:
+    the N kept rows are the N that sorted to the top (the N biggest outliers under
+    ``--sort-by delta``, or the N most-trustworthy under ``--sort-by grade``). With
+    ``top_n`` ``None`` (no cap requested) returns the rows unchanged (a copy, so a
+    batch with no ``--top-n`` is byte-identical to the pre-cap output). A ``top_n``
+    larger than the row count keeps every row (slicing is saturating, never raises).
+    Pure: never mutates the source list. The caller guarantees ``top_n >= 1`` via
+    :func:`positive_int_type` at the parser, so a cap never silently empties the
+    table.
+    """
+    if top_n is None:
+        return list(rows)
+    return list(rows)[:top_n]
+
+
 def render_vad_gap_recommend_batch(results, labels, *, bias=DEFAULT_GAP_RECOMMEND_BIAS,
-                                   sort_by=None):
+                                   sort_by=None, top_n=None):
     """Render a corpus recommended-hangover table as plain text (iter-385).
 
     The human-readable face of :func:`vad_gap_recommend_batch`. ``labels`` name the
@@ -5765,6 +5787,14 @@ def render_vad_gap_recommend_batch(results, labels, *, bias=DEFAULT_GAP_RECOMMEN
     keeps the argument order (byte-identical to the pre-sort render). When set, the
     bias line names the active ordering so a reader knows the rows are no longer in
     argument order.
+
+    ``top_n`` (iter-387) keeps only the first ``top_n`` recording rows AFTER the
+    ``sort_by`` ordering — the N most-useful recordings (the N biggest outliers under
+    ``"delta"``, the N most-trustworthy under ``"grade"``). The corpus summary line is
+    still computed over the WHOLE corpus and is unaffected by the cap. The default
+    ``None`` shows every recording. When the cap actually drops rows the bias line
+    names it (``(top N of M)``) so a reader knows the table is truncated, not the full
+    corpus.
     """
     if any(r is None for r in results):
         return [
@@ -5782,17 +5812,20 @@ def render_vad_gap_recommend_batch(results, labels, *, bias=DEFAULT_GAP_RECOMMEN
     def _delta(value):
         return "-" if value is None else f"{_signed_float(value)}ms"
 
+    rows = _truncate_batch_rows(_sort_batch_rows(d["rows"], sort_by), top_n)
     rec_width = max([len("recording")] + [len(str(label)) for label in labels])
     bias_line = f"  bias: {d['bias']}"
     if sort_by is not None:
         bias_line += f"  (sorted by: {sort_by})"
+    if top_n is not None and len(rows) < len(d["rows"]):
+        bias_line += f"  (top {len(rows)} of {len(d['rows'])})"
     lines = [
         f"silero VAD recommended-hangover batch ({d['num_recordings']} recordings)",
         bias_line,
         f"  {'recording':<{rec_width}}  segments  gaps  {'recommended':>11}  "
         f"{'grade':>8}  {'Δmedian':>9}",
     ]
-    for row in _sort_batch_rows(d["rows"], sort_by):
+    for row in rows:
         lines.append(
             f"  {str(row['recording']):<{rec_width}}  "
             f"{row['num_segments']:>8}  {row['num_gaps']:>4}  "
@@ -5818,7 +5851,7 @@ def render_vad_gap_recommend_batch(results, labels, *, bias=DEFAULT_GAP_RECOMMEN
 
 def render_vad_gap_recommend_batch_json(results, labels, *,
                                         bias=DEFAULT_GAP_RECOMMEND_BIAS,
-                                        sort_by=None):
+                                        sort_by=None, top_n=None):
     """Render a corpus recommended-hangover table as JSON (iter-385).
 
     Machine-readable twin of :func:`render_vad_gap_recommend_batch`, mirroring the
@@ -5835,6 +5868,13 @@ def render_vad_gap_recommend_batch_json(results, labels, *,
     key naming it, so a consumer knows the ``rows`` list is no longer in argument
     order. The corpus aggregates are unaffected. The default ``None`` keeps the
     argument order (unchanged payload).
+
+    ``top_n`` (iter-387) keeps only the first ``top_n`` ``rows`` AFTER the ``sort_by``
+    ordering. When a cap is set the payload also carries a top-level ``top_n`` key
+    naming it, so a consumer knows the ``rows`` list was truncated (and the rows are
+    the N best under the active ordering). The corpus aggregates remain computed over
+    the WHOLE corpus and are unaffected. The default ``None`` keeps every row
+    (unchanged payload). Composes with ``sort_by``.
     """
     if any(r is None for r in results):
         return json.dumps(
@@ -5848,17 +5888,19 @@ def render_vad_gap_recommend_batch_json(results, labels, *,
             indent=2,
         )
     d = vad_gap_recommend_batch(results, labels, bias=bias)
-    d["rows"] = _sort_batch_rows(d["rows"], sort_by)
+    d["rows"] = _truncate_batch_rows(_sort_batch_rows(d["rows"], sort_by), top_n)
     payload = {"available": True}
     if sort_by is not None:
         payload["sort_by"] = sort_by
+    if top_n is not None:
+        payload["top_n"] = top_n
     payload.update(d)
     return json.dumps(payload, indent=2)
 
 
 def render_vad_gap_recommend_batch_csv(results, labels, *,
                                        bias=DEFAULT_GAP_RECOMMEND_BIAS,
-                                       sort_by=None):
+                                       sort_by=None, top_n=None):
     """Render a corpus recommended-hangover table as CSV (iter-385).
 
     The spreadsheet/plot-friendly twin of :func:`render_vad_gap_recommend_batch_json`,
@@ -5879,6 +5921,11 @@ def render_vad_gap_recommend_batch_csv(results, labels, *,
     DESCENDING). The header and column set are unchanged, so a sorted run still unions
     cleanly with an unsorted one — only the row order differs. The default ``None``
     keeps the argument order.
+
+    ``top_n`` (iter-387) keeps only the first ``top_n`` data rows AFTER the ``sort_by``
+    ordering — the N most-useful recordings. The header and column set are unchanged
+    (a truncated run still unions cleanly with a full one — it just has fewer rows).
+    The default ``None`` keeps every row. Composes with ``sort_by``.
     """
     if any(r is None for r in results):
         return (
@@ -5886,7 +5933,7 @@ def render_vad_gap_recommend_batch_csv(results, labels, *,
             "torchaudio) to enable offline neural segmentation"
         )
     d = vad_gap_recommend_batch(results, labels, bias=bias)
-    rows = _sort_batch_rows(d["rows"], sort_by)
+    rows = _truncate_batch_rows(_sort_batch_rows(d["rows"], sort_by), top_n)
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(
@@ -10126,7 +10173,9 @@ def cmd_vad_gap_recommend_batch(args, *, log=print, segmenter=None, availability
     ``segmenter`` / ``availability`` default to the real :mod:`vad.silero`
     functions, imported lazily so the parser stays torch-free. The segmenter knobs
     are shared by every run so the recommendations are apples-to-apples, and
-    ``--bias`` (iter-351) is shared too. ``--csv`` is mutually exclusive with
+    ``--bias`` (iter-351) is shared too. ``--sort-by`` (iter-386) orders the rows
+    most-useful-first; ``--top-n`` (iter-387) then keeps only the N most-useful
+    recordings (applied AFTER ``--sort-by``). ``--csv`` is mutually exclusive with
     ``--json``; when ``silero-vad`` is absent the handler prints the install hint
     and returns, never crashing.
     """
@@ -10140,19 +10189,20 @@ def cmd_vad_gap_recommend_batch(args, *, log=print, segmenter=None, availability
     as_csv = getattr(args, "csv", False)
     bias = getattr(args, "bias", DEFAULT_GAP_RECOMMEND_BIAS)
     sort_by = getattr(args, "sort_by", None)
+    top_n = getattr(args, "top_n", None)
     labels = args.wavs
 
     if not availability():
         results = [None] * len(labels)
         if as_json:
             log(render_vad_gap_recommend_batch_json(
-                results, labels, bias=bias, sort_by=sort_by))
+                results, labels, bias=bias, sort_by=sort_by, top_n=top_n))
         elif as_csv:
             log(render_vad_gap_recommend_batch_csv(
-                results, labels, bias=bias, sort_by=sort_by))
+                results, labels, bias=bias, sort_by=sort_by, top_n=top_n))
         else:
             for line in render_vad_gap_recommend_batch(
-                results, labels, bias=bias, sort_by=sort_by
+                results, labels, bias=bias, sort_by=sort_by, top_n=top_n
             ):
                 log(line)
         return
@@ -10169,13 +10219,13 @@ def cmd_vad_gap_recommend_batch(args, *, log=print, segmenter=None, availability
     results = [segmenter(label, params=params) for label in labels]
     if as_json:
         log(render_vad_gap_recommend_batch_json(
-            results, labels, bias=bias, sort_by=sort_by))
+            results, labels, bias=bias, sort_by=sort_by, top_n=top_n))
     elif as_csv:
         log(render_vad_gap_recommend_batch_csv(
-            results, labels, bias=bias, sort_by=sort_by))
+            results, labels, bias=bias, sort_by=sort_by, top_n=top_n))
     else:
         for line in render_vad_gap_recommend_batch(
-            results, labels, bias=bias, sort_by=sort_by
+            results, labels, bias=bias, sort_by=sort_by, top_n=top_n
         ):
             log(line)
 
@@ -12945,6 +12995,17 @@ def build_parser():
         "'grade' = most-trustworthy first (confidence descending), 'delta' = "
         "biggest outliers first (|Δmedian| descending) (default: keep argument "
         "order)",
+    )
+    vad_gap_rec_batch.add_argument(
+        "--top-n",
+        type=positive_int_type,
+        default=None,
+        dest="top_n",
+        help="Keep only the N most-useful recordings, applied AFTER --sort-by "
+        "(so '--sort-by delta --top-n 3' shows the 3 biggest outliers, "
+        "'--sort-by grade --top-n 3' the 3 most-trustworthy); the corpus "
+        "median / spread is still computed over the whole corpus "
+        "(default: show every recording)",
     )
     vad_gap_rec_batch_fmt = vad_gap_rec_batch.add_mutually_exclusive_group()
     vad_gap_rec_batch_fmt.add_argument(
