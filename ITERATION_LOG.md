@@ -36281,3 +36281,93 @@ re-verified on main post-merge (`test_calibrate_base_wpm_batch.py` +
 5. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232,
    iter-317 still present) — a future lap could `git worktree prune` / remove
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-398 — calibrate-base-wpm-batch --json/--csv: machine-readable corpus twins
+
+- **Date:** 2026-06-22
+- **Branch:** iter-398-calib-batch-json (ff-merged to main, worktree removed)
+- **Commit:** 8e44c23
+
+**Why.** The iter-397 next-item #1 named this exact follow-on. iter-397 shipped
+the HUMAN `calibrate-base-wpm-batch` render (per-voice base_wpm + grade + margin
++ drift + Δmedian, then a corpus median/range/spread + grade histogram). The
+named first step toward enriching it — mirroring the VAD batch's evolution — was
+its `--json`/`--csv` machine-readable twins (iter-390/391 did the same for
+`vad-gap-recommend-batch`). An operator scripting a fleet-wide `DEFAULT_BASE_WPM`
+off a corpus had to scrape the human report; this lap gives them a parseable
+corpus record, completing the human / `--json` / `--csv` trio the single-voice
+`calibrate-base-wpm` already carries (iter-316/317).
+
+**What it is.** `gv calibrate-base-wpm-batch --json` emits the nested corpus
+object (per-voice `rows` + the corpus aggregates + the four-bucket grade
+histogram + shared `nominal`); `--csv` emits a one-row-per-voice grid
+(`voice,implied_base_wpm,n_samples,spread,relative_spread,dispersion_grade,
+dispersion_margin,drift,delta_from_median_wpm`) with the corpus aggregates
+trailing as `#` comment lines. The two are mutually exclusive at the parser;
+each is the whole output in that mode.
+
+**Design — reuse the single-voice shapes, generalised over N voices.**
+- `render_calibration_batch_json` nests one `calibration` object per voice that
+  is BYTE-IDENTICAL to what `gv calibrate-base-wpm --json` emits on that voice's
+  samples (pinned by `test_json_row_matches_single_voice_json`), so the batch is
+  a true generalisation, not a re-derivation. A `_calib_batch_row_obj` helper
+  builds the per-voice unit (`{voice, calibration, delta_from_median_wpm}`) and a
+  shared `_round_or_none` keeps an uncalibrated voice's nulls as nulls rather
+  than crashing on `round(None, 3)`.
+- The `grade_counts` object always carries all four `CALIB_BATCH_GRADE_ORDER`
+  buckets summing to `num_voices` (read from the engine via
+  `_wm_calib_batch_grade_order` so the render and engine never drift on the set).
+- An uncalibrated (no-sample) voice carries `"calibration": null` /
+  `"delta_from_median_wpm": null` in JSON and blank cells in CSV — listed but
+  excluded from the corpus aggregates, which themselves go `null`/blank for an
+  empty corpus. Mirrors the engine's empty contract (iter-397).
+- `render_calibration_batch_csv` keeps the per-voice rows a pure data grid and
+  trails the corpus median/range/spread/grade-histogram as `#` comments (pandas
+  `read_csv(comment="#")` skips them), the same non-tabular-metadata pattern
+  `render_calibration_csv` uses for the single-voice surface.
+- Voice-comparable: the same relative spread at a 100-WPM and a 300-WPM voice
+  grades identically (inherits `relative_spread`'s iter-393/394
+  voice-independence; pinned by
+  `test_json_grade_is_voice_comparable_across_rates`).
+
+**What landed.** `examples/gv.py` (`render_calibration_batch_json` +
+`_round_or_none` + `_calib_batch_row_obj` helpers, `render_calibration_batch_csv`,
+the `--json`/`--csv` mutually-exclusive group on the batch parser, the handler
+branches, the header usage line). No engine change — the iter-397
+`BaseWpmCalibrationBatch` already carries every field the twins surface.
+
+**Tests (+21 net new).** parser: json/csv mutually-exclusive, each flag parses.
+json render: corpus-aggregates, grade-counts all-four-summing, row-matches-
+single-voice-json, uncalibrated-null, signed Δmedian, empty-corpus-null,
+rows-in-input-order, voice-comparable-grade. csv render: header, one-row-per-
+voice, uncalibrated-blank-cells, summary-comments-carry-aggregates,
+empty-corpus-blank, pandas-comment-skip. handler: json-single-string,
+json-matches-render, csv-matches-render, json-suppresses-human-report.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5765 passed**
+(5744 prior + 21 net new), run in the feature worktree before ff-merge;
+re-verified on main post-merge (`test_gv_calibrate_base_wpm_batch.py` +
+`test_calibrate_base_wpm_batch.py` + `test_gv_cli.py` → 144 passed).
+- Integration: not run this lap (pure string/JSON/CSV formatting over the
+  iter-397 `BaseWpmCalibrationBatch`; no torch import, no audio I/O — mirrors the
+  iter-220/316/317/393..397 calibration laps and the iter-338/340..397 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] continue the iter-386..392 batch enrichment** — the batch now has
+   the human / `--json` / `--csv` trio; the remaining VAD-batch follow-ons are
+   `--sort-by` (implied_base_wpm / grade / drift / Δmedian) + `--top-n`
+   (iter-386/387), a `--min-grade` floor (iter-389), a `--summary` line naming
+   the single most-representative voice (iter-388), and an IQR/Tukey-fence flyer
+   flag naming outlier voices directly (iter-391/392). Each reuses iter-397/398.
+2. **[gv CLI] continue the STT-side frontier** — the TTS-side calibration
+   surface is now rich (single + batch, all three formats); the STT side
+   (transcription RTF / accuracy) is still unexplored by the gv analysis family.
+   A genuinely new pipeline stage.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Prefer a genuinely new signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232,
+   iter-317 still present) — a future lap could `git worktree prune` / remove
+   merged ones. NOTE: this lap correctly removed its own worktree.
