@@ -583,3 +583,340 @@ def test_cmd_unavailable_csv():
         availability=lambda: False,
     )
     assert lines[0].startswith("# silero VAD unavailable")
+
+
+# ============ iter-386 — --sort-by ordering for the batch ================
+#
+# Reorders the RECORDING rows of the batch so the most-useful read first:
+#   recommended = shortest hangover first (recommended ms ascending),
+#   grade       = most-trustworthy first (confidence descending),
+#   delta       = biggest outliers first (|Δmedian| descending).
+# Render-only: the core vad_gap_recommend_batch stays argument-order; the three
+# renderers gain a sort_by kwarg, and the handler reads args.sort_by. The default
+# None keeps argument order (byte-identical to the pre-sort output).
+
+
+def _graded_corpus():
+    """A corpus spanning every grade so a grade sort has something to reorder.
+
+    Built so the recommended-ms order and the grade order DISAGREE — that way a
+    grade sort and a recommended sort produce visibly different orderings, proving
+    each key is applied independently.
+    """
+    # name -> (result, recommended_ms, grade) for reference in assertions:
+    #   strong.wav  : _clean   ms=850.0  grade=strong
+    #   strongL.wav : _lower   ms=550.0  grade=strong
+    #   mod.wav     : moderate ms=550.0  grade=moderate
+    #   none.wav    : smear    ms=250.0  grade=none
+    return {
+        "strong.wav": _clean("strong.wav"),
+        "strongL.wav": _lower("strongL.wav"),
+        "mod.wav": _result_from_gaps([0.2, 0.3, 0.4, 0.7, 0.9], name="mod.wav"),
+        "none.wav": _result_from_gaps([0.5, 0.5, 0.5, 0.5], name="none.wav"),
+    }
+
+
+# ---- argparse type: gap_recommend_batch_sort_type ----------------------
+
+
+@pytest.mark.parametrize("key", ["recommended", "grade", "delta"])
+def test_batch_sort_type_accepts_each_key(key):
+    assert gv.gap_recommend_batch_sort_type(key) == key
+
+
+def test_batch_sort_type_is_case_insensitive_and_strips():
+    assert gv.gap_recommend_batch_sort_type("  Delta ") == "delta"
+
+
+def test_batch_sort_type_rejects_empty_and_unknown():
+    for bad in ["", "spread", "median", "bogus"]:
+        with pytest.raises(gv.argparse.ArgumentTypeError):
+            gv.gap_recommend_batch_sort_type(bad)
+
+
+def test_batch_sort_type_rejects_non_string():
+    with pytest.raises(gv.argparse.ArgumentTypeError):
+        gv.gap_recommend_batch_sort_type(3)
+
+
+# ---- parser wiring -----------------------------------------------------
+
+
+def test_parser_vad_gap_recommend_batch_sort_by_default_none():
+    parser = gv.build_parser()
+    args = parser.parse_args(["vad-gap-recommend-batch", "a.wav", "b.wav"])
+    assert args.sort_by is None
+
+
+def test_parser_vad_gap_recommend_batch_sort_by_value():
+    parser = gv.build_parser()
+    args = parser.parse_args(
+        ["vad-gap-recommend-batch", "a.wav", "b.wav", "--sort-by", "delta"]
+    )
+    assert args.sort_by == "delta"
+
+
+def test_parser_vad_gap_recommend_batch_sort_by_bad_key():
+    parser = gv.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            ["vad-gap-recommend-batch", "a.wav", "b.wav", "--sort-by", "spread"]
+        )
+
+
+# ---- pure helper: _sort_batch_rows -------------------------------------
+
+
+def _rows(*tuples):
+    """Build batch-shaped rows from (recording, recommended_ms, grade, delta)."""
+    return [
+        {
+            "recording": rec,
+            "recommended_ms": ms,
+            "grade": grade,
+            "delta_from_median_ms": delta,
+        }
+        for rec, ms, grade, delta in tuples
+    ]
+
+
+def test_sort_batch_rows_none_keeps_argument_order():
+    rows = _rows(("a", 300.0, "weak", 50.0), ("b", 100.0, "strong", -150.0))
+    out = gv._sort_batch_rows(rows, None)
+    assert [r["recording"] for r in out] == ["a", "b"]
+    # A copy — the source is not mutated/aliased.
+    assert out is not rows
+
+
+def test_sort_batch_rows_recommended_ascending():
+    rows = _rows(
+        ("a", 300.0, "weak", 0.0),
+        ("b", 100.0, "strong", -200.0),
+        ("d", 500.0, "moderate", 200.0),
+    )
+    out = gv._sort_batch_rows(rows, "recommended")
+    assert [r["recording"] for r in out] == ["b", "a", "d"]
+
+
+def test_sort_batch_rows_grade_descending():
+    rows = _rows(
+        ("a", 300.0, "weak", 0.0),
+        ("b", 100.0, "strong", -200.0),
+        ("d", 500.0, "moderate", 200.0),
+    )
+    out = gv._sort_batch_rows(rows, "grade")
+    assert [r["recording"] for r in out] == ["b", "d", "a"]
+
+
+def test_sort_batch_rows_delta_by_absolute_value_descending():
+    rows = _rows(
+        ("a", 300.0, "weak", 50.0),
+        ("b", 100.0, "strong", -200.0),
+        ("d", 400.0, "moderate", 150.0),
+    )
+    out = gv._sort_batch_rows(rows, "delta")
+    # |−200| > |150| > |50|
+    assert [r["recording"] for r in out] == ["b", "d", "a"]
+
+
+def test_sort_batch_rows_missing_sort_last_under_every_key():
+    rows = _rows(
+        ("miss", None, None, None),
+        ("a", 300.0, "weak", 50.0),
+        ("b", 100.0, "strong", -200.0),
+    )
+    for key in ("recommended", "grade", "delta"):
+        out = gv._sort_batch_rows(rows, key)
+        assert out[-1]["recording"] == "miss", key
+
+
+def test_sort_batch_rows_is_stable_on_ties():
+    # Two rows tie on grade; the one earlier in argument order stays first.
+    rows = _rows(
+        ("first", 200.0, "strong", 0.0),
+        ("second", 800.0, "strong", 600.0),
+    )
+    out = gv._sort_batch_rows(rows, "grade")
+    assert [r["recording"] for r in out] == ["first", "second"]
+
+
+def test_sort_batch_rows_unknown_key_keeps_order():
+    rows = _rows(("a", 300.0, "weak", 0.0), ("b", 100.0, "strong", -200.0))
+    out = gv._sort_batch_rows(rows, "nonsense")
+    assert [r["recording"] for r in out] == ["a", "b"]
+
+
+def test_sort_batch_rows_does_not_mutate_source():
+    rows = _rows(("a", 300.0, "weak", 50.0), ("b", 100.0, "strong", -200.0))
+    gv._sort_batch_rows(rows, "recommended")
+    assert [r["recording"] for r in rows] == ["a", "b"]
+
+
+# ---- human renderer with sort_by ---------------------------------------
+
+
+def test_human_sort_by_reorders_rows():
+    labels = ["a.wav", "b.wav", "c.wav"]
+    results = [_clean("a.wav"), _lower("b.wav"), _higher("c.wav")]
+    lines = gv.render_vad_gap_recommend_batch(
+        results, labels, sort_by="recommended"
+    )
+    # Body rows (skip the 3 header lines): lower(550) < clean(850) < higher(1350).
+    body = [ln for ln in lines if any(w in ln for w in labels)]
+    order = [next(w for w in labels if w in ln) for ln in body]
+    assert order == ["b.wav", "a.wav", "c.wav"]
+
+
+def test_human_sort_by_default_matches_argument_order():
+    labels = ["a.wav", "b.wav", "c.wav"]
+    results = [_clean("a.wav"), _lower("b.wav"), _higher("c.wav")]
+    lines = gv.render_vad_gap_recommend_batch(results, labels)
+    body = [ln for ln in lines if any(w in ln for w in labels)]
+    order = [next(w for w in labels if w in ln) for ln in body]
+    assert order == labels
+
+
+def test_human_sort_by_names_the_ordering():
+    lines = gv.render_vad_gap_recommend_batch(
+        [_clean("a.wav"), _lower("b.wav")], ["a.wav", "b.wav"], sort_by="delta"
+    )
+    assert any("sorted by: delta" in ln for ln in lines)
+
+
+def test_human_no_sort_omits_ordering_note():
+    lines = gv.render_vad_gap_recommend_batch(
+        [_clean("a.wav"), _lower("b.wav")], ["a.wav", "b.wav"]
+    )
+    assert not any("sorted by" in ln for ln in lines)
+
+
+def test_human_sort_does_not_change_corpus_summary():
+    labels = ["a.wav", "b.wav", "c.wav"]
+    results = [_clean("a.wav"), _lower("b.wav"), _higher("c.wav")]
+    unsorted = gv.render_vad_gap_recommend_batch(results, labels)
+    srt = gv.render_vad_gap_recommend_batch(results, labels, sort_by="grade")
+    summary_u = [ln for ln in unsorted if "corpus:" in ln][0]
+    summary_s = [ln for ln in srt if "corpus:" in ln][0]
+    assert summary_u == summary_s
+
+
+# ---- JSON renderer with sort_by ----------------------------------------
+
+
+def test_json_sort_by_reorders_rows_and_echoes_key():
+    labels = ["a.wav", "b.wav", "c.wav"]
+    results = [_clean("a.wav"), _lower("b.wav"), _higher("c.wav")]
+    payload = json.loads(
+        gv.render_vad_gap_recommend_batch_json(
+            results, labels, sort_by="recommended"
+        )
+    )
+    assert payload["sort_by"] == "recommended"
+    order = [r["recording"] for r in payload["rows"]]
+    assert order == ["b.wav", "a.wav", "c.wav"]
+
+
+def test_json_no_sort_omits_sort_by_key():
+    payload = json.loads(
+        gv.render_vad_gap_recommend_batch_json(
+            [_clean("a.wav"), _lower("b.wav")], ["a.wav", "b.wav"]
+        )
+    )
+    assert "sort_by" not in payload
+    assert [r["recording"] for r in payload["rows"]] == ["a.wav", "b.wav"]
+
+
+def test_json_sort_preserves_aggregates():
+    labels = ["a.wav", "b.wav", "c.wav"]
+    results = [_clean("a.wav"), _lower("b.wav"), _higher("c.wav")]
+    base = json.loads(
+        gv.render_vad_gap_recommend_batch_json(results, labels)
+    )
+    srt = json.loads(
+        gv.render_vad_gap_recommend_batch_json(results, labels, sort_by="delta")
+    )
+    for key in (
+        "recommended_ms_median",
+        "recommended_ms_min",
+        "recommended_ms_max",
+        "recommended_ms_spread",
+        "num_recommended",
+    ):
+        assert base[key] == srt[key]
+
+
+# ---- CSV renderer with sort_by -----------------------------------------
+
+
+def test_csv_sort_by_reorders_data_rows_same_header():
+    labels = ["a.wav", "b.wav", "c.wav"]
+    results = [_clean("a.wav"), _lower("b.wav"), _higher("c.wav")]
+    base = list(csv.reader(io.StringIO(
+        gv.render_vad_gap_recommend_batch_csv(results, labels)
+    )))
+    srt = list(csv.reader(io.StringIO(
+        gv.render_vad_gap_recommend_batch_csv(
+            results, labels, sort_by="recommended"
+        )
+    )))
+    # Header unchanged; sorted run unions cleanly with the unsorted one.
+    assert base[0] == srt[0]
+    assert [row[0] for row in srt[1:]] == ["b.wav", "a.wav", "c.wav"]
+    # Same set of recordings, just reordered.
+    assert sorted(row[0] for row in base[1:]) == sorted(
+        row[0] for row in srt[1:]
+    )
+
+
+# ---- handler threads sort_by -------------------------------------------
+
+
+def test_cmd_threads_sort_by_human():
+    lines = []
+    gv.cmd_vad_gap_recommend_batch(
+        _args(sort_by="recommended"),
+        log=lines.append,
+        segmenter=_corpus_segmenter(),
+        availability=lambda: True,
+    )
+    body = [ln for ln in lines if any(w in ln for w in ("a.wav", "b.wav", "c.wav"))]
+    order = [next(w for w in ("a.wav", "b.wav", "c.wav") if w in ln) for ln in body]
+    assert order == ["b.wav", "a.wav", "c.wav"]
+    assert any("sorted by: recommended" in ln for ln in lines)
+
+
+def test_cmd_threads_sort_by_json():
+    lines = []
+    gv.cmd_vad_gap_recommend_batch(
+        _args(json=True, sort_by="delta"),
+        log=lines.append,
+        segmenter=_corpus_segmenter(),
+        availability=lambda: True,
+    )
+    payload = json.loads("\n".join(lines))
+    assert payload["sort_by"] == "delta"
+
+
+def test_cmd_sort_by_default_none_keeps_argument_order():
+    lines = []
+    gv.cmd_vad_gap_recommend_batch(
+        _args(json=True),
+        log=lines.append,
+        segmenter=_corpus_segmenter(),
+        availability=lambda: True,
+    )
+    payload = json.loads("\n".join(lines))
+    assert "sort_by" not in payload
+    assert [r["recording"] for r in payload["rows"]] == ["a.wav", "b.wav", "c.wav"]
+
+
+def test_cmd_unavailable_still_threads_sort_by_json():
+    lines = []
+    gv.cmd_vad_gap_recommend_batch(
+        _args(json=True, sort_by="grade"),
+        log=lines.append,
+        segmenter=lambda wav, params=None: None,
+        availability=lambda: False,
+    )
+    # Degrades cleanly — no crash — even with a sort requested.
+    assert json.loads("\n".join(lines))["available"] is False

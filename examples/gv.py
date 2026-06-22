@@ -25,6 +25,7 @@ Usage:
     gv vad-gap-diff recording.wav --threshold-a 0.5 --threshold-b 0.7  # how the silence-gap distribution shifts
     gv vad-gap-recommend-diff before.wav after.wav  # compare two recordings' recommended hangovers + grades (did re-recording move it?)
     gv vad-gap-recommend-batch a.wav b.wav c.wav  # tabulate N recordings' recommended hangovers + grades + corpus median/spread (which agree, which are outliers?)
+    gv vad-gap-recommend-batch a.wav b.wav c.wav --sort-by delta  # float the biggest outliers (|Δmedian| descending) to the top
     gv vad-sweep recording.wav --thresholds 0.3,0.5,0.7,0.9  # sweep N gates, tabulate the elbow
     gv vad-sweep recording.wav --min-silences 200,400,800,1600  # sweep the hangover instead
     gv vad-sweep recording.wav --min-speeches 50,100,200,400  # sweep the min-speech floor instead
@@ -5644,7 +5645,106 @@ def vad_gap_recommend_batch(results, labels, *, bias=DEFAULT_GAP_RECOMMEND_BIAS)
     }
 
 
-def render_vad_gap_recommend_batch(results, labels, *, bias=DEFAULT_GAP_RECOMMEND_BIAS):
+# iter-386 ``--sort-by`` ordering for the recommend BATCH. The batch analogue of
+# iter-378's ``_sort_knob_rows`` (which orders a single WAV's knob-sweep rows): here
+# the rows are RECORDINGS, so the orderings are tuned to the batch's question —
+# "which recordings agree on a hangover, and which are outliers?". Three keys, each
+# "most useful first":
+#   - ``recommended``: recommended ``--min-silence-ms`` ASCENDING (shortest hangover
+#     first), so the corpus reads in monotone hangover order regardless of argument
+#     order — the recordings that want the snappiest end-of-turn cut come first.
+#   - ``grade``: confidence grade DESCENDING (strong -> moderate -> weak -> none ->
+#     ungraded), so the most-trustworthy recordings float to the top. This matches
+#     iter-378's ``grade`` direction EXACTLY, so ``--sort-by grade`` means the same
+#     thing on the batch as on the knob sweep (no cross-command surprise).
+#   - ``delta``: |delta_from_median_ms| DESCENDING (biggest outliers first) — the
+#     batch's signature ordering: it floats the recordings that DISAGREE MOST with
+#     the corpus median to the top, so an operator hunting outliers reads them first
+#     without scanning the whole Δmedian column. Has no knob-sweep analogue (a single
+#     WAV has no corpus median to deviate from).
+# All three are STABLE: rows tying on the sort key keep their original argument order,
+# so a sorted batch is a deterministic permutation of the unsorted one. Rows with no
+# recommendation (``recommended_ms`` / ``delta_from_median_ms`` ``None`` / ungraded,
+# <2 segments) sort LAST under every ordering — they carry nothing to act on.
+# Render-only, like iter-378: the core ``vad_gap_recommend_batch`` stays the
+# always-by-argument-order primitive, and the ordering lives purely in the renderers,
+# so a consumer of the core data is unaffected.
+GAP_RECOMMEND_BATCH_SORT_CHOICES = ("recommended", "grade", "delta")
+
+
+def gap_recommend_batch_sort_type(raw):
+    """Argparse ``type`` for the iter-386 batch ``--sort-by`` ordering: a sort key.
+
+    Parses a single sort key (``recommended`` / ``grade`` / ``delta``,
+    case-insensitive) naming how to ORDER the recording rows of
+    ``gv vad-gap-recommend-batch`` — by ascending recommended hangover, by descending
+    confidence grade, or by descending distance from the corpus median (biggest
+    outliers first) — so the most-useful recordings read first instead of in argument
+    order. The empty string and any other token are rejected. Pure and
+    side-effect-free for direct unit testing — the batch analogue of
+    :func:`gap_recommend_sort_type` (which serves the knob sweep).
+    """
+    if not isinstance(raw, str):
+        raise argparse.ArgumentTypeError(
+            f"a sort key must be a string, got {raw!r}"
+        )
+    tok = raw.strip().lower()
+    if tok not in GAP_RECOMMEND_BATCH_SORT_CHOICES:
+        raise argparse.ArgumentTypeError(
+            f"invalid sort key {raw!r}: choose from "
+            f"{list(GAP_RECOMMEND_BATCH_SORT_CHOICES)}"
+        )
+    return tok
+
+
+def _sort_batch_rows(rows, sort_by):
+    """Reorder recommend-batch recording rows by ``sort_by`` (iter-386), best first.
+
+    Render-only ordering: the core :func:`vad_gap_recommend_batch` stays the
+    always-by-argument-order primitive; this returns a reordered copy. With
+    ``sort_by`` ``None`` (no ordering requested) returns the rows in their original
+    argument order (a copy, so the default batch is byte-identical to the pre-sort
+    output). ``"recommended"`` sorts by recommended ``--min-silence-ms`` ASCENDING
+    (shortest hangover first); ``"grade"`` sorts by confidence grade DESCENDING
+    (strong first; ungraded last — matching iter-378's direction); ``"delta"`` sorts
+    by |``delta_from_median_ms``| DESCENDING (biggest outliers first). All three are
+    STABLE — rows tying on the key keep their original argument order — so the result
+    is a deterministic permutation. Rows with no recommendation
+    (``recommended_ms`` / ``delta_from_median_ms`` ``None`` / ungraded) sort LAST
+    under every ordering via a leading ``is None`` key. Pure: never mutates the source
+    rows. An unrecognised ``sort_by`` returns the rows in their original order
+    (defensive: a future key never silently scrambles the table).
+    """
+    if sort_by == "recommended":
+        # Ascending recommended ms; a None recommendation sorts after every number.
+        return sorted(
+            rows,
+            key=lambda r: (
+                r["recommended_ms"] is None,
+                r["recommended_ms"] if r["recommended_ms"] is not None else 0,
+            ),
+        )
+    if sort_by == "grade":
+        # Negative rank -> descending; sorted() is stable so argument order breaks ties.
+        return sorted(
+            rows, key=lambda r: -_GAP_CONFIDENCE_GRADE_RANK.get(r["grade"], -1)
+        )
+    if sort_by == "delta":
+        # Descending |Δmedian| (biggest outliers first); a None delta sorts last.
+        return sorted(
+            rows,
+            key=lambda r: (
+                r["delta_from_median_ms"] is None,
+                -abs(r["delta_from_median_ms"])
+                if r["delta_from_median_ms"] is not None
+                else 0,
+            ),
+        )
+    return list(rows)
+
+
+def render_vad_gap_recommend_batch(results, labels, *, bias=DEFAULT_GAP_RECOMMEND_BIAS,
+                                   sort_by=None):
     """Render a corpus recommended-hangover table as plain text (iter-385).
 
     The human-readable face of :func:`vad_gap_recommend_batch`. ``labels`` name the
@@ -5656,6 +5756,15 @@ def render_vad_gap_recommend_batch(results, labels, *, bias=DEFAULT_GAP_RECOMMEN
     (median / min / max / spread). A recording with fewer than 2 segments has no
     recommendation and prints ``-`` for its number / grade / delta. Pure: returns a
     list of strings.
+
+    ``sort_by`` (iter-386) reorders the recording rows so the most-useful read first:
+    ``"recommended"`` = shortest hangover first (recommended ms ASCENDING),
+    ``"grade"`` = most-trustworthy first (confidence DESCENDING), ``"delta"`` =
+    biggest outliers first (|Δmedian| DESCENDING). The corpus summary line is computed
+    over the whole corpus and is unaffected by the ordering. The default ``None``
+    keeps the argument order (byte-identical to the pre-sort render). When set, the
+    bias line names the active ordering so a reader knows the rows are no longer in
+    argument order.
     """
     if any(r is None for r in results):
         return [
@@ -5674,13 +5783,16 @@ def render_vad_gap_recommend_batch(results, labels, *, bias=DEFAULT_GAP_RECOMMEN
         return "-" if value is None else f"{_signed_float(value)}ms"
 
     rec_width = max([len("recording")] + [len(str(label)) for label in labels])
+    bias_line = f"  bias: {d['bias']}"
+    if sort_by is not None:
+        bias_line += f"  (sorted by: {sort_by})"
     lines = [
         f"silero VAD recommended-hangover batch ({d['num_recordings']} recordings)",
-        f"  bias: {d['bias']}",
+        bias_line,
         f"  {'recording':<{rec_width}}  segments  gaps  {'recommended':>11}  "
         f"{'grade':>8}  {'Δmedian':>9}",
     ]
-    for row in d["rows"]:
+    for row in _sort_batch_rows(d["rows"], sort_by):
         lines.append(
             f"  {str(row['recording']):<{rec_width}}  "
             f"{row['num_segments']:>8}  {row['num_gaps']:>4}  "
@@ -5705,7 +5817,8 @@ def render_vad_gap_recommend_batch(results, labels, *, bias=DEFAULT_GAP_RECOMMEN
 
 
 def render_vad_gap_recommend_batch_json(results, labels, *,
-                                        bias=DEFAULT_GAP_RECOMMEND_BIAS):
+                                        bias=DEFAULT_GAP_RECOMMEND_BIAS,
+                                        sort_by=None):
     """Render a corpus recommended-hangover table as JSON (iter-385).
 
     Machine-readable twin of :func:`render_vad_gap_recommend_batch`, mirroring the
@@ -5715,6 +5828,13 @@ def render_vad_gap_recommend_batch_json(results, labels, *,
     (each with its recommendation, grade, and signed delta from the median —
     ``null`` for a <2-segment recording). Either ``None`` in ``results`` →
     ``{"available": false}`` + install hint. Pure: returns a single JSON string.
+
+    ``sort_by`` (iter-386) reorders the ``rows`` list (``"recommended"`` = recommended
+    ms ASCENDING, ``"grade"`` = confidence DESCENDING, ``"delta"`` = |Δmedian|
+    DESCENDING). When a key is set the payload also carries a top-level ``sort_by``
+    key naming it, so a consumer knows the ``rows`` list is no longer in argument
+    order. The corpus aggregates are unaffected. The default ``None`` keeps the
+    argument order (unchanged payload).
     """
     if any(r is None for r in results):
         return json.dumps(
@@ -5727,15 +5847,18 @@ def render_vad_gap_recommend_batch_json(results, labels, *,
             },
             indent=2,
         )
-    payload = {
-        "available": True,
-        **vad_gap_recommend_batch(results, labels, bias=bias),
-    }
+    d = vad_gap_recommend_batch(results, labels, bias=bias)
+    d["rows"] = _sort_batch_rows(d["rows"], sort_by)
+    payload = {"available": True}
+    if sort_by is not None:
+        payload["sort_by"] = sort_by
+    payload.update(d)
     return json.dumps(payload, indent=2)
 
 
 def render_vad_gap_recommend_batch_csv(results, labels, *,
-                                       bias=DEFAULT_GAP_RECOMMEND_BIAS):
+                                       bias=DEFAULT_GAP_RECOMMEND_BIAS,
+                                       sort_by=None):
     """Render a corpus recommended-hangover table as CSV (iter-385).
 
     The spreadsheet/plot-friendly twin of :func:`render_vad_gap_recommend_batch_json`,
@@ -5750,6 +5873,12 @@ def render_vad_gap_recommend_batch_csv(results, labels, *,
     duplicated into every row. Either ``None`` in ``results`` (segmenter
     unavailable) yields a single ``# silero VAD unavailable: ...`` comment line.
     Pure: built with the stdlib :mod:`csv` writer, trailing terminator stripped.
+
+    ``sort_by`` (iter-386) reorders the data rows (``"recommended"`` = recommended ms
+    ASCENDING, ``"grade"`` = confidence DESCENDING, ``"delta"`` = |Δmedian|
+    DESCENDING). The header and column set are unchanged, so a sorted run still unions
+    cleanly with an unsorted one — only the row order differs. The default ``None``
+    keeps the argument order.
     """
     if any(r is None for r in results):
         return (
@@ -5757,6 +5886,7 @@ def render_vad_gap_recommend_batch_csv(results, labels, *,
             "torchaudio) to enable offline neural segmentation"
         )
     d = vad_gap_recommend_batch(results, labels, bias=bias)
+    rows = _sort_batch_rows(d["rows"], sort_by)
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(
@@ -5777,7 +5907,7 @@ def render_vad_gap_recommend_batch_csv(results, labels, *,
     def _ms_cell(value):
         return "" if value is None else _format_cut_label(value)
 
-    for row in d["rows"]:
+    for row in rows:
         writer.writerow(
             [
                 row["recording"],
@@ -10009,16 +10139,21 @@ def cmd_vad_gap_recommend_batch(args, *, log=print, segmenter=None, availability
     as_json = getattr(args, "json", False)
     as_csv = getattr(args, "csv", False)
     bias = getattr(args, "bias", DEFAULT_GAP_RECOMMEND_BIAS)
+    sort_by = getattr(args, "sort_by", None)
     labels = args.wavs
 
     if not availability():
         results = [None] * len(labels)
         if as_json:
-            log(render_vad_gap_recommend_batch_json(results, labels, bias=bias))
+            log(render_vad_gap_recommend_batch_json(
+                results, labels, bias=bias, sort_by=sort_by))
         elif as_csv:
-            log(render_vad_gap_recommend_batch_csv(results, labels, bias=bias))
+            log(render_vad_gap_recommend_batch_csv(
+                results, labels, bias=bias, sort_by=sort_by))
         else:
-            for line in render_vad_gap_recommend_batch(results, labels, bias=bias):
+            for line in render_vad_gap_recommend_batch(
+                results, labels, bias=bias, sort_by=sort_by
+            ):
                 log(line)
         return
 
@@ -10033,11 +10168,15 @@ def cmd_vad_gap_recommend_batch(args, *, log=print, segmenter=None, availability
     )
     results = [segmenter(label, params=params) for label in labels]
     if as_json:
-        log(render_vad_gap_recommend_batch_json(results, labels, bias=bias))
+        log(render_vad_gap_recommend_batch_json(
+            results, labels, bias=bias, sort_by=sort_by))
     elif as_csv:
-        log(render_vad_gap_recommend_batch_csv(results, labels, bias=bias))
+        log(render_vad_gap_recommend_batch_csv(
+            results, labels, bias=bias, sort_by=sort_by))
     else:
-        for line in render_vad_gap_recommend_batch(results, labels, bias=bias):
+        for line in render_vad_gap_recommend_batch(
+            results, labels, bias=bias, sort_by=sort_by
+        ):
             log(line)
 
 
@@ -12795,6 +12934,17 @@ def build_parser():
         help="Where in each WAV's valley the recommended hangover sits "
         "(short/balanced/long) — shared by all runs so the comparison is "
         f"apples-to-apples (default: {DEFAULT_GAP_RECOMMEND_BIAS})",
+    )
+    vad_gap_rec_batch.add_argument(
+        "--sort-by",
+        type=gap_recommend_batch_sort_type,
+        default=None,
+        dest="sort_by",
+        help="Reorder the recording rows so the most-useful read first: "
+        "'recommended' = shortest hangover first (recommended ms ascending), "
+        "'grade' = most-trustworthy first (confidence descending), 'delta' = "
+        "biggest outliers first (|Δmedian| descending) (default: keep argument "
+        "order)",
     )
     vad_gap_rec_batch_fmt = vad_gap_rec_batch.add_mutually_exclusive_group()
     vad_gap_rec_batch_fmt.add_argument(
