@@ -37029,3 +37029,84 @@ verified on main post-merge (`test_stt_rtf_profile.py` → 22 passed).
 5. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232, iter-317
    still present) — a future lap could `git worktree prune` / remove merged ones.
    NOTE: this lap correctly removed its own worktree.
+
+## iter-406 — gv stt-rtf: surface the STT-RTF profile on the CLI
+
+- **Date:** 2026-06-22
+- **Branch:** iter-406-gv-stt-rtf (ff-merged to main, worktree removed)
+- **Commit:** 88f5445
+
+**Why.** The iter-405 log's next-item #1 named this lap explicitly: surface the
+iter-405 STT real-time-factor profiling core (`TranscriptionSample` /
+`profile_stt_rtf` in `stt/rtf_profile.py`) on the gv CLI — the STT-side analogue
+of iter-221's `gv calibrate-base-wpm`. iter-405 landed the audio-free fold
+(measured transcriptions → robust median RTF + speed grade + dispersion +
+headroom); the core had no CLI entrypoint, so an operator could not actually run
+it. This lap adds that entrypoint, the natural two-step (engine then CLI) the TTS
+side took at iter-220→221, beginning to grow the STT-side gv surface.
+
+**What landed (all in `examples/gv.py` + one test wiring update).**
+
+- **`stt_rtf_sample_type`** — argparse `type` for one `--samples` pair
+  `audio_seconds:transcribe_seconds`, the STT twin of `calibration_sample_type`.
+  Rejects a wrong field count (must be exactly two), a non-numeric / NaN field,
+  or a non-positive field with a clean `ArgumentTypeError` (argparse →
+  `SystemExit(2)`), mirroring the guard `TranscriptionSample.__post_init__`
+  applies, so malformed input fails early instead of forwarding garbage.
+- **`render_stt_rtf` / `render_stt_rtf_csv` / `render_stt_rtf_json`** — the human
+  / `--json` / `--csv` trio every calibration and VAD-analysis surface already
+  carries. Human: samples / median RTF / range / spread / relative spread /
+  speed-grade-with-note-and-margin. CSV: one row per sample
+  (`sample,audio_seconds,transcribe_seconds,rtf`) with the aggregate profile
+  trailing as `#` comment lines (pandas `read_csv(comment="#")` skips them),
+  header-only for an empty profile. JSON: nested `{samples, profile}`, `profile`
+  null for no samples. `speed_margin` is `null` (JSON) / blank (CSV) for the
+  worst (`"slow"`) grade, matching the calibration family's "not measurable"
+  spelling. `_stt_rtf_grade_summary` / `_stt_rtf_margin_note` are the per-grade
+  text helpers (with defensive unknown-value fallbacks), the STT twins of
+  `_calib_dispersion_summary` / `_calib_dispersion_margin_note`.
+- **`_load_stt_rtf_profile`** — loads `stt/rtf_profile.py` by file path (the
+  `stt/__init__.py` package eagerly imports the heavy whisper / faster-whisper
+  engines, not installable everywhere), the same audio-free bypass
+  `_load_wpm_mirror` uses for the calibration core, so the CLI imports on any
+  host. Cached in `sys.modules` under `_gv_stt_rtf_profile`.
+- **`cmd_stt_rtf`** handler + **`stt-rtf`** subparser (mutually-exclusive
+  `--json`/`--csv`) + `DEFAULT_HANDLERS["stt-rtf"]` registration + a usage line
+  in the module docstring.
+
+**Tests (+34 net new).** New `tests/unit/test_gv_stt_rtf.py`: parser wiring
+(handler-map entry, defaults, requires-samples, multiple samples, json/csv
+mutually exclusive); `stt_rtf_sample_type` (two-field, integer coercion,
+whitespace strip, wrong-field-count parametrized, non-numeric, NaN, non-positive
+parametrized, non-string); the three renderers (None contracts, full-field
+human/csv/json, slow-grade margin None/blank, realtime headroom); the handler
+(human default / json / csv / single sample); and the loader cache. Also added
+the `"stt-rtf"` entry to `test_gv_cli.py`'s full-handler-map assertion (the only
+existing-file edit — that test enumerates the complete map).
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5926 passed**
+(5892 prior + 34 net new), run in the feature worktree before ff-merge.
+- Integration: not run this lap (the handler folds injected timings through the
+  pure `profile_stt_rtf` core and renders strings; no torch, no faster-whisper,
+  no audio I/O — mirrors the iter-221/316/317 calibration-CLI laps, which the
+  integration suite never exercised either).
+
+**Next planned items:**
+1. **[stt] a data-driven `stt-rtf` VERDICT** — the iter-222 analogue: fold
+   `n_samples` + `relative_spread` + `median_rtf` into a recommend/keep verdict
+   (enough samples, runs agree, grade is "slow" enough to matter) surfaced via a
+   `--verdict` flag, mirroring the calibrate→verdict two-step on the STT side.
+   The natural next STT-side step now that the single profile is on the CLI.
+2. **[gv CLI] an `stt-rtf-batch` corpus command** — the iter-397 analogue on the
+   STT side: profile a CORPUS of engines/models (`--engine label pair pair ...`),
+   tabulate each one's median RTF + grade, plus the corpus median (which engines
+   keep up?). Would begin the STT-side batch family the way iter-397 began the
+   TTS one.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Prefer a genuinely new signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232, iter-317
+   still present) — a future lap could `git worktree prune` / remove merged ones.
+   NOTE: this lap correctly removed its own worktree.
