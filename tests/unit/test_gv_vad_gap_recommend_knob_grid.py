@@ -1142,3 +1142,228 @@ def test_cmd_top_n_unavailable_json_threads_through():
     )
     payload = json.loads("\n".join(lines))
     assert payload["available"] is False
+
+
+# ---- iter-383: --summary single-best-cell verdict ------------------------
+
+
+def test_grid_summary_verdict_helper_names_both_axes():
+    # The verdict line carries BOTH axis labels (the only structural difference
+    # from the 1-D sweep verdict). Uses a synthetic cell with known fields.
+    cell = {
+        "threshold": 0.5,
+        "min_silence_ms": 600.0,
+        "grade": "strong",
+        "spread_ms": 250.0,
+        "biases": [
+            {"bias": "short", "recommended_ms": 350.0},
+            {"bias": "balanced", "recommended_ms": 475.0},
+            {"bias": "long", "recommended_ms": 600.0},
+        ],
+    }
+    line = gv._format_knob_grid_summary_verdict(
+        cell, "threshold", "min_silence_ms", gv.GAP_RECOMMEND_BIAS_ORDER
+    )
+    assert "best: threshold=0.50 min_silence=600" in line
+    assert "confidence strong" in line
+    assert "spread 250ms" in line
+    # default biases → the headline number is the rightmost (long) recommendation.
+    assert "[long]" in line
+
+
+def test_render_human_summary_names_best_cell():
+    # weak / strong / none → the strong cell (bimodal) is the verdict.
+    res = [_weak(), _bimodal(), _no_valley()]
+    lines = gv.render_vad_gap_recommend_knob_grid(
+        [0.3], [400.0, 600.0, 800.0], res, name="rec.wav", summary=True
+    )
+    assert lines[0] == (
+        "silero VAD recommended-hangover knob grid summary — rec.wav "
+        "(threshold × min_silence)"
+    )
+    assert len(lines) == 2
+    assert "best: threshold=0.30 min_silence=600" in lines[1]
+    assert "confidence strong" in lines[1]
+    assert "[long]" in lines[1]
+
+
+def test_render_human_summary_respects_bias_for_headline_number():
+    res = [_weak(), _bimodal(), _no_valley()]
+    lines = gv.render_vad_gap_recommend_knob_grid(
+        [0.3], [400.0, 600.0, 800.0], res, name="rec.wav",
+        summary=True, biases=["short"],
+    )
+    assert "[short]" in lines[1]
+
+
+def test_render_human_summary_independent_of_sort_and_top_n():
+    # The verdict is the same regardless of --sort-by / --top-n.
+    res = [_weak(), _bimodal(), _no_valley()]
+    plain = gv.render_vad_gap_recommend_knob_grid(
+        [0.3], [400.0, 600.0, 800.0], res, name="rec.wav", summary=True
+    )
+    sorted_capped = gv.render_vad_gap_recommend_knob_grid(
+        [0.3], [400.0, 600.0, 800.0], res, name="rec.wav", summary=True,
+        sort_by="spread", top_n=1,
+    )
+    assert plain == sorted_capped
+
+
+def test_render_human_summary_no_recommendation_note():
+    # Only single-segment cells → no cell carries a recommendation.
+    lines = gv.render_vad_gap_recommend_knob_grid(
+        [0.3], [400.0, 800.0], [_single(), _single()], name="rec.wav", summary=True
+    )
+    assert len(lines) == 2
+    assert "no grid cell" in lines[1]
+
+
+def test_render_human_summary_no_recommendation_note_names_floor():
+    # min_grade with no surviving recommendation → the note names the floor.
+    lines = gv.render_vad_gap_recommend_knob_grid(
+        [0.3], [400.0, 800.0], [_no_valley(), _no_valley()], name="rec.wav",
+        summary=True, min_grade="strong",
+    )
+    assert "strong" in lines[1]
+
+
+def test_render_human_summary_unavailable_hint():
+    lines = gv.render_vad_gap_recommend_knob_grid(
+        [], [], [None], name="rec.wav", summary=True
+    )
+    assert len(lines) == 1
+    assert "silero VAD unavailable" in lines[0]
+
+
+def test_render_json_summary_shape():
+    res = [_weak(), _bimodal(), _no_valley()]
+    text = gv.render_vad_gap_recommend_knob_grid_json(
+        [0.3], [400.0, 600.0, 800.0], res, name="rec.wav", summary=True
+    )
+    payload = json.loads(text)
+    assert payload["summary"] is True
+    assert "grid" not in payload
+    assert payload["best"]["grade"] == "strong"
+    assert payload["best"]["threshold"] == 0.3
+    assert payload["best"]["min_silence_ms"] == 600.0
+
+
+def test_render_json_summary_default_has_no_summary_or_best_key():
+    text = gv.render_vad_gap_recommend_knob_grid_json(
+        [0.3], [400.0, 800.0], [_bimodal(), _no_valley()], name="rec.wav"
+    )
+    payload = json.loads(text)
+    assert "summary" not in payload
+    assert "best" not in payload
+    assert "grid" in payload
+
+
+def test_render_json_summary_best_null_when_no_recommendation():
+    text = gv.render_vad_gap_recommend_knob_grid_json(
+        [0.3], [400.0, 800.0], [_single(), _single()], name="rec.wav", summary=True
+    )
+    payload = json.loads(text)
+    assert payload["summary"] is True
+    assert payload["best"] is None
+
+
+def test_render_json_summary_narrows_best_biases():
+    res = [_weak(), _bimodal(), _no_valley()]
+    text = gv.render_vad_gap_recommend_knob_grid_json(
+        [0.3], [400.0, 600.0, 800.0], res, name="rec.wav",
+        summary=True, biases=["short", "long"],
+    )
+    payload = json.loads(text)
+    assert payload["biases"] == ["short", "long"]
+    assert [b["bias"] for b in payload["best"]["biases"]] == ["short", "long"]
+
+
+def test_render_json_summary_composes_with_min_grade():
+    res = [_weak(), _bimodal(), _no_valley()]
+    text = gv.render_vad_gap_recommend_knob_grid_json(
+        [0.3], [400.0, 600.0, 800.0], res, name="rec.wav",
+        summary=True, min_grade="moderate",
+    )
+    payload = json.loads(text)
+    assert payload["min_grade"] == "moderate"
+    # only the strong cell survives the moderate floor and is the pick.
+    assert payload["best"]["grade"] == "strong"
+
+
+def test_render_csv_summary_one_best_row():
+    res = [_weak(), _bimodal(), _no_valley()]
+    text = gv.render_vad_gap_recommend_knob_grid_csv(
+        [0.3], [400.0, 600.0, 800.0], res, name="rec.wav", summary=True
+    )
+    rows = list(csv.reader(io.StringIO(text)))
+    assert rows[0][0] == "threshold"  # header unchanged
+    assert rows[0][1] == "min_silence_ms"
+    assert rows[0][8] == "grade"
+    assert len(rows) == 2  # header + the single best cell
+    assert rows[1][8] == "strong"
+
+
+def test_render_csv_summary_header_only_when_no_recommendation():
+    text = gv.render_vad_gap_recommend_knob_grid_csv(
+        [0.3], [400.0, 800.0], [_single(), _single()], name="rec.wav", summary=True
+    )
+    rows = list(csv.reader(io.StringIO(text)))
+    assert len(rows) == 1  # header only
+    assert rows[0][0] == "threshold"
+
+
+def test_cmd_summary_human_path():
+    lines = _run_handler(
+        [_weak(), _bimodal(), _no_valley()],
+        argv_extra=["--thresholds", "0.3", "--min-silences", "400,600,800",
+                    "--summary"],
+    )
+    assert "knob grid summary" in lines[0]
+    assert "best: threshold=0.30 min_silence=600" in lines[1]
+    assert "confidence strong" in lines[1]
+
+
+def test_cmd_summary_json_path():
+    lines = _run_handler(
+        [_weak(), _bimodal(), _no_valley()],
+        argv_extra=["--thresholds", "0.3", "--min-silences", "400,600,800",
+                    "--json", "--summary"],
+    )
+    payload = json.loads("\n".join(lines))
+    assert payload["summary"] is True
+    assert payload["best"]["grade"] == "strong"
+
+
+def test_cmd_summary_csv_path():
+    lines = _run_handler(
+        [_weak(), _bimodal(), _no_valley()],
+        argv_extra=["--thresholds", "0.3", "--min-silences", "400,600,800",
+                    "--csv", "--summary"],
+    )
+    rows = list(csv.reader(io.StringIO("\n".join(lines))))
+    assert len(rows) == 2
+    assert rows[1][8] == "strong"
+
+
+def test_cmd_summary_default_off_renders_grid():
+    lines = _run_handler(
+        [_bimodal(), _no_valley()],
+        argv_extra=["--thresholds", "0.3", "--min-silences", "400,800", "--json"],
+    )
+    payload = json.loads("\n".join(lines))
+    assert "summary" not in payload
+    assert "grid" in payload
+
+
+def test_cmd_summary_unavailable_json_threads_through():
+    # The unavailable branch still threads summary through (graceful degrade).
+    lines: List[str] = []
+    args = gv.build_parser().parse_args(
+        ["vad-gap-recommend-knob-grid", "rec.wav", "--json", "--summary"]
+    )
+    gv.cmd_vad_gap_recommend_knob_grid(
+        args, log=lines.append, segmenter=lambda *a, **k: None,
+        availability=lambda: False,
+    )
+    payload = json.loads("\n".join(lines))
+    assert payload["available"] is False

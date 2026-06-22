@@ -3595,6 +3595,37 @@ def _format_knob_summary_verdict(row, axis, biases):
     )
 
 
+def _format_knob_grid_summary_verdict(cell, row_axis, col_axis, biases):
+    """One human line naming the single best grid CELL (iter-383).
+
+    The 2-D analogue of :func:`_format_knob_summary_verdict`: where the 1-D sweep
+    verdict names one swept value, the grid verdict names the (gate × column) CELL
+    :func:`_best_knob_row` picked, spelling the adopt-this-setting call as ``best:
+    <row_axis>=<value> <col_axis>=<value> → --min-silence-ms <n> [bias] (confidence
+    <grade>, spread <s>ms)``. Both axis labels precede the recommendation because a
+    cell varies in TWO dimensions (the only structural difference from the sweep
+    line — exactly how :func:`render_vad_gap_recommend_knob_grid`'s body row carries
+    two leading columns where the sweep carries one). The headline bias is the LAST
+    of the selected ``biases`` in canonical short..balanced..long order (default
+    triad → ``long``, ``--bias short`` → ``short``), matching the table's rightmost
+    recommendation column. ``row_axis`` / ``col_axis`` name the two swept dimensions
+    (rendered via :func:`_format_sweep_axis_value`). Pure: returns a single string;
+    the caller owns the surrounding lines.
+    """
+    bias = list(biases)[-1]
+    rec = _format_cut_label(_knob_sweep_bias_ms(cell, bias))
+    row_value = _format_sweep_axis_value(row_axis, cell[row_axis])
+    col_value = _format_sweep_axis_value(col_axis, cell[col_axis])
+    row_label = _SWEEP_AXIS_LABEL.get(row_axis, row_axis)
+    col_label = _SWEEP_AXIS_LABEL.get(col_axis, col_axis)
+    spread = _format_cut_label(cell["spread_ms"])
+    return (
+        f"  best: {row_label}={row_value} {col_label}={col_value} → "
+        f"--min-silence-ms {rec} [{bias}] "
+        f"(confidence {cell['grade']}, spread {spread}ms)"
+    )
+
+
 def _knob_bias_header_segment(biases):
     """The ``  short  balanced      long`` header segment for the selected biases.
 
@@ -4641,6 +4672,7 @@ def render_vad_gap_recommend_knob_grid(
     min_grade=None,
     sort_by=None,
     top_n=None,
+    summary=False,
 ):
     """Render a 2-D recommend knob grid as a plain-text table (iter-373).
 
@@ -4690,12 +4722,52 @@ def render_vad_gap_recommend_knob_grid(
     keeps an unknown number of cells, ``top_n`` keeps a fixed count. The default
     ``None`` keeps every kept cell. The grid analogue of the iter-380 ``top_n`` on
     the 1-D knob sweep, reusing the same :func:`_truncate_knob_rows` primitive.
+
+    ``summary`` (iter-383) collapses the whole grid to ONE verdict line naming the
+    single best (gate × column) CELL (:func:`_best_knob_row` — highest confidence,
+    ties to the tightest spread), so an operator who just wants "which cell do I
+    adopt?" gets the answer without reading the grid. It is applied to the cells that
+    survive ``min_grade`` and is INDEPENDENT of ``sort_by`` / ``top_n`` (the best
+    cell is the best regardless of how — or whether — the grid was ordered or
+    capped). When no surviving cell carries a recommendation a single ``(no grid
+    cell ...)`` note is emitted instead. The default ``False`` renders the full grid.
+    The grid analogue of the iter-382 ``summary`` on the 1-D knob sweep, reusing the
+    same :func:`_best_knob_row` selection primitive.
     """
     if any(r is None for r in results):
         return [
             "silero VAD unavailable: install 'silero-vad' (pulls torch + "
             "torchaudio) to enable offline neural segmentation"
         ]
+    row_label = _SWEEP_AXIS_LABEL.get(row_axis, row_axis)
+    col_label = _SWEEP_AXIS_LABEL.get(col_axis, col_axis)
+    if summary:
+        # The verdict is an objective reduction over the grade-filtered cells —
+        # order/count-independent, so --sort-by / --top-n do not change the pick.
+        kept = _filter_knob_rows_by_grade(
+            vad_gap_recommend_knob_grid(
+                row_values, col_values, results,
+                row_axis=row_axis, col_axis=col_axis,
+            ),
+            min_grade,
+        )
+        best = _best_knob_row(kept)
+        lines = [
+            f"silero VAD recommended-hangover knob grid summary — {name} "
+            f"({row_label} × {col_label})"
+        ]
+        if best is None:
+            floor = (
+                f" reaching confidence grade '{min_grade}' or better"
+                if min_grade is not None
+                else ""
+            )
+            lines.append(f"  (no grid cell{floor} carries a recommendation)")
+            return lines
+        lines.append(
+            _format_knob_grid_summary_verdict(best, row_axis, col_axis, biases)
+        )
+        return lines
     cells = _truncate_knob_rows(
         _sort_knob_rows(
             _filter_knob_rows_by_grade(
@@ -4709,8 +4781,6 @@ def render_vad_gap_recommend_knob_grid(
         ),
         top_n,
     )
-    row_label = _SWEEP_AXIS_LABEL.get(row_axis, row_axis)
-    col_label = _SWEEP_AXIS_LABEL.get(col_axis, col_axis)
     lines = [
         f"silero VAD recommended-hangover knob grid — {name} "
         f"({row_label} × {col_label})",
@@ -4744,6 +4814,7 @@ def render_vad_gap_recommend_knob_grid_json(
     min_grade=None,
     sort_by=None,
     top_n=None,
+    summary=False,
 ):
     """Render a 2-D recommend knob grid as a JSON string (iter-373).
 
@@ -4783,6 +4854,15 @@ def render_vad_gap_recommend_knob_grid_json(
     ``top_n`` key naming it, so a consumer knows the list was truncated (and the cells
     are the N best under the active ordering). The default ``None`` keeps every kept
     cell (unchanged payload). Composes with ``biases`` / ``min_grade`` / ``sort_by``.
+
+    ``summary`` (iter-383) replaces the ``grid`` list with a single ``best`` key
+    holding the one best grid cell (:func:`_best_knob_row` — highest confidence, ties
+    to the tightest spread) or ``null`` when no surviving cell carries a
+    recommendation, and sets ``summary`` true. The pick is computed over the
+    ``min_grade``-filtered cells and is INDEPENDENT of ``sort_by`` / ``top_n``. The
+    ``best`` cell is narrowed by ``biases`` like the grid cells, so a consumer reads
+    the same columns. The default ``False`` emits the full ``grid`` list. The grid
+    analogue of the iter-382 ``summary`` on the 1-D knob sweep.
     """
     if any(r is None for r in results):
         return json.dumps(
@@ -4795,6 +4875,32 @@ def render_vad_gap_recommend_knob_grid_json(
             },
             indent=2,
         )
+    biases = list(biases)
+    payload = {
+        "available": True,
+        "name": name,
+        "row_axis": row_axis,
+        "col_axis": col_axis,
+    }
+    if min_grade is not None:
+        payload["min_grade"] = min_grade
+    narrowed = list(biases) != list(GAP_RECOMMEND_BIAS_ORDER)
+    if summary:
+        payload["summary"] = True
+        if narrowed:
+            payload["biases"] = biases
+        kept = _filter_knob_rows_by_grade(
+            vad_gap_recommend_knob_grid(
+                row_values, col_values, results,
+                row_axis=row_axis, col_axis=col_axis,
+            ),
+            min_grade,
+        )
+        best = _best_knob_row(kept)
+        if best is not None and narrowed:
+            best = _knob_filtered_biases(best, biases)
+        payload["best"] = best
+        return json.dumps(payload, indent=2)
     cells = _truncate_knob_rows(
         _sort_knob_rows(
             _filter_knob_rows_by_grade(
@@ -4808,20 +4914,11 @@ def render_vad_gap_recommend_knob_grid_json(
         ),
         top_n,
     )
-    biases = list(biases)
-    payload = {
-        "available": True,
-        "name": name,
-        "row_axis": row_axis,
-        "col_axis": col_axis,
-    }
-    if min_grade is not None:
-        payload["min_grade"] = min_grade
     if sort_by is not None:
         payload["sort_by"] = sort_by
     if top_n is not None:
         payload["top_n"] = top_n
-    if list(biases) != list(GAP_RECOMMEND_BIAS_ORDER):
+    if narrowed:
         payload["biases"] = biases
         cells = [_knob_filtered_biases(c, biases) for c in cells]
     payload["grid"] = cells
@@ -4840,6 +4937,7 @@ def render_vad_gap_recommend_knob_grid_csv(
     min_grade=None,
     sort_by=None,
     top_n=None,
+    summary=False,
 ):
     """Render a 2-D recommend knob grid as CSV text (no trailing newline) (iter-373).
 
@@ -4883,6 +4981,14 @@ def render_vad_gap_recommend_knob_grid_csv(
     still unions cleanly with an uncapped one — only the row count differs (and a
     header-only CSV stays valid when the cap meets an empty body). The default
     ``None`` keeps every kept cell.
+
+    ``summary`` (iter-383) emits just the header plus the ONE best grid cell
+    (:func:`_best_knob_row`) — header-only when no surviving cell carries a
+    recommendation. The column set is unchanged, so a summary CSV unions cleanly
+    with a full grid — it is simply the single best cell. The pick is computed over
+    the ``min_grade``-filtered cells and is INDEPENDENT of ``sort_by`` / ``top_n``.
+    The default ``False`` emits every kept cell. The grid analogue of the iter-382
+    ``summary`` on the 1-D knob sweep.
     """
     if any(r is None for r in results):
         return (
@@ -4904,19 +5010,30 @@ def render_vad_gap_recommend_knob_grid_csv(
             "separation_ratio",
         ]
     )
-    cells = _truncate_knob_rows(
-        _sort_knob_rows(
-            _filter_knob_rows_by_grade(
-                vad_gap_recommend_knob_grid(
-                    row_values, col_values, results,
-                    row_axis=row_axis, col_axis=col_axis,
-                ),
-                min_grade,
+    if summary:
+        kept = _filter_knob_rows_by_grade(
+            vad_gap_recommend_knob_grid(
+                row_values, col_values, results,
+                row_axis=row_axis, col_axis=col_axis,
             ),
-            sort_by,
-        ),
-        top_n,
-    )
+            min_grade,
+        )
+        best = _best_knob_row(kept)
+        cells = [best] if best is not None else []
+    else:
+        cells = _truncate_knob_rows(
+            _sort_knob_rows(
+                _filter_knob_rows_by_grade(
+                    vad_gap_recommend_knob_grid(
+                        row_values, col_values, results,
+                        row_axis=row_axis, col_axis=col_axis,
+                    ),
+                    min_grade,
+                ),
+                sort_by,
+            ),
+            top_n,
+        )
     for cell in cells:
         if cell["num_gaps"] > 0:
             bias_cells = [
@@ -8603,6 +8720,11 @@ def cmd_vad_gap_recommend_knob_grid(args, *, log=print, segmenter=None, availabi
     # grid analogue of the iter-380 knob-sweep --top-n).
     top_n = getattr(args, "top_n", None)
 
+    # iter-383 --summary: collapse the whole grid to ONE verdict naming the single
+    # best (gate × column) cell (the grid analogue of the iter-382 knob-sweep
+    # --summary). Independent of --sort-by/--top-n; composes with --min-grade/--bias.
+    summary = getattr(args, "summary", False)
+
     if not availability():
         unavailable = [None]
         if as_json:
@@ -8611,6 +8733,7 @@ def cmd_vad_gap_recommend_knob_grid(args, *, log=print, segmenter=None, availabi
                     [], [], unavailable, name=args.wav,
                     row_axis=row_axis, col_axis=col_axis, biases=biases,
                     min_grade=min_grade, sort_by=sort_by, top_n=top_n,
+                    summary=summary,
                 )
             )
         elif as_csv:
@@ -8619,6 +8742,7 @@ def cmd_vad_gap_recommend_knob_grid(args, *, log=print, segmenter=None, availabi
                     [], [], unavailable, name=args.wav,
                     row_axis=row_axis, col_axis=col_axis, biases=biases,
                     min_grade=min_grade, sort_by=sort_by, top_n=top_n,
+                    summary=summary,
                 )
             )
         else:
@@ -8626,6 +8750,7 @@ def cmd_vad_gap_recommend_knob_grid(args, *, log=print, segmenter=None, availabi
                 [], [], unavailable, name=args.wav,
                 row_axis=row_axis, col_axis=col_axis, biases=biases,
                 min_grade=min_grade, sort_by=sort_by, top_n=top_n,
+                summary=summary,
             ):
                 log(line)
         return
@@ -8667,6 +8792,7 @@ def cmd_vad_gap_recommend_knob_grid(args, *, log=print, segmenter=None, availabi
                 row_values, col_values, results, name=name,
                 row_axis=row_axis, col_axis=col_axis, biases=biases,
                 min_grade=min_grade, sort_by=sort_by, top_n=top_n,
+                summary=summary,
             )
         )
     elif as_csv:
@@ -8675,6 +8801,7 @@ def cmd_vad_gap_recommend_knob_grid(args, *, log=print, segmenter=None, availabi
                 row_values, col_values, results, name=name,
                 row_axis=row_axis, col_axis=col_axis, biases=biases,
                 min_grade=min_grade, sort_by=sort_by, top_n=top_n,
+                summary=summary,
             )
         )
     else:
@@ -8682,6 +8809,7 @@ def cmd_vad_gap_recommend_knob_grid(args, *, log=print, segmenter=None, availabi
             row_values, col_values, results, name=name,
             row_axis=row_axis, col_axis=col_axis, biases=biases,
             min_grade=min_grade, sort_by=sort_by, top_n=top_n,
+            summary=summary,
         ):
             log(line)
 
@@ -11284,6 +11412,14 @@ def build_parser():
         "'--sort-by grade --top-n 3' shows the 3 most-trustworthy grid cells; "
         "a count (>=1), distinct from --min-grade's threshold (default: keep all "
         "kept cells)",
+    )
+    vad_gap_rec_knob_grid.add_argument(
+        "--summary",
+        action="store_true",
+        help="Collapse the grid to ONE verdict naming the single best (gate × "
+        "column) cell (highest confidence, ties to the tightest spread) — answers "
+        "'which cell do I adopt?' without reading the grid; independent of "
+        "--sort-by/--top-n, composes with --min-grade/--bias (default: full grid)",
     )
     vad_gap_rec_knob_grid_fmt = vad_gap_rec_knob_grid.add_mutually_exclusive_group()
     vad_gap_rec_knob_grid_fmt.add_argument(
