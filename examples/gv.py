@@ -10,7 +10,7 @@ Usage:
     gv calibrate-base-wpm … # offline base_wpm calibration (dispersion grade agree/loose/scattered + margin to next grade; --verdict for an adopt/keep call; --json/--csv for per-sample data)
     gv calibrate-base-wpm-batch --voice af_heart 50:18.2 --voice am_adam 40:15.0  # calibrate a CORPUS of voices — per-voice base_wpm + grade + drift + the corpus median (which voices agree?); --json/--csv for the machine-readable corpus; --sort-by base_wpm/grade/drift/delta to float the most-useful voices to the top; --top-n N to keep only the N most-useful; --min-grade scattered/loose/agree to drop voices below a dispersion floor; --summary to name the single most-representative voice (nearest the corpus median); the flyers: line names outlier voices (outside the Q1-1.5·IQR..Q3+1.5·IQR Tukey fence), also marked ← flyer in the table
     gv stt-rtf --samples 10.0:1.2 5.0:0.8  # offline STT real-time-factor profile — fold measured transcriptions (audio_seconds:transcribe_seconds) into a robust median RTF + speed grade (fast/realtime/slow); --verdict for a lighten/keep call; --json/--csv for per-sample data
-    gv stt-rtf-batch --engine mlx-whisper 10.0:1.2 5.0:0.8 --engine faster-whisper 10.0:6.0  # profile a CORPUS of STT engines — per-engine median RTF + speed grade + lighten/keep verdict, plus the outlier-robust corpus median (which engines keep up with realtime?)
+    gv stt-rtf-batch --engine mlx-whisper 10.0:1.2 5.0:0.8 --engine faster-whisper 10.0:6.0  # profile a CORPUS of STT engines — per-engine median RTF + speed grade + lighten/keep verdict, plus the outlier-robust corpus median (which engines keep up with realtime?); --json/--csv for the machine-readable corpus
     gv vad recording.wav  # offline Silero VAD — segment a WAV into speech regions
     gv vad recording.wav --json # machine-readable segmentation (SileroResult.to_dict shape)
     gv vad-gaps recording.wav  # report the silence gaps BETWEEN speech regions (tune --min-silence-ms)
@@ -2460,6 +2460,172 @@ def render_stt_rtf_batch(batch):
     grades = ", ".join(f"{counts[g]} {g}" for g in _stt_rtf_batch_grade_order())
     lines.append(f"  grades: {grades}")
     return lines
+
+
+def _stt_rtf_batch_row_obj(row):
+    """Build the JSON object for one ``stt-rtf-batch`` engine row (iter-410).
+
+    The per-engine unit the batch JSON's ``rows`` list carries, the STT-side
+    analogue of :func:`_calib_batch_row_obj`:
+    ``{"engine": label, "profile": <object or null>,
+    "delta_from_median_rtf": <float or null>, "recommend": <bool or null>}``.
+    The nested ``profile`` is the SAME shape the single-engine ``--json`` emits
+    (:func:`render_stt_rtf_json`), so a row matches ``gv stt-rtf --json`` on that
+    engine's samples EXACTLY; ``null`` for an unprofiled (no-sample) engine.
+    ``recommend`` echoes the iter-407 verdict's act-or-keep call (the
+    human render's ``← lighten`` marker), ``null`` when there is no verdict.
+    """
+    profile = row["profile"]
+    verdict = row["verdict"]
+    return {
+        "engine": row["engine"],
+        "profile": (
+            None
+            if profile is None
+            else {
+                "median_rtf": round(profile.median_rtf, 3),
+                "n_samples": profile.n_samples,
+                "min_rtf": round(profile.min_rtf, 3),
+                "max_rtf": round(profile.max_rtf, 3),
+                "spread": round(profile.spread, 3),
+                "relative_spread": round(profile.relative_spread, 3),
+                "speed_grade": profile.speed_grade,
+                "speed_margin": _round_or_none(profile.speed_margin),
+            }
+        ),
+        "delta_from_median_rtf": _round_or_none(row["delta_from_median_rtf"]),
+        "recommend": None if verdict is None else verdict.recommend,
+    }
+
+
+def render_stt_rtf_batch_json(batch):
+    """Render an ``stt-rtf-batch`` corpus verdict as a JSON string (iter-410).
+
+    The nested/programmatic twin of :func:`render_stt_rtf_batch`, the STT-side
+    analogue of :func:`render_calibration_batch_json` (iter-398). Where the
+    single-engine ``stt-rtf --json`` (:func:`render_stt_rtf_json`) nests one
+    profile, this nests the whole CORPUS: a ``rows`` list (one object per engine
+    — its label, full nested ``profile`` object, signed ``delta_from_median_rtf``,
+    and the verdict's ``recommend`` flag) plus the corpus aggregates
+    (``num_engines`` / ``num_profiled`` / the outlier-robust ``corpus_median_rtf``
+    / ``corpus_min_rtf`` / ``corpus_max_rtf`` / ``corpus_spread`` of the per-engine
+    median RTFs / ``num_keep_up`` / ``num_recommend`` / the ``grade_counts``
+    histogram — always all four :data:`STT_RTF_BATCH_GRADE_ORDER` buckets summing
+    to ``num_engines``) and the shared verdict gates (``rel_spread_max`` /
+    ``min_samples``).
+
+    Each row's ``profile`` is the SAME object the single-engine ``--json`` emits
+    for that engine (median / range / spread / relative_spread / speed_grade /
+    speed_margin), so a row agrees EXACTLY with ``gv stt-rtf --json`` on that
+    engine's samples. ``speed_margin`` is ``null`` for a ``"slow"`` profile (no
+    worse grade to degrade into). An engine with no samples carries
+    ``"profile": null``, ``"delta_from_median_rtf": null``, and
+    ``"recommend": null`` (the engine's unprofiled contract) — listed but excluded
+    from the corpus aggregates, which stay ``null`` when no engine profiled.
+    Floats round to 3 places. Pure: returns a single JSON string (no I/O).
+    """
+    payload = {
+        "num_engines": batch.num_engines,
+        "num_profiled": batch.num_profiled,
+        "corpus_median_rtf": _round_or_none(batch.corpus_median_rtf),
+        "corpus_min_rtf": _round_or_none(batch.corpus_min_rtf),
+        "corpus_max_rtf": _round_or_none(batch.corpus_max_rtf),
+        "corpus_spread": _round_or_none(batch.corpus_spread),
+        "num_keep_up": batch.num_keep_up,
+        "num_recommend": batch.num_recommend,
+        "rel_spread_max": round(batch.rel_spread_max, 3),
+        "min_samples": batch.min_samples,
+        "grade_counts": {
+            g: batch.grade_counts[g] for g in _stt_rtf_batch_grade_order()
+        },
+        "rows": [_stt_rtf_batch_row_obj(r) for r in batch.rows],
+    }
+    return json.dumps(payload, indent=2)
+
+
+def render_stt_rtf_batch_csv(batch):
+    """Render an ``stt-rtf-batch`` corpus verdict as CSV text (iter-410).
+
+    The spreadsheet/plot-friendly twin of :func:`render_stt_rtf_batch_json`,
+    completing the human / ``--json`` / ``--csv`` trio for the STT-RTF batch
+    surface the way iter-398 did for ``calibrate-base-wpm-batch``. The natural CSV
+    unit is **one row per engine** — the shape a plotter wants (one median RTF per
+    engine to eyeball which keep up) and a spreadsheet wants (one engine per
+    line). Columns:
+    ``engine,median_rtf,n_samples,min_rtf,max_rtf,spread,relative_spread,speed_grade,speed_margin,delta_from_median_rtf,recommend``
+    (``recommend`` is the iter-407 ``true``/``false`` act-or-keep flag, empty for
+    an unprofiled engine).
+
+    An engine with no samples has no profile, so every numeric cell past
+    ``engine`` is empty (the CSV spelling of JSON ``null``) — listed but blank.
+    The corpus aggregates the human/JSON twins surface (median / range / spread /
+    num_keep_up / num_recommend / grade histogram) trail as ``#`` comment lines —
+    self-describing metadata a plotting/spreadsheet tool skips by default (pandas
+    ``read_csv(comment="#")``), matching the ``#``-comment precedent
+    :func:`render_calibration_batch_csv` uses — so the per-engine rows stay a
+    pure, parseable data grid while the corpus bottom line stays visible in the
+    same file. An empty corpus (no engine profiled) spells the aggregates as blank
+    comment values. Floats round to 3 places. Pure: built with the stdlib
+    :mod:`csv` writer (RFC-4180 quoting), trailing terminator stripped.
+    """
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(
+        [
+            "engine",
+            "median_rtf",
+            "n_samples",
+            "min_rtf",
+            "max_rtf",
+            "spread",
+            "relative_spread",
+            "speed_grade",
+            "speed_margin",
+            "delta_from_median_rtf",
+            "recommend",
+        ]
+    )
+    for r in batch.rows:
+        profile = r["profile"]
+        if profile is None:
+            writer.writerow([r["engine"], "", "", "", "", "", "", "", "", "", ""])
+            continue
+        margin = profile.speed_margin
+        delta = r["delta_from_median_rtf"]
+        verdict = r["verdict"]
+        writer.writerow(
+            [
+                r["engine"],
+                round(profile.median_rtf, 3),
+                profile.n_samples,
+                round(profile.min_rtf, 3),
+                round(profile.max_rtf, 3),
+                round(profile.spread, 3),
+                round(profile.relative_spread, 3),
+                profile.speed_grade,
+                "" if margin is None else round(margin, 3),
+                "" if delta is None else round(delta, 3),
+                "" if verdict is None else str(bool(verdict.recommend)).lower(),
+            ]
+        )
+    body = buf.getvalue().rstrip("\r\n")
+
+    def _agg(value):
+        return "" if value is None else round(value, 3)
+
+    counts = batch.grade_counts
+    comments = [
+        f"# num_engines: {batch.num_engines}",
+        f"# num_profiled: {batch.num_profiled}",
+        f"# corpus_median_rtf: {_agg(batch.corpus_median_rtf)}",
+        f"# range: {_agg(batch.corpus_min_rtf)} - {_agg(batch.corpus_max_rtf)}",
+        f"# corpus_spread: {_agg(batch.corpus_spread)}",
+        f"# num_keep_up: {batch.num_keep_up}",
+        f"# num_recommend: {batch.num_recommend}",
+        "# grades: "
+        + ", ".join(f"{counts[g]} {g}" for g in _stt_rtf_batch_grade_order()),
+    ]
+    return body + "\n" + "\n".join(comments)
 
 
 def render_trajectory(traj, *, wpms=None):
@@ -10484,6 +10650,14 @@ def cmd_stt_rtf_batch(args, *, log=print):
     aggregates, mirroring the engine's empty contract. The profiling core is
     pure stdlib loaded lazily by file path (:func:`_load_stt_rtf_profile`) so the
     parser stays audio-free; ``log`` is injectable for tests.
+
+    iter-410 adds the machine-readable twins (mirroring the single-engine
+    ``stt-rtf --json/--csv`` and the calibration batch's iter-398): ``--json``
+    emits the nested corpus object (per-engine ``rows`` + corpus aggregates,
+    :func:`render_stt_rtf_batch_json`) and ``--csv`` emits the one-row-per-engine
+    grid with the corpus aggregates trailing as ``#`` comments
+    (:func:`render_stt_rtf_batch_csv`). They are mutually exclusive at the parser;
+    either is the whole output in that mode.
     """
     mod = _load_stt_rtf_profile()
     TranscriptionSample = mod.TranscriptionSample
@@ -10509,6 +10683,12 @@ def cmd_stt_rtf_batch(args, *, log=print):
         rel_spread_max=args.rel_spread_max,
         min_samples=args.min_samples,
     )
+    if getattr(args, "json", False):
+        log(render_stt_rtf_batch_json(batch))
+        return
+    if getattr(args, "csv", False):
+        log(render_stt_rtf_batch_csv(batch))
+        return
     for line in render_stt_rtf_batch(batch):
         log(line)
 
@@ -13124,6 +13304,21 @@ def build_parser():
         dest="min_samples",
         help="Per-engine verdict gate: min sample count for a robust median "
         f"(default: {stt_rtf_min_samples_default})",
+    )
+    stt_rtf_batch_fmt = stt_rtf_batch.add_mutually_exclusive_group()
+    stt_rtf_batch_fmt.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit nested JSON (per-engine rows + corpus aggregates) instead of "
+        "the human report, for programmatic consumers; mutually exclusive with "
+        "--csv",
+    )
+    stt_rtf_batch_fmt.add_argument(
+        "--csv",
+        action="store_true",
+        help="Emit one-row-per-engine CSV (engine,median_rtf,n_samples,…,recommend) "
+        "with the corpus aggregates trailing as # comment lines, for "
+        "spreadsheets/plots; mutually exclusive with --json",
     )
 
     # gv vad — offline Silero segmentation of a WAV file. Defaults mirror

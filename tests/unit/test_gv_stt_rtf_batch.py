@@ -234,3 +234,234 @@ def test_handler_default_log_is_print(capsys):
     gv.cmd_stt_rtf_batch(args)
     out = capsys.readouterr().out
     assert "STT real-time-factor batch (1 engines, 1 profiled)" in out
+
+
+# ---- --json / --csv parser wiring (iter-410) ----------------------------
+
+
+def test_batch_json_flag_defaults_off():
+    args = gv.build_parser().parse_args(["stt-rtf-batch", "--engine", "a", "10.0:1.0"])
+    assert args.json is False
+    assert args.csv is False
+
+
+def test_batch_json_flag_sets_true():
+    args = gv.build_parser().parse_args(
+        ["stt-rtf-batch", "--engine", "a", "10.0:1.0", "--json"]
+    )
+    assert args.json is True
+
+
+def test_batch_csv_flag_sets_true():
+    args = gv.build_parser().parse_args(
+        ["stt-rtf-batch", "--engine", "a", "10.0:1.0", "--csv"]
+    )
+    assert args.csv is True
+
+
+def test_batch_json_and_csv_mutually_exclusive():
+    with pytest.raises(SystemExit) as exc:
+        gv.build_parser().parse_args(
+            ["stt-rtf-batch", "--engine", "a", "10.0:1.0", "--json", "--csv"]
+        )
+    assert exc.value.code == 2
+
+
+# ---- render_stt_rtf_batch_json (iter-410) -------------------------------
+
+
+def test_render_json_corpus_aggregates():
+    import json
+
+    batch = _batch(("fast", [(10.0, 1.0)]), ("slow", [(10.0, 15.0)]))
+    payload = json.loads(gv.render_stt_rtf_batch_json(batch))
+    assert payload["num_engines"] == 2
+    assert payload["num_profiled"] == 2
+    assert payload["corpus_median_rtf"] == 0.8  # median of 0.1 and 1.5
+    assert payload["corpus_min_rtf"] == 0.1
+    assert payload["corpus_max_rtf"] == 1.5
+    assert payload["corpus_spread"] == 1.4
+    assert payload["rel_spread_max"] == 0.15
+    assert payload["min_samples"] == 3
+    assert payload["grade_counts"] == {
+        "fast": 1,
+        "realtime": 0,
+        "slow": 1,
+        "unprofiled": 0,
+    }
+    assert [r["engine"] for r in payload["rows"]] == ["fast", "slow"]
+
+
+def test_render_json_row_matches_single_engine_json():
+    # A batch row's nested profile object equals the single-engine --json profile
+    # on the same samples EXACTLY (the cross-surface agreement contract).
+    import json
+
+    srp = gv._load_stt_rtf_profile()
+    samples = [srp.TranscriptionSample(audio_seconds=10.0, transcribe_seconds=1.2)]
+    single = json.loads(gv.render_stt_rtf_json(samples, srp.profile_stt_rtf(samples)))
+    batch = _batch(("only", [(10.0, 1.2)]))
+    row = json.loads(gv.render_stt_rtf_batch_json(batch))["rows"][0]
+    assert row["profile"] == single["profile"]
+
+
+def test_render_json_unprofiled_engine_is_null():
+    import json
+
+    batch = _batch(("a", [(10.0, 1.0)]), ("empty", []))
+    payload = json.loads(gv.render_stt_rtf_batch_json(batch))
+    empty = [r for r in payload["rows"] if r["engine"] == "empty"][0]
+    assert empty["profile"] is None
+    assert empty["delta_from_median_rtf"] is None
+    assert empty["recommend"] is None
+
+
+def test_render_json_empty_corpus_aggregates_null():
+    import json
+
+    batch = _batch(("a", []), ("b", []))
+    payload = json.loads(gv.render_stt_rtf_batch_json(batch))
+    assert payload["corpus_median_rtf"] is None
+    assert payload["corpus_min_rtf"] is None
+    assert payload["corpus_max_rtf"] is None
+    assert payload["corpus_spread"] is None
+    assert payload["num_profiled"] == 0
+    assert payload["num_engines"] == 2
+
+
+def test_render_json_recommend_flag():
+    import json
+
+    batch = _batch(
+        ("heavy", [(10.0, 15.0), (10.0, 15.2), (10.0, 14.8)]),
+        ("light", [(10.0, 1.0), (10.0, 1.1), (10.0, 0.9)]),
+    )
+    rows = {r["engine"]: r for r in json.loads(gv.render_stt_rtf_batch_json(batch))["rows"]}
+    assert rows["heavy"]["recommend"] is True
+    assert rows["light"]["recommend"] is False
+
+
+def test_render_json_speed_margin_null_for_slow():
+    import json
+
+    batch = _batch(("slow", [(10.0, 15.0)]))
+    row = json.loads(gv.render_stt_rtf_batch_json(batch))["rows"][0]
+    assert row["profile"]["speed_grade"] == "slow"
+    assert row["profile"]["speed_margin"] is None
+
+
+def test_render_json_echoes_gate_overrides():
+    import json
+
+    batch = _batch(("a", [(10.0, 1.0)]), rel_spread_max=0.05, min_samples=5)
+    payload = json.loads(gv.render_stt_rtf_batch_json(batch))
+    assert payload["rel_spread_max"] == 0.05
+    assert payload["min_samples"] == 5
+
+
+# ---- render_stt_rtf_batch_csv (iter-410) --------------------------------
+
+
+def _csv_data_rows(text):
+    return [l for l in text.splitlines() if l and not l.startswith("#")]
+
+
+def test_render_csv_header_and_per_engine_rows():
+    batch = _batch(("fast", [(10.0, 1.0)]), ("slow", [(10.0, 15.0)]))
+    text = gv.render_stt_rtf_batch_csv(batch)
+    rows = _csv_data_rows(text)
+    assert rows[0] == (
+        "engine,median_rtf,n_samples,min_rtf,max_rtf,spread,relative_spread,"
+        "speed_grade,speed_margin,delta_from_median_rtf,recommend"
+    )
+    assert rows[1].startswith("fast,0.1,1,")
+    assert rows[2].startswith("slow,1.5,1,")
+    # one header + one row per engine
+    assert len(rows) == 3
+
+
+def test_render_csv_unprofiled_engine_blank_cells():
+    batch = _batch(("a", [(10.0, 1.0)]), ("empty", []))
+    rows = _csv_data_rows(gv.render_stt_rtf_batch_csv(batch))
+    empty = [r for r in rows if r.startswith("empty,")][0]
+    assert empty == "empty,,,,,,,,,,"
+
+
+def test_render_csv_corpus_aggregates_as_comments():
+    batch = _batch(("fast", [(10.0, 1.0)]), ("slow", [(10.0, 15.0)]))
+    text = gv.render_stt_rtf_batch_csv(batch)
+    assert "# num_engines: 2" in text
+    assert "# num_profiled: 2" in text
+    assert "# corpus_median_rtf: 0.8" in text
+    assert "# range: 0.1 - 1.5" in text
+    assert "# corpus_spread: 1.4" in text
+    assert "# num_keep_up: 1" in text
+    assert "# num_recommend: 0" in text
+    assert "# grades: 1 fast, 0 realtime, 1 slow, 0 unprofiled" in text
+
+
+def test_render_csv_recommend_cell():
+    batch = _batch(
+        ("heavy", [(10.0, 15.0), (10.0, 15.2), (10.0, 14.8)]),
+        ("light", [(10.0, 1.0), (10.0, 1.1), (10.0, 0.9)]),
+    )
+    rows = _csv_data_rows(gv.render_stt_rtf_batch_csv(batch))
+    heavy = [r for r in rows if r.startswith("heavy,")][0]
+    light = [r for r in rows if r.startswith("light,")][0]
+    assert heavy.endswith(",true")
+    assert light.endswith(",false")
+
+
+def test_render_csv_empty_corpus_blank_aggregates():
+    batch = _batch(("a", []), ("b", []))
+    text = gv.render_stt_rtf_batch_csv(batch)
+    assert "# corpus_median_rtf: " in text
+    assert "# range:  - " in text
+    assert "# num_profiled: 0" in text
+
+
+# ---- handler --json / --csv dispatch (iter-410) -------------------------
+
+
+def test_handler_json_emits_json_payload():
+    import json
+
+    args = gv.build_parser().parse_args(
+        ["stt-rtf-batch", "--engine", "a", "10.0:1.0", "--engine", "b", "10.0:8.0", "--json"]
+    )
+    lines = []
+    gv.cmd_stt_rtf_batch(args, log=lines.append)
+    assert len(lines) == 1
+    payload = json.loads(lines[0])
+    assert payload["num_engines"] == 2
+    assert [r["engine"] for r in payload["rows"]] == ["a", "b"]
+
+
+def test_handler_json_matches_render_directly():
+    args = gv.build_parser().parse_args(
+        ["stt-rtf-batch", "--engine", "a", "10.0:1.0", "--engine", "b", "10.0:8.0", "--json"]
+    )
+    lines = []
+    gv.cmd_stt_rtf_batch(args, log=lines.append)
+    batch = _batch(("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]))
+    assert lines == [gv.render_stt_rtf_batch_json(batch)]
+
+
+def test_handler_csv_matches_render_directly():
+    args = gv.build_parser().parse_args(
+        ["stt-rtf-batch", "--engine", "a", "10.0:1.0", "--engine", "b", "10.0:8.0", "--csv"]
+    )
+    lines = []
+    gv.cmd_stt_rtf_batch(args, log=lines.append)
+    batch = _batch(("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]))
+    assert lines == [gv.render_stt_rtf_batch_csv(batch)]
+
+
+def test_handler_csv_emits_header_row():
+    args = gv.build_parser().parse_args(
+        ["stt-rtf-batch", "--engine", "a", "10.0:1.0", "--csv"]
+    )
+    lines = []
+    gv.cmd_stt_rtf_batch(args, log=lines.append)
+    assert len(lines) == 1
+    assert lines[0].splitlines()[0].startswith("engine,median_rtf,n_samples,")
