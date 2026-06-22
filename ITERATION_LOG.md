@@ -35371,3 +35371,106 @@ the feature worktree before ff-merge AND re-verified on main post-merge
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    leftover per-iter worktrees. A future lap could `git worktree prune` / remove the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-388 — gv vad-gap-recommend-batch --summary: name the single most-representative recording
+
+- **Date:** 2026-06-21
+- **Branch:** iter-388-batch-summary (ff-merged to main, worktree removed)
+- **Commit:** 3d848b9
+
+**Why.** The standing iter-387 next-item #1 asked to "add a `--summary` to
+`vad-gap-recommend-batch`. With `--sort-by` + `--top-n` now in place, `--summary`
+would collapse the whole corpus to ONE verdict — naming the single
+most-representative recording (e.g. the one closest to the corpus median, or the
+highest-confidence one) — the batch analogue of iter-382's knob-sweep `--summary` and
+iter-383's grid `--summary`. Would reuse a small `_best_batch_row` reduction (a single
+MAX, robust to `--sort-by` / `--top-n`)." This lap lands exactly that. Not an 18th
+chat-metrics clone (family complete, iter-328).
+
+**What it is.** `gv vad-gap-recommend-batch a.wav b.wav c.wav --summary` collapses the
+whole corpus to ONE verdict line naming the single most-representative RECORDING — the
+one whose recommended hangover sits CLOSEST to the corpus median — so an operator who
+just wants "which one recording speaks for the corpus consensus?" gets the answer
+without reading rows. Where iter-386's `--sort-by` (an ORDERING) and iter-387's
+`--top-n` (a COUNT) shape a TABLE the operator still reads, `--summary` names the ONE
+recording worth trusting as the consensus.
+
+**The chosen "best" — the deliberate INVERSE of `--sort-by delta`.** The batch's job
+is to show agreement-vs-disagreement, so its two reductions sit at OPPOSITE ends:
+`--sort-by delta` (iter-386) floats the biggest OUTLIERS (largest |Δmedian|) to the
+top; `--summary` names the recording that AGREES MOST (smallest |Δmedian|, nearest the
+median). The sort surfaces who disagrees most; the summary surfaces who agrees most.
+This is the batch-specific twist on iter-382's `_best_knob_row` (which picks by
+highest confidence / tightest spread) — the batch picks by distance-to-median because
+that is the question a corpus raises.
+
+**Design — render-only, mirroring iter-382 exactly; the core stays the primitive.**
+- `_best_batch_row(rows)` — the selection primitive: among rows that carry a
+  recommendation (`delta_from_median_ms` not None — >= 2 segments), the row with the
+  SMALLEST |`delta_from_median_ms`| (nearest the corpus median), ties broken to the
+  HIGHEST confidence grade (the more trustworthy of two equally-central recordings),
+  remaining ties to EARLIEST position in `rows` (deterministic; prefers the recording
+  listed first). A single MIN, not a sort+truncate, so it is robust to whatever
+  `--sort-by` / `--top-n` the operator did or did not request. Rows with no
+  recommendation (`delta_from_median_ms` None / ungraded) are never picked; returns
+  None when no recording recommends. Pure, never mutates.
+- `_format_batch_summary_verdict(row, bias)` — one human line spelling the consensus
+  as `representative: <recording> → --min-silence-ms <n> [bias] (confidence <grade>,
+  Δmedian <±s>ms)`. The signed Δmedian lets the reader confirm the pick really is near
+  the corpus centre.
+- The three renderers gain a `summary` kwarg (default `False`): the human report
+  emits a `batch summary (N recordings)` heading + bias line + the verdict line (or a
+  `(no recording carries a recommendation ...)` note); JSON replaces the `rows` list
+  with a single `best` key + a top-level `summary: true` flag, STILL carrying the
+  corpus aggregates (median / min / max / spread / counts) so a consumer sees what the
+  representative is central WITHIN — `best` is `null` when nothing recommends; CSV
+  emits the header + the ONE best row (header-only when nothing recommends), with the
+  column set unchanged so a summary CSV unions cleanly with a full batch.
+- `cmd_vad_gap_recommend_batch` reads `args.summary` and threads it to all three
+  renderers on BOTH the available and unavailable paths; a new `--summary` parser flag
+  (`store_true`) plus a header usage-example line.
+
+**What landed in `examples/gv.py` (+~150).** `_best_batch_row`,
+`_format_batch_summary_verdict`, the `summary` kwarg + wiring across the three
+renderers (human heading + verdict, JSON `best`/`summary` keys, CSV single best row),
+the handler thread-through on both paths, the parser flag, and the header example
+line.
+
+**Tests (tests/unit, +29 in `test_gv_vad_gap_recommend_batch.py`).** `_best_batch_row`
+none-when-no-rec / empty-none / picks-nearest-median / uses-abs-delta /
+ties-to-higher-grade / full-tie-to-earliest / skips-missing / no-mutation /
+order-independent; verdict spells-the-call / signs-negative-delta; parser
+default-False / store-true; human names-representative / independent-of-sort+top-n /
+no-rec-note / default-full-table; JSON shape / preserves-aggregates / default-no-keys /
+best-null-no-rec / independent-of-sort+top-n; CSV one-best-row / header-unchanged /
+header-only-no-rec; handler summary-human / summary-json / default-false-full /
+unavailable-still-threads.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5600 passed**
+(5571 prior + 29 net new), run in the feature worktree before ff-merge AND
+re-verified on main post-merge (`test_gv_vad_gap_recommend_batch.py` +
+`test_gv_cli.py` → 213 passed).
+- Integration: not run this lap (pure string-formatting/reduction over injected stub
+  `_Result` objects; no torch import, no audio I/O — mirrors the iter-338/340..387
+  unit laps).
+
+**Next planned items:**
+1. **[gv CLI] surface the recommend/confidence machinery on the STT/TTS side**
+   (noted iter-381..387 #2) — a still-unexplored direction now that the VAD-gap
+   recommend surfaces (recommend → confidence → sweep → grid → diff → batch →
+   batch-sort → batch-top-n → batch-summary) are mature and the whole batch family
+   (sort/top-n/summary) mirrors the knob-sweep family completely.
+2. **[gv CLI] add a `--csv`/`--json` `min-grade` filter to the batch.** The knob sweep
+   has `--min-grade` (iter-376) to hide low-confidence rows; the batch does not. A
+   `--min-grade` on `vad-gap-recommend-batch` would drop recordings whose valley is
+   below a trust floor before the table/summary — the last knob-sweep filter the batch
+   has not yet borrowed.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows 31
+   entries (leftover per-iter worktrees). A future lap could `git worktree prune` /
+   remove the merged ones. NOTE: this lap correctly removed its own worktree.
