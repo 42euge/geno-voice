@@ -35736,3 +35736,91 @@ re-verified on main post-merge (`test_gv_vad_gap_recommend_batch.py` +
 5. **[housekeeping] Stale worktrees accumulating** — a future lap could
    `git worktree prune` / remove merged ones. NOTE: this lap correctly removed
    its own worktree.
+
+## iter-392 — gv vad-gap-recommend-batch flyer flag: name the IQR-vs-spread outlier
+
+- **Date:** 2026-06-21
+- **Branch:** iter-392-batch-flyer (ff-merged to main, worktree removed)
+- **Commit:** 807cac3
+
+**Why.** The iter-391 next-item steer (#2) asked to "surface the IQR-vs-spread
+gap as an explicit `flyer` flag" now that the batch carries both `spread` and
+`IQR`. The iter-391 IQR only HINTS that an outlier exists — a tight IQR beside a
+wide spread reads "the corpus agrees but one recording is a flyer", leaving the
+operator to scan the Δmedian column to find WHICH WAV. This lap turns that eyeball
+comparison into a named, per-recording flag.
+
+**What it is.** `gv vad-gap-recommend-batch *.wav` now marks each recommending
+recording as a `flyer` when its recommended ms falls outside the standard Tukey
+boxplot fence `[Q1 - 1.5*IQR, Q3 + 1.5*IQR]` (reusing the iter-391 Q1/Q3/IQR — no
+new statistic). The human table appends a trailing `← flyer` marker to each outlier
+row plus a corpus `flyers: 1 (c.wav) outside [200ms, 1600ms]` line naming the
+outliers (`flyers: none` when the corpus agrees). It answers "WHICH recording is
+the outlier?" directly, where the iter-391 IQR only answered "does one exist?".
+
+**Design — a per-row flag + whole-corpus fence aggregate, reusing iter-391.**
+- `vad_gap_recommend_batch` gains a per-row `flyer` boolean and corpus
+  `recommended_ms_fence_lo` / `recommended_ms_fence_hi` (the Tukey fence bounds) +
+  `num_flyers`. Computed from the existing sorted-percentile `q1`/`q3`/`iqr` — the
+  fence is `q1 - 1.5*iqr` / `q3 + 1.5*iqr`. Only recordings carrying a
+  recommendation feed the fence and are flagged; a <2-segment recording has
+  `flyer = None` (the same `null` distinction `recommended_ms` / `grade` /
+  `delta_from_median_ms` already make) and never counts toward `num_flyers`.
+- When IQR is 0 (a degenerate corpus whose middle half is a single value) the fence
+  collapses to `[Q1, Q3]` and only recordings strictly outside that band are flyers,
+  so a lone different recording among identical ones is correctly named (verified by
+  `test_batch_flyer_names_the_outlier`: 4 identical + 1 outlier → IQR 0 → exactly
+  the outlier flagged).
+- Human: trailing `← flyer` row marker + a corpus `flyers:` line (new
+  `_format_batch_flyers(d)` helper), emitted only when ≥1 recording recommends,
+  computed over the WHOLE corpus (`d["rows"]` is the full list) so it is unaffected
+  by render-time `--min-grade` / `--top-n` — same property as the
+  median/spread/IQR/grade_counts aggregates. JSON inherits the three new keys + the
+  per-row `flyer` automatically via `payload.update(d)` on BOTH the full and summary
+  paths. CSV gains a trailing `flyer` column (`true`/`false`, empty for a
+  non-recommending recording — the CSV spelling of `null`).
+- Docstrings (core / human / JSON / CSV / handler) + two header usage-example lines
+  document the new signal and its lineage from the iter-391 IQR.
+
+**What landed in `examples/gv.py` (+~96/-14).** the per-row `flyer` field +
+`recommended_ms_fence_lo` / `_fence_hi` / `num_flyers` core keys (Tukey-fence
+computation, `None`/`0` fallback), the new `_format_batch_flyers` helper, the human
+row marker + corpus line, the CSV `flyer` column + `_flyer_cell` formatter, and
+core/human/JSON/CSV/handler docstring + header-example updates.
+
+**Tests (tests/unit, +16 net in `test_gv_vad_gap_recommend_batch.py`).** core
+carries-fence-keys / names-the-outlier / matches-tukey-formula /
+no-flyer-when-agrees / none-for-non-recommending /
+fence-none-when-nothing-recommends / ignores-non-recommending-in-fence; human
+marks-and-names / none-when-agrees / unaffected-by-min-grade+top-n /
+no-line-when-nothing-recommends; JSON carries-keys+per-row /
+null-when-nothing-recommends / summary-still-carries / unaffected-by-min-grade; CSV
+carries-flyer-column. The existing CSV header test was extended for the new column.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5675 passed**
+(5659 prior + 16 net new), run in the feature worktree before ff-merge;
+re-verified on main post-merge (`test_gv_vad_gap_recommend_batch.py` +
+`test_gv_cli.py` → 288 passed).
+- Integration: not run this lap (pure arithmetic/string-formatting over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..391 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] surface the recommend/confidence machinery on the STT/TTS side**
+   (noted iter-381..391) — the still-unexplored frontier now that the VAD-gap
+   recommend surfaces are mature (recommend → confidence → sweep → grid → diff →
+   batch). The batch family's filters (min-grade/sort/top-n/summary) AND its
+   aggregates (median/spread/grade_counts/IQR/flyer) are now complete; the natural
+   next frontier is a different pipeline stage (STT/TTS), not more batch surface.
+2. **[gv CLI] add a `--biases`-column selector to the batch** like the knob sweep's
+   iter-374 `--biases` — a multi-bias batch column set would let an operator compare
+   short/balanced/long recommendations per recording in one table. (Larger core
+   restructure; deferred.)
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Prefer a genuinely new signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — a future lap could
+   `git worktree prune` / remove merged ones. NOTE: this lap correctly removed
+   its own worktree.
