@@ -36636,3 +36636,104 @@ re-verified on main post-merge (`test_gv_calibrate_base_wpm_batch.py` +
 5. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232, iter-317
    still present) — a future lap could `git worktree prune` / remove merged ones.
    NOTE: this lap correctly removed its own worktree.
+
+## iter-402 — calibrate-base-wpm-batch --summary: name the single most-representative voice
+
+- **Date:** 2026-06-22
+- **Branch:** iter-402-calib-batch-summary (ff-merged to main, worktree removed)
+- **Commit:** 028bd43
+
+**Why.** iter-401's next-item #1 named this exact follow-on: continue the
+iter-386..392 batch-enrichment family on the `calibrate-base-wpm-batch` surface.
+The batch already carries the human / `--json` / `--csv` trio (iter-397/398),
+`--sort-by` (iter-399), `--top-n` (iter-400) and `--min-grade` (iter-401) — but
+every surface still hands the operator a TABLE to read. `--summary` is the
+calibration analogue of `vad-gap-recommend-batch --summary` (iter-388), the
+next-most-precedented increment: collapse the whole table to the ONE most-
+representative voice so an operator picking a fleet `DEFAULT_BASE_WPM` gets
+"which single voice speaks for the fleet?" without reading rows.
+
+**What it is.** `gv calibrate-base-wpm-batch --summary` names the single voice
+whose implied base_wpm sits CLOSEST to the corpus median. Note the DIRECTION:
+this is the deliberate INVERSE of `--sort-by delta` (iter-399), which floats the
+biggest corpus OUTLIERS to the top. The batch's job is agreement-vs-disagreement,
+so its two reductions sit at opposite ends — the sort surfaces who disagrees
+most, the summary surfaces who agrees most.
+
+**Design — render-only, exactly like iter-388.** The core
+`calibrate_base_wpm_batch` engine (iter-397 `BaseWpmCalibrationBatch`) is
+unchanged. The pick lives in a new `_best_calib_batch_row` helper: among rows
+carrying a `delta_from_median_wpm` (calibrated voices), the SMALLEST |Δmedian|,
+ties to the HIGHEST dispersion grade (`_CALIB_DISPERSION_GRADE_RANK`), remaining
+ties to earliest `--voice` position (stable `min`). An uncalibrated voice has no
+delta and is never picked; `None` when no voice carries a delta (empty / all-
+uncalibrated corpus). It is a single MIN, not a sort+truncate, so it is robust to
+whatever `--sort-by` / `--top-n` the operator did or did not request — the most-
+central voice is the same regardless of ordering/cap. It is INDEPENDENT of
+`--sort-by` / `--top-n` but respects `--min-grade` (the representative is chosen
+among voices that clear the floor). The batch analogue of `_best_batch_row`
+(iter-388) with `implied_base_wpm` / dispersion grade swapped in for the VAD
+batch's recommended ms / confidence grade.
+
+`--summary` applies across the whole trio:
+- **human** — a `calibration batch summary` header plus one
+  `representative: <voice> → base_wpm <n> (grade <g>, Δmedian <±n>)` verdict line
+  (`_format_calib_batch_summary_verdict`); the whole-corpus summary + `grades:`
+  histogram are still emitted so the reader sees what the pick is central WITHIN.
+  A `(no voice ...)` note replaces the verdict when no voice carries a delta.
+- **`--json`** — replaces the `rows` list with a single `best` key (the same
+  per-voice object shape, or `null`), plus a top-level `summary: true`. The
+  corpus aggregates are still carried.
+- **`--csv`** — emits the header plus the ONE best data row (header-only when
+  none), flagged by a leading `# summary: true` comment. The `--sort-by` /
+  `--top-n` comments are meaningless in summary mode and omitted; `--min-grade`
+  (which scopes the pick) is still echoed.
+
+The corpus aggregates (median / range / spread / grade histogram, `num_voices` /
+`num_calibrated`) ALWAYS describe the WHOLE corpus in every format — `--summary`
+shapes the displayed verdict, not the consensus it is measured against. Also
+refactored `render_calibration_batch`'s tail-of-render corpus + grades lines into
+a local `_corpus_lines()` helper reused by the full-table, empty-floor-note, and
+new `--summary` paths (removed the triplicated block).
+
+**What landed.** `examples/gv.py`: `_best_calib_batch_row`,
+`_format_calib_batch_summary_verdict`, `_corpus_lines` (local); `summary=` kwarg
+threaded through `render_calibration_batch` / `render_calibration_batch_json` /
+`render_calibration_batch_csv` and the `cmd_calibrate_base_wpm_batch` handler;
+the `--summary` parser argument and the header usage line. No engine change.
+
+**Tests (+21 net new).** `_best_calib_batch_row` picks-nearest-median / None-when-
+no-delta / tie-breaks-to-higher-grade; human names-representative, independent-
+of-sort-and-top-n, respects-min-grade, no-voice-note, no-voice-after-floor-names-
+floor; parser parse/default; json replaces-rows-with-best, best-null, independent-
+of-sort-and-top-n, omits-key-when-false; csv single-best-row, header-only-when-no-
+delta, omits-sort-and-top-n-comments, omits-comment-when-false; handler threads-
+to-human + threads-to-json + matches-render.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5845 passed**
+(5824 prior + 21 net new), run in the feature worktree before ff-merge; re-verified
+on main post-merge (`test_gv_calibrate_base_wpm_batch.py` +
+`test_calibrate_base_wpm_batch.py` + `test_gv_cli.py` → 224 passed).
+- Integration: not run this lap (pure reduction / string-formatting over the
+  iter-397 `BaseWpmCalibrationBatch`; no torch import, no audio I/O — mirrors the
+  iter-220/316/317/393..401 calibration laps).
+
+**Next planned items:**
+1. **[gv CLI] continue the iter-386..392 batch enrichment** — `--summary` now
+   lands; the last remaining VAD-batch follow-on is an IQR/Tukey-fence flyer flag
+   naming outlier voices directly (iter-391/392) — a `flyers:` corpus line + a
+   per-row `← flyer` marker over the calibration batch's per-voice base rates.
+   With that the calibration batch reaches full parity with the VAD recommend
+   batch's enrichment surface.
+2. **[gv CLI] continue the STT-side frontier** — the TTS-side calibration surface
+   is now rich (single + batch, all three formats, sortable, top-n-capped,
+   grade-floored, summarizable); the STT side (transcription RTF / accuracy) is
+   still unexplored by the gv analysis family. A genuinely new pipeline stage.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Prefer a genuinely new signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232, iter-317
+   still present) — a future lap could `git worktree prune` / remove merged ones.
+   NOTE: this lap correctly removed its own worktree.
