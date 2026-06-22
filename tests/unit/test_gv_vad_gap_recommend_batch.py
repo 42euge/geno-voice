@@ -1517,3 +1517,325 @@ def test_cmd_unavailable_still_threads_summary_json():
         availability=lambda: False,
     )
     assert json.loads("\n".join(lines))["available"] is False
+
+
+# ========================================================================
+# iter-389 --min-grade: drop recordings below a confidence floor before the
+# table / summary. Applied FIRST (before --sort-by / --top-n / --summary); the
+# corpus aggregates stay computed over the WHOLE corpus. The batch analogue of
+# the iter-376 --min-grade on the knob sweep, reusing _filter_knob_rows_by_grade.
+# ========================================================================
+
+
+def _mixed_grade_corpus():
+    """A corpus spanning strong / moderate / none grades, with labels.
+
+    grades (verified): strong.wav=strong, mod.wav=moderate, none.wav=none.
+    Returns (results, labels) so a --min-grade floor has rows to drop.
+    """
+    strong = _result_from_gaps([0.2, 0.3, 0.25, 1.5, 1.6, 1.4], name="strong.wav")
+    mod = _result_from_gaps([0.2, 0.3, 0.4, 0.7, 0.9], name="mod.wav")
+    none = _result_from_gaps([0.5, 0.5, 0.5, 0.5], name="none.wav")
+    return [strong, mod, none], ["strong.wav", "mod.wav", "none.wav"]
+
+
+def _mixed_grade_segmenter():
+    results, labels = _mixed_grade_corpus()
+    table = dict(zip(labels, results))
+
+    def seg(wav, params=None):
+        return table[wav]
+
+    return seg
+
+
+# ---- argparse type reuse: gap_confidence_grade_type --------------------
+
+
+@pytest.mark.parametrize("grade", ["weak", "moderate", "strong"])
+def test_batch_min_grade_type_accepts_each(grade):
+    assert gv.gap_confidence_grade_type(grade) == grade
+
+
+def test_batch_min_grade_type_rejects_none_and_empty():
+    for bad in ["", "none", "bogus"]:
+        with pytest.raises(gv.argparse.ArgumentTypeError):
+            gv.gap_confidence_grade_type(bad)
+
+
+# ---- parser wiring -----------------------------------------------------
+
+
+def test_parser_vad_gap_recommend_batch_min_grade_default_none():
+    parser = gv.build_parser()
+    args = parser.parse_args(["vad-gap-recommend-batch", "a.wav", "b.wav"])
+    assert args.min_grade is None
+
+
+def test_parser_vad_gap_recommend_batch_min_grade_value():
+    parser = gv.build_parser()
+    args = parser.parse_args(
+        ["vad-gap-recommend-batch", "a.wav", "b.wav", "--min-grade", "strong"]
+    )
+    assert args.min_grade == "strong"
+
+
+def test_parser_vad_gap_recommend_batch_min_grade_case_insensitive():
+    parser = gv.build_parser()
+    args = parser.parse_args(
+        ["vad-gap-recommend-batch", "a.wav", "b.wav", "--min-grade", "  Moderate "]
+    )
+    assert args.min_grade == "moderate"
+
+
+def test_parser_vad_gap_recommend_batch_min_grade_rejects_none():
+    parser = gv.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            ["vad-gap-recommend-batch", "a.wav", "b.wav", "--min-grade", "none"]
+        )
+
+
+def test_parser_vad_gap_recommend_batch_min_grade_composes_with_sort_and_top_n():
+    parser = gv.build_parser()
+    args = parser.parse_args(
+        [
+            "vad-gap-recommend-batch", "a.wav", "b.wav",
+            "--min-grade", "moderate", "--sort-by", "delta", "--top-n", "1",
+        ]
+    )
+    assert args.min_grade == "moderate"
+    assert args.sort_by == "delta"
+    assert args.top_n == 1
+
+
+# ---- human renderer with min_grade -------------------------------------
+
+
+def test_human_min_grade_drops_below_floor():
+    results, labels = _mixed_grade_corpus()
+    lines = gv.render_vad_gap_recommend_batch(results, labels, min_grade="strong")
+    body = "\n".join(lines)
+    assert "strong.wav" in body
+    # moderate / none recordings are below the 'strong' floor.
+    assert "mod.wav" not in body
+    assert "none.wav" not in body
+
+
+def test_human_min_grade_moderate_keeps_strong_and_moderate():
+    results, labels = _mixed_grade_corpus()
+    lines = gv.render_vad_gap_recommend_batch(results, labels, min_grade="moderate")
+    body = "\n".join(lines)
+    assert "strong.wav" in body and "mod.wav" in body
+    assert "none.wav" not in body
+
+
+def test_human_min_grade_names_the_floor():
+    results, labels = _mixed_grade_corpus()
+    lines = gv.render_vad_gap_recommend_batch(results, labels, min_grade="strong")
+    assert any("min grade: strong" in ln for ln in lines)
+
+
+def test_human_no_min_grade_omits_floor_note():
+    results, labels = _mixed_grade_corpus()
+    lines = gv.render_vad_gap_recommend_batch(results, labels)
+    assert not any("min grade" in ln for ln in lines)
+
+
+def test_human_min_grade_corpus_summary_over_whole_corpus():
+    # The corpus line must reflect ALL 3 recordings, not just the survivors.
+    results, labels = _mixed_grade_corpus()
+    full = gv.render_vad_gap_recommend_batch(results, labels)
+    filt = gv.render_vad_gap_recommend_batch(results, labels, min_grade="strong")
+    corpus_full = [ln for ln in full if "corpus:" in ln][0]
+    corpus_filt = [ln for ln in filt if "corpus:" in ln][0]
+    assert corpus_full == corpus_filt
+
+
+def test_human_min_grade_removes_every_row_note():
+    # No recording reaches 'strong' -> a single note replaces the body.
+    mod = _result_from_gaps([0.2, 0.3, 0.4, 0.7, 0.9], name="mod.wav")
+    lines = gv.render_vad_gap_recommend_batch(
+        [mod], ["mod.wav"], min_grade="strong"
+    )
+    assert any("no recording reaches confidence grade 'strong'" in ln for ln in lines)
+
+
+def test_human_min_grade_applied_before_top_n():
+    # min_grade drops to 1 survivor; top_n count is over the FILTERED set.
+    results, labels = _mixed_grade_corpus()
+    lines = gv.render_vad_gap_recommend_batch(
+        results, labels, min_grade="strong", top_n=5
+    )
+    # Only 1 strong recording survives; the (top N of M) note uses the kept count,
+    # so a top_n >= kept count is a no-op (no note).
+    assert not any("top " in ln and " of " in ln for ln in lines)
+    assert "strong.wav" in "\n".join(lines)
+
+
+# ---- JSON renderer with min_grade --------------------------------------
+
+
+def test_json_min_grade_filters_rows_and_echoes_key():
+    results, labels = _mixed_grade_corpus()
+    payload = json.loads(
+        gv.render_vad_gap_recommend_batch_json(results, labels, min_grade="strong")
+    )
+    assert payload["min_grade"] == "strong"
+    recs = [r["recording"] for r in payload["rows"]]
+    assert recs == ["strong.wav"]
+
+
+def test_json_no_min_grade_omits_key():
+    results, labels = _mixed_grade_corpus()
+    payload = json.loads(
+        gv.render_vad_gap_recommend_batch_json(results, labels)
+    )
+    assert "min_grade" not in payload
+    assert len(payload["rows"]) == 3
+
+
+def test_json_min_grade_preserves_corpus_aggregates():
+    results, labels = _mixed_grade_corpus()
+    base = json.loads(gv.render_vad_gap_recommend_batch_json(results, labels))
+    filt = json.loads(
+        gv.render_vad_gap_recommend_batch_json(results, labels, min_grade="strong")
+    )
+    for key in (
+        "recommended_ms_median",
+        "recommended_ms_min",
+        "recommended_ms_max",
+        "recommended_ms_spread",
+        "num_recommended",
+        "num_recordings",
+    ):
+        assert base[key] == filt[key]
+
+
+def test_json_min_grade_composes_with_sort_and_top_n():
+    results, labels = _mixed_grade_corpus()
+    payload = json.loads(
+        gv.render_vad_gap_recommend_batch_json(
+            results, labels, min_grade="moderate", sort_by="recommended", top_n=1
+        )
+    )
+    # moderate floor keeps strong.wav + mod.wav; sort recommended ascending puts
+    # mod.wav (550) before strong.wav (850); top_n 1 keeps just mod.wav.
+    assert payload["min_grade"] == "moderate"
+    assert [r["recording"] for r in payload["rows"]] == ["mod.wav"]
+
+
+# ---- CSV renderer with min_grade ---------------------------------------
+
+
+def test_csv_min_grade_filters_data_rows_same_header():
+    results, labels = _mixed_grade_corpus()
+    base = list(csv.reader(io.StringIO(
+        gv.render_vad_gap_recommend_batch_csv(results, labels)
+    )))
+    filt = list(csv.reader(io.StringIO(
+        gv.render_vad_gap_recommend_batch_csv(results, labels, min_grade="strong")
+    )))
+    assert base[0] == filt[0]  # header unchanged
+    assert [row[0] for row in filt[1:]] == ["strong.wav"]
+
+
+# ---- summary respects min_grade ----------------------------------------
+
+
+def test_human_summary_respects_min_grade():
+    # With a 'strong' floor, only strong.wav survives, so it must be the
+    # representative even though mod.wav sits exactly at the median.
+    results, labels = _mixed_grade_corpus()
+    lines = gv.render_vad_gap_recommend_batch(
+        results, labels, min_grade="strong", summary=True
+    )
+    assert any("representative: strong.wav" in ln for ln in lines)
+
+
+def test_json_summary_respects_min_grade():
+    results, labels = _mixed_grade_corpus()
+    payload = json.loads(
+        gv.render_vad_gap_recommend_batch_json(
+            results, labels, min_grade="strong", summary=True
+        )
+    )
+    assert payload["min_grade"] == "strong"
+    assert payload["best"]["recording"] == "strong.wav"
+
+
+def test_summary_min_grade_no_survivor_note():
+    # A 'strong' floor over a moderate-only corpus leaves nothing to summarize.
+    mod = _result_from_gaps([0.2, 0.3, 0.4, 0.7, 0.9], name="mod.wav")
+    lines = gv.render_vad_gap_recommend_batch(
+        [mod], ["mod.wav"], min_grade="strong", summary=True
+    )
+    body = "\n".join(lines)
+    assert "reaching confidence grade 'strong' or better" in body
+    assert "no recording" in body
+
+
+def test_csv_summary_respects_min_grade():
+    results, labels = _mixed_grade_corpus()
+    text = gv.render_vad_gap_recommend_batch_csv(
+        results, labels, min_grade="strong", summary=True
+    )
+    rows = list(csv.reader(io.StringIO(text)))
+    assert len(rows) == 2  # header + the one surviving best
+    assert rows[1][0] == "strong.wav"
+
+
+# ---- handler threads min_grade -----------------------------------------
+
+
+def test_cmd_threads_min_grade_human():
+    lines = []
+    gv.cmd_vad_gap_recommend_batch(
+        _args(wavs=["strong.wav", "mod.wav", "none.wav"], min_grade="strong"),
+        log=lines.append,
+        segmenter=_mixed_grade_segmenter(),
+        availability=lambda: True,
+    )
+    body = "\n".join(lines)
+    assert "strong.wav" in body
+    assert "mod.wav" not in body and "none.wav" not in body
+    assert "min grade: strong" in body
+
+
+def test_cmd_threads_min_grade_json():
+    lines = []
+    gv.cmd_vad_gap_recommend_batch(
+        _args(wavs=["strong.wav", "mod.wav", "none.wav"], json=True,
+              min_grade="moderate"),
+        log=lines.append,
+        segmenter=_mixed_grade_segmenter(),
+        availability=lambda: True,
+    )
+    payload = json.loads("\n".join(lines))
+    assert payload["min_grade"] == "moderate"
+    recs = sorted(r["recording"] for r in payload["rows"])
+    assert recs == ["mod.wav", "strong.wav"]
+
+
+def test_cmd_default_no_min_grade_keeps_all():
+    lines = []
+    gv.cmd_vad_gap_recommend_batch(
+        _args(wavs=["strong.wav", "mod.wav", "none.wav"], json=True),
+        log=lines.append,
+        segmenter=_mixed_grade_segmenter(),
+        availability=lambda: True,
+    )
+    payload = json.loads("\n".join(lines))
+    assert "min_grade" not in payload
+    assert len(payload["rows"]) == 3
+
+
+def test_cmd_unavailable_still_threads_min_grade_json():
+    lines = []
+    gv.cmd_vad_gap_recommend_batch(
+        _args(json=True, min_grade="strong"),
+        log=lines.append,
+        segmenter=lambda wav, params=None: None,
+        availability=lambda: False,
+    )
+    assert json.loads("\n".join(lines))["available"] is False
