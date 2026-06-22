@@ -8,7 +8,7 @@ Usage:
     gv chat               # chat mode — STT → LLM (litellm) → TTS
     gv simulate-mirror …  # offline WPM-mirror trajectory / grid-sweep simulator
     gv calibrate-base-wpm … # offline base_wpm calibration (dispersion grade agree/loose/scattered + margin to next grade; --verdict for an adopt/keep call; --json/--csv for per-sample data)
-    gv calibrate-base-wpm-batch --voice af_heart 50:18.2 --voice am_adam 40:15.0  # calibrate a CORPUS of voices — per-voice base_wpm + grade + drift + the corpus median (which voices agree?)
+    gv calibrate-base-wpm-batch --voice af_heart 50:18.2 --voice am_adam 40:15.0  # calibrate a CORPUS of voices — per-voice base_wpm + grade + drift + the corpus median (which voices agree?); --json/--csv for the machine-readable corpus
     gv vad recording.wav  # offline Silero VAD — segment a WAV into speech regions
     gv vad recording.wav --json # machine-readable segmentation (SileroResult.to_dict shape)
     gv vad-gaps recording.wav  # report the silence gaps BETWEEN speech regions (tune --min-silence-ms)
@@ -1311,6 +1311,166 @@ def _wm_calib_batch_grade_order():
     like every other ``wpm_mirror`` consumer here.
     """
     return _load_wpm_mirror().CALIB_BATCH_GRADE_ORDER
+
+
+def render_calibration_batch_json(batch):
+    """Render a ``calibrate-base-wpm-batch`` corpus verdict as a JSON string.
+
+    The nested/programmatic twin of :func:`render_calibration_batch` (iter-398),
+    the calibration-batch analogue of :func:`render_vad_gap_recommend_batch_json`.
+    Where the single-voice ``calibrate-base-wpm --json``
+    (:func:`render_calibration_json`) nests one calibration, this nests the whole
+    CORPUS: a ``rows`` list (one object per voice — its label, full nested
+    ``calibration`` object, and signed ``delta_from_median_wpm``) plus the corpus
+    aggregates (``num_voices`` / ``num_calibrated`` / the outlier-robust median /
+    min / max / spread of the per-voice base rates / the ``grade_counts``
+    histogram — always all four :data:`CALIB_BATCH_GRADE_ORDER` buckets summing to
+    ``num_voices``) and the shared ``nominal``.
+
+    Each row's ``calibration`` is the SAME object the single-voice ``--json``
+    emits for that voice (median / range / spread / relative_spread /
+    dispersion_grade / dispersion_margin / nominal / drift), so a row agrees
+    EXACTLY with ``gv calibrate-base-wpm --json`` on that voice's samples.
+    ``dispersion_margin`` is ``null`` for a ``"scattered"`` calibration (no worse
+    grade to degrade into). A voice with no samples carries ``"calibration":
+    null`` and ``"delta_from_median_wpm": null`` (the engine's uncalibrated
+    contract) — listed but excluded from the corpus aggregates, which stay
+    ``null`` when no voice calibrated. Floats round to 3 places. Pure: returns a
+    single JSON string (no I/O).
+    """
+    payload = {
+        "nominal": round(batch.default_base_wpm, 3),
+        "num_voices": batch.num_voices,
+        "num_calibrated": batch.num_calibrated,
+        "implied_base_wpm_median": _round_or_none(batch.implied_base_wpm_median),
+        "implied_base_wpm_min": _round_or_none(batch.implied_base_wpm_min),
+        "implied_base_wpm_max": _round_or_none(batch.implied_base_wpm_max),
+        "implied_base_wpm_spread": _round_or_none(batch.implied_base_wpm_spread),
+        "grade_counts": {g: batch.grade_counts[g] for g in _wm_calib_batch_grade_order()},
+        "rows": [_calib_batch_row_obj(r) for r in batch.rows],
+    }
+    return json.dumps(payload, indent=2)
+
+
+def _round_or_none(value):
+    """Round a float to 3 places, passing ``None`` through unchanged.
+
+    The shared rounding helper the calibration-batch JSON uses for every
+    optional corpus aggregate — keeps a ``null`` a ``null`` (the uncalibrated /
+    empty-corpus contract) rather than crashing on ``round(None, 3)`` (iter-398).
+    """
+    return None if value is None else round(value, 3)
+
+
+def _calib_batch_row_obj(row):
+    """Build the JSON object for one ``calibrate-base-wpm-batch`` voice row.
+
+    The per-voice unit the batch JSON's ``rows`` list carries (iter-398):
+    ``{"voice": label, "calibration": <object or null>,
+    "delta_from_median_wpm": <float or null>}``. The nested ``calibration`` is the
+    SAME shape the single-voice ``--json`` emits, so a row matches ``gv
+    calibrate-base-wpm --json`` on that voice exactly; ``null`` for an
+    uncalibrated (no-sample) voice.
+    """
+    calib = row["calibration"]
+    return {
+        "voice": row["voice"],
+        "calibration": (
+            None
+            if calib is None
+            else {
+                "implied_base_wpm": round(calib.implied_base_wpm, 3),
+                "n_samples": calib.n_samples,
+                "min_base_wpm": round(calib.min_base_wpm, 3),
+                "max_base_wpm": round(calib.max_base_wpm, 3),
+                "spread": round(calib.spread, 3),
+                "relative_spread": round(calib.relative_spread, 3),
+                "dispersion_grade": calib.dispersion_grade,
+                "dispersion_margin": _round_or_none(calib.dispersion_margin),
+                "nominal": round(calib.default_base_wpm, 3),
+                "drift": round(calib.drift, 3),
+            }
+        ),
+        "delta_from_median_wpm": _round_or_none(row["delta_from_median_wpm"]),
+    }
+
+
+def render_calibration_batch_csv(batch):
+    """Render a ``calibrate-base-wpm-batch`` corpus verdict as CSV text.
+
+    The spreadsheet/plot-friendly twin of :func:`render_calibration_batch_json`
+    (iter-398), completing the human / ``--json`` / ``--csv`` trio for the batch
+    surface the way iter-390/391 did for ``vad-gap-recommend-batch``. The natural
+    CSV unit is **one row per voice** — the shape a plotter wants (one base rate
+    per voice to eyeball which agree) and a spreadsheet wants (one voice per
+    line). Columns:
+    ``voice,implied_base_wpm,n_samples,spread,relative_spread,dispersion_grade,dispersion_margin,drift,delta_from_median_wpm``.
+
+    A voice with no samples has no calibration, so every numeric cell past
+    ``voice`` is empty (the CSV spelling of JSON ``null``) — listed but blank.
+    The corpus aggregates the human/JSON twins surface (median / range / spread /
+    grade histogram) trail as ``#`` comment lines — self-describing metadata a
+    plotting/spreadsheet tool skips by default (pandas ``read_csv(comment="#")``),
+    matching the ``#``-comment precedent :func:`render_calibration_csv` uses for
+    its own non-tabular summary — so the per-voice rows stay a pure, parseable
+    data grid while the corpus bottom line stays visible in the same file. An
+    empty corpus (no voice calibrated) spells the aggregates as blank comment
+    values. Floats round to 3 places. Pure: built with the stdlib :mod:`csv`
+    writer (RFC-4180 quoting), trailing terminator stripped.
+    """
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(
+        [
+            "voice",
+            "implied_base_wpm",
+            "n_samples",
+            "spread",
+            "relative_spread",
+            "dispersion_grade",
+            "dispersion_margin",
+            "drift",
+            "delta_from_median_wpm",
+        ]
+    )
+    for r in batch.rows:
+        calib = r["calibration"]
+        if calib is None:
+            writer.writerow([r["voice"], "", "", "", "", "", "", "", ""])
+            continue
+        margin = calib.dispersion_margin
+        delta = r["delta_from_median_wpm"]
+        writer.writerow(
+            [
+                r["voice"],
+                round(calib.implied_base_wpm, 3),
+                calib.n_samples,
+                round(calib.spread, 3),
+                round(calib.relative_spread, 3),
+                calib.dispersion_grade,
+                "" if margin is None else round(margin, 3),
+                round(calib.drift, 3),
+                "" if delta is None else round(delta, 3),
+            ]
+        )
+    body = buf.getvalue().rstrip("\r\n")
+
+    def _agg(value):
+        return "" if value is None else round(value, 3)
+
+    counts = batch.grade_counts
+    summary = [
+        f"# nominal: {round(batch.default_base_wpm, 3)}",
+        f"# num_voices: {batch.num_voices}",
+        f"# num_calibrated: {batch.num_calibrated}",
+        f"# implied_base_wpm_median: {_agg(batch.implied_base_wpm_median)}",
+        f"# range: {_agg(batch.implied_base_wpm_min)} - "
+        f"{_agg(batch.implied_base_wpm_max)}",
+        f"# implied_base_wpm_spread: {_agg(batch.implied_base_wpm_spread)}",
+        "# grades: "
+        + ", ".join(f"{counts[g]} {g}" for g in _wm_calib_batch_grade_order()),
+    ]
+    return body + "\n" + "\n".join(summary)
 
 
 def render_calibration_csv(samples, calib):
@@ -9289,6 +9449,14 @@ def cmd_calibrate_base_wpm_batch(args, *, log=print):
     aggregates, mirroring the engine's empty contract. The engine is loaded
     lazily by file path so the parser stays audio-free; ``log`` is injectable for
     tests.
+
+    iter-398 adds the machine-readable twins (mirroring the single-voice
+    ``calibrate-base-wpm --json/--csv``): ``--json`` emits the nested corpus
+    object (per-voice ``rows`` + corpus aggregates,
+    :func:`render_calibration_batch_json`) and ``--csv`` emits the one-row-per-voice
+    grid with the corpus aggregates trailing as ``#`` comments
+    (:func:`render_calibration_batch_csv`). They are mutually exclusive at the
+    parser; either is the whole output in that mode.
     """
     wm = _load_wpm_mirror()
     CalibrationSample = wm.CalibrationSample
@@ -9308,6 +9476,12 @@ def cmd_calibrate_base_wpm_batch(args, *, log=print):
         voices.append((label, samples))
 
     batch = calibrate_base_wpm_batch(voices, default_base_wpm=args.nominal)
+    if getattr(args, "json", False):
+        log(render_calibration_batch_json(batch))
+        return
+    if getattr(args, "csv", False):
+        log(render_calibration_batch_csv(batch))
+        return
     for line in render_calibration_batch(batch):
         log(line)
 
@@ -11750,6 +11924,22 @@ def build_parser():
         default=base_wpm_default,
         help=f"Nominal base_wpm to report per-voice drift against "
         f"(default: {base_wpm_default})",
+    )
+    calib_batch_fmt = calib_batch.add_mutually_exclusive_group()
+    calib_batch_fmt.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit nested JSON (per-voice rows + corpus aggregates) instead of "
+        "the human report, for programmatic consumers; mutually exclusive with "
+        "--csv",
+    )
+    calib_batch_fmt.add_argument(
+        "--csv",
+        action="store_true",
+        help="Emit one-row-per-voice CSV (voice,implied_base_wpm,n_samples,"
+        "spread,relative_spread,dispersion_grade,dispersion_margin,drift,"
+        "delta_from_median_wpm) with the corpus aggregates trailing as # comment "
+        "lines, for spreadsheets/plots; mutually exclusive with --json",
     )
 
     # gv vad — offline Silero segmentation of a WAV file. Defaults mirror
