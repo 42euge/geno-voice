@@ -35287,3 +35287,87 @@ re-verified on main post-merge (`test_gv_vad_gap_recommend_batch.py` +
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    leftover per-iter worktrees. A future lap could `git worktree prune` / remove the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-387 — gv vad-gap-recommend-batch --top-n: keep only the N most-useful recordings
+
+- **Date:** 2026-06-21
+- **Branch:** iter-387-batch-topn (ff-merged to main, worktree removed)
+- **Commit:** b3484f9
+
+**Why.** The standing iter-386 next-item #1 asked to "add a `--top-n` to
+`vad-gap-recommend-batch`. With `--sort-by` now in place, `--top-n N` would keep only
+the N most-useful recordings (the N biggest outliers under `--sort-by delta`, or the N
+most-trustworthy under `--sort-by grade`) — the exact count companion iter-380 added
+to the knob sweep. Would reuse a small `_truncate_batch_rows` over the sorted batch
+rows." This lap lands exactly that. Not an 18th chat-metrics clone (family complete,
+iter-328).
+
+**What it is.** `gv vad-gap-recommend-batch a.wav b.wav c.wav --top-n N` keeps only
+the N most-useful RECORDING rows, applied AFTER `--sort-by`. Where iter-386's
+`--sort-by` (an ORDERING) shapes the whole table the operator still reads, `--top-n N`
+keeps a FIXED COUNT — "show me only the N most-useful recordings" — so the N kept rows
+are the N that sorted to the top: `--sort-by delta --top-n 3` shows the 3 biggest
+outliers, `--sort-by grade --top-n 3` the 3 most-trustworthy. The batch analogue of
+iter-380's knob-sweep `--top-n` (which caps a single WAV's knob-sweep rows); here the
+rows are recordings.
+
+**Design — render-only, mirroring iter-380/386 exactly; the core stays the primitive.**
+- `_truncate_batch_rows(rows, top_n)` — pure, returns a COPY, never mutates the
+  source. `top_n=None` keeps every row (byte-identical to the pre-cap output); a
+  `top_n` larger than the row count keeps every row (slicing is saturating, never
+  raises). The batch sibling of `_truncate_knob_rows`. The parser guarantees
+  `top_n >= 1` via `positive_int_type`, so a cap never silently empties the table.
+- The three renderers gain a `top_n` kwarg (default `None`) applied AFTER
+  `_sort_batch_rows`: the human report names the cap on the bias line
+  (`(top N of M)`) ONLY when it actually drops rows (not silent truncation, but also
+  no noise when the cap is a no-op — e.g. `--top-n 5` on a 2-recording corpus);
+  JSON truncates `rows` and adds a top-level `top_n` key only when set; CSV truncates
+  the data rows with the header/column set unchanged (a capped run unions cleanly with
+  a full one). The corpus aggregates (median / min / max / spread / counts) stay
+  computed over the WHOLE corpus and are unaffected by the cap — a critical property:
+  the table is truncated, the statistics are not.
+- `cmd_vad_gap_recommend_batch` reads `args.top_n` and threads it to all three
+  renderers on BOTH the available and unavailable paths; a new `--top-n` parser arg
+  (default `None`) plus a header usage-example line.
+
+**What landed in `examples/gv.py` (+~75).** `_truncate_batch_rows`, the `top_n`
+kwarg + wiring across the three renderers (human bias-line note, JSON key, CSV
+truncation), the handler thread-through on both paths, the parser arg, and the header
+example line.
+
+**Tests (tests/unit, +22 in `test_gv_vad_gap_recommend_batch.py`).** parser
+default-None / value / rejects-zero+negative / composes-with-sort-by;
+`_truncate_batch_rows` none-keeps-all+copy / keeps-first-n / n-larger-keeps-all /
+no-mutation / applied-after-sort; human keeps-first-n-after-sort / default-shows-all /
+names-cap-when-truncating / omits-note-when-no-op / corpus-summary-unchanged; JSON
+truncates+echoes-key / omits-key-when-unset / preserves-aggregates; CSV
+truncates-same-header; handler threads-top-n human+json / default-none /
+unavailable-still-threads.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5571 passed**, run in
+the feature worktree before ff-merge AND re-verified on main post-merge
+(`test_gv_vad_gap_recommend_batch.py` + `test_gv_cli.py` → 184 passed).
+- Integration: not run this lap (pure string-formatting/slicing/reduction over
+  injected stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..386 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] add a `--summary` to `vad-gap-recommend-batch`.** With `--sort-by` +
+   `--top-n` now in place, `--summary` would collapse the whole corpus to ONE verdict
+   — naming the single most-representative recording (e.g. the one closest to the
+   corpus median, or the highest-confidence one) — the batch analogue of iter-382's
+   knob-sweep `--summary` and iter-383's grid `--summary`. Would reuse a small
+   `_best_batch_row` reduction (a single MAX, robust to `--sort-by` / `--top-n`).
+2. **[gv CLI] surface the recommend/confidence machinery on the STT/TTS side**
+   (noted iter-381..386 #2) — a still-unexplored direction now that the VAD-gap
+   recommend surfaces (recommend → confidence → sweep → grid → diff → batch →
+   batch-sort → batch-top-n) are mature.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   leftover per-iter worktrees. A future lap could `git worktree prune` / remove the
+   merged ones. NOTE: this lap correctly removed its own worktree.
