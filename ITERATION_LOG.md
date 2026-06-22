@@ -37202,3 +37202,86 @@ verdict tests).
 5. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232, iter-317
    still present) — a future lap could `git worktree prune` / remove merged ones.
    NOTE: this lap correctly removed its own worktree.
+
+## iter-408 — gv stt-rtf --verdict: surface the STT-RTF recommend/keep verdict on the CLI
+
+- **Date:** 2026-06-22
+- **Branch:** iter-408-gv-stt-rtf-verdict (ff-merged to main, worktree removed)
+- **Commit:** ae77792
+
+**Why.** The iter-407 log's next-item #1 named this lap explicitly: wire the
+iter-407 `stt_rtf_verdict` engine onto the `gv stt-rtf` command behind a
+`--verdict` flag — the STT-side twin of `gv calibrate-base-wpm --verdict`
+(iter-223). iter-405 measured the STT real-time factor (`profile_stt_rtf`),
+iter-406 surfaced that profile on the CLI, and iter-407 folded the profile into
+a recommend/keep DECISION (`SttRtfVerdict`) — but that verdict had no CLI
+entrypoint, so an operator running `gv stt-rtf` still had to eyeball the raw
+grade/dispersion numbers and decide for themselves whether the transcriber was
+slow enough to act on. This lap closes that gap, completing the STT-side
+measure→CLI→verdict→CLI-verdict arc the TTS side walked at iter-220→221→222→223.
+
+**What landed (all in `examples/gv.py` + its test — purely additive on the CLI
+side, no behavioural change to any existing flag).**
+
+- **`render_stt_rtf_verdict(verdict)`** — the pure human face of an
+  `SttRtfVerdict`, mirroring `render_calibration_verdict`: a `decision` line
+  ("lighten the STT path (a smaller model or streaming partial transcription)"
+  vs "keep the current engine"), the engine's `reason`, the `gates` line
+  (`relative_spread<=…, grade==slow, samples>=…`), and a reading-aid `speed`
+  line echoing the median RTF / grade / relative spread over n samples
+  (explicitly labelled "a reading aid, not a gate", the way the calibration
+  verdict labels its `dispersion` line). `None` ⇒ a single
+  `stt-rtf verdict: no samples (nothing to decide)` line, matching
+  `render_calibration_verdict`'s empty contract.
+- **`cmd_stt_rtf --verdict`** — after the human profile report, folds the
+  profile through `mod.stt_rtf_verdict(rel_spread_max, min_samples)` and prints
+  the decision. The verdict is human prose, not a data record, so (like
+  `gv calibrate-base-wpm --verdict`) it is SUPPRESSED under `--json` / `--csv`:
+  a consumer scripts the action off the `speed_grade` / `relative_spread` /
+  `n_samples` fields the machine-readable output already carries.
+- **`--verdict` / `--rel-spread-max` / `--min-samples`** on the `stt-rtf`
+  subparser. The gate defaults are sourced from the profile core's
+  `DEFAULT_STT_RTF_REL_SPREAD_MAX` / `DEFAULT_STT_RTF_MIN_SAMPLES` (a new
+  `_load_stt_rtf_profile`-backed try/except in `build_parser`, with
+  `_STT_RTF_DEFAULT_*` fallback constants so the parser stays importable when
+  the pure-stdlib core can't be loaded). Updated the module-docstring usage
+  line to mention `--verdict for a lighten/keep call`.
+
+**Tests (+14 net new).** `tests/unit/test_gv_stt_rtf.py`: `--verdict` parser
+wiring (default off, sets true, gate defaults match the core's
+`DEFAULT_STT_RTF_*`, gate overrides parse); `render_stt_rtf_verdict` (None
+contract, recommend-lightens for slow+agree+enough, keep-when-fast via a
+tight+fast fixture that passes sample+trust and fails significance, echoed gate
+thresholds under custom `rel_spread_max`/`min_samples`); handler dispatch
+(verdict block appends below the profile report, absent by default,
+keep-when-too-few-samples names the "need 3+" reason, suppressed under `--json`
+AND `--csv`, and honors a tight `--rel-spread-max` that flips the recommendation
+to "keep" via the trust gate).
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5949 passed**
+(5935 prior + 14 net new), run in the feature worktree before ff-merge; re-
+verified on main post-merge (`test_gv_stt_rtf.py` → 48 passed, 14 of them
+verdict tests). Also smoke-tested the real CLI:
+`python examples/gv.py stt-rtf --samples 5.0:10.0 5.0:10.2 5.0:9.8 --verdict`
+prints the profile then the "lighten the STT path" decision.
+- Integration: not run this lap (the handler folds injected timings through the
+  pure `profile_stt_rtf` + `stt_rtf_verdict` cores and renders strings; no
+  torch, no faster-whisper, no audio I/O — mirrors the iter-221/223/316/317/406
+  calibration-/STT-CLI laps, which the integration suite never exercised
+  either).
+
+**Next planned items:**
+1. **[gv CLI] an `stt-rtf-batch` corpus command** — the iter-397 analogue on the
+   STT side: profile a CORPUS of engines/models (`--engine label pair pair ...`),
+   tabulate each one's median RTF + grade + verdict, plus the corpus median
+   (which engines keep up?). Would begin the STT-side batch family the way
+   iter-397 began the TTS one — the natural next STT-side step now that the
+   single profile + verdict are both on the CLI.
+2. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Prefer a genuinely new signal over an 18th near-clone.
+3. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+4. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232, iter-317
+   still present) — a future lap could `git worktree prune` / remove merged ones.
+   NOTE: this lap correctly removed its own worktree.
