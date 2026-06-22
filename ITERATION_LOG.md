@@ -36371,3 +36371,86 @@ re-verified on main post-merge (`test_gv_calibrate_base_wpm_batch.py` +
 5. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232,
    iter-317 still present) — a future lap could `git worktree prune` / remove
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-399 — calibrate-base-wpm-batch --sort-by: float the most-useful voices to the top
+
+- **Date:** 2026-06-22
+- **Branch:** iter-399-calib-batch-sort (ff-merged to main, worktree removed)
+- **Commit:** e785625
+
+**Why.** iter-398's next-item #1 named this exact follow-on: continue the
+iter-386..392 batch-enrichment family on the `calibrate-base-wpm-batch` surface.
+The batch now carries the human / `--json` / `--csv` trio (iter-397/398), but the
+per-voice rows were listed strictly in `--voice` argument order — an operator
+scanning a fleet for the slowest voice or the biggest outliers had to eyeball the
+table. `--sort-by` is the calibration analogue of iter-386's
+`vad-gap-recommend-batch --sort-by`, the next-most-precedented increment.
+
+**What it is.** `gv calibrate-base-wpm-batch --sort-by KEY` reorders the per-voice
+rows so the most-useful read first:
+- `base_wpm` — implied base_wpm ASCENDING (slowest voice first).
+- `grade` — dispersion grade DESCENDING (`agree` → `loose` → `scattered`;
+  most-trustworthy first).
+- `drift` — |drift| vs nominal DESCENDING (biggest movers off the seed first).
+- `delta` — |Δmedian| DESCENDING (biggest corpus outliers first — the calibration
+  analogue of the VAD batch's `delta`, the "which voices disagree most?" key).
+
+**Design — render-only, exactly like iter-386.** The core
+`calibrate_base_wpm_batch` engine stays the always-by-input-order primitive; the
+ordering lives purely in the gv renderers via a new `_sort_calib_batch_rows`
+helper that returns a reordered COPY (never mutates the engine rows), so an engine
+consumer is unaffected. All four orderings are STABLE (input order breaks ties),
+and an uncalibrated (no-sample) voice always sorts LAST under every key via a
+leading `is None` sort key. An unrecognised key returns rows in input order
+(defensive). `calib_batch_sort_type` is the argparse type (case-insensitive,
+strips, rejects empty/unknown), the analogue of `gap_recommend_batch_sort_type`.
+`_CALIB_DISPERSION_GRADE_RANK` maps `agree`/`loose`/`scattered` to 2/1/0 for the
+grade ordering.
+
+`--sort-by` applies across the whole trio: the human nominal line gains a
+`(sorted by KEY)` tag; `--json` carries a top-level `sort_by` key (omitted when
+unsorted); `--csv` carries a leading `# sort_by: KEY` comment (omitted when
+unsorted). The corpus aggregates (median / range / spread / grade histogram) are
+computed over the WHOLE corpus and are unaffected by the ordering in every format.
+
+**What landed.** `examples/gv.py`: `CALIB_BATCH_SORT_CHOICES`,
+`_CALIB_DISPERSION_GRADE_RANK`, `calib_batch_sort_type`, `_sort_calib_batch_rows`;
+`sort_by=` kwarg threaded through `render_calibration_batch` /
+`render_calibration_batch_json` / `render_calibration_batch_csv` and the
+`cmd_calibrate_base_wpm_batch` handler; the `--sort-by` parser argument and the
+header usage line.
+
+**Tests (+20 net new).** sort-type accept/case/strip/reject + parser
+parse/default/reject; human-render none-keeps-order, base_wpm-ascending-
+uncalibrated-last, delta-biggest-outlier, drift-biggest-mover, grade-most-
+trustworthy, names-ordering-in-header, corpus-summary-unaffected; json
+reorders-and-names-key + none-omits-key; csv reorders-and-comments-key +
+none-omits-comment; handler threads-to-human + threads-to-json + matches-render.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5785 passed**
+(5765 prior + 20 net new), run in the feature worktree before ff-merge;
+re-verified on main post-merge (`test_gv_calibrate_base_wpm_batch.py` +
+`test_calibrate_base_wpm_batch.py` + `test_gv_cli.py` → 164 passed).
+- Integration: not run this lap (pure list-reordering / string-formatting over the
+  iter-397 `BaseWpmCalibrationBatch`; no torch import, no audio I/O — mirrors the
+  iter-220/316/317/393..398 calibration laps).
+
+**Next planned items:**
+1. **[gv CLI] continue the iter-386..392 batch enrichment** — `--sort-by` now
+   lands; the remaining VAD-batch follow-ons are `--top-n` (iter-387, cap to the N
+   most-useful AFTER the sort), a `--min-grade` floor (iter-389), a `--summary`
+   line naming the single most-representative voice (iter-388, nearest the corpus
+   median — the INVERSE of `--sort-by delta`), and an IQR/Tukey-fence flyer flag
+   naming outlier voices directly (iter-391/392). Each reuses iter-397/398/399.
+2. **[gv CLI] continue the STT-side frontier** — the TTS-side calibration surface
+   is now rich (single + batch, all three formats, sortable); the STT side
+   (transcription RTF / accuracy) is still unexplored by the gv analysis family. A
+   genuinely new pipeline stage.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Prefer a genuinely new signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232, iter-317
+   still present) — a future lap could `git worktree prune` / remove merged ones.
+   NOTE: this lap correctly removed its own worktree.
