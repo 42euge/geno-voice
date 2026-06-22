@@ -1510,7 +1510,8 @@ def render_calibration_batch(batch, *, min_grade=None, sort_by=None, top_n=None,
     ``BaseWpmCalibrationBatch``. One row per voice — its implied base_wpm, the
     voice-comparable dispersion grade, the iter-396 margin, the drift vs nominal,
     and the signed delta from the corpus median — followed by a corpus summary
-    line (median / min / max / spread of the per-voice base rates) and a
+    line (median / min / max / spread / iter-403 outlier-robust IQR of the
+    per-voice base rates) and a
     ``grades:`` histogram counting how many voices sit at each dispersion grade
     over the WHOLE corpus. A voice with no samples prints ``-`` for its numbers
     and is tagged ``uncalibrated`` (excluded from the corpus aggregates but still
@@ -1582,8 +1583,10 @@ def render_calibration_batch(batch, *, min_grade=None, sort_by=None, top_n=None,
                 f"  corpus: median {batch.implied_base_wpm_median:.1f}, "
                 f"range {batch.implied_base_wpm_min:.1f} – "
                 f"{batch.implied_base_wpm_max:.1f}, "
-                f"spread {batch.implied_base_wpm_spread:.1f} "
-                "(voices disagree on a fleet base if large)"
+                f"spread {batch.implied_base_wpm_spread:.1f}, "
+                f"IQR {batch.implied_base_wpm_iqr:.1f} "
+                "(a tight IQR with a wide spread means the corpus agrees but one "
+                "voice is a flyer)"
             )
         else:
             out.append("  corpus: (no voice calibrated — nothing to summarise)")
@@ -1676,7 +1679,9 @@ def render_calibration_batch_json(batch, *, min_grade=None, sort_by=None, top_n=
     CORPUS: a ``rows`` list (one object per voice — its label, full nested
     ``calibration`` object, and signed ``delta_from_median_wpm``) plus the corpus
     aggregates (``num_voices`` / ``num_calibrated`` / the outlier-robust median /
-    min / max / spread of the per-voice base rates / the ``grade_counts``
+    min / max / spread / iter-403 ``implied_base_wpm_q1`` / ``implied_base_wpm_q3``
+    / ``implied_base_wpm_iqr`` (the outlier-robust inter-quartile spread, ``null``
+    when no voice calibrated) of the per-voice base rates / the ``grade_counts``
     histogram — always all four :data:`CALIB_BATCH_GRADE_ORDER` buckets summing to
     ``num_voices``) and the shared ``nominal``.
 
@@ -1745,6 +1750,9 @@ def render_calibration_batch_json(batch, *, min_grade=None, sort_by=None, top_n=
             "implied_base_wpm_min": _round_or_none(batch.implied_base_wpm_min),
             "implied_base_wpm_max": _round_or_none(batch.implied_base_wpm_max),
             "implied_base_wpm_spread": _round_or_none(batch.implied_base_wpm_spread),
+            "implied_base_wpm_q1": _round_or_none(batch.implied_base_wpm_q1),
+            "implied_base_wpm_q3": _round_or_none(batch.implied_base_wpm_q3),
+            "implied_base_wpm_iqr": _round_or_none(batch.implied_base_wpm_iqr),
             "grade_counts": {g: batch.grade_counts[g] for g in _wm_calib_batch_grade_order()},
         }
     )
@@ -1820,7 +1828,7 @@ def render_calibration_batch_csv(batch, *, min_grade=None, sort_by=None, top_n=N
     A voice with no samples has no calibration, so every numeric cell past
     ``voice`` is empty (the CSV spelling of JSON ``null``) — listed but blank.
     The corpus aggregates the human/JSON twins surface (median / range / spread /
-    grade histogram) trail as ``#`` comment lines — self-describing metadata a
+    iter-403 IQR / grade histogram) trail as ``#`` comment lines — self-describing metadata a
     plotting/spreadsheet tool skips by default (pandas ``read_csv(comment="#")``),
     matching the ``#``-comment precedent :func:`render_calibration_csv` uses for
     its own non-tabular summary — so the per-voice rows stay a pure, parseable
@@ -1917,6 +1925,7 @@ def render_calibration_batch_csv(batch, *, min_grade=None, sort_by=None, top_n=N
         f"# range: {_agg(batch.implied_base_wpm_min)} - "
         f"{_agg(batch.implied_base_wpm_max)}",
         f"# implied_base_wpm_spread: {_agg(batch.implied_base_wpm_spread)}",
+        f"# implied_base_wpm_iqr: {_agg(batch.implied_base_wpm_iqr)}",
         "# grades: "
         + ", ".join(f"{counts[g]} {g}" for g in _wm_calib_batch_grade_order()),
     ]

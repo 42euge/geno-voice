@@ -132,6 +132,98 @@ def test_single_voice_corpus_spread_is_zero():
 
 
 # --------------------------------------------------------------------------
+# iter-403 — outlier-robust IQR (q1 / q3 / iqr) of the per-voice base rates
+# --------------------------------------------------------------------------
+
+def test_empty_corpus_has_no_iqr():
+    batch = calibrate_base_wpm_batch([])
+    assert batch.implied_base_wpm_q1 is None
+    assert batch.implied_base_wpm_q3 is None
+    assert batch.implied_base_wpm_iqr is None
+
+
+def test_all_uncalibrated_corpus_has_no_iqr():
+    batch = calibrate_base_wpm_batch([("a", []), ("b", [])])
+    assert batch.implied_base_wpm_q1 is None
+    assert batch.implied_base_wpm_q3 is None
+    assert batch.implied_base_wpm_iqr is None
+
+
+def test_single_voice_iqr_is_zero():
+    # One sample ⇒ q1 == q3 == that value ⇒ iqr 0 (R-7 of a 1-element list).
+    batch = calibrate_base_wpm_batch([("solo", _samples((165, 60.0)))])
+    assert batch.implied_base_wpm_q1 == pytest.approx(165.0)
+    assert batch.implied_base_wpm_q3 == pytest.approx(165.0)
+    assert batch.implied_base_wpm_iqr == pytest.approx(0.0)
+
+
+def test_iqr_matches_r7_quartiles():
+    # Five voices at 150/160/165/170/180 WPM (each one 60s sample). Sorted base
+    # rates feed the R-7 percentile: q1 at rank (25/100)*(5-1)=1.0 ⇒ 160,
+    # q3 at rank (75/100)*(5-1)=3.0 ⇒ 170, iqr = 10.
+    batch = calibrate_base_wpm_batch(
+        [
+            ("a", _samples((150, 60.0))),
+            ("b", _samples((160, 60.0))),
+            ("c", _samples((165, 60.0))),
+            ("d", _samples((170, 60.0))),
+            ("e", _samples((180, 60.0))),
+        ]
+    )
+    assert batch.implied_base_wpm_q1 == pytest.approx(160.0)
+    assert batch.implied_base_wpm_q3 == pytest.approx(170.0)
+    assert batch.implied_base_wpm_iqr == pytest.approx(10.0)
+
+
+def test_iqr_is_robust_to_an_outlier_that_inflates_spread():
+    # Four clustered voices + one wild flyer. The range-based spread balloons to
+    # the flyer's distance, but the IQR (middle half) stays tight — the very
+    # signature the iter-403 line surfaces.
+    batch = calibrate_base_wpm_batch(
+        [
+            ("a", _samples((160, 60.0))),
+            ("b", _samples((165, 60.0))),
+            ("c", _samples((170, 60.0))),
+            ("d", _samples((175, 60.0))),
+            ("wild", _samples((600, 60.0))),
+        ]
+    )
+    # spread = 600 - 160 = 440 (dragged by the flyer)
+    assert batch.implied_base_wpm_spread == pytest.approx(440.0)
+    # sorted: 160,165,170,175,600 ⇒ q1 rank 1.0 ⇒ 165, q3 rank 3.0 ⇒ 175, iqr 10
+    assert batch.implied_base_wpm_iqr == pytest.approx(10.0)
+    # The IQR is an order of magnitude tighter than the spread.
+    assert batch.implied_base_wpm_iqr < batch.implied_base_wpm_spread
+
+
+def test_iqr_ignores_uncalibrated_voices():
+    # An empty voice contributes no base rate, so the IQR is computed over the
+    # calibrated voices only (same population as the median / spread).
+    with_empty = calibrate_base_wpm_batch(
+        [
+            ("a", _samples((150, 60.0))),
+            ("b", _samples((160, 60.0))),
+            ("c", _samples((165, 60.0))),
+            ("d", _samples((170, 60.0))),
+            ("e", _samples((180, 60.0))),
+            ("empty", []),
+        ]
+    )
+    without = calibrate_base_wpm_batch(
+        [
+            ("a", _samples((150, 60.0))),
+            ("b", _samples((160, 60.0))),
+            ("c", _samples((165, 60.0))),
+            ("d", _samples((170, 60.0))),
+            ("e", _samples((180, 60.0))),
+        ]
+    )
+    assert with_empty.implied_base_wpm_q1 == pytest.approx(without.implied_base_wpm_q1)
+    assert with_empty.implied_base_wpm_q3 == pytest.approx(without.implied_base_wpm_q3)
+    assert with_empty.implied_base_wpm_iqr == pytest.approx(without.implied_base_wpm_iqr)
+
+
+# --------------------------------------------------------------------------
 # uncalibrated voices (no samples)
 # --------------------------------------------------------------------------
 

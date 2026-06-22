@@ -1089,6 +1089,25 @@ def calibration_verdict(
 CALIB_BATCH_GRADE_ORDER = ("agree", "loose", "scattered", "uncalibrated")
 
 
+def _percentile_of_sorted(sorted_values, p: float) -> float:
+    """Linear-interpolated percentile ``p`` of an already-SORTED, non-empty list.
+
+    The R-7 / numpy-``"linear"`` convention (iter-403, the calibration-batch
+    twin of ``examples/gv.py``'s ``_percentile_of_sorted``, kept local so this
+    module stays self-contained and importable without the gv CLI): for ``n``
+    samples the fractional rank is ``(p / 100) * (n - 1)`` and the value
+    interpolates between the samples at the floor and ceil of that rank. A single
+    sample yields that sample for every percentile. Caller sorts and guards the
+    empty list. Returns the raw (unrounded) value — the caller rounds.
+    """
+    n = len(sorted_values)
+    rank = (p / 100.0) * (n - 1)
+    lo = int(rank)
+    hi = min(lo + 1, n - 1)
+    frac = rank - lo
+    return sorted_values[lo] + frac * (sorted_values[hi] - sorted_values[lo])
+
+
 @dataclass(frozen=True)
 class BaseWpmCalibrationBatch:
     """Verdict of calibrating a CORPUS of voices (iter-397).
@@ -1118,6 +1137,16 @@ class BaseWpmCalibrationBatch:
         apart the voices clock (``None`` when no voice calibrated). A large
         spread means the corpus's voices genuinely differ in rate, so a single
         fleet-wide ``DEFAULT_BASE_WPM`` would mis-serve the extremes.
+      implied_base_wpm_q1 / implied_base_wpm_q3 / implied_base_wpm_iqr: the
+        outlier-ROBUST companion to ``spread`` (iter-403, the calibration
+        analogue of the iter-391 IQR on ``vad_gap_recommend_batch``). ``q1`` /
+        ``q3`` are the 25th / 75th percentiles of the per-voice ``implied_base_wpm``
+        (R-7 linear interpolation), and ``iqr = q3 - q1`` is the width of the
+        MIDDLE HALF of the corpus. Where ``spread`` (max - min) is a pair of
+        extremes that a single misfiring voice inflates, the IQR cannot be widened
+        by one outlier — so a tight ``iqr`` alongside a wide ``spread`` is the
+        signature of "the corpus agrees on a fleet base, but one voice is a flyer".
+        All ``None`` when no voice calibrated.
       grade_counts: how many voices sit at each dispersion grade, keyed by
         :data:`CALIB_BATCH_GRADE_ORDER` (always all four buckets, summing to
         ``num_voices``) — the corpus's trust profile at a glance.
@@ -1134,6 +1163,9 @@ class BaseWpmCalibrationBatch:
     implied_base_wpm_min: float | None
     implied_base_wpm_max: float | None
     implied_base_wpm_spread: float | None
+    implied_base_wpm_q1: float | None
+    implied_base_wpm_q3: float | None
+    implied_base_wpm_iqr: float | None
     grade_counts: dict
     default_base_wpm: float
 
@@ -1181,12 +1213,23 @@ def calibrate_base_wpm_batch(
         lo = min(calibrated)
         hi = max(calibrated)
         spread = hi - lo
+        # iter-403 outlier-ROBUST spread: the inter-quartile range (Q3 - Q1) of the
+        # per-voice implied base rates. Where ``spread`` (max - min) is a single pair
+        # of extremes — one misfiring voice inflates it — the IQR measures the width
+        # of the MIDDLE HALF of the corpus, so a lone outlier voice cannot widen it.
+        # A tight IQR alongside a wide spread is the signature of "the corpus agrees
+        # on a fleet base, but one voice is a flyer". The calibration analogue of the
+        # iter-391 IQR on ``vad_gap_recommend_batch``.
+        srt = sorted(calibrated)
+        q1 = _percentile_of_sorted(srt, 25)
+        q3 = _percentile_of_sorted(srt, 75)
+        iqr = q3 - q1
         for r in rows:
             calib = r["calibration"]
             if calib is not None:
                 r["delta_from_median_wpm"] = calib.implied_base_wpm - median
     else:
-        median = lo = hi = spread = None
+        median = lo = hi = spread = q1 = q3 = iqr = None
 
     counts = {g: 0 for g in CALIB_BATCH_GRADE_ORDER}
     for r in rows:
@@ -1207,6 +1250,9 @@ def calibrate_base_wpm_batch(
         implied_base_wpm_min=lo,
         implied_base_wpm_max=hi,
         implied_base_wpm_spread=spread,
+        implied_base_wpm_q1=q1,
+        implied_base_wpm_q3=q3,
+        implied_base_wpm_iqr=iqr,
         grade_counts=counts,
         default_base_wpm=float(default_base_wpm),
     )

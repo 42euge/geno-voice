@@ -109,6 +109,22 @@ def test_render_corpus_summary_line():
     assert "spread 30.0" in text
 
 
+def test_render_corpus_summary_carries_iqr():
+    # iter-403: the human corpus line names the outlier-robust IQR alongside spread.
+    batch = _batch(
+        [
+            ("a", [(150, 60.0, 1.0)]),
+            ("b", [(160, 60.0, 1.0)]),
+            ("c", [(165, 60.0, 1.0)]),
+            ("d", [(170, 60.0, 1.0)]),
+            ("e", [(180, 60.0, 1.0)]),
+        ]
+    )
+    text = "\n".join(gv.render_calibration_batch(batch))
+    assert "spread 30.0" in text
+    assert "IQR 10.0" in text
+
+
 def test_render_grades_histogram():
     batch = _batch([("tight", [(165, 60.0, 1.0)]), ("empty", [])])
     text = "\n".join(gv.render_calibration_batch(batch))
@@ -269,6 +285,29 @@ def test_json_carries_corpus_aggregates():
     assert payload["implied_base_wpm_spread"] == 30.0
 
 
+def test_json_carries_iqr_keys():
+    # iter-403: q1 / q3 / iqr ride alongside the other corpus aggregates.
+    payload = _json(
+        [
+            ("a", [(150, 60.0, 1.0)]),
+            ("b", [(160, 60.0, 1.0)]),
+            ("c", [(165, 60.0, 1.0)]),
+            ("d", [(170, 60.0, 1.0)]),
+            ("e", [(180, 60.0, 1.0)]),
+        ]
+    )
+    assert payload["implied_base_wpm_q1"] == 160.0
+    assert payload["implied_base_wpm_q3"] == 170.0
+    assert payload["implied_base_wpm_iqr"] == 10.0
+
+
+def test_json_empty_corpus_iqr_keys_null():
+    payload = _json([("a", []), ("b", [])])
+    assert payload["implied_base_wpm_q1"] is None
+    assert payload["implied_base_wpm_q3"] is None
+    assert payload["implied_base_wpm_iqr"] is None
+
+
 def test_json_grade_counts_has_all_four_buckets_summing_to_num_voices():
     payload = _json([("tight", [(165, 60.0, 1.0)]), ("empty", [])])
     counts = payload["grade_counts"]
@@ -390,12 +429,29 @@ def test_csv_summary_comments_carry_aggregates():
     assert "# grades: 3 agree, 0 loose, 0 scattered, 0 uncalibrated" in text
 
 
+def test_csv_summary_comments_carry_iqr():
+    # iter-403: the IQR rides in the trailing # comment block beside spread.
+    rows = _csv_rows(
+        [
+            ("a", [(150, 60.0, 1.0)]),
+            ("b", [(160, 60.0, 1.0)]),
+            ("c", [(165, 60.0, 1.0)]),
+            ("d", [(170, 60.0, 1.0)]),
+            ("e", [(180, 60.0, 1.0)]),
+        ]
+    )
+    text = "\n".join(rows)
+    assert "# implied_base_wpm_spread: 30.0" in text
+    assert "# implied_base_wpm_iqr: 10.0" in text
+
+
 def test_csv_empty_corpus_blank_aggregates():
     rows = _csv_rows([("a", []), ("b", [])])
     text = "\n".join(rows)
     assert "# num_calibrated: 0" in text
     assert "# implied_base_wpm_median: " in text  # blank value
     assert "# range:  - " in text
+    assert "# implied_base_wpm_iqr: " in text  # blank value
 
 
 def test_csv_parses_with_pandas_comment_skip():
