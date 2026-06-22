@@ -35192,3 +35192,98 @@ re-verified on main post-merge (`test_gv_vad_gap_recommend_batch.py` +
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    leftover per-iter worktrees. A future lap could `git worktree prune` / remove the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-386 — gv vad-gap-recommend-batch --sort-by: order recordings best-first
+
+- **Date:** 2026-06-21
+- **Branch:** iter-386-batch-sort (ff-merged to main, worktree removed)
+- **Commit:** 3c2cb54
+
+**Why.** The standing iter-385 next-item #1 asked to "add a `--sort-by` to
+`vad-gap-recommend-batch`. The batch currently prints recordings in argument order.
+A `--sort-by recommended` / `grade` / `delta` would surface the outliers (largest
+|Δmedian|) or the least-trustworthy recordings first — the count/ordering analogue
+of how iter-378/380 added `--sort-by`/`--top-n` to the knob sweep. Would reuse a
+small row-sort helper over the batch rows." This lap lands exactly that. Not an 18th
+chat-metrics clone (family complete, iter-328).
+
+**What it is.** `gv vad-gap-recommend-batch a.wav b.wav c.wav --sort-by <key>`
+reorders the RECORDING rows so the most-useful read first, instead of in argument
+order. The batch analogue of iter-378's `--sort-by` for the recommend knob sweep
+(which orders a single WAV's knob-sweep rows); here the rows are recordings, so the
+orderings are tuned to the batch's question — "which recordings agree on a hangover,
+and which are outliers?". Three keys, each "most useful first":
+- `recommended` — recommended `--min-silence-ms` ASCENDING (shortest hangover
+  first), so the corpus reads in monotone hangover order regardless of argument
+  order.
+- `grade` — confidence grade DESCENDING (strong → moderate → weak → none →
+  ungraded). Matches iter-378's `grade` direction EXACTLY, so the key means the same
+  thing on the batch as on the knob sweep (no cross-command surprise).
+- `delta` — |`delta_from_median_ms`| DESCENDING (biggest outliers first), the
+  batch's signature ordering: it floats the recordings that DISAGREE MOST with the
+  corpus median to the top, so an operator hunting outliers reads them first without
+  scanning the whole Δmedian column. Has no knob-sweep analogue (a single WAV has no
+  corpus median to deviate from).
+
+**Design — render-only, mirroring iter-378 exactly; the core stays the primitive.**
+- `GAP_RECOMMEND_BATCH_SORT_CHOICES` + `gap_recommend_batch_sort_type` — an argparse
+  `type` validating the key (case-insensitive, strips, rejects empty/unknown), the
+  batch sibling of `gap_recommend_sort_type`.
+- `_sort_batch_rows(rows, sort_by)` — pure, never mutates the source, returns a
+  reordered COPY. All three keys are STABLE (argument order breaks ties) so a sorted
+  batch is a deterministic permutation. Rows with no recommendation
+  (`recommended_ms` / `delta_from_median_ms` None / ungraded, <2 segments) sort LAST
+  under every key via a leading `is None` key. An unrecognised key returns the rows
+  unchanged (defensive: a future key never silently scrambles the table).
+- The three renderers gain a `sort_by` kwarg (default `None` = argument order,
+  byte-identical to the pre-sort output): the human report names the active ordering
+  on the bias line (`(sorted by: <key>)`) and reorders the body; JSON reorders `rows`
+  and adds a top-level `sort_by` key only when set; CSV reorders the data rows with
+  the header/column set unchanged (a sorted run unions cleanly with an unsorted one).
+  The corpus aggregates are computed over the whole corpus and are unaffected by the
+  ordering.
+- `cmd_vad_gap_recommend_batch` reads `args.sort_by` and threads it to all three
+  renderers on BOTH the available and unavailable paths; a new `--sort-by` parser
+  arg (default `None`) plus a header usage-example line.
+
+**What landed in `examples/gv.py` (+166).** `GAP_RECOMMEND_BATCH_SORT_CHOICES`, the
+argparse type, `_sort_batch_rows`, the `sort_by` kwarg + wiring across the three
+renderers, the handler thread-through, the parser arg, and the header example line.
+
+**Tests (tests/unit, +30 in `test_gv_vad_gap_recommend_batch.py`).** argparse type
+accepts-each-key / case-insensitive+strips / rejects-empty+unknown / rejects-non-
+string; parser default-None / value / bad-key; `_sort_batch_rows` none-keeps-order+
+copy / recommended-ascending / grade-descending / delta-abs-descending / missing-
+last-under-every-key / stable-on-ties / unknown-key-keeps-order / no-mutation; human
+reorders / default-matches-argument-order / names-ordering / omits-note-when-unset /
+corpus-summary-unchanged; JSON reorders+echoes-key / omits-key-when-unset / preserves-
+aggregates; CSV reorders-same-header; handler threads-sort-by human+json / default-
+none / unavailable-still-threads.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5549 passed**
+(5519 prior + 30 net new), run in the feature worktree before ff-merge AND
+re-verified on main post-merge (`test_gv_vad_gap_recommend_batch.py` +
+`test_gv_cli.py` → 162 passed).
+- Integration: not run this lap (pure string-formatting/arithmetic/reduction over
+  injected stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..385 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] add a `--top-n` to `vad-gap-recommend-batch`.** With `--sort-by` now
+   in place, `--top-n N` would keep only the N most-useful recordings (the N biggest
+   outliers under `--sort-by delta`, or the N most-trustworthy under `--sort-by
+   grade`) — the exact count companion iter-380 added to the knob sweep. Would reuse
+   a small `_truncate_batch_rows` over the sorted batch rows.
+2. **[gv CLI] surface the recommend/confidence machinery on the STT/TTS side**
+   (noted iter-381..385 #2) — a still-unexplored direction now that the VAD-gap
+   recommend surfaces (recommend → confidence → sweep → grid → diff → batch →
+   batch-sort) are mature.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Future chat-metrics laps should prefer a genuinely new
+   signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   leftover per-iter worktrees. A future lap could `git worktree prune` / remove the
+   merged ones. NOTE: this lap correctly removed its own worktree.
