@@ -37574,3 +37574,89 @@ grade` emits the reordered grid with `# sort_by: grade` and the whole-corpus
 4. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232, iter-317
    still present) — a future lap could `git worktree prune` / remove merged ones.
    NOTE: this lap correctly removed its own worktree.
+
+## iter-412 — stt-rtf-batch --min-grade: drop engines below a speed floor
+
+- **Date:** 2026-06-22
+- **Branch:** iter-412-stt-rtf-batch-min-grade (ff-merged to main, worktree removed)
+- **Commit:** 8ef2729
+
+**Why.** The iter-411 log's next-item #1 named this lap: finish the
+`stt-rtf-batch` surface with the iter-401 analogue — a `--min-grade` speed-grade
+floor. iter-409 landed the human corpus report, iter-410 the `--json`/`--csv`
+twins, iter-411 `--sort-by`/`--top-n`; but every engine in `--engine` still
+showed regardless of how slow. An operator scanning a corpus for "which
+transcribers actually keep up" had to eyeball the grades. This lets them hide
+every engine too slow to act on, leaving only the engines that keep up well
+enough — exactly how iter-401 did for `calibrate-base-wpm-batch`.
+
+**What landed (all render-only, in `examples/gv.py`).**
+
+- **`STT_RTF_BATCH_GRADE_CHOICES = ("slow", "realtime", "fast")`** — the three
+  speed grades as valid floors; `"slow"` keeps every profiled engine, `"fast"`
+  keeps only the engines that comfortably beat realtime.
+  **`stt_rtf_batch_min_grade_type`** validates/normalizes the floor
+  (case-insensitive, rejects empty / non-string / unknown), the STT analogue of
+  `calib_batch_min_grade_type`.
+- **`_stt_rtf_grade_meets_min(grade, min_grade)`** ranks the total order
+  (unprofiled/`None` < `slow` < `realtime` < `fast`) via
+  `_STT_RTF_SPEED_GRADE_RANK` and compares; `None` min_grade passes everything;
+  an unprofiled/unrecognised grade ranks below every floor (the `.get(grade, -1)`
+  default), so it never survives a set floor.
+- **`_filter_stt_rtf_batch_rows_by_grade(rows, min_grade)`** drops every row
+  whose speed grade is below the floor; `min_grade` `None` returns the rows
+  unchanged (a copy). Pure — never mutates the source rows. The STT analogue of
+  `_filter_calib_batch_rows_by_grade`.
+- **`render_stt_rtf_batch` / `_json` / `_csv`** all gained a `min_grade` kwarg
+  applied BEFORE sort/top-n so the later stages see only the surviving engines;
+  the corpus median / aggregates / grade histogram still describe the WHOLE
+  corpus (the iter-401 contract). The human header echoes `(min grade <grade>)`
+  and emits a `(no engine profiled to grade '<grade>' or better)` note when the
+  floor empties the table; JSON adds a top-level `min_grade` key; CSV echoes a
+  leading `# min_grade:` comment (inserted so it reads
+  `min_grade` → `sort_by` → `top_n`).
+- **`cmd_stt_rtf_batch`** threads `args.min_grade` into whichever renderer the
+  format flag selects. `--min-grade` (`stt_rtf_batch_min_grade_type`) added to
+  the `stt-rtf-batch` subparser; handler docstring + module usage line updated.
+
+**Tests (+29 net new, `test_gv_stt_rtf_batch.py` now 99 tests).** Parser wiring
+(min_grade default None, each grade parses, unknown exits 2); type validator
+(case/whitespace normalize, reject empty/unknown/non-string); filter primitive
+(None keeps all + returns a copy, slow keeps profiled drops unprofiled, realtime
+drops slow, fast keeps only fastest, grade-meets-min total order); human render
+(filter + header echo, applied before sort/top-n, empties-table note, corpus
+unaffected, default no marker); json (filter + key, none omits key, combines
+with sort/top-n); csv (filter + comment, none omits comment, reads before
+sort/top-n in min_grade→sort_by→top_n order); handler threading to all three
+renderers.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **6065 passed**
+(6036 prior + 29 net new), run in the feature worktree before ff-merge;
+re-verified on main post-merge (`test_gv_stt_rtf_batch.py` → 99 passed). Also
+smoke-tested the real CLI:
+`python examples/gv.py stt-rtf-batch --engine fast 10.0:1.0 --engine rt 10.0:8.0 --engine slow 10.0:15.0 --min-grade realtime`
+prints the header with `(min grade realtime)`, the two engines that keep up
+(fast, rt), and a corpus line still describing all 3; `--csv --min-grade fast`
+emits the single-engine grid with `# min_grade: fast` and the whole-corpus
+`# num_engines: 2` comment.
+- Integration: not run this lap (pure list-filtering / string-formatting over
+  the injected `profile_stt_rtf_batch` core; no torch, no faster-whisper, no
+  audio I/O — mirrors the iter-401 calib-batch min-grade lap and the
+  iter-405..411 STT laps, which the integration suite never exercised either).
+
+**Next planned items:**
+1. **[gv CLI] finish the stt-rtf-batch surface with the iter-402 `--summary`** —
+   the human + `--json`/`--csv` trio plus `--sort-by`/`--top-n`/`--min-grade` now
+   exist; the last calibration-batch follow-on is a `--summary` line (iter-402)
+   naming the single fastest / most-representative engine (nearest the corpus
+   median), respecting `--min-grade` for the pick. A small, well-precedented
+   increment reusing iter-409's engine + iter-410/411/412's renderers, which
+   completes the STT-RTF-batch surface parity with `calibrate-base-wpm-batch`.
+2. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Prefer a genuinely new signal over an 18th near-clone.
+3. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+4. **[housekeeping] Stale worktrees accumulating** (iter-028, iter-232, iter-317
+   still present) — a future lap could `git worktree prune` / remove merged ones.
+   NOTE: this lap correctly removed its own worktree.
