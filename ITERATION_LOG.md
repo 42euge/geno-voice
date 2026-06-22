@@ -35652,3 +35652,87 @@ human-emits-line / json-carries.
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
    leftover per-iter worktrees. A future lap could `git worktree prune` / remove the
    merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-391 — gv vad-gap-recommend-batch IQR: outlier-robust corpus spread
+
+- **Date:** 2026-06-21
+- **Branch:** iter-391-batch-iqr (ff-merged to main, worktree removed)
+- **Commit:** 749206c
+
+**Why.** The iter-390 next-item steer asked for "a genuinely new signal" now
+that the batch family has borrowed EVERY knob-sweep render filter (min-grade /
+sort / top-n / summary, iter-386..389) AND its first fresh aggregate (the
+iter-390 grade histogram). The recommend-batch summarises the corpus by the
+outlier-ROBUST median plus the range-based `spread` (max − min) — but `spread`
+is exactly the pair of extremes, so a single misfiring recording inflates it: it
+reads "wide disagreement" even when the bulk of the corpus agrees and one WAV is
+a flyer. This lap adds the robust companion the median already has.
+
+**What it is.** `gv vad-gap-recommend-batch *.wav` now reports the
+inter-quartile range (Q3 − Q1) of the recommended ms alongside the existing
+median / min / max / spread: `corpus: median 1200ms  …  spread 1800ms  IQR
+300ms`. The IQR is the width of the MIDDLE HALF of the corpus, so a lone outlier
+cannot widen it. A tight IQR with a wide spread is the signature of "the corpus
+agrees on a hangover, but one recording is a flyer" — the human line spells that
+interpretation out. A second outlier-robust statistic sitting next to the median,
+answering a distinct question from the grade histogram (HOW SPREAD vs HOW
+TRUSTWORTHY).
+
+**Design — a whole-corpus aggregate reusing the iter-338 percentile primitive.**
+- `vad_gap_recommend_batch` gains `recommended_ms_q1` / `recommended_ms_q3` /
+  `recommended_ms_iqr`, computed by sorting the recommending recordings' ms and
+  calling the existing `_percentile_of_sorted` (R-7 linear interpolation) at the
+  25th/75th percentiles. No new primitive — the same interpolation
+  `vad_gap_percentiles` (iter-338) and the iter-357 rate floor already use.
+- Only recordings that actually carry a recommendation (`recommended_ms` not
+  `None`, ≥ 2 segments) feed the quartiles — the SAME population as the median —
+  so a <2-segment recording never skews the IQR. All three keys are `None` when
+  no recording recommends (mirroring the existing median/spread `None`).
+- Human corpus line appends `IQR <n>ms` + a one-line interpretation. JSON
+  carries the three keys automatically via `payload.update(d)` on BOTH the full
+  and summary paths (a summary still reports the whole-corpus IQR). CSV is
+  unchanged — its aggregates are derivable from the rows, per the iter-385
+  contract. Computed over the WHOLE corpus, so render-time `--min-grade` /
+  `--top-n` never change it (the floor narrows which rows you READ, not what the
+  corpus IS — same property as the median/spread/grade_counts aggregates).
+
+**What landed in `examples/gv.py` (+29/-5).** the `recommended_ms_q1/_q3/_iqr`
+core keys (sorted-percentile computation, `None` fallback), the human corpus
+IQR field + interpretation text, and core/human/JSON docstring updates. CSV
+needed no code change.
+
+**Tests (tests/unit, +12 in `test_gv_vad_gap_recommend_batch.py`).** core
+carries-keys / matches-percentile-primitive (5-point corpus) /
+robust-to-single-flyer (IQR < spread) / single-recording-is-zero /
+none-when-nothing-recommends / ignores-non-recommending; human
+corpus-line-shows-IQR / unaffected-by-min-grade+top-n; JSON carries-keys /
+null-when-nothing-recommends / summary-still-carries / unaffected-by-min-grade.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5659 passed**
+(5647 prior + 12 net new), run in the feature worktree before ff-merge;
+re-verified on main post-merge (`test_gv_vad_gap_recommend_batch.py` +
+`test_gv_cli.py` → 272 passed).
+- Integration: not run this lap (pure arithmetic/string-formatting over injected
+  stub `_Result` objects; no torch import, no audio I/O — mirrors the
+  iter-338/340..390 unit laps).
+
+**Next planned items:**
+1. **[gv CLI] surface the recommend/confidence machinery on the STT/TTS side**
+   (noted iter-381..390) — the still-unexplored frontier now that the VAD-gap
+   recommend surfaces are mature (recommend → confidence → sweep → grid → diff →
+   batch). The batch family's filters (min-grade/sort/top-n/summary) AND its
+   aggregates (median/spread/grade_counts/IQR) are now complete; the natural next
+   frontier is a different pipeline stage (STT/TTS), not more batch surface.
+2. **[gv CLI] surface the IQR-vs-spread gap as an explicit `flyer` flag** — the
+   batch now carries both spread and IQR, so a derived "is there an outlier?"
+   signal (e.g. spread/IQR ratio over a threshold) could name the flyer
+   recording directly rather than leaving the operator to compare the two
+   numbers by eye. Small follow-on to this lap.
+3. **[chat-metrics] The diversity-check family is declared complete** (17
+   sentinels, iter-328). Prefer a genuinely new signal over an 18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** —
+   needs a browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — a future lap could
+   `git worktree prune` / remove merged ones. NOTE: this lap correctly removed
+   its own worktree.
