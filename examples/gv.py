@@ -24,6 +24,7 @@ Usage:
     gv vad-diff recording.wav --threshold-a 0.5 --threshold-b 0.7  # compare two P(speech) gates
     gv vad-gap-diff recording.wav --threshold-a 0.5 --threshold-b 0.7  # how the silence-gap distribution shifts
     gv vad-gap-recommend-diff before.wav after.wav  # compare two recordings' recommended hangovers + grades (did re-recording move it?)
+    gv vad-gap-recommend-batch a.wav b.wav c.wav  # tabulate N recordings' recommended hangovers + grades + corpus median/spread (which agree, which are outliers?)
     gv vad-sweep recording.wav --thresholds 0.3,0.5,0.7,0.9  # sweep N gates, tabulate the elbow
     gv vad-sweep recording.wav --min-silences 200,400,800,1600  # sweep the hangover instead
     gv vad-sweep recording.wav --min-speeches 50,100,200,400  # sweep the min-speech floor instead
@@ -5553,6 +5554,244 @@ def render_vad_gap_recommend_diff_csv(result_a, result_b, *, label_a, label_b,
     return buf.getvalue().rstrip("\r\n")
 
 
+def _median(values):
+    """Return the median of a non-empty list of numbers (no statistics import).
+
+    Sorts a copy, returns the middle element for an odd count and the mean of the
+    two middle elements for an even count. Used by :func:`vad_gap_recommend_batch`
+    to summarise a corpus of recommended hangovers with an outlier-robust centre
+    (a single misfiring recording cannot drag the median the way it drags a mean).
+    Pure; assumes ``values`` is non-empty (the caller guards the empty case).
+    """
+    s = sorted(values)
+    n = len(s)
+    mid = n // 2
+    if n % 2 == 1:
+        return s[mid]
+    return (s[mid - 1] + s[mid]) / 2
+
+
+def vad_gap_recommend_batch(results, labels, *, bias=DEFAULT_GAP_RECOMMEND_BIAS):
+    """Tabulate the recommended hangover + grade for a CORPUS of recordings (iter-385).
+
+    Where :func:`vad_gap_recommend_delta` (iter-384) diffs exactly TWO recordings,
+    this generalises to N: segment a whole corpus under the same shared knobs and
+    report each recording's :func:`vad_gap_recommend` end-of-turn hangover (and its
+    :func:`vad_gap_confidence` grade) in one table, so an operator can see at a
+    glance which recordings AGREE on a hangover and which are OUTLIERS. It is the
+    recommend analogue of how ``gv vad-gap-sweep`` generalises ``gv vad-gap-diff``:
+    the diff is the two-point special case, the batch is the full corpus.
+
+    ``bias`` (iter-351) is shared by every recording so the recommendations are
+    taken at the same point in each WAV's valley — apples-to-apples — and is echoed
+    back in the ``bias`` field. Each row carries its own confidence ``grade`` (a
+    valley property, invariant across biases, iter-353), so an outlier that reads
+    ``weak`` is plausibly just noise while one that reads ``strong`` is a real
+    disagreement worth chasing.
+
+    The corpus is summarised by the OUTLIER-ROBUST median of the per-recording
+    recommended ms (a single misfiring recording cannot drag the median the way it
+    drags a mean), alongside the min / max / spread. Each row carries its signed
+    ``delta_from_median_ms`` so the outliers are obvious without re-reading the
+    whole column. Only recordings that actually carry a recommendation
+    (``recommended_ms`` not ``None`` — at least 2 segments) feed the median and the
+    aggregates; a recording with fewer than 2 segments has no pause to recommend
+    over, so its ``recommended_ms`` / ``grade`` / ``delta_from_median_ms`` are
+    ``None`` (the same ``null`` distinction the sibling surfaces make).
+
+    Pure: built from :func:`vad_gap_recommend` (once per recording, at ``bias``)
+    and :func:`vad_gap_confidence` (once per recording), so each row agrees EXACTLY
+    with ``gv vad-gap-recommend`` / ``gv vad-gap-confidence`` on that WAV. The
+    median / min / max / spread round to 1 place (matching ``recommended_ms``).
+    No I/O, no torch import, so it is testable without importing torch.
+    """
+    rows = []
+    for result, label in zip(results, labels):
+        rec = vad_gap_recommend(result, bias=bias)
+        conf = vad_gap_confidence(result)
+        rows.append(
+            {
+                "recording": label,
+                "num_segments": rec["num_segments"],
+                "num_gaps": rec["num_gaps"],
+                "recommended_ms": rec["recommended_ms"],
+                "recommended_s": rec["recommended_s"],
+                "grade": conf["grade"],
+                # delta_from_median filled in once the median is known.
+                "delta_from_median_ms": None,
+            }
+        )
+    recommended = [r["recommended_ms"] for r in rows if r["recommended_ms"] is not None]
+    if recommended:
+        median = round(_median(recommended), 1)
+        lo = round(min(recommended), 1)
+        hi = round(max(recommended), 1)
+        spread = round(hi - lo, 1)
+        for r in rows:
+            if r["recommended_ms"] is not None:
+                r["delta_from_median_ms"] = round(r["recommended_ms"] - median, 1)
+    else:
+        median = lo = hi = spread = None
+    return {
+        "bias": bias,
+        "num_recordings": len(rows),
+        "num_recommended": len(recommended),
+        "recommended_ms_median": median,
+        "recommended_ms_min": lo,
+        "recommended_ms_max": hi,
+        "recommended_ms_spread": spread,
+        "rows": rows,
+    }
+
+
+def render_vad_gap_recommend_batch(results, labels, *, bias=DEFAULT_GAP_RECOMMEND_BIAS):
+    """Render a corpus recommended-hangover table as plain text (iter-385).
+
+    The human-readable face of :func:`vad_gap_recommend_batch`. ``labels`` name the
+    recordings (their WAV paths) and become the left column. Any ``None`` in
+    ``results`` (segmenter unavailable) yields the shared install hint, matching
+    :func:`render_vad_gap_recommend_diff`. Prints the shared ``bias``, then one row
+    per recording — recommended ``--min-silence-ms``, confidence grade, and signed
+    delta from the corpus median — followed by a corpus summary line
+    (median / min / max / spread). A recording with fewer than 2 segments has no
+    recommendation and prints ``-`` for its number / grade / delta. Pure: returns a
+    list of strings.
+    """
+    if any(r is None for r in results):
+        return [
+            "silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        ]
+    d = vad_gap_recommend_batch(results, labels, bias=bias)
+
+    def _ms(value):
+        return "-" if value is None else f"{_format_cut_label(value)}ms"
+
+    def _grade(value):
+        return "-" if value is None else value
+
+    def _delta(value):
+        return "-" if value is None else f"{_signed_float(value)}ms"
+
+    rec_width = max([len("recording")] + [len(str(label)) for label in labels])
+    lines = [
+        f"silero VAD recommended-hangover batch ({d['num_recordings']} recordings)",
+        f"  bias: {d['bias']}",
+        f"  {'recording':<{rec_width}}  segments  gaps  {'recommended':>11}  "
+        f"{'grade':>8}  {'Δmedian':>9}",
+    ]
+    for row in d["rows"]:
+        lines.append(
+            f"  {str(row['recording']):<{rec_width}}  "
+            f"{row['num_segments']:>8}  {row['num_gaps']:>4}  "
+            f"{_ms(row['recommended_ms']):>11}  {_grade(row['grade']):>8}  "
+            f"{_delta(row['delta_from_median_ms']):>9}"
+        )
+    if d["num_recommended"] == 0:
+        lines.append(
+            "  corpus: (no recording carries a recommendation — every WAV has "
+            "fewer than 2 speech regions)"
+        )
+    else:
+        lines.append(
+            f"  corpus: median {_ms(d['recommended_ms_median'])}  "
+            f"min {_ms(d['recommended_ms_min'])}  "
+            f"max {_ms(d['recommended_ms_max'])}  "
+            f"spread {_ms(d['recommended_ms_spread'])}  "
+            f"({d['num_recommended']}/{d['num_recordings']} recordings recommend) "
+            "— a tight spread means the corpus agrees on a hangover"
+        )
+    return lines
+
+
+def render_vad_gap_recommend_batch_json(results, labels, *,
+                                        bias=DEFAULT_GAP_RECOMMEND_BIAS):
+    """Render a corpus recommended-hangover table as JSON (iter-385).
+
+    Machine-readable twin of :func:`render_vad_gap_recommend_batch`, mirroring the
+    degrade-to-``{"available": false}`` contract the other VAD JSON renderers use.
+    Carries the shared ``bias``, the corpus aggregates (count + median / min / max /
+    spread, ``null`` when no recording recommends), and the per-recording ``rows``
+    (each with its recommendation, grade, and signed delta from the median —
+    ``null`` for a <2-segment recording). Either ``None`` in ``results`` →
+    ``{"available": false}`` + install hint. Pure: returns a single JSON string.
+    """
+    if any(r is None for r in results):
+        return json.dumps(
+            {
+                "available": False,
+                "hint": (
+                    "install 'silero-vad' (pulls torch + torchaudio) to enable "
+                    "offline neural segmentation"
+                ),
+            },
+            indent=2,
+        )
+    payload = {
+        "available": True,
+        **vad_gap_recommend_batch(results, labels, bias=bias),
+    }
+    return json.dumps(payload, indent=2)
+
+
+def render_vad_gap_recommend_batch_csv(results, labels, *,
+                                       bias=DEFAULT_GAP_RECOMMEND_BIAS):
+    """Render a corpus recommended-hangover table as CSV (iter-385).
+
+    The spreadsheet/plot-friendly twin of :func:`render_vad_gap_recommend_batch_json`,
+    completing the human / ``--json`` / ``--csv`` trio. One row per recording — the
+    same flat shape ``gv vad-gap-recommend-diff --csv`` uses, extended to N rows —
+    with the columns
+    ``recording,bias,num_segments,num_gaps,recommended_ms,grade,delta_from_median_ms``.
+    A recording with fewer than 2 segments has no recommendation, so its
+    ``recommended_ms`` / ``grade`` / ``delta_from_median_ms`` cells are empty (the
+    CSV spelling of JSON ``null``). The corpus aggregates the human/JSON twins
+    surface are trivially derivable from the rows, so they are left out rather than
+    duplicated into every row. Either ``None`` in ``results`` (segmenter
+    unavailable) yields a single ``# silero VAD unavailable: ...`` comment line.
+    Pure: built with the stdlib :mod:`csv` writer, trailing terminator stripped.
+    """
+    if any(r is None for r in results):
+        return (
+            "# silero VAD unavailable: install 'silero-vad' (pulls torch + "
+            "torchaudio) to enable offline neural segmentation"
+        )
+    d = vad_gap_recommend_batch(results, labels, bias=bias)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(
+        [
+            "recording",
+            "bias",
+            "num_segments",
+            "num_gaps",
+            "recommended_ms",
+            "grade",
+            "delta_from_median_ms",
+        ]
+    )
+
+    def _cell(value):
+        return "" if value is None else value
+
+    def _ms_cell(value):
+        return "" if value is None else _format_cut_label(value)
+
+    for row in d["rows"]:
+        writer.writerow(
+            [
+                row["recording"],
+                d["bias"],
+                row["num_segments"],
+                row["num_gaps"],
+                _ms_cell(row["recommended_ms"]),
+                _cell(row["grade"]),
+                _ms_cell(row["delta_from_median_ms"]),
+            ]
+        )
+    return buf.getvalue().rstrip("\r\n")
+
+
 def vad_gap_histogram(result, *, bin_width_s=0.5):
     """Bucket the inter-segment silence gaps into a fixed-width histogram (iter-336).
 
@@ -9741,6 +9980,67 @@ def cmd_vad_gap_recommend_diff(args, *, log=print, segmenter=None, availability=
             log(line)
 
 
+def cmd_vad_gap_recommend_batch(args, *, log=print, segmenter=None, availability=None):
+    """Segment a CORPUS of WAVs offline and tabulate their recommended hangovers.
+
+    iter-385's generalisation of iter-384's two-recording
+    ``gv vad-gap-recommend-diff`` to N recordings — the recommend analogue of how
+    ``gv vad-gap-sweep`` generalises ``gv vad-gap-diff``. ``gv vad-gap-recommend-batch
+    a.wav b.wav c.wav ...`` segments every WAV under the same shared knobs and
+    reports each one's :func:`vad_gap_recommend` end-of-turn hangover (and its
+    :func:`vad_gap_confidence` grade) in one table, plus a corpus median / spread,
+    so an operator can see at a glance which recordings agree on a hangover and
+    which are outliers.
+
+    Same injected-dependency contract as :func:`cmd_vad_gap_recommend_diff`:
+    ``segmenter`` / ``availability`` default to the real :mod:`vad.silero`
+    functions, imported lazily so the parser stays torch-free. The segmenter knobs
+    are shared by every run so the recommendations are apples-to-apples, and
+    ``--bias`` (iter-351) is shared too. ``--csv`` is mutually exclusive with
+    ``--json``; when ``silero-vad`` is absent the handler prints the install hint
+    and returns, never crashing.
+    """
+    if segmenter is None or availability is None:
+        from vad.silero import segment_recording, silero_available
+
+        segmenter = segment_recording if segmenter is None else segmenter
+        availability = silero_available if availability is None else availability
+
+    as_json = getattr(args, "json", False)
+    as_csv = getattr(args, "csv", False)
+    bias = getattr(args, "bias", DEFAULT_GAP_RECOMMEND_BIAS)
+    labels = args.wavs
+
+    if not availability():
+        results = [None] * len(labels)
+        if as_json:
+            log(render_vad_gap_recommend_batch_json(results, labels, bias=bias))
+        elif as_csv:
+            log(render_vad_gap_recommend_batch_csv(results, labels, bias=bias))
+        else:
+            for line in render_vad_gap_recommend_batch(results, labels, bias=bias):
+                log(line)
+        return
+
+    from vad.silero import SileroParams
+
+    params = SileroParams(
+        threshold=args.threshold,
+        min_speech_ms=args.min_speech_ms,
+        min_silence_ms=args.min_silence_ms,
+        speech_pad_ms=args.speech_pad_ms,
+        max_speech_s=args.max_speech_s,
+    )
+    results = [segmenter(label, params=params) for label in labels]
+    if as_json:
+        log(render_vad_gap_recommend_batch_json(results, labels, bias=bias))
+    elif as_csv:
+        log(render_vad_gap_recommend_batch_csv(results, labels, bias=bias))
+    else:
+        for line in render_vad_gap_recommend_batch(results, labels, bias=bias):
+            log(line)
+
+
 def cmd_vad_sweep(args, *, log=print, segmenter=None, availability=None):
     """Segment one WAV across a swept knob and print a sweep table.
 
@@ -10409,6 +10709,7 @@ DEFAULT_HANDLERS = {
     "vad-gap-cdf": cmd_vad_gap_cdf,
     "vad-gap-recommend": cmd_vad_gap_recommend,
     "vad-gap-recommend-diff": cmd_vad_gap_recommend_diff,
+    "vad-gap-recommend-batch": cmd_vad_gap_recommend_batch,
     "vad-gap-recommend-sweep": cmd_vad_gap_recommend_sweep,
     "vad-gap-recommend-knob-sweep": cmd_vad_gap_recommend_knob_sweep,
     "vad-gap-recommend-knob-grid": cmd_vad_gap_recommend_knob_grid,
@@ -12426,6 +12727,88 @@ def build_parser():
         help="Emit a flat recording,bias,num_segments,num_gaps,recommended_ms,"
         "grade CSV table (one row per recording) for spreadsheets/plots; "
         "mutually exclusive with --json",
+    )
+
+    # gv vad-gap-recommend-batch — segment a CORPUS of WAVs under the same knobs and
+    # tabulate each one's recommended end-of-turn hangover + confidence grade plus a
+    # corpus median / spread (iter-385). The recommend analogue of how vad-gap-sweep
+    # generalises vad-gap-diff: where vad-gap-recommend-diff (iter-384) compares
+    # exactly TWO recordings, this scales to N — see at a glance which recordings in
+    # a corpus AGREE on a hangover and which are outliers. All segmenter knobs (and
+    # --bias) are shared by every run.
+    vad_gap_rec_batch = sub.add_parser(
+        "vad-gap-recommend-batch",
+        help="Offline Silero VAD — segment N WAVs and tabulate each one's "
+        "recommended end-of-turn --min-silence-ms hangover (and confidence grade) "
+        "plus a corpus median / spread (which recordings agree, which are outliers?)",
+    )
+    vad_gap_rec_batch.add_argument(
+        "wavs",
+        nargs="+",
+        metavar="wav",
+        help="Paths to two or more 16-bit PCM WAV files to segment under the same "
+        "knobs",
+    )
+    vad_gap_rec_batch.add_argument(
+        "--threshold",
+        type=unit_interval_type,
+        default=vad_threshold_default,
+        help="P(speech) gate in [0, 1] — shared by all runs "
+        f"(default: {vad_threshold_default})",
+    )
+    vad_gap_rec_batch.add_argument(
+        "--min-speech-ms",
+        type=nonneg_float_type,
+        default=vad_min_speech_default,
+        dest="min_speech_ms",
+        help="Drop speech regions shorter than this, in ms — shared by all "
+        f"runs (default: {vad_min_speech_default})",
+    )
+    vad_gap_rec_batch.add_argument(
+        "--min-silence-ms",
+        type=nonneg_float_type,
+        default=vad_min_silence_default,
+        dest="min_silence_ms",
+        help="Trailing silence before a region ends, in ms — shared by all "
+        f"runs (default: {vad_min_silence_default})",
+    )
+    vad_gap_rec_batch.add_argument(
+        "--speech-pad-ms",
+        type=nonneg_float_type,
+        default=vad_speech_pad_default,
+        dest="speech_pad_ms",
+        help="Symmetric padding added to each region, in ms — shared by all "
+        f"runs (default: {vad_speech_pad_default})",
+    )
+    vad_gap_rec_batch.add_argument(
+        "--max-speech-s",
+        type=max_speech_type,
+        default=vad_max_speech_default,
+        dest="max_speech_s",
+        help="Force-split regions longer than this, in seconds — shared by "
+        "all runs; 'inf'/'none' never splits (default: inf)",
+    )
+    vad_gap_rec_batch.add_argument(
+        "--bias",
+        choices=sorted(GAP_RECOMMEND_BIAS_FRACTIONS),
+        default=DEFAULT_GAP_RECOMMEND_BIAS,
+        help="Where in each WAV's valley the recommended hangover sits "
+        "(short/balanced/long) — shared by all runs so the comparison is "
+        f"apples-to-apples (default: {DEFAULT_GAP_RECOMMEND_BIAS})",
+    )
+    vad_gap_rec_batch_fmt = vad_gap_rec_batch.add_mutually_exclusive_group()
+    vad_gap_rec_batch_fmt.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON (per-recording rows + corpus median / "
+        "spread) instead of the human-readable table",
+    )
+    vad_gap_rec_batch_fmt.add_argument(
+        "--csv",
+        action="store_true",
+        help="Emit a flat recording,bias,num_segments,num_gaps,recommended_ms,"
+        "grade,delta_from_median_ms CSV table (one row per recording) for "
+        "spreadsheets/plots; mutually exclusive with --json",
     )
 
     # gv vad-sweep — segment one WAV across a swept knob and tabulate the result.
