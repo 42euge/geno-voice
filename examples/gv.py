@@ -10,7 +10,7 @@ Usage:
     gv calibrate-base-wpm … # offline base_wpm calibration (dispersion grade agree/loose/scattered + margin to next grade; --verdict for an adopt/keep call; --json/--csv for per-sample data)
     gv calibrate-base-wpm-batch --voice af_heart 50:18.2 --voice am_adam 40:15.0  # calibrate a CORPUS of voices — per-voice base_wpm + grade + drift + the corpus median (which voices agree?); --json/--csv for the machine-readable corpus; --sort-by base_wpm/grade/drift/delta to float the most-useful voices to the top; --top-n N to keep only the N most-useful; --min-grade scattered/loose/agree to drop voices below a dispersion floor; --summary to name the single most-representative voice (nearest the corpus median); the flyers: line names outlier voices (outside the Q1-1.5·IQR..Q3+1.5·IQR Tukey fence), also marked ← flyer in the table
     gv stt-rtf --samples 10.0:1.2 5.0:0.8  # offline STT real-time-factor profile — fold measured transcriptions (audio_seconds:transcribe_seconds) into a robust median RTF + speed grade (fast/realtime/slow); --verdict for a lighten/keep call; --json/--csv for per-sample data
-    gv stt-rtf-batch --engine mlx-whisper 10.0:1.2 5.0:0.8 --engine faster-whisper 10.0:6.0  # profile a CORPUS of STT engines — per-engine median RTF + speed grade + lighten/keep verdict, plus the outlier-robust corpus median (which engines keep up with realtime?); --json/--csv for the machine-readable corpus; --sort-by median_rtf/grade/delta to float the most-useful engines to the top; --top-n N to keep only the N most-useful; --min-grade slow/realtime/fast to drop engines below a speed floor
+    gv stt-rtf-batch --engine mlx-whisper 10.0:1.2 5.0:0.8 --engine faster-whisper 10.0:6.0  # profile a CORPUS of STT engines — per-engine median RTF + speed grade + lighten/keep verdict, plus the outlier-robust corpus median (which engines keep up with realtime?); --json/--csv for the machine-readable corpus; --sort-by median_rtf/grade/delta to float the most-useful engines to the top; --top-n N to keep only the N most-useful; --min-grade slow/realtime/fast to drop engines below a speed floor; --summary to name the single most-representative engine (nearest the corpus median RTF)
     gv vad recording.wav  # offline Silero VAD — segment a WAV into speech regions
     gv vad recording.wav --json # machine-readable segmentation (SileroResult.to_dict shape)
     gv vad-gaps recording.wav  # report the silence gaps BETWEEN speech regions (tune --min-silence-ms)
@@ -2582,7 +2582,80 @@ def _sort_stt_rtf_batch_rows(rows, sort_by):
     return list(rows)
 
 
-def render_stt_rtf_batch(batch, *, min_grade=None, sort_by=None, top_n=None):
+def _best_stt_rtf_batch_row(rows):
+    """Pick the single most-REPRESENTATIVE stt-rtf-batch engine (iter-413), or ``None``.
+
+    The selection primitive behind ``--summary``: where ``--top-n`` (a COUNT) and
+    ``--sort-by`` (an ORDERING) shape a TABLE the operator still reads, ``--summary``
+    names the ONE engine that best speaks for the corpus — the engine whose median
+    RTF sits CLOSEST to the corpus median, so an operator who just wants "which
+    single transcriber represents the fleet's typical speed?" gets the answer
+    without reading rows.
+
+    Note the DIRECTION: this is the deliberate INVERSE of ``--sort-by delta``
+    (iter-411), which floats the biggest corpus OUTLIERS to the top. The batch's
+    job is to show which engines agree-vs-disagree on speed, so its two reductions
+    sit at opposite ends — the sort surfaces who disagrees most, the summary
+    surfaces who agrees most. "Best" is defined objectively and independently of
+    ``--sort-by`` / ``--top-n``: among rows that carry a recommendation
+    (``delta_from_median_rtf`` not ``None`` — i.e. a profiled engine with a
+    per-corpus delta), the row with the SMALLEST |``delta_from_median_rtf``|
+    (nearest the corpus median), ties broken toward the HIGHEST speed grade (the
+    faster of two equally-central engines), and remaining ties broken by EARLIEST
+    position in ``rows`` (so the pick is deterministic and prefers the engine the
+    operator listed first). An unprofiled (no-sample) engine has
+    ``delta_from_median_rtf`` ``None`` and is never picked. Returns ``None`` when no
+    engine carries a delta (nothing to summarize — an empty or all-unprofiled
+    corpus). Pure: reads the rows, mutates nothing.
+
+    This is a genuinely new reduction — a single MIN, not a sort+truncate — so it
+    is robust to whatever ``--sort-by`` / ``--top-n`` the operator did (or did not)
+    request: the most-representative engine is the same regardless of how the table
+    was ordered or capped. The STT-side analogue of :func:`_best_calib_batch_row`
+    (which serves the calibration batch), with the engine's ``median_rtf`` / speed
+    grade swapped in for the calibration batch's ``implied_base_wpm`` / dispersion
+    grade.
+    """
+    candidates = [r for r in rows if r["delta_from_median_rtf"] is not None]
+    if not candidates:
+        return None
+    # Nearest the median first (|Δ| ascending), then highest grade (negative rank →
+    # descending); ``min`` over this key is stable so earliest position breaks
+    # remaining ties. An unprofiled engine never reaches here (filtered above), but
+    # the ``.get(..., -1)`` default keeps the key total-ordered defensively.
+    return min(
+        candidates,
+        key=lambda r: (
+            abs(r["delta_from_median_rtf"]),
+            -_STT_RTF_SPEED_GRADE_RANK.get(
+                r["profile"].speed_grade if r["profile"] is not None else None,
+                -1,
+            ),
+        ),
+    )
+
+
+def _format_stt_rtf_batch_summary_verdict(row):
+    """One human line naming the single most-representative engine (iter-413).
+
+    The ``--summary`` verdict body: given the row :func:`_best_stt_rtf_batch_row`
+    picked, spells the corpus consensus as ``representative: <engine> → <n> RTF
+    (grade <grade>, Δmedian <±n>)``. The signed Δmedian is shown so the reader can
+    confirm the pick really is near the corpus centre (it should be the smallest
+    |Δ| in the table). Pure: returns a single string; the caller owns the
+    surrounding lines. The STT-side twin of
+    :func:`_format_calib_batch_summary_verdict`.
+    """
+    profile = row["profile"]
+    sign = _signed_float3(row["delta_from_median_rtf"])
+    return (
+        f"  representative: {row['engine']} → {profile.median_rtf:.3f} RTF "
+        f"(grade {profile.speed_grade}, Δmedian {sign})"
+    )
+
+
+def render_stt_rtf_batch(batch, *, min_grade=None, sort_by=None, top_n=None,
+                         summary=False):
     """Render an ``stt-rtf-batch`` corpus verdict as plain-text report lines.
 
     The human-readable face of ``profile_stt_rtf_batch`` (iter-409), the STT-side
@@ -2620,29 +2693,85 @@ def render_stt_rtf_batch(batch, *, min_grade=None, sort_by=None, top_n=None):
     When set, the header line echoes ``(min grade <grade>)``, ``(sorted by
     <key>)``, and ``(top N of M)`` so the operator sees the table was reshaped.
 
+    ``summary`` (iter-413) collapses the whole table to ONE verdict line naming the
+    most-representative engine (:func:`_best_stt_rtf_batch_row` — the engine nearest
+    the corpus median RTF), the STT-side analogue of the iter-402 ``summary`` on
+    ``calibrate-base-wpm-batch``. The pick is INDEPENDENT of ``--sort-by`` /
+    ``--top-n`` (it is an objective reduction, not a row off the top of a sort) but
+    respects ``--min-grade`` (the pick is made over the surviving engines, so a
+    floor scopes who can represent the corpus). The whole-corpus summary +
+    ``grades:`` histogram are still emitted so the operator sees the consensus the
+    pick is measured against. The default ``False`` renders the full table.
+
     Pure: returns a list of strings (no I/O, no ANSI) so it is testable in
     isolation — the handler joins and prints them.
     """
-    header = (
+    header_prefix = (
         f"STT real-time-factor batch ({batch.num_engines} engines, "
         f"{batch.num_profiled} profiled)"
     )
+    gates_line = (
+        f"  gates: relative_spread<={batch.rel_spread_max:.2f}, "
+        f"samples>={batch.min_samples}"
+    )
+    # The grade floor is applied first: every later stage (summary / sort / top-n)
+    # sees only the surviving engines, while the corpus aggregates below stay over
+    # the WHOLE corpus.
+    kept_rows = _filter_stt_rtf_batch_rows_by_grade(batch.rows, min_grade)
+
+    def _corpus_lines():
+        # The whole-corpus summary + speed-grade histogram, emitted at the tail of
+        # every render variant (full table, empty-floor note, and --summary
+        # verdict) so the corpus consensus the rows are measured against is always
+        # visible. Computed over the WHOLE corpus, so it is unaffected by
+        # min_grade / sort_by / top_n / summary.
+        out = []
+        if batch.num_profiled:
+            out.append(
+                f"  corpus: median {batch.corpus_median_rtf:.3f}, "
+                f"range {batch.corpus_min_rtf:.3f} – {batch.corpus_max_rtf:.3f}, "
+                f"spread {batch.corpus_spread:.3f}, "
+                f"{batch.num_keep_up}/{batch.num_profiled} keep up with realtime"
+            )
+        else:
+            out.append("  corpus: (no engine profiled — nothing to summarise)")
+        counts = batch.grade_counts
+        grades = ", ".join(
+            f"{counts[g]} {g}" for g in _stt_rtf_batch_grade_order()
+        )
+        out.append(f"  grades: {grades}")
+        return out
+
+    header = header_prefix
     if min_grade is not None:
         header += f" (min grade {min_grade})"
+
+    if summary:
+        # The verdict is an objective reduction over the grade-filtered rows —
+        # order/count-independent, so --sort-by / --top-n do not change the pick.
+        best = _best_stt_rtf_batch_row(kept_rows)
+        lines = [header, gates_line]
+        if best is None:
+            floor = (
+                f" profiled to grade '{min_grade}' or better"
+                if min_grade is not None
+                else ""
+            )
+            lines.append(
+                f"  (no engine{floor} carries a median RTF — nothing to summarise)"
+            )
+        else:
+            lines.append(_format_stt_rtf_batch_summary_verdict(best))
+        lines.extend(_corpus_lines())
+        return lines
+
     if sort_by is not None:
         header += f" (sorted by {sort_by})"
-    # The grade floor is applied first: the later sort / top-n stages see only the
-    # surviving engines, while the corpus aggregates below stay over the WHOLE corpus.
-    kept_rows = _filter_stt_rtf_batch_rows_by_grade(batch.rows, min_grade)
     sorted_rows = _sort_stt_rtf_batch_rows(kept_rows, sort_by)
     shown_rows = _truncate_batch_rows(sorted_rows, top_n)
     if top_n is not None and len(shown_rows) < len(sorted_rows):
         header += f" (top {len(shown_rows)} of {len(sorted_rows)})"
-    lines = [
-        header,
-        f"  gates: relative_spread<={batch.rel_spread_max:.2f}, "
-        f"samples>={batch.min_samples}",
-    ]
+    lines = [header, gates_line]
     if min_grade is not None and not shown_rows:
         lines.append(
             f"  (no engine profiled to grade '{min_grade}' or better)"
@@ -2662,18 +2791,7 @@ def render_stt_rtf_batch(batch, *, min_grade=None, sort_by=None, top_n=None):
             f"  {r['engine']}: {profile.median_rtf:.3f} RTF "
             f"({profile.speed_grade}, Δmedian {delta_cell}){lighten_mark}"
         )
-    if batch.num_profiled:
-        lines.append(
-            f"  corpus: median {batch.corpus_median_rtf:.3f}, "
-            f"range {batch.corpus_min_rtf:.3f} – {batch.corpus_max_rtf:.3f}, "
-            f"spread {batch.corpus_spread:.3f}, "
-            f"{batch.num_keep_up}/{batch.num_profiled} keep up with realtime"
-        )
-    else:
-        lines.append("  corpus: (no engine profiled — nothing to summarise)")
-    counts = batch.grade_counts
-    grades = ", ".join(f"{counts[g]} {g}" for g in _stt_rtf_batch_grade_order())
-    lines.append(f"  grades: {grades}")
+    lines.extend(_corpus_lines())
     return lines
 
 
@@ -2713,7 +2831,8 @@ def _stt_rtf_batch_row_obj(row):
     }
 
 
-def render_stt_rtf_batch_json(batch, *, min_grade=None, sort_by=None, top_n=None):
+def render_stt_rtf_batch_json(batch, *, min_grade=None, sort_by=None, top_n=None,
+                              summary=False):
     """Render an ``stt-rtf-batch`` corpus verdict as a JSON string (iter-410).
 
     The nested/programmatic twin of :func:`render_stt_rtf_batch`, the STT-side
@@ -2752,13 +2871,26 @@ def render_stt_rtf_batch_json(batch, *, min_grade=None, sort_by=None, top_n=None
     key naming the requested count, so a consumer knows ``rows`` was truncated. All
     three are RENDER-ONLY — every corpus aggregate still describes the WHOLE corpus
     (mirroring :func:`render_calibration_batch_json`).
+
+    ``summary`` (iter-413) replaces the ``rows`` list with a single ``best`` key
+    holding the most-representative engine (:func:`_best_stt_rtf_batch_row` —
+    nearest the corpus median RTF), or ``null`` when no engine carries a delta. The
+    ``best`` object is the SAME per-engine shape a ``rows`` entry uses
+    (:func:`_stt_rtf_batch_row_obj`), so it carries a ``delta_from_median_rtf``. A
+    top-level ``summary: true`` flags the mode. The pick is INDEPENDENT of
+    ``sort_by`` / ``top_n`` (those ``rows``-shaping keys are omitted in summary
+    mode) but respects ``min_grade``. The STT-side twin of
+    :func:`render_calibration_batch_json`'s ``summary`` mode.
     """
+    kept_rows = _filter_stt_rtf_batch_rows_by_grade(batch.rows, min_grade)
     payload = {}
+    if summary:
+        payload["summary"] = True
     if min_grade is not None:
         payload["min_grade"] = min_grade
-    if sort_by is not None:
+    if not summary and sort_by is not None:
         payload["sort_by"] = sort_by
-    if top_n is not None:
+    if not summary and top_n is not None:
         payload["top_n"] = top_n
     payload.update(
         {
@@ -2777,19 +2909,22 @@ def render_stt_rtf_batch_json(batch, *, min_grade=None, sort_by=None, top_n=None
             },
         }
     )
-    payload["rows"] = [
-        _stt_rtf_batch_row_obj(r)
-        for r in _truncate_batch_rows(
-            _sort_stt_rtf_batch_rows(
-                _filter_stt_rtf_batch_rows_by_grade(batch.rows, min_grade), sort_by
-            ),
-            top_n,
-        )
-    ]
+    if summary:
+        best = _best_stt_rtf_batch_row(kept_rows)
+        payload["best"] = None if best is None else _stt_rtf_batch_row_obj(best)
+    else:
+        payload["rows"] = [
+            _stt_rtf_batch_row_obj(r)
+            for r in _truncate_batch_rows(
+                _sort_stt_rtf_batch_rows(kept_rows, sort_by),
+                top_n,
+            )
+        ]
     return json.dumps(payload, indent=2)
 
 
-def render_stt_rtf_batch_csv(batch, *, min_grade=None, sort_by=None, top_n=None):
+def render_stt_rtf_batch_csv(batch, *, min_grade=None, sort_by=None, top_n=None,
+                             summary=False):
     """Render an ``stt-rtf-batch`` corpus verdict as CSV text (iter-410).
 
     The spreadsheet/plot-friendly twin of :func:`render_stt_rtf_batch_json`,
@@ -2828,13 +2963,25 @@ def render_stt_rtf_batch_csv(batch, *, min_grade=None, sort_by=None, top_n=None)
     was truncated. All three are RENDER-ONLY — the corpus aggregates trailing as
     ``#`` comments still describe the WHOLE corpus (mirroring
     :func:`render_calibration_batch_csv`).
+
+    ``summary`` (iter-413) emits just the header plus the ONE most-representative
+    engine row (:func:`_best_stt_rtf_batch_row` — nearest the corpus median RTF) —
+    header-only when no engine carries a delta. The column set is unchanged, so a
+    summary CSV unions cleanly with a full batch — it is simply the single best
+    row. The pick is INDEPENDENT of ``sort_by`` / ``top_n`` (those grid-shaping
+    comments are omitted in summary mode) but respects ``min_grade``; a leading
+    ``# summary: true`` comment flags the mode. The default ``False`` emits every
+    row. The STT-side twin of :func:`render_calibration_batch_csv`'s ``summary``
+    mode.
     """
-    data_rows = _truncate_batch_rows(
-        _sort_stt_rtf_batch_rows(
-            _filter_stt_rtf_batch_rows_by_grade(batch.rows, min_grade), sort_by
-        ),
-        top_n,
-    )
+    kept_rows = _filter_stt_rtf_batch_rows_by_grade(batch.rows, min_grade)
+    if summary:
+        best = _best_stt_rtf_batch_row(kept_rows)
+        data_rows = [best] if best is not None else []
+    else:
+        data_rows = _truncate_batch_rows(
+            _sort_stt_rtf_batch_rows(kept_rows, sort_by), top_n
+        )
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(
@@ -2893,14 +3040,19 @@ def render_stt_rtf_batch_csv(batch, *, min_grade=None, sort_by=None, top_n=None)
         + ", ".join(f"{counts[g]} {g}" for g in _stt_rtf_batch_grade_order()),
     ]
     # Echo the render-only reshaping as leading comments, inserted so they read
-    # min_grade -> sort_by -> top_n (the order they apply), mirroring
-    # render_calibration_batch_csv.
-    if top_n is not None:
+    # summary -> min_grade -> sort_by -> top_n (the order they apply), mirroring
+    # render_calibration_batch_csv. In --summary mode there is exactly one row (the
+    # most-representative engine), so the sort_by/top_n grid-shaping tags are
+    # meaningless and omitted — only min_grade (which scopes the pick) and the
+    # summary flag itself are echoed.
+    if not summary and top_n is not None:
         comments.insert(0, f"# top_n: {top_n}")
-    if sort_by is not None:
+    if not summary and sort_by is not None:
         comments.insert(0, f"# sort_by: {sort_by}")
     if min_grade is not None:
         comments.insert(0, f"# min_grade: {min_grade}")
+    if summary:
+        comments.insert(0, "# summary: true")
     return body + "\n" + "\n".join(comments)
 
 
@@ -10942,7 +11094,12 @@ def cmd_stt_rtf_batch(args, *, log=print):
     engine below a speed-grade floor, leaving only the engines that keep up well
     enough (the calibration batch's iter-401 analogue). All three are render-only —
     the corpus median/aggregates still describe the whole corpus — and apply to the
-    human, ``--json``, and ``--csv`` output.
+    human, ``--json``, and ``--csv`` output. iter-413 adds ``--summary`` to collapse
+    the table to the ONE most-representative engine (nearest the corpus median RTF,
+    the inverse of ``--sort-by delta``); the pick respects ``--min-grade`` but is
+    independent of ``--sort-by`` / ``--top-n``, and applies to all three output
+    formats (the calibration batch's iter-402 analogue), completing the
+    STT-RTF-batch surface's parity with ``calibrate-base-wpm-batch``.
     """
     mod = _load_stt_rtf_profile()
     TranscriptionSample = mod.TranscriptionSample
@@ -10971,22 +11128,25 @@ def cmd_stt_rtf_batch(args, *, log=print):
     min_grade = getattr(args, "min_grade", None)
     sort_by = getattr(args, "sort_by", None)
     top_n = getattr(args, "top_n", None)
+    summary = getattr(args, "summary", False)
     if getattr(args, "json", False):
         log(
             render_stt_rtf_batch_json(
-                batch, min_grade=min_grade, sort_by=sort_by, top_n=top_n
+                batch, min_grade=min_grade, sort_by=sort_by, top_n=top_n,
+                summary=summary,
             )
         )
         return
     if getattr(args, "csv", False):
         log(
             render_stt_rtf_batch_csv(
-                batch, min_grade=min_grade, sort_by=sort_by, top_n=top_n
+                batch, min_grade=min_grade, sort_by=sort_by, top_n=top_n,
+                summary=summary,
             )
         )
         return
     for line in render_stt_rtf_batch(
-        batch, min_grade=min_grade, sort_by=sort_by, top_n=top_n
+        batch, min_grade=min_grade, sort_by=sort_by, top_n=top_n, summary=summary
     ):
         log(line)
 
@@ -13653,6 +13813,14 @@ def build_parser():
         "Render-only — the corpus median/aggregates still describe the whole "
         "corpus. Applies to the human, --json, and --csv output. Default: keep "
         "every engine",
+    )
+    stt_rtf_batch.add_argument(
+        "--summary",
+        action="store_true",
+        help="Collapse the table to the ONE most-representative engine (nearest "
+        "the corpus median RTF, ties to fastest grade) — the inverse of '--sort-by "
+        "delta'. Independent of --sort-by/--top-n but respects --min-grade. Applies "
+        "to the human, --json (a 'best' key), and --csv (a single data row) output",
     )
 
     # gv vad — offline Silero segmentation of a WAV file. Defaults mirror

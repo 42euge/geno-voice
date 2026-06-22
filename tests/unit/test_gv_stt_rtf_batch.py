@@ -1068,3 +1068,317 @@ def test_handler_threads_min_grade_to_csv():
             batch, min_grade="realtime", sort_by="grade", top_n=None
         )
     ]
+
+
+# =========================================================================
+# iter-413 — --summary: name the single most-representative engine
+# =========================================================================
+
+# parser wiring -----------------------------------------------------------
+
+
+def test_summary_defaults_false():
+    args = gv.build_parser().parse_args(["stt-rtf-batch", "--engine", "a", "10.0:1.0"])
+    assert args.summary is False
+
+
+def test_summary_flag_parses_true():
+    args = gv.build_parser().parse_args(
+        ["stt-rtf-batch", "--engine", "a", "10.0:1.0", "--summary"]
+    )
+    assert args.summary is True
+
+
+# selection primitive -----------------------------------------------------
+
+
+def test_best_row_picks_nearest_corpus_median():
+    # Medians 0.1 / 0.8 / 1.5 -> corpus median 0.8, so the 0.8 engine (delta 0) wins.
+    batch = _batch(
+        ("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]), ("c", [(10.0, 15.0)])
+    )
+    best = gv._best_stt_rtf_batch_row(batch.rows)
+    assert best["engine"] == "b"
+    assert best["delta_from_median_rtf"] == 0.0
+
+
+def test_best_row_none_when_no_engine_profiled():
+    batch = _batch(("a", []), ("b", []))
+    assert gv._best_stt_rtf_batch_row(batch.rows) is None
+
+
+def test_best_row_ignores_unprofiled_engine():
+    # The unprofiled engine has delta None and must never be picked.
+    batch = _batch(("a", [(10.0, 1.0)]), ("empty", []))
+    best = gv._best_stt_rtf_batch_row(batch.rows)
+    assert best["engine"] == "a"
+
+
+def test_best_row_tie_breaks_to_higher_grade():
+    # Two engines equidistant from the corpus median; the faster grade wins.
+    # Medians 0.4 / 0.6 / 1.0 -> corpus median 0.6. With two engines tied on |Δ|
+    # we instead use a symmetric pair around the median: 0.3 (fast) and 0.9 are
+    # 0.3 from median 0.6, but 0.3 grades "fast" and 0.9 grades "realtime".
+    batch = _batch(
+        ("hi", [(10.0, 3.0)]), ("mid", [(10.0, 6.0)]), ("lo", [(10.0, 9.0)])
+    )
+    # Drop the exact-median engine so the two flankers tie on |Δ| = 0.3.
+    rows = [r for r in batch.rows if r["engine"] != "mid"]
+    best = gv._best_stt_rtf_batch_row(rows)
+    assert best["engine"] == "hi"  # "fast" beats "realtime" on the grade tie
+
+
+def test_best_row_tie_breaks_to_earliest_position():
+    # Two engines identical in every key keep the earlier-listed one.
+    batch = _batch(
+        ("first", [(10.0, 6.0)]),
+        ("second", [(10.0, 6.0)]),
+        ("anchor", [(10.0, 6.0)]),
+    )
+    best = gv._best_stt_rtf_batch_row(batch.rows)
+    assert best["engine"] == "first"
+
+
+# human render ------------------------------------------------------------
+
+
+def test_human_summary_names_representative_engine():
+    batch = _batch(
+        ("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]), ("c", [(10.0, 15.0)])
+    )
+    lines = gv.render_stt_rtf_batch(batch, summary=True)
+    rep = [l for l in lines if l.strip().startswith("representative:")][0]
+    assert "representative: b → 0.800 RTF (grade realtime, Δmedian 0.000)" in rep
+    # No per-engine table rows beyond the verdict (the only ":"-bearing body line
+    # is the representative verdict itself).
+    assert [e for e in _engine_order(lines) if e != "representative"] == []
+
+
+def test_human_summary_independent_of_sort_and_top_n():
+    batch = _batch(
+        ("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]), ("c", [(10.0, 15.0)])
+    )
+    plain = gv.render_stt_rtf_batch(batch, summary=True)
+    reshaped = gv.render_stt_rtf_batch(
+        batch, summary=True, sort_by="delta", top_n=1
+    )
+    assert plain == reshaped
+
+
+def test_human_summary_respects_min_grade():
+    # Floor "fast" keeps only the 0.1 engine, so it represents the corpus.
+    batch = _batch(
+        ("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]), ("c", [(10.0, 15.0)])
+    )
+    lines = gv.render_stt_rtf_batch(batch, summary=True, min_grade="fast")
+    rep = [l for l in lines if l.strip().startswith("representative:")][0]
+    assert "representative: a →" in rep
+    assert "(min grade fast)" in lines[0]
+
+
+def test_human_summary_empty_corpus_note():
+    batch = _batch(("a", []), ("b", []))
+    lines = gv.render_stt_rtf_batch(batch, summary=True)
+    text = "\n".join(lines)
+    assert "nothing to summarise" in text
+    assert not any(l.strip().startswith("representative:") for l in lines)
+
+
+def test_human_summary_min_grade_empties_pick_note():
+    batch = _batch(("slow", [(10.0, 15.0)]))
+    lines = gv.render_stt_rtf_batch(batch, summary=True, min_grade="fast")
+    text = "\n".join(lines)
+    assert "no engine profiled to grade 'fast' or better carries a median RTF" in text
+
+
+def test_human_summary_still_emits_whole_corpus_lines():
+    batch = _batch(
+        ("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]), ("c", [(10.0, 15.0)])
+    )
+    full = [
+        l
+        for l in gv.render_stt_rtf_batch(batch)
+        if l.strip().startswith(("corpus:", "grades:"))
+    ]
+    summ = [
+        l
+        for l in gv.render_stt_rtf_batch(batch, summary=True)
+        if l.strip().startswith(("corpus:", "grades:"))
+    ]
+    assert full == summ
+
+
+# json render -------------------------------------------------------------
+
+
+def test_json_summary_replaces_rows_with_best():
+    import json
+
+    batch = _batch(
+        ("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]), ("c", [(10.0, 15.0)])
+    )
+    payload = json.loads(gv.render_stt_rtf_batch_json(batch, summary=True))
+    assert payload["summary"] is True
+    assert "rows" not in payload
+    assert payload["best"]["engine"] == "b"
+    assert payload["best"]["delta_from_median_rtf"] == 0.0
+    # Whole-corpus aggregates unchanged.
+    assert payload["num_engines"] == 3
+    assert payload["num_profiled"] == 3
+
+
+def test_json_summary_best_null_when_empty():
+    import json
+
+    batch = _batch(("a", []), ("b", []))
+    payload = json.loads(gv.render_stt_rtf_batch_json(batch, summary=True))
+    assert payload["summary"] is True
+    assert payload["best"] is None
+
+
+def test_json_summary_omits_sort_and_top_n_keys():
+    import json
+
+    batch = _batch(("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]))
+    payload = json.loads(
+        gv.render_stt_rtf_batch_json(
+            batch, summary=True, sort_by="delta", top_n=1
+        )
+    )
+    assert "sort_by" not in payload
+    assert "top_n" not in payload
+
+
+def test_json_summary_respects_min_grade():
+    import json
+
+    batch = _batch(
+        ("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]), ("c", [(10.0, 15.0)])
+    )
+    payload = json.loads(
+        gv.render_stt_rtf_batch_json(batch, summary=True, min_grade="fast")
+    )
+    assert payload["min_grade"] == "fast"
+    assert payload["best"]["engine"] == "a"
+
+
+def test_json_default_omits_summary_key():
+    import json
+
+    batch = _batch(("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]))
+    payload = json.loads(gv.render_stt_rtf_batch_json(batch))
+    assert "summary" not in payload
+    assert "rows" in payload
+
+
+# csv render --------------------------------------------------------------
+
+
+def test_csv_summary_single_data_row_and_comment():
+    batch = _batch(
+        ("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]), ("c", [(10.0, 15.0)])
+    )
+    text = gv.render_stt_rtf_batch_csv(batch, summary=True)
+    assert "# summary: true" in text.splitlines()
+    assert _csv_data_engines(text) == ["b"]
+    # Corpus comment still describes the whole corpus.
+    assert "# num_engines: 3" in text.splitlines()
+
+
+def test_csv_summary_header_only_when_empty():
+    batch = _batch(("a", []), ("b", []))
+    text = gv.render_stt_rtf_batch_csv(batch, summary=True)
+    assert _csv_data_engines(text) == []
+    assert "# summary: true" in text.splitlines()
+
+
+def test_csv_summary_omits_sort_and_top_n_comments():
+    batch = _batch(("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]))
+    text = gv.render_stt_rtf_batch_csv(
+        batch, summary=True, sort_by="delta", top_n=1
+    )
+    assert "# sort_by:" not in text
+    assert "# top_n:" not in text
+
+
+def test_csv_summary_respects_min_grade():
+    batch = _batch(
+        ("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]), ("c", [(10.0, 15.0)])
+    )
+    text = gv.render_stt_rtf_batch_csv(batch, summary=True, min_grade="fast")
+    comment_lines = [l for l in text.splitlines() if l.startswith("#")]
+    assert "# summary: true" in comment_lines
+    assert "# min_grade: fast" in comment_lines
+    # summary reads before min_grade.
+    assert comment_lines.index("# summary: true") < comment_lines.index(
+        "# min_grade: fast"
+    )
+    assert _csv_data_engines(text) == ["a"]
+
+
+def test_csv_default_omits_summary_comment():
+    batch = _batch(("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]))
+    text = gv.render_stt_rtf_batch_csv(batch)
+    assert "# summary:" not in text
+
+
+# handler threading -------------------------------------------------------
+
+
+def test_handler_threads_summary_to_human():
+    args = gv.build_parser().parse_args(
+        [
+            "stt-rtf-batch",
+            "--engine", "a", "10.0:1.0",
+            "--engine", "b", "10.0:8.0",
+            "--engine", "c", "10.0:15.0",
+            "--summary",
+        ]
+    )
+    lines = []
+    gv.cmd_stt_rtf_batch(args, log=lines.append)
+    batch = _batch(
+        ("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]), ("c", [(10.0, 15.0)])
+    )
+    assert lines == gv.render_stt_rtf_batch(batch, summary=True)
+
+
+def test_handler_threads_summary_to_json():
+    args = gv.build_parser().parse_args(
+        [
+            "stt-rtf-batch",
+            "--engine", "a", "10.0:1.0",
+            "--engine", "b", "10.0:8.0",
+            "--json",
+            "--summary",
+        ]
+    )
+    lines = []
+    gv.cmd_stt_rtf_batch(args, log=lines.append)
+    batch = _batch(("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]))
+    assert lines == [
+        gv.render_stt_rtf_batch_json(
+            batch, min_grade=None, sort_by=None, top_n=None, summary=True
+        )
+    ]
+
+
+def test_handler_threads_summary_to_csv():
+    args = gv.build_parser().parse_args(
+        [
+            "stt-rtf-batch",
+            "--engine", "a", "10.0:1.0",
+            "--engine", "b", "10.0:8.0",
+            "--csv",
+            "--summary",
+            "--min-grade", "realtime",
+        ]
+    )
+    lines = []
+    gv.cmd_stt_rtf_batch(args, log=lines.append)
+    batch = _batch(("a", [(10.0, 1.0)]), ("b", [(10.0, 8.0)]))
+    assert lines == [
+        gv.render_stt_rtf_batch_csv(
+            batch, min_grade="realtime", sort_by=None, top_n=None, summary=True
+        )
+    ]
