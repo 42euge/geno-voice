@@ -35474,3 +35474,95 @@ re-verified on main post-merge (`test_gv_vad_gap_recommend_batch.py` +
 5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows 31
    entries (leftover per-iter worktrees). A future lap could `git worktree prune` /
    remove the merged ones. NOTE: this lap correctly removed its own worktree.
+
+## iter-389 — gv vad-gap-recommend-batch --min-grade: drop recordings below a confidence floor
+
+- **Date:** 2026-06-21
+- **Branch:** iter-389-batch-min-grade (ff-merged to main, worktree removed)
+- **Commit:** 9507b1d
+
+**Why.** The standing iter-388 next-item #2 asked to "add a `--csv`/`--json`
+`min-grade` filter to the batch. The knob sweep has `--min-grade` (iter-376) to hide
+low-confidence rows; the batch does not. A `--min-grade` on
+`vad-gap-recommend-batch` would drop recordings whose valley is below a trust floor
+before the table/summary — the last knob-sweep filter the batch has not yet
+borrowed." This lap lands exactly that. Not an 18th chat-metrics clone (family
+complete, iter-328).
+
+**What it is.** `gv vad-gap-recommend-batch a.wav b.wav c.wav --min-grade strong`
+drops every RECORDING whose iter-348 confidence grade is below the named floor
+(weak/moderate/strong), leaving only the recordings whose recommended hangover is
+trustworthy enough to act on. The corpus analogue of the iter-376 knob-sweep filter:
+that one hides low-confidence knob SETTINGS, this hides low-confidence RECORDINGS.
+Recordings graded `"none"` or ungraded (<2 segments) sit below every floor and are
+always dropped when one is set. The last knob-sweep filter the batch had not yet
+borrowed — the batch family (sort/top-n/summary, iter-386..388) plus this filter now
+mirrors the knob-sweep family (min-grade/sort/top-n/summary) completely.
+
+**Design — render-only, REUSING the knob-sweep primitive; the core stays complete.**
+- Reuses `_filter_knob_rows_by_grade` (iter-376) directly — no new filter primitive.
+  Batch rows carry the same `grade` key the knob rows do (the iter-377 grid already
+  reuses this exact filter), so the floor is the existing total order
+  `none < weak < moderate < strong` via `gap_confidence_grade_type` /
+  `_GAP_CONFIDENCE_GRADE_RANK`. The `--min-grade` parser arg also reuses the existing
+  `gap_confidence_grade_type` validator.
+- The filter is applied FIRST in all three renderers (before `sort_by` / `top_n` /
+  `summary`), so every later stage sees only the surviving recordings: `--sort-by`
+  reorders survivors, `--top-n` caps survivors (the `(top N of M)` note now counts
+  against the KEPT set, not the raw corpus), and `--summary` picks the representative
+  among survivors. CRITICAL property: the corpus aggregates (median / min / max /
+  spread / counts) stay computed over the WHOLE corpus — the floor narrows which
+  recordings you READ without redefining what the corpus consensus IS.
+- Human: bias line gains a `(min grade: X)` note; an all-filtered-out corpus prints a
+  single `(no recording reaches confidence grade 'X' or better)` line. JSON: adds a
+  top-level `min_grade` key only when set; rows truncated; aggregates preserved. CSV:
+  data rows filtered, header/column set unchanged (a filtered run unions cleanly with
+  a full one). Summary: the no-survivor note names the floor.
+- `cmd_vad_gap_recommend_batch` reads `args.min_grade` and threads it to all three
+  renderers on BOTH the available and unavailable paths; a new `--min-grade` parser
+  arg (default `None`) plus a header usage-example line.
+
+**What landed in `examples/gv.py` (+~111/-39).** the `min_grade` kwarg + filter
+wiring across the three renderers (human floor note + all-filtered note + top-n
+base-count fix, JSON `min_grade` key, CSV filtered rows), the handler thread-through
+on both paths, the parser arg, the handler/renderer docstrings, and the header
+example line.
+
+**Tests (tests/unit, +29 in `test_gv_vad_gap_recommend_batch.py`).** type reuse
+accepts-each / rejects-none+empty; parser default-None / value / case-insensitive /
+rejects-none / composes-with-sort+top-n; human drops-below-floor /
+moderate-keeps-two / names-floor / omits-note-when-unset /
+corpus-summary-over-whole-corpus / removes-every-row-note / applied-before-top-n;
+JSON filters+echoes-key / omits-key-unset / preserves-aggregates /
+composes-with-sort+top-n; CSV filters-same-header; summary respects-min-grade
+(human+json+csv) / no-survivor-note; handler threads human+json / default-keeps-all /
+unavailable-still-threads.
+
+**GATE result.** PASS.
+`cd ~/code-purp/geno-voice && python -m pytest tests/unit/` → **5629 passed**
+(5600 prior + 29 net new), run in the feature worktree before ff-merge AND
+re-verified on main post-merge (`test_gv_vad_gap_recommend_batch.py` +
+`test_gv_cli.py` → 242 passed).
+- Integration: not run this lap (pure string-formatting/filtering over injected stub
+  `_Result` objects; no torch import, no audio I/O — mirrors the iter-338/340..388
+  unit laps).
+
+**Next planned items:**
+1. **[gv CLI] surface the recommend/confidence machinery on the STT/TTS side**
+   (noted iter-381..388 #2/#1) — a still-unexplored direction now that the VAD-gap
+   recommend surfaces (recommend → confidence → sweep → grid → diff → batch, with the
+   batch family sort/top-n/summary/min-grade now COMPLETE, mirroring the knob-sweep
+   family fully). The batch has borrowed every knob-sweep filter; the natural next
+   frontier is a different pipeline stage.
+2. **[gv CLI] add a `--bias`-column selector to the batch** like the knob sweep's
+   iter-374 `--biases` (which narrows which per-bias COLUMNS appear). The batch
+   currently shows one shared `--bias`; a multi-bias batch column set would let an
+   operator compare short/balanced/long recommendations per recording in one table.
+3. **[chat-metrics] The diversity-check family is declared complete** (17 sentinels,
+   iter-328). Future chat-metrics laps should prefer a genuinely new signal over an
+   18th near-clone.
+4. **[desktop, operator] Wire `ContinuousListener` → `/vad/silero/stream`** — needs a
+   browser + mic, operator-only / non-headless.
+5. **[housekeeping] Stale worktrees accumulating** — `git worktree list` shows
+   leftover per-iter worktrees. A future lap could `git worktree prune` / remove the
+   merged ones. NOTE: this lap correctly removed its own worktree.
