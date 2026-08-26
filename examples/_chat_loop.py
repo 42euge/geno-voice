@@ -118,6 +118,22 @@ class TurnResult:
     idle_timed_out: bool = False
 
 
+class _InactiveBargeInWatcher:
+    """No-op watcher used by strict half-duplex sessions."""
+
+    def __init__(self) -> None:
+        self.detected = False
+        self.frames: list[bytes] = []
+        self.started_at = None
+        self.stopped_at = None
+
+    def start(self) -> None:
+        return None
+
+    def stop(self, timeout: float = 2.0) -> None:
+        return None
+
+
 class ChatLoop:
     """Per-turn chat orchestrator with all dependencies injected.
 
@@ -174,6 +190,9 @@ class ChatLoop:
         # comfortably above normal token-streaming jitter, well
         # below the user's "is this broken" threshold.
         auto_aggressive_threshold: float = 0.0,
+        # True keeps the interruptible watcher/cancel/replay path. False uses
+        # a no-op watcher for strict listen-then-speak half duplex.
+        barge_in_enabled: bool = True,
         # iter-159: organic utterance aggregation (backlog #9 live wiring).
         # When None (default), the loop responds to each finalized utterance
         # exactly as before — byte-for-byte the pre-aggregator path. When an
@@ -242,6 +261,7 @@ class ChatLoop:
         self._aggressive_first_sentence = aggressive_first_sentence
         # iter-093: auto-aggressive-on-stall threshold (seconds).
         self._auto_aggressive_threshold = auto_aggressive_threshold
+        self._barge_in_enabled = bool(barge_in_enabled)
 
         # iter-159: optional cross-turn utterance aggregator. None = the
         # proven single-utterance path; an UtteranceAggregator engages the
@@ -568,17 +588,20 @@ class ChatLoop:
         # background noise even when the recorder was tuned to ignore
         # it.
         from examples._chat_helpers import VadState
-        watcher = BargeInWatcher(
-            mic=self._mic,
-            on_speech_detected=coord.trigger,
-            chunk_size=self._chunk,
-            rate=self._rate,
-            vad=VadState(
-                silence_threshold=self._silence_threshold,
-                silence_duration=self._silence_duration,
-                min_speech_duration=self._min_speech_duration,
-            ),
-        )
+        if self._barge_in_enabled:
+            watcher = BargeInWatcher(
+                mic=self._mic,
+                on_speech_detected=coord.trigger,
+                chunk_size=self._chunk,
+                rate=self._rate,
+                vad=VadState(
+                    silence_threshold=self._silence_threshold,
+                    silence_duration=self._silence_duration,
+                    min_speech_duration=self._min_speech_duration,
+                ),
+            )
+        else:
+            watcher = _InactiveBargeInWatcher()
         watcher.start()
 
         llm_start = self._clock()
@@ -716,6 +739,10 @@ class ChatLoop:
                 worker.wait_done(timeout=self._cancel_wait_timeout)
 
             watcher.stop(timeout=2.0)
+            if not self._barge_in_enabled:
+                # PortAudio keeps buffering input during the reply. Discard
+                # that likely speaker echo before the next listening turn.
+                flush_pending_audio(self._mic, chunk_size=self._chunk)
             # iter-074: bargeable-time fraction. Of the time the
             # bot was producing audio, what fraction was the
             # watcher active (i.e. barge-in was actually possible)?

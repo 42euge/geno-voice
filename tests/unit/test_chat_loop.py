@@ -148,6 +148,7 @@ def _make_chat_loop(
     fillers=None,
     idle_threshold: float = 0.0,
     idle_timeout=None,
+    barge_in_enabled: bool = True,
 ):
     engine, transcribe = _stt_engine_stub(transcript=transcript)
     if llm_stream_fn is None:
@@ -166,6 +167,7 @@ def _make_chat_loop(
         fillers=fillers,
         idle_threshold=idle_threshold,
         idle_timeout=idle_timeout,
+        barge_in_enabled=barge_in_enabled,
     )
 
 
@@ -319,6 +321,33 @@ class TestBargeInDuringLlmStream:
         # If metrics exist, barge_in flag is set.
         if result.metrics is not None:
             assert result.metrics.barge_in is True
+
+    def test_half_duplex_ignores_speech_during_reply(self):
+        mic = VirtualMicStream(rate=RATE, chunk_size=CHUNK)
+        mic.push(_utterance_audio())
+
+        def push_during_reply():
+            time.sleep(0.05)
+            mic.push(make_tone_burst(0.5, rate=RATE, amp=0.3))
+
+        threading.Thread(target=push_during_reply, daemon=True).start()
+
+        loop = _make_chat_loop(
+            mic=mic,
+            speaker_factory=lambda: VirtualSpeakerStream(rate=24000),
+            transcript="initial",
+            llm_text="One sentence. Two sentence. Three sentence. Four sentence.",
+            llm_per_token_delay=0.02,
+            play_fn=_slow_play,
+            barge_in_enabled=False,
+        )
+        result = loop.run_one_turn([])
+
+        assert result.had_error is False
+        assert result.next_primed_frames is None
+        assert result.metrics is not None
+        assert result.metrics.barge_in is False
+        assert "Four sentence" in result.metrics.response
 
 
 class TestLlmErrorPath:

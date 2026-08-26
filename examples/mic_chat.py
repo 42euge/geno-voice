@@ -176,7 +176,14 @@ def play_aligned(pa, audio_np, tokens, is_first_sentence=False):
         out_stream.close()
 
 
-def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
+def run_chat(
+    model_repo: str,
+    voice: str = "af_heart",
+    speed: float = 1.0,
+    *,
+    full_duplex: bool | None = None,
+    barge_in_enabled: bool = True,
+):
     """Main chat loop with streaming LLM + sentence-by-sentence TTS.
 
     ``model_repo`` is the FALLBACK STT model when chat config
@@ -184,8 +191,35 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
     ``chat.stt_engine`` / ``stt_model`` in config.local.yaml to
     pick faster_whisper for x86_64 Linux; the function arg is
     still honored for backwards compatibility.
+
+    ``full_duplex`` explicitly selects the organic turn-taking gate for the
+    installed ``geno-voice agent`` command. ``None`` preserves the legacy
+    ``gv chat`` behavior and reads ``GENO_FULL_DUPLEX*`` environment flags.
+    ``barge_in_enabled`` controls whether the mic is watched while the agent
+    speaks; half-duplex callers disable it, while the legacy chat path keeps
+    its proven interruptible default.
     """
     llm_config = load_llm_config()
+
+    # Resolve the mode once and inject the same immutable config into every
+    # organic-turn component. Explicit agent modes override ambient env vars;
+    # legacy ``gv chat`` retains its environment-driven behavior.
+    from session.full_duplex import (
+        FullDuplexConfig,
+        full_duplex_config_from_env,
+    )
+    full_duplex_config = (
+        full_duplex_config_from_env()
+        if full_duplex is None
+        else FullDuplexConfig(enabled=full_duplex)
+    )
+    effective_full_duplex = (
+        full_duplex_config.enabled
+        or full_duplex_config.continuer_aware_listening_active()
+        or full_duplex_config.agent_backchannels_active()
+        or full_duplex_config.utterance_merging_active()
+    )
+    mode_label = "full-duplex" if effective_full_duplex else "half-duplex"
 
     # iter-119: load chat_cfg up front so stt_config is available
     # before load_engines. The original code loaded chat_cfg AFTER
@@ -207,7 +241,7 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
     stt_engine_name = stt_cfg["engine"]
 
     model_short = stt_model.split("/")[-1] if stt_model else "(default)"
-    print(f"\n{BOLD}gv chat{RESET}")
+    print(f"\n{BOLD}geno-voice agent {mode_label}{RESET}")
     print(
         f"{DIM}stt: {stt_engine_name}/{model_short} │ "
         f"llm: {llm_config['model']} │ tts: kokoro/{voice}{RESET}"
@@ -353,9 +387,7 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
     # utterance is held and merged with a quick follow-on. Lazy-imported so the
     # session package's eager pipecat import isn't paid unless we're actually on
     # a device running the live chat.
-    from session.full_duplex import full_duplex_config_from_env
     from session.utterance_aggregator import UtteranceAggregator
-    full_duplex_config = full_duplex_config_from_env()
     aggregator = UtteranceAggregator(config=full_duplex_config)
     # iter-167: mid-session long-silence flush (backlog #9, wiring hop 2).
     # The recorder's pre-speech idle timeout (iter-165) lets run_session notice
@@ -399,6 +431,9 @@ def run_chat(model_repo: str, voice: str = "af_heart", speed: float = 1.0):
         idle_threshold=filler_idle_threshold,
         aggressive_first_sentence=aggressive_first_sentence,
         auto_aggressive_threshold=auto_aggressive_threshold,
+        # The canonical half-duplex mode does not monitor the mic while the
+        # assistant speaks. Full-duplex and legacy chat retain barge-in.
+        barge_in_enabled=barge_in_enabled,
         # iter-167: pre-speech idle timeout on the recorder (iter-165),
         # wired only in organic mode (None in half-duplex = wait forever).
         idle_timeout=idle_timeout,

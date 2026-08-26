@@ -4,6 +4,18 @@ version = "0.1.0"
 description = "Offline voice SDK for local AI agents"
 requires-python = ">=3.11"
 
+[project.scripts]
+geno-voice = "geno_voice.cli:main"
+gv = "geno_voice.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["geno_voice*", "examples*", "session*", "stt*", "tts*", "vad*"]
+namespaces = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests", "benchmarks"]
 markers = [

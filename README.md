@@ -28,6 +28,66 @@ Or from within an agent session:
 /geno-tools install geno-voice
 ```
 
+For development, install the console entrypoints from this checkout:
+
+```bash
+python -m pip install -e .
+```
+
+## Voice agent
+
+The canonical agent command has two explicit turn-taking modes:
+
+```bash
+geno-voice agent full-duplex
+geno-voice agent half-duplex
+```
+
+Both modes run the same local voice pipeline: microphone → STT → streaming
+LLM → sentence-overlapped Kokoro TTS → speaker. The LLM is an
+OpenAI-compatible `/chat/completions` endpoint, so it can point at the Blue
+LiteLLM gateway or another custom endpoint; it is not tied to OpenAI.
+
+Create an untracked `config.local.yaml` in the checkout:
+
+```yaml
+llm:
+  model: your-blue-deployment-name
+  base_url: https://your-litellm-host/v1
+  api_key: ${BLUE_LITELLM_API_KEY}
+  max_tokens: 150
+
+chat:
+  stt_engine: faster_whisper
+  stt_model: large-v3
+  stt_device: cuda
+  stt_compute: float16
+```
+
+Export the referenced credential before starting the agent. Keep secrets out
+of YAML and command-line arguments.
+
+- `full-duplex` watches the mic during the response, cancels LLM/TTS on real
+  user speech, replays captured interruption audio into the next turn, and
+  enables organic utterance merging.
+- `half-duplex` waits for a complete user turn, stops mic monitoring while the
+  agent replies, and drains buffered speaker echo before listening again.
+
+STT and voice overrides are shared by both modes:
+
+```bash
+geno-voice agent full-duplex --stt-model large-v3 --voice bf_emma --speed 1.1
+```
+
+The same API is importable by a GUI without loading audio dependencies until
+the session starts:
+
+```python
+from geno_voice import AgentConfig, AgentMode, run_agent
+
+run_agent(AgentConfig(mode=AgentMode.FULL_DUPLEX, stt_model="large-v3"))
+```
+
 ## Evaluating a new STT engine
 
 `scripts/run_stt_benchmark.py` runs any registered `STTEngine` against

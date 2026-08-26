@@ -2,6 +2,8 @@
 """geno-voice CLI.
 
 Usage:
+    geno-voice agent full-duplex  # interruptible agent voice loop
+    geno-voice agent half-duplex  # strict listen, then speak turns
     gv bench              # batch mode — wait for silence, transcribe, show timing
     gv stream             # streaming mode — live progressive transcription
     gv talk               # talk mode — STT → NLP → canned response → TTS
@@ -13525,9 +13527,24 @@ def cmd_chat(args):
     run_chat(model_repo=args.model, voice=args.voice, speed=args.speed)
 
 
+def cmd_agent(args):
+    """Run the canonical voice-agent loop in an explicit duplex mode."""
+    from geno_voice.agent import AgentConfig, AgentMode, run_agent
+
+    run_agent(
+        AgentConfig(
+            mode=AgentMode(args.agent_mode),
+            stt_model=args.model,
+            voice=args.voice,
+            speed=args.speed,
+        )
+    )
+
+
 # Command-name → handler. Injectable so dispatch() can be unit-tested with
 # stub handlers instead of importing the audio modules.
 DEFAULT_HANDLERS = {
+    "agent": cmd_agent,
     "bench": cmd_bench,
     "stream": cmd_stream,
     "talk": cmd_talk,
@@ -13582,13 +13599,13 @@ _STT_RTF_DEFAULT_REL_SPREAD_MAX = 0.15
 _STT_RTF_DEFAULT_MIN_SAMPLES = 3
 
 
-def build_parser():
+def build_parser(*, prog="gv"):
     """Construct the gv argument parser.
 
     Pure: no I/O, no audio imports. The returned parser is safe to
     exercise from tests with ``parse_args([...])``.
     """
-    parser = argparse.ArgumentParser(prog="gv", description="geno-voice CLI")
+    parser = argparse.ArgumentParser(prog=prog, description="geno-voice CLI")
     sub = parser.add_subparsers(dest="command")
 
     # Source the mirror seed defaults from the engine so the simulator's
@@ -13629,6 +13646,43 @@ def build_parser():
 
     bench = sub.add_parser("bench", help="Batch mode — transcribe after silence")
     bench.add_argument("--model", type=model_type, default=DEFAULT_MODEL)
+
+    agent = sub.add_parser(
+        "agent",
+        help="Voice agent using a configured LiteLLM/custom endpoint",
+    )
+    agent_modes = agent.add_subparsers(dest="agent_mode", required=True)
+    for mode, help_text in (
+        (
+            "full-duplex",
+            "Interruptible conversation with barge-in and organic turn merging",
+        ),
+        (
+            "half-duplex",
+            "Strict listen-then-speak turns; mic monitoring pauses during replies",
+        ),
+    ):
+        mode_parser = agent_modes.add_parser(mode, help=help_text)
+        mode_parser.add_argument(
+            "--stt-model",
+            "--model",
+            dest="model",
+            type=model_type,
+            default=DEFAULT_MODEL,
+            help="Speech-to-text model (legacy alias: --model)",
+        )
+        mode_parser.add_argument(
+            "--voice",
+            type=voice_type,
+            default="af_heart",
+            help="TTS voice id, e.g. af_heart / bf_emma (default: af_heart)",
+        )
+        mode_parser.add_argument(
+            "--speed",
+            type=speed_type,
+            default=1.0,
+            help=f"TTS speed in [{SPEED_MIN}, {SPEED_MAX}] (default: 1.0)",
+        )
 
     stream = sub.add_parser("stream", help="Streaming mode — live progressive transcription")
     stream.add_argument("--model", type=model_type, default=DEFAULT_MODEL)
@@ -16656,8 +16710,8 @@ def dispatch(args, parser, *, handlers=None):
     return 0
 
 
-def main(argv=None):
-    parser = build_parser()
+def main(argv=None, *, prog="gv"):
+    parser = build_parser(prog=prog)
     args = parser.parse_args(argv)
     return dispatch(args, parser)
 
