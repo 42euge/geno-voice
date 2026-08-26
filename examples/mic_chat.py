@@ -183,6 +183,8 @@ def run_chat(
     *,
     full_duplex: bool | None = None,
     barge_in_enabled: bool = True,
+    llm_config: dict | None = None,
+    chat_config: dict | None = None,
 ):
     """Main chat loop with streaming LLM + sentence-by-sentence TTS.
 
@@ -198,8 +200,18 @@ def run_chat(
     ``barge_in_enabled`` controls whether the mic is watched while the agent
     speaks; half-duplex callers disable it, while the legacy chat path keeps
     its proven interruptible default.
+
+    ``llm_config`` and ``chat_config`` are injectable for embedding hosts such
+    as OpenCode. The CLI leaves them unset and loads ``config.local.yaml``;
+    an embedding process can pass its custom endpoint and voice settings
+    without writing credentials to the geno-voice checkout.
     """
-    llm_config = load_llm_config()
+    if llm_config is None:
+        llm_config = load_llm_config()
+    else:
+        # Reuse the same validation and ${ENV_VAR} resolution as the file path,
+        # while copying the caller-owned mapping before normalization.
+        llm_config = parse_llm_config({"llm": dict(llm_config)})
 
     # Resolve the mode once and inject the same immutable config into every
     # organic-turn component. Explicit agent modes override ambient env vars;
@@ -228,7 +240,7 @@ def run_chat(
     from examples._chat_config import (
         parse_filler_config, parse_stt_config, parse_vad_config,
     )
-    chat_cfg = load_chat_config()
+    chat_cfg = load_chat_config() if chat_config is None else dict(chat_config)
     # iter-188: warn adapter so a typo'd stt knob (wrong type, empty
     # string) surfaces a YELLOW one-liner instead of silently falling
     # back to the default. Mirrors the iter-187 vad wiring.

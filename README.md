@@ -83,9 +83,22 @@ The same API is importable by a GUI without loading audio dependencies until
 the session starts:
 
 ```python
+import os
+
 from geno_voice import AgentConfig, AgentMode, run_agent
 
-run_agent(AgentConfig(mode=AgentMode.FULL_DUPLEX, stt_model="large-v3"))
+run_agent(
+    AgentConfig(
+        mode=AgentMode.FULL_DUPLEX,
+        stt_model="large-v3",
+        llm_config={
+            "model": "your-blue-deployment-name",
+            "base_url": "https://your-litellm-host/v1",
+            "api_key": os.environ["BLUE_LITELLM_API_KEY"],
+        },
+        chat_config={"stt_engine": "faster_whisper", "stt_device": "cuda"},
+    )
+)
 ```
 
 ## Evaluating a new STT engine

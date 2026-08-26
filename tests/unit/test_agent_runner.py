@@ -52,6 +52,12 @@ def test_run_agent_injects_mode_into_shared_runner(
             stt_model="faster-whisper/large-v3",
             voice="bf_emma",
             speed=1.25,
+            llm_config={
+                "model": "blue-model",
+                "base_url": "https://litellm.example/v1",
+                "api_key": "test-only",
+            },
+            chat_config={"stt_engine": "faster_whisper"},
         ),
         chat_runner=runner,
     )
@@ -64,6 +70,12 @@ def test_run_agent_injects_mode_into_shared_runner(
             "speed": 1.25,
             "full_duplex": expected_full,
             "barge_in_enabled": expected_barge,
+            "llm_config": {
+                "model": "blue-model",
+                "base_url": "https://litellm.example/v1",
+                "api_key": "test-only",
+            },
+            "chat_config": {"stt_engine": "faster_whisper"},
         }
     ]
 

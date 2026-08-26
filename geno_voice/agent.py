@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, Protocol
+from typing import Any, Callable, Mapping, Protocol
 
 
 class AgentMode(str, Enum):
@@ -35,6 +35,8 @@ class AgentConfig:
     stt_model: str
     voice: str = "af_heart"
     speed: float = 1.0
+    llm_config: Mapping[str, Any] | None = None
+    chat_config: Mapping[str, Any] | None = None
 
 
 class ChatRunner(Protocol):
@@ -46,6 +48,8 @@ class ChatRunner(Protocol):
         *,
         full_duplex: bool | None = None,
         barge_in_enabled: bool = True,
+        llm_config: Mapping[str, Any] | None = None,
+        chat_config: Mapping[str, Any] | None = None,
     ) -> object: ...
 
 
@@ -82,4 +86,6 @@ def run_agent(
         speed=config.speed,
         full_duplex=runtime.full_duplex,
         barge_in_enabled=runtime.barge_in_enabled,
+        llm_config=config.llm_config,
+        chat_config=config.chat_config,
     )
