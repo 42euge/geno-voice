@@ -76,6 +76,13 @@ def synthesize_with_alignment(tts_engine, text: str, voice: str, speed: float):
         duration = len(audio) / TTS_RATE
 
         for tok in result.tokens:
+            # Kokoro occasionally emits metadata-only / punctuation tokens
+            # without alignment timestamps. They do not describe a playable
+            # interval, so leave them out of the reveal timeline while keeping
+            # the synthesized audio. Attempting to add the chunk offset to a
+            # missing timestamp used to abort the rest of the response.
+            if tok.start_ts is None or tok.end_ts is None:
+                continue
             all_tokens.append({
                 "text": tok.text,
                 "start": tok.start_ts + offset,

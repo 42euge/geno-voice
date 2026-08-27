@@ -30,7 +30,12 @@ from examples._chat_tts import TTS_RATE, synthesize_with_alignment  # noqa: E402
 class FakeToken:
     """Mimics kokoro's per-token timing object."""
 
-    def __init__(self, text: str, start_ts: float, end_ts: float):
+    def __init__(
+        self,
+        text: str,
+        start_ts: float | None,
+        end_ts: float | None,
+    ):
         self.text = text
         self.start_ts = start_ts
         self.end_ts = end_ts
@@ -196,6 +201,26 @@ class TestSynthesizeWithAlignment:
         audio, tokens = synthesize_with_alignment(eng, "x", "v", 1.0)
         assert len(audio) == 100
         assert tokens == []
+
+    def test_untimed_tokens_are_skipped_without_losing_audio(self):
+        chunk = np.full(TTS_RATE, 0.2, dtype=np.float32)
+        eng = _fake_engine([
+            FakeResult(audio=chunk, tokens=[
+                FakeToken("Hello", 0.0, 0.5),
+                FakeToken("!", None, None),
+                FakeToken("world", 0.5, 1.0),
+            ]),
+        ])
+
+        audio, tokens = synthesize_with_alignment(
+            eng, "Hello! world", "v", 1.0,
+        )
+
+        assert np.array_equal(audio, chunk)
+        assert tokens == [
+            {"text": "Hello", "start": 0.0, "end": 0.5},
+            {"text": "world", "start": 0.5, "end": 1.0},
+        ]
 
 
 # ---- Integration test with real kokoro --------------------------------------
