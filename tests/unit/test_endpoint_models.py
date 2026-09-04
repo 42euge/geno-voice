@@ -40,6 +40,7 @@ def fake_breeze_modules(monkeypatch):
 
     runtime_module.load_runtime = load_runtime
     runtime_module.resolve_device = lambda: "cuda:0"
+    runtime_module.set_all_seeds = lambda seed: calls.setdefault("seed", seed)
     runtime_module.update_generation_config_for_breeze = (
         lambda loaded_model: calls.setdefault("updated_model", loaded_model)
     )
@@ -68,8 +69,8 @@ def fake_breeze_modules(monkeypatch):
                 tokenizer,
             )
 
-        def iter_audio_chunks(self, inputs, *, request_id):
-            calls["iter_audio_chunks"] = (inputs, request_id)
+        def iter_audio_chunks(self, inputs, *, request_id, seed=None):
+            calls["iter_audio_chunks"] = (inputs, request_id, seed)
             yield FakeBreezeChunk(np.array([1.0, -1.0], dtype=np.float32))
 
     fast_module.FastStreamingConfig = FastStreamingConfig
@@ -134,6 +135,12 @@ def test_breeze_adapter_uses_official_runtime_and_converts_float_pcm(
             "guidance_scale_ref": None,
             "guidance_scale_ins": None,
         }
+        assert fake_breeze_modules["seed"] == 42
+        assert fake_breeze_modules["iter_audio_chunks"] == (
+            {"prepared": True},
+            "r1",
+            42,
+        )
         assert str(runtime_path) not in sys.path
 
     asyncio.run(scenario())

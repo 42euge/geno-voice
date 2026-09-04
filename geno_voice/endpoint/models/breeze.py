@@ -62,6 +62,7 @@ class BreezeTTS2Adapter:
         self._runtime: Any = None
         self._prepare_inputs: Any = None
         self._get_template: Any = None
+        self._set_all_seeds: Any = None
         self._inference_lock = asyncio.Lock()
 
     async def load(self) -> None:
@@ -75,6 +76,7 @@ class BreezeTTS2Adapter:
                 from breeze_infer.runtime import (
                     load_runtime,
                     resolve_device,
+                    set_all_seeds,
                     update_generation_config_for_breeze,
                 )
                 from breeze_infer.templates import get_template, prepare_inputs
@@ -111,6 +113,7 @@ class BreezeTTS2Adapter:
         self._runtime = runtime
         self._prepare_inputs = prepare_inputs
         self._get_template = get_template
+        self._set_all_seeds = set_all_seeds
 
     async def synthesize(
         self, request: SynthesisRequest, cancellation: CancellationToken
@@ -133,8 +136,9 @@ class BreezeTTS2Adapter:
                 )
 
                 def chunks():
+                    self._set_all_seeds(42)
                     return self._runtime.iter_audio_chunks(
-                        inputs, request_id=request.request_id
+                        inputs, request_id=request.request_id, seed=42
                     )
 
                 async for chunk in stream_sync_iterator(chunks, cancellation):
