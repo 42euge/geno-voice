@@ -12,6 +12,7 @@ gv = "geno_voice.cli:main"
 endpoint = [
     "fastapi>=0.115",
     "uvicorn>=0.30",
+    "websockets>=15",
     "grpcio>=1.83",
     "protobuf>=7.35",
     "aiortc>=1.9",

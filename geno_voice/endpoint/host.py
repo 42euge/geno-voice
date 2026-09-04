@@ -22,7 +22,11 @@ TRANSPORT_TARGETS = {
 }
 
 PROTOCOL_DEPENDENCIES = {
-    "websocket": (("fastapi", "fastapi"), ("uvicorn", "uvicorn")),
+    "websocket": (
+        ("fastapi", "fastapi"),
+        ("uvicorn", "uvicorn"),
+        ("websockets", "websockets"),
+    ),
     "grpc": (("grpc", "grpcio"),),
     "webrtc": (
         ("fastapi", "fastapi"),
