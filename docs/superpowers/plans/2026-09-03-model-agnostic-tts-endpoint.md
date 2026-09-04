@@ -183,7 +183,7 @@ git commit -m "feat: add pluggable Breeze and Kokoro endpoint models"
 - Consumes: `ModelRegistry` and transport launchers by protocol name.
 - Produces: `EndpointConfig`, `run_endpoint(config)`, CLI command `start-endpoint`.
 
-- [ ] **Step 1: Write failing parser and lazy-dispatch tests**
+- [x] **Step 1: Write failing parser and lazy-dispatch tests**
 
 ```python
 def test_start_endpoint_parser_is_case_insensitive():
@@ -200,13 +200,13 @@ def test_dispatch_passes_endpoint_config_without_importing_models(monkeypatch):
     assert seen[0].protocol == "websocket"
 ```
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run: `../../.venv/bin/python -m pytest tests/unit/test_gv_start_endpoint.py tests/unit/test_endpoint_host.py -q`
 
 Expected: argparse rejects `start-endpoint`.
 
-- [ ] **Step 3: Implement CLI and host lifecycle**
+- [x] **Step 3: Implement CLI and host lifecycle**
 
 ```python
 @dataclass(frozen=True)
@@ -228,13 +228,13 @@ licensing, and always closes the model on exit. Add an `endpoint` optional
 dependency group containing FastAPI/Uvicorn, grpcio/protobuf, aiortc/av, and
 numpy.
 
-- [ ] **Step 4: Run focused and existing CLI tests**
+- [x] **Step 4: Run focused and existing CLI tests**
 
 Run: `../../.venv/bin/python -m pytest tests/unit/test_gv_start_endpoint.py tests/unit/test_endpoint_host.py tests/unit/test_gv_agent_cli.py -q`
 
 Expected: endpoint and existing agent CLI tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add geno_voice/endpoint/cli.py geno_voice/endpoint/host.py examples/gv.py pyproject.toml tests/unit/test_gv_start_endpoint.py tests/unit/test_endpoint_host.py

@@ -152,6 +152,36 @@ def model_type(raw):
     return raw
 
 
+def endpoint_protocol_type(raw):
+    """Normalize the supported TTS endpoint transport names."""
+    aliases = {
+        "websocket": "websocket",
+        "ws": "websocket",
+        "grpc": "grpc",
+        "webrtc": "webrtc",
+        "rtp": "rtp",
+    }
+    normalized = str(raw).strip().lower()
+    try:
+        return aliases[normalized]
+    except KeyError as exc:
+        supported = ", ".join(("websocket", "ws", "grpc", "webrtc", "rtp"))
+        raise argparse.ArgumentTypeError(
+            f"protocol must be one of {supported}, got {raw!r}"
+        ) from exc
+
+
+def port_type(raw):
+    """Parse a TCP control port in the IANA-valid range."""
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError(f"port must be an integer, got {raw!r}") from exc
+    if not (1 <= value <= 65_535):
+        raise argparse.ArgumentTypeError(f"port must be in [1, 65535], got {value}")
+    return value
+
+
 def unit_interval_type(raw):
     """Argparse ``type`` for ``gv vad --threshold``: a P(speech) gate in [0, 1].
 
@@ -13541,10 +13571,21 @@ def cmd_agent(args):
     )
 
 
+def cmd_start_endpoint(args):
+    """Launch a model-agnostic streaming TTS service."""
+    from geno_voice.endpoint import cli as endpoint_cli
+
+    if args.list_models:
+        endpoint_cli.print_models()
+        return
+    endpoint_cli.run_endpoint(endpoint_cli.endpoint_config_from_args(args))
+
+
 # Command-name → handler. Injectable so dispatch() can be unit-tested with
 # stub handlers instead of importing the audio modules.
 DEFAULT_HANDLERS = {
     "agent": cmd_agent,
+    "start-endpoint": cmd_start_endpoint,
     "bench": cmd_bench,
     "stream": cmd_stream,
     "talk": cmd_talk,
@@ -13646,6 +13687,39 @@ def build_parser(*, prog="gv"):
 
     bench = sub.add_parser("bench", help="Batch mode — transcribe after silence")
     bench.add_argument("--model", type=model_type, default=DEFAULT_MODEL)
+
+    endpoint = sub.add_parser(
+        "start-endpoint",
+        help="Serve one local TTS model over WebSocket, gRPC, WebRTC, or RTP",
+    )
+    endpoint.add_argument(
+        "--protocol",
+        type=endpoint_protocol_type,
+        default="websocket",
+        help="websocket/ws, grpc, webrtc, or rtp (default: websocket)",
+    )
+    endpoint.add_argument(
+        "--model",
+        type=model_type,
+        default="kokoro",
+        help="Built-in or installed geno_voice.tts_models adapter (default: kokoro)",
+    )
+    endpoint.add_argument("--host", default="127.0.0.1")
+    endpoint.add_argument("--port", type=port_type)
+    endpoint.add_argument("--model-path", type=Path)
+    endpoint.add_argument("--runtime-path", type=Path)
+    endpoint.add_argument("--device")
+    endpoint.add_argument("--voice")
+    endpoint.add_argument(
+        "--log-level",
+        choices=("critical", "error", "warning", "info", "debug", "trace"),
+        default="info",
+    )
+    endpoint.add_argument(
+        "--list-models",
+        action="store_true",
+        help="List built-in and installed model adapters, then exit",
+    )
 
     agent = sub.add_parser(
         "agent",
