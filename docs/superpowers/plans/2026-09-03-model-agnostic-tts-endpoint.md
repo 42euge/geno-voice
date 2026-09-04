@@ -254,7 +254,7 @@ git commit -m "feat: launch streaming TTS endpoints from geno-voice"
 - Consumes: `SynthesisSession`, JSON commands, `EndpointEvent`.
 - Produces: `encode_audio_envelope(event)`, `decode_audio_envelope(data)`, `create_websocket_app(host)` and `serve_websocket(host, bind, port)`.
 
-- [ ] **Step 1: Write failing wire and loopback tests**
+- [x] **Step 1: Write failing wire and loopback tests**
 
 ```python
 def test_audio_envelope_round_trip():
@@ -272,13 +272,13 @@ def test_websocket_stream_accepts_speak_and_returns_binary_audio(fake_host):
             assert receive_until_binary(socket).startswith(b"GVA1")
 ```
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run: `../../.venv/bin/python -m pytest tests/unit/test_endpoint_wire.py tests/integration/test_endpoint_websocket.py -q`
 
 Expected: transport modules are missing.
 
-- [ ] **Step 3: Implement wire validation and concurrent WebSocket pumps**
+- [x] **Step 3: Implement wire validation and concurrent WebSocket pumps**
 
 ```python
 async def websocket_endpoint(ws: WebSocket) -> None:
@@ -293,13 +293,13 @@ Reject malformed JSON/commands with stable error events. Keep receive and send
 independent so cancel arrives during synthesis. Emit health/capabilities routes
 and close only the affected session on disconnect.
 
-- [ ] **Step 4: Run focused tests and verify GREEN**
+- [x] **Step 4: Run focused tests and verify GREEN**
 
 Run: `../../.venv/bin/python -m pytest tests/unit/test_endpoint_wire.py tests/integration/test_endpoint_websocket.py -q`
 
 Expected: envelope and loopback flows pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add geno_voice/endpoint/transports tests/unit/test_endpoint_wire.py tests/integration/test_endpoint_websocket.py

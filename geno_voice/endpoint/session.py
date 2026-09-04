@@ -104,6 +104,14 @@ class SynthesisSession:
             if event.type == "closed":
                 return
 
+    async def report_error(
+        self, code: str, message: str, *, request_id: str | None = None
+    ) -> None:
+        """Add a transport-validation error without terminating the session."""
+
+        if not self._closed:
+            await self._error(code, message, request_id)
+
     async def close(self) -> None:
         async with self._close_lock:
             if self._closed:
