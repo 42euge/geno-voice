@@ -112,7 +112,7 @@ git commit -m "feat: add interruptible TTS endpoint sessions"
 - Consumes: `AudioChunk`, `CancellationToken`, `ModelCapabilities`, `SynthesisRequest`.
 - Produces: `ModelRegistry`, `BreezeTTS2Adapter`, and `KokoroAdapter`, each satisfying `TTSModelAdapter` structurally.
 
-- [ ] **Step 1: Write failing registry and adapter tests**
+- [x] **Step 1: Write failing registry and adapter tests**
 
 ```python
 def test_registry_normalizes_alias_and_loads_factory_lazily():
@@ -131,13 +131,13 @@ async def test_kokoro_adapter_unwraps_wav_chunks(fake_kokoro_engine):
     assert chunks[0].pcm == b"\x01\x00\x02\x00"
 ```
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run: `../../.venv/bin/python -m pytest tests/unit/test_endpoint_registry.py tests/unit/test_endpoint_models.py -q`
 
 Expected: imports fail for missing registry/adapters.
 
-- [ ] **Step 3: Implement built-ins and plugin discovery**
+- [x] **Step 3: Implement built-ins and plugin discovery**
 
 ```python
 class ModelRegistry:
@@ -156,13 +156,13 @@ names, and surface the originating entry point in errors. Breeze adds
 and converts float numpy chunks to PCM16. Kokoro calls the existing engine in a
 worker thread and extracts PCM frames from its WAV chunks.
 
-- [ ] **Step 4: Run focused tests and verify GREEN**
+- [x] **Step 4: Run focused tests and verify GREEN**
 
 Run: `../../.venv/bin/python -m pytest tests/unit/test_endpoint_registry.py tests/unit/test_endpoint_models.py -q`
 
 Expected: all registry/adapter tests pass with injected fakes and no model downloads.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add geno_voice/endpoint/registry.py geno_voice/endpoint/models tests/unit/test_endpoint_registry.py tests/unit/test_endpoint_models.py
