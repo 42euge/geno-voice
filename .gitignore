@@ -7,3 +7,4 @@ test-data/*.wav
 .env
 config.local.yaml
 .claude/
+.worktrees/
