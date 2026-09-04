@@ -1,0 +1,324 @@
+{
+  "schema_version": 1,
+  "title": "Breeze TTS 2 expressive capability samples",
+  "description": "Deterministic first-pass samples designed to probe the expressive limits of the live geno-voice TTS endpoint.",
+  "model": "BreezeBlue/Breeze-TTS-2",
+  "engine": "geno-voice",
+  "endpoint": "ws://ngrt-ug-z2:8765/v1/tts/stream",
+  "transport": "websocket",
+  "seed": 42,
+  "generated_at": "2026-09-04T17:53:16.926315+00:00",
+  "audio_format": {
+    "container": "wav",
+    "encoding": "pcm_s16le",
+    "sample_rate_hz": 24000,
+    "channels": 1
+  },
+  "license": "BreezeBlue Research and Non-Commercial License; research/evaluation use only.",
+  "samples": [
+    {
+      "id": "01-intimate-whisper-en",
+      "filename": "01_intimate_whisper_en.wav",
+      "language": "en",
+      "capability": "Intimate near-whisper and micro-pauses",
+      "text": "Come a little closer. I shouldn't tell you this... but the key was here, beneath the blue cup, the whole time.",
+      "instruction": "A close-miked young adult with a soft, airy voice. Speak in an intimate near-whisper, slowly and confidentially, with tiny meaningful pauses. Keep the delivery gentle and breathy without becoming inaudible.",
+      "listen_for": [
+        "Sustained breathy phonation",
+        "Small pauses around the secret",
+        "Clear words despite low intensity"
+      ],
+      "output": {
+        "duration_seconds": 7.6,
+        "frame_count": 182400,
+        "file_size_bytes": 364844,
+        "sha256": "5b943069e341e6c57589635442e736a9dbcb40b939c50b8e1feef2268f517fd5"
+      }
+    },
+    {
+      "id": "02-exuberant-reunion-en",
+      "filename": "02_exuberant_reunion_en.wav",
+      "language": "en",
+      "capability": "Exuberant excitement and dynamic lift",
+      "text": "You made it! You actually made it! Look at this place—we did it, and I cannot believe you're finally here!",
+      "instruction": "A bright, youthful voice bursting with genuine joy. Start surprised, accelerate into delighted excitement, and let the final phrase soar. Use energetic dynamics and a broad smile, but keep every word intelligible.",
+      "listen_for": [
+        "Rising energy across the take",
+        "Audible smile",
+        "Excitement without clipped words"
+      ],
+      "output": {
+        "duration_seconds": 6.56,
+        "frame_count": 157440,
+        "file_size_bytes": 314924,
+        "sha256": "a27c6cd945d8066bdf43e00ed732704f44705bb41b2ddebf3631c97fdbd7548b"
+      }
+    },
+    {
+      "id": "03-restrained-anger-en",
+      "filename": "03_restrained_anger_en.wav",
+      "language": "en",
+      "capability": "Restrained anger without shouting",
+      "text": "Put it back. Exactly where you found it. We can discuss the rest after everyone else has left.",
+      "instruction": "A low, controlled adult voice with quiet intensity. The speaker is deeply angry but refuses to shout. Use clipped consonants, measured pauses, and a cold final sentence, as though every word is being held tightly in check.",
+      "listen_for": [
+        "Tension at low volume",
+        "Clipped articulation",
+        "Controlled rather than theatrical anger"
+      ],
+      "output": {
+        "duration_seconds": 8.4,
+        "frame_count": 201600,
+        "file_size_bytes": 403244,
+        "sha256": "68f144f7670ba892eeb956171dd44389b025647c875d7dc2ce8937d44347f850"
+      }
+    },
+    {
+      "id": "04-grief-vulnerability-en",
+      "filename": "04_grief_vulnerability_en.wav",
+      "language": "en",
+      "capability": "Grief, fragility, and emotional recovery",
+      "text": "I kept your last message. Some days I can listen to it. Today... I only made it as far as hello.",
+      "instruction": "A tired adult voice trying not to cry. Speak softly with fragile breath, a slight tremble, and an honest break before the last word. Avoid melodrama; make the emotion private, vulnerable, and restrained.",
+      "listen_for": [
+        "Subtle vocal tremble",
+        "Emotion carried by pacing",
+        "Natural recovery after the ellipsis"
+      ],
+      "output": {
+        "duration_seconds": 6.96,
+        "frame_count": 167040,
+        "file_size_bytes": 334124,
+        "sha256": "7506d27aa385a81abff7397542404b1a1ac5d90349473e699d215f2c28104dff"
+      }
+    },
+    {
+      "id": "05-suspense-narration-en",
+      "filename": "05_suspense_narration_en.wav",
+      "language": "en",
+      "capability": "Cinematic suspense and gradual escalation",
+      "text": "At midnight, the elevator stopped between floors. The lights went out. Then, from the other side of the doors... someone knocked three times.",
+      "instruction": "A cinematic suspense narrator with a dark, focused tone. Begin hushed and deliberate, lengthen the silences after each revelation, then build pressure toward three sharply separated knocks in the final phrase.",
+      "listen_for": [
+        "Progressive tension",
+        "Narrative pause control",
+        "Emphasis on the final count"
+      ],
+      "output": {
+        "duration_seconds": 9.68,
+        "frame_count": 232320,
+        "file_size_bytes": 464684,
+        "sha256": "dd5a224a60f7f163515309b50e7b94300e081374fdcfe61061a4b682f87ca6e3"
+      }
+    },
+    {
+      "id": "06-comedic-timing-en",
+      "filename": "06_comedic_timing_en.wav",
+      "language": "en",
+      "capability": "Deadpan comedy and punchline timing",
+      "text": "The good news is, I fixed the coffee machine. The bad news? It now believes it's the office manager.",
+      "instruction": "A dry, quick-witted speaker with precise comic timing. Deliver the setup matter-of-factly, leave a tiny expectant beat after the question, and land the final phrase with deadpan disbelief and a barely contained smile.",
+      "listen_for": [
+        "Beat before the punchline",
+        "Deadpan contrast",
+        "Subtle amused release"
+      ],
+      "output": {
+        "duration_seconds": 6.72,
+        "frame_count": 161280,
+        "file_size_bytes": 322604,
+        "sha256": "5102eb06c5ab37f992e814d32f5b37fb77d196266794c6ce6388cce848ea30b9"
+      }
+    },
+    {
+      "id": "07-authoritative-announcement-en",
+      "filename": "07_authoritative_announcement_en.wav",
+      "language": "en",
+      "capability": "Authoritative public announcement",
+      "text": "Attention, all teams. The north platform closes in two minutes. Complete your safety check and report to Gate Seven immediately.",
+      "instruction": "A resonant, confident transit announcer. Speak with crisp diction, calm authority, and firm urgency. Make the location, time limit, and final instruction unmistakable without sounding panicked or aggressive.",
+      "listen_for": [
+        "Command presence",
+        "Clear key information",
+        "Urgency without panic"
+      ],
+      "output": {
+        "duration_seconds": 8.0,
+        "frame_count": 192000,
+        "file_size_bytes": 384044,
+        "sha256": "14dc21dd9e7f25cabc64c253ea75e3caa007d841f7da90d34ded8149c740dd23"
+      }
+    },
+    {
+      "id": "08-agent-backchannels-en",
+      "filename": "08_agent_backchannels_en.wav",
+      "language": "en",
+      "capability": "Conversational backchannels for voice agents",
+      "text": "Mm-hm. Right... okay. Oh! I see what you mean. Yeah, go on—I'm listening.",
+      "instruction": "A warm, attentive conversational partner in a live call. Make each backchannel distinct and spontaneous: quiet acknowledgement, thoughtful processing, sudden understanding, then an encouraging invitation to continue. Keep turns short and natural.",
+      "listen_for": [
+        "Distinct pragmatic meaning per interjection",
+        "Fast conversational turns",
+        "Non-announcer spontaneity"
+      ],
+      "output": {
+        "duration_seconds": 8.16,
+        "frame_count": 195840,
+        "file_size_bytes": 391724,
+        "sha256": "a3d097128262b777f7a16015ae31ae07a811fd6031620e0f114de6d5663522a4"
+      }
+    },
+    {
+      "id": "09-urgent-fast-en",
+      "filename": "09_urgent_fast_en.wav",
+      "language": "en",
+      "capability": "Fast urgent pacing with intelligibility",
+      "text": "Take the second exit, stay in the left lane, cross the bridge, and call me the moment you reach the red building—don't stop before then!",
+      "instruction": "A focused adult speaking very quickly under real time pressure. Maintain breathless forward momentum and urgent emphasis while keeping the route sequence and every landmark completely intelligible.",
+      "listen_for": [
+        "High speaking rate",
+        "Preserved route sequence",
+        "Breathless urgency"
+      ],
+      "output": {
+        "duration_seconds": 5.28,
+        "frame_count": 126720,
+        "file_size_bytes": 253484,
+        "sha256": "17c282d19b13d24d40ee2895d6c5a8a3c68eab73f414bfd84a50cf5f1c592ee0"
+      }
+    },
+    {
+      "id": "10-reflective-slow-en",
+      "filename": "10_reflective_slow_en.wav",
+      "language": "en",
+      "capability": "Slow reflective pacing without monotony",
+      "text": "There is a moment, just before sunrise, when the whole city seems to breathe in... and wait.",
+      "instruction": "A mature, meditative voice with unhurried confidence. Speak very slowly, allow generous silence, and gently lengthen important vowels. Keep a living emotional arc so the delivery feels reflective rather than sleepy.",
+      "listen_for": [
+        "Meaningful long pauses",
+        "Natural vowel lengthening",
+        "Emotional motion at slow pace"
+      ],
+      "output": {
+        "duration_seconds": 10.88,
+        "frame_count": 261120,
+        "file_size_bytes": 522284,
+        "sha256": "307190b7e555148fe474ebd5658ee7334c4ab84bab5ac7a808b730fa2c7878a1"
+      }
+    },
+    {
+      "id": "11-vocal-events-en",
+      "filename": "11_vocal_events_en.wav",
+      "language": "en",
+      "capability": "English inline vocal events",
+      "text": "(clears throat) All right, I have an announcement. (cough) Sorry. We won the contract! (laugh) I knew we could do it. (sigh) What a week.",
+      "instruction": "A personable team lead speaking naturally after a long week. Perform every parenthesized vocal event organically and blend it into the surrounding speech. Move from formality to surprise, joyful laughter, and relieved exhaustion.",
+      "listen_for": [
+        "Four recognizable vocal events",
+        "Smooth event-to-speech transitions",
+        "Changing emotional state"
+      ],
+      "output": {
+        "duration_seconds": 10.08,
+        "frame_count": 241920,
+        "file_size_bytes": 483884,
+        "sha256": "6298a1561246473a246f7c3ceccb48cc919c7474bd1f1636ab27c55035062dbc"
+      }
+    },
+    {
+      "id": "12-elder-storyteller-en",
+      "filename": "12_elder_storyteller_en.wav",
+      "language": "en",
+      "capability": "Reference-free character and timbre design",
+      "text": "When I was your age, the river froze so clear that we skated by moonlight and watched the fish drift beneath our feet.",
+      "instruction": "An elderly storyteller with a warm, weathered, slightly gravelly voice. Speak with affectionate nostalgia, gentle humor, and the patient rhythm of someone savoring a vivid childhood memory.",
+      "listen_for": [
+        "Convincing age and texture",
+        "Warm nostalgic affect",
+        "Stable designed voice"
+      ],
+      "output": {
+        "duration_seconds": 8.56,
+        "frame_count": 205440,
+        "file_size_bytes": 410924,
+        "sha256": "97e69605a8414e14e0e54c49fc6a19216dd2d67bb0df0a1c749524976120948d"
+      }
+    },
+    {
+      "id": "13-mandarin-emotion-events-zh",
+      "filename": "13_mandarin_emotion_events_zh.wav",
+      "language": "zh",
+      "capability": "Mandarin emotion and inline vocal events",
+      "text": "[清嗓子] 大家先别紧张。答案就在最后一页。[笑] 你看，我早就说过我们会找到的！[叹气] 终于可以回家了。",
+      "instruction": "一位聪明、亲切的年轻研究员。开头沉着安抚大家，发现答案时变得惊喜而兴奋，最后带着疲惫又满足的释然。自然地演出所有方括号中的声音事件。",
+      "listen_for": [
+        "Natural Mandarin prosody",
+        "Three recognizable bracketed events",
+        "Calm-to-excited-to-relieved arc"
+      ],
+      "output": {
+        "duration_seconds": 15.36,
+        "frame_count": 368640,
+        "file_size_bytes": 737324,
+        "sha256": "f236a8b9e086804624ddcfde82266adc9ea2b0493250d7082a8f44696540b71b"
+      }
+    },
+    {
+      "id": "14-bilingual-code-switch",
+      "filename": "14_bilingual_code_switch.wav",
+      "language": "zh-en",
+      "capability": "English-Mandarin code-switching",
+      "text": "好，我們再確認一次：the launch window opens at nine fifteen，所有人八點四十五以前到 control room。Ready? 那就開始吧。",
+      "instruction": "一位自信俐落的台灣雙語團隊主管，在中文與英文之間自然切換。英文技術詞要清楚流暢，時間要準確，最後一句帶著鼓舞團隊的明亮力量。",
+      "listen_for": [
+        "Fluid language switching",
+        "Clear English technical phrases",
+        "Accurate time expression"
+      ],
+      "output": {
+        "duration_seconds": 12.48,
+        "frame_count": 299520,
+        "file_size_bytes": 599084,
+        "sha256": "b9e8b3bd55dec0889f55b7f9a39cceddb38897ee2ad0bbe655cd372f83c0be4a"
+      }
+    },
+    {
+      "id": "15-prosody-punctuation-en",
+      "filename": "15_prosody_punctuation_en.wav",
+      "language": "en",
+      "capability": "Punctuation, contrastive stress, and abrupt turns",
+      "text": "Wait—what? No, no, no... I said thirteen, not thirty! First: breathe. Second: listen. Third: go—now!",
+      "instruction": "An expressive, precise speaker reacting in real time. Follow every punctuation cue: abrupt interruption, disbelief, decelerating repetition, strong contrast on thirteen versus thirty, then three increasingly decisive commands.",
+      "listen_for": [
+        "Punctuation-shaped phrasing",
+        "Clear thirteen/thirty contrast",
+        "Escalation across the numbered commands"
+      ],
+      "output": {
+        "duration_seconds": 10.08,
+        "frame_count": 241920,
+        "file_size_bytes": 483884,
+        "sha256": "65b8d553cb78d178dac0db1385cd9474cdc178bd88d5fc88ef94e839e06c7d79"
+      }
+    },
+    {
+      "id": "16-near-sung-lyrical-en",
+      "filename": "16_near_sung_lyrical_en.wav",
+      "language": "en",
+      "capability": "Near-sung lyrical boundary case",
+      "text": "Follow the light, follow it home; over the water, wherever you roam. Follow the light... and you won't be alone.",
+      "instruction": "A clear, luminous voice hovering at the boundary between speech and song. Use flowing legato phrasing, gentle pitch contours, and a lightly melodic lift on each repeated 'follow the light,' but remain intelligible and do not become a full song.",
+      "listen_for": [
+        "Controlled melodic contour",
+        "Legato phrasing",
+        "Speech intelligibility at the singing boundary"
+      ],
+      "output": {
+        "duration_seconds": 16.08,
+        "frame_count": 385920,
+        "file_size_bytes": 771884,
+        "sha256": "816273d9a6bb20b90fc1b53f49390bf3dbae9381eb43d9f942558b1bfc0e8dc6"
+      }
+    }
+  ]
+}
