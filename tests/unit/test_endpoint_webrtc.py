@@ -10,6 +10,7 @@ from collections.abc import AsyncIterator
 from types import SimpleNamespace
 
 import httpx
+from fastapi.testclient import TestClient
 
 from geno_voice.endpoint.host import EndpointHost
 from geno_voice.endpoint.transports.webrtc import create_webrtc_app
@@ -198,3 +199,19 @@ def test_offer_rejects_malformed_signaling_without_opening_session() -> None:
         assert host.session_count == 0
 
     asyncio.run(scenario())
+
+
+def test_app_shutdown_closes_active_peers_and_sessions() -> None:
+    host = EndpointHost(FakeWebRTCModel())
+    peers = FakePeerFactory()
+    app = create_webrtc_app(host, peer_factory=peers)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/webrtc/offer", json={"sdp": "fake-offer", "type": "offer"}
+        )
+        assert response.status_code == 200
+        assert host.session_count == 1
+
+    assert peers.created[0].closed is True
+    assert host.session_count == 0

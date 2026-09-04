@@ -3,6 +3,7 @@
 import asyncio
 import json
 from collections import deque
+from contextlib import asynccontextmanager
 from fractions import Fraction
 
 try:
@@ -182,8 +183,20 @@ def create_webrtc_app(host, *, peer_factory=None):
         ) from exc
 
     peer_factory = peer_factory or RTCPeerConnection
-    app = FastAPI(title="geno-voice TTS WebRTC endpoint")
+    peer_cleanups = set()
+
+    @asynccontextmanager
+    async def lifespan(app):
+        yield
+        cleanups = tuple(peer_cleanups)
+        if cleanups:
+            await asyncio.gather(*(cleanup() for cleanup in cleanups))
+
+    app = FastAPI(
+        title="geno-voice TTS WebRTC endpoint", lifespan=lifespan
+    )
     app.state.peers = set()
+    app.state.peer_cleanups = peer_cleanups
 
     @app.post("/v1/webrtc/offer")
     async def offer(request: Request):
@@ -214,11 +227,14 @@ def create_webrtc_app(host, *, peer_factory=None):
             if cleaned:
                 return
             cleaned = True
+            peer_cleanups.discard(cleanup)
             app.state.peers.discard(peer)
             await host.close_session(session.session_id)
             track.stop()
             if peer.connectionState != "closed":
                 await peer.close()
+
+        peer_cleanups.add(cleanup)
 
         @peer.on("datachannel")
         def on_datachannel(channel):
