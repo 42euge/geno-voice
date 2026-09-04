@@ -320,7 +320,7 @@ git commit -m "feat: serve TTS sessions over WebSocket"
 - Consumes: typed protobuf `ClientMessage`, `SynthesisSession`.
 - Produces: `TTS.Stream(stream ClientMessage) returns (stream ServerMessage)` and `serve_grpc`.
 
-- [ ] **Step 1: Add the proto contract and failing round-trip test**
+- [x] **Step 1: Add the proto contract and failing round-trip test**
 
 ```protobuf
 service TTS { rpc Stream(stream ClientMessage) returns (stream ServerMessage); }
@@ -342,13 +342,13 @@ message ServerMessage {
 Test a real `grpc.aio` loopback stream with the fake host and assert ready,
 audio bytes, completion, and cancellation.
 
-- [ ] **Step 2: Generate stubs and verify RED**
+- [x] **Step 2: Generate stubs and verify RED**
 
 Run: `../../.venv/bin/python -m grpc_tools.protoc -I geno_voice/endpoint/proto --python_out=geno_voice/endpoint/proto --grpc_python_out=geno_voice/endpoint/proto geno_voice/endpoint/proto/tts_endpoint.proto && ../../.venv/bin/python -m pytest tests/integration/test_endpoint_grpc.py -q`
 
 Expected: loopback test fails because the servicer/launcher is absent.
 
-- [ ] **Step 3: Implement concurrent gRPC receive/event pumps**
+- [x] **Step 3: Implement concurrent gRPC receive/event pumps**
 
 ```python
 class TTSServicer(tts_endpoint_pb2_grpc.TTSServicer):
@@ -367,13 +367,13 @@ Translate validation/model errors into typed error events rather than gRPC
 process failures. Import grpc lazily and provide the endpoint-extra install
 hint when missing.
 
-- [ ] **Step 4: Run gRPC tests and verify GREEN**
+- [x] **Step 4: Run gRPC tests and verify GREEN**
 
 Run: `../../.venv/bin/python -m pytest tests/integration/test_endpoint_grpc.py -q`
 
 Expected: real loopback bidi stream passes.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add geno_voice/endpoint/proto geno_voice/endpoint/transports/grpc.py tests/integration/test_endpoint_grpc.py
