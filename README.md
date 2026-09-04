@@ -34,6 +34,105 @@ For development, install the console entrypoints from this checkout:
 python -m pip install -e .
 ```
 
+## Streaming TTS endpoint
+
+`geno-voice start-endpoint` loads one TTS model and exposes interruptible,
+low-latency synthesis over one selected transport. This service is TTS-only:
+the calling voice agent retains VAD, STT, turn-taking, backchannel timing, and
+dialogue policy. Install the transport dependencies with:
+
+```bash
+python -m pip install -e '.[endpoint]'
+geno-voice start-endpoint --list-models
+```
+
+Kokoro uses the existing local engine:
+
+```bash
+geno-voice start-endpoint --protocol websocket --model kokoro \
+  --host 0.0.0.0 --voice af_heart
+```
+
+Breeze-TTS-2 uses its official CUDA runtime and model directory. Install the
+[official runtime](https://github.com/breezeblue-ai/breeze-tts) on the Z2 and
+download the model weights separately, then run:
+
+```bash
+geno-voice start-endpoint --protocol WebRTC --model Breeze-TTS-2 \
+  --host 0.0.0.0 \
+  --model-path /models/Breeze-TTS-2 \
+  --runtime-path /opt/breeze-tts \
+  --device cuda:0
+```
+
+The model is loaded before the endpoint reports ready. Breeze inference is
+serialized because its official runtime is single-request. Breeze's open
+weights and self-hosted outputs are governed by the BreezeBlue Research and
+Non-Commercial License; the CLI prints that warning at every Breeze launch.
+
+The supported protocols and default ports are:
+
+| Protocol | Command value | Connection surface | Default port |
+|----------|---------------|--------------------|--------------|
+| WebSocket | `websocket` or `ws` | `WS /v1/tts/stream`; `GET /health`; `GET /v1/capabilities` | 8765 |
+| gRPC | `grpc` | `geno.voice.endpoint.v1.TTS/Stream` bidirectional stream | 50051 |
+| WebRTC | `webrtc` | `POST /v1/webrtc/offer`; audio track + ordered `geno-voice-control` data channel | 8787 |
+| RTP | `rtp` | HTTP session/control/SSE plus RTP and RTCP over UDP | 8790 |
+
+WebSocket audio is an atomic binary `GVA1` envelope: magic, a two-byte
+network-order JSON-header length, the audio-event header, then mono 24 kHz
+PCM16. gRPC carries the same PCM in `ServerMessage.audio`. WebRTC resamples it
+to a 48 kHz media track. RTP emits dynamic payload type 96 as
+`L16/24000/1`, with periodic RTCP sender reports; its control routes are:
+
+```text
+POST   /v1/rtp/sessions
+POST   /v1/rtp/sessions/{id}/commands
+GET    /v1/rtp/sessions/{id}/events
+DELETE /v1/rtp/sessions/{id}
+```
+
+JSON transports share one command vocabulary:
+
+```json
+{"type":"append","request_id":"turn-7","text":"Partial text "}
+{"type":"commit","request_id":"turn-7"}
+{"type":"speak","request_id":"cue-2","text":"Mm-hmm.","priority":"backchannel"}
+{"type":"cancel","request_id":"turn-7"}
+{"type":"supersede","request_id":"turn-8","text":"Corrected answer."}
+{"type":"close"}
+```
+
+Receive and synthesis pumps are independent, so `cancel` and `supersede`
+remain responsive while audio is being generated. A backchannel job moves
+ahead of queued normal speech; add `"interrupt":true` to cancel active normal
+speech too. Sessions cap text at 64 KiB and pending jobs at 32 without killing
+the connection.
+
+Additional open-source models plug in through the
+`geno_voice.tts_models` Python entry-point group. An entry point is named for
+the CLI model alias and returns a factory accepting
+`geno_voice.endpoint.registry.ModelConfig`; the resulting adapter implements
+`load()`, `close()`, and async `synthesize(request, cancellation)` yielding
+canonical `AudioChunk` values. Model-specific downloads, tensors, threading,
+and licenses remain inside that adapter.
+
+### Z2 LAN smoke check
+
+1. Bind to `0.0.0.0` on the Z2 and connect to its private LAN address. The
+   endpoint intentionally has no authentication, encryption, STUN, or TURN.
+2. Check `/health` for WebSocket/WebRTC/RTP, or open the gRPC `Stream`, and
+   confirm the `ready` event names the loaded model and 24 kHz PCM format.
+3. Send a short `speak` command and verify first audio on the selected media
+   channel. For RTP, create a session with the receiver's private IP/UDP port
+   and use the SDP returned by the create call.
+4. Send `cancel` during a long request and verify `cancelled` arrives and no
+   new audio packets/frames follow. Then send another `speak` command to prove
+   the connection remains usable.
+5. Repeat with `--protocol websocket`, `grpc`, `webrtc`, and `rtp`. Start a
+   separate process for each simultaneous protocol; one process intentionally
+   serves one model through one transport.
+
 ## Voice agent
 
 The canonical agent command has two explicit turn-taking modes:

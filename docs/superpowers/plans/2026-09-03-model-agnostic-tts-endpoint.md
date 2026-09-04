@@ -455,7 +455,7 @@ git commit -m "feat: serve TTS sessions over WebRTC"
 - Consumes: RTP session-create/control HTTP calls and session audio events.
 - Produces: RTP packetizer, RTCP sender reports, SSE events, SDP description, and `serve_rtp`.
 
-- [ ] **Step 1: Write failing packet and loopback tests**
+- [x] **Step 1: Write failing packet and loopback tests**
 
 ```python
 def test_rtp_packet_has_sequence_timestamp_ssrc_and_big_endian_l16():
@@ -471,13 +471,13 @@ async def test_rtp_http_control_sends_udp_and_cancel_stops_packets(fake_host, ud
     assert await udp_receiver.no_packet_for(0.1)
 ```
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run: `../../.venv/bin/python -m pytest tests/unit/test_endpoint_rtp.py tests/integration/test_endpoint_rtp.py -q`
 
 Expected: RTP transport is missing.
 
-- [ ] **Step 3: Implement HTTP control, RTP L16, RTCP reports, SSE, and SDP**
+- [x] **Step 3: Implement HTTP control, RTP L16, RTCP reports, SSE, and SDP**
 
 ```python
 def packetize_l16(pcm_le: bytes, *, sequence: int, timestamp: int, ssrc: int) -> bytes:
@@ -491,7 +491,7 @@ Split PCM into 20 ms/480-sample RTP packets, pace delivery against the event
 loop clock, wrap sequence/timestamp, send periodic RTCP sender reports, emit
 session events over SSE, and delete/cancel session state idempotently.
 
-- [ ] **Step 4: Document install, commands, contracts, and Z2 smoke procedure**
+- [x] **Step 4: Document install, commands, contracts, and Z2 smoke procedure**
 
 ```markdown
 pip install -e '.[endpoint]'
@@ -503,7 +503,11 @@ geno-voice start-endpoint --protocol webrtc --model Breeze-TTS-2 \
 Document each protocol's connection surface, model plugin entry-point group,
 Breeze license/runtime prerequisites, cancellation check, and LAN-only warning.
 
-- [ ] **Step 5: Run focused protocol suite and full unit suite**
+- [x] **Step 5: Run focused protocol suite and full unit suite**
+
+Endpoint result: 41 passed. Repository-wide result: 6,203 passed, 2 skipped,
+with two unrelated baseline/environment failures remaining (`ci-gate.sh` uses a
+GNU-sed expression rejected by macOS sed; the local venv lacks `torchaudio`).
 
 Run: `../../.venv/bin/python -m pytest tests/unit/test_endpoint_*.py tests/integration/test_endpoint_*.py -q`
 
@@ -511,14 +515,14 @@ Run: `../../.venv/bin/python -m pytest tests/unit -q`
 
 Expected: endpoint protocol suite and all existing unit tests pass.
 
-- [ ] **Step 6: Exercise installed CLI help without endpoint extras**
+- [x] **Step 6: Exercise installed CLI help without endpoint extras**
 
 Run: `PYTHONPATH=. ../../.venv/bin/python -m geno_voice start-endpoint --help`
 
 Expected: help lists all protocols/model options without importing CUDA,
 Breeze, grpc, or aiortc.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add geno_voice/endpoint/transports/rtp.py tests/unit/test_endpoint_rtp.py tests/integration/test_endpoint_rtp.py README.md docs/index.md
