@@ -390,7 +390,7 @@ git commit -m "feat: serve TTS sessions over bidirectional gRPC"
 - Consumes: `SynthesisSession`, SDP offer, ordered `geno-voice-control` data channel.
 - Produces: signaling FastAPI app, `SessionAudioTrack`, and `serve_webrtc`.
 
-- [ ] **Step 1: Write failing signaling/data/audio tests with peer fakes**
+- [x] **Step 1: Write failing signaling/data/audio tests with peer fakes**
 
 ```python
 async def test_offer_returns_answer_and_binds_control_channel(fake_peer_factory, fake_host):
@@ -407,13 +407,13 @@ async def test_peer_disconnect_closes_session(fake_peer_factory, fake_host):
     assert fake_host.sessions[0].is_closed
 ```
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run: `../../.venv/bin/python -m pytest tests/unit/test_endpoint_webrtc.py -q`
 
 Expected: WebRTC module is missing.
 
-- [ ] **Step 3: Implement signaling, data-channel commands, and audio track**
+- [x] **Step 3: Implement signaling, data-channel commands, and audio track**
 
 ```python
 class SessionAudioTrack(MediaStreamTrack):
@@ -428,14 +428,14 @@ Use `RTCPeerConnection`, `RTCSessionDescription`, and PyAV resampling through
 lazy imports. Send non-audio events on the data channel. Close peer/session on
 either side's disconnect. Do not configure STUN/TURN.
 
-- [ ] **Step 4: Run fake and optional real-aiortc tests**
+- [x] **Step 4: Run fake and optional real-aiortc tests**
 
 Run: `../../.venv/bin/python -m pytest tests/unit/test_endpoint_webrtc.py -q`
 
 Expected: signaling, routing, audio timing, and cleanup pass without requiring
 a real browser.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add geno_voice/endpoint/transports/webrtc.py tests/unit/test_endpoint_webrtc.py
