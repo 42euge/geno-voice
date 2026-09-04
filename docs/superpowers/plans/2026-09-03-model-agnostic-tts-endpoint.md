@@ -34,7 +34,7 @@
 - Produces: `ModelCapabilities`, `SynthesisRequest`, `AudioChunk`, `EndpointCommand`, `EndpointEvent`, `CancellationToken`, and `SynthesisSession`.
 - `SynthesisSession.handle(command)` accepts append/commit/speak/cancel/supersede/close; `events()` asynchronously yields ordered events.
 
-- [ ] **Step 1: Write failing session tests**
+- [x] **Step 1: Write failing session tests**
 
 ```python
 async def test_append_commit_streams_ordered_audio():
@@ -61,13 +61,13 @@ async def test_cancel_interrupts_active_request():
     assert model.cancelled.is_set()
 ```
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run: `../../.venv/bin/python -m pytest tests/unit/test_endpoint_session.py -q`
 
 Expected: collection fails because `geno_voice.endpoint` does not exist.
 
-- [ ] **Step 3: Implement immutable wire/domain types and the session worker**
+- [x] **Step 3: Implement immutable wire/domain types and the session worker**
 
 ```python
 @dataclass(frozen=True)
@@ -85,13 +85,13 @@ class SynthesisSession:
 
 Implement the 64 KiB text limit, 32-job limit, normal/backchannel priority queue, monotonic PTS/audio sequence, matching-request cancellation, normal-lane supersession, and deterministic close. The model worker receives a `CancellationToken` checked between chunks.
 
-- [ ] **Step 4: Run focused tests and verify GREEN**
+- [x] **Step 4: Run focused tests and verify GREEN**
 
 Run: `../../.venv/bin/python -m pytest tests/unit/test_endpoint_session.py -q`
 
 Expected: all core session tests pass without network/model dependencies.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add geno_voice/endpoint tests/unit/test_endpoint_session.py
