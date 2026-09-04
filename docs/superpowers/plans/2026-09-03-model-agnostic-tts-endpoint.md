@@ -505,9 +505,9 @@ Breeze license/runtime prerequisites, cancellation check, and LAN-only warning.
 
 - [x] **Step 5: Run focused protocol suite and full unit suite**
 
-Endpoint result: 41 passed. Repository-wide result: 6,203 passed, 2 skipped,
-with two unrelated baseline/environment failures remaining (`ci-gate.sh` uses a
-GNU-sed expression rejected by macOS sed; the local venv lacks `torchaudio`).
+Endpoint result: all focused tests passed. The repository-wide run retained two
+unrelated baseline/environment failures (`ci-gate.sh` uses a GNU-sed expression
+rejected by macOS sed; the local venv lacks `torchaudio`).
 
 Run: `../../.venv/bin/python -m pytest tests/unit/test_endpoint_*.py tests/integration/test_endpoint_*.py -q`
 
