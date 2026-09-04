@@ -48,14 +48,17 @@ async def stream_sync_iterator(
             asyncio.run_coroutine_threadsafe(queue.put(_END), loop).result()
 
     producer = asyncio.create_task(asyncio.to_thread(produce))
+    finished_normally = False
     try:
         while True:
             item = await queue.get()
             if item is _END:
+                finished_normally = True
                 break
             if isinstance(item, _ThreadFailure):
                 raise item.error
             yield item
     finally:
-        cancellation.cancel()
+        if not finished_normally:
+            cancellation.cancel()
         await producer

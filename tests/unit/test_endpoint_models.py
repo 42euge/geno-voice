@@ -179,17 +179,19 @@ def test_kokoro_adapter_unwraps_wav_chunks_without_blocking_contract() -> None:
     async def scenario() -> None:
         engine = FakeKokoroEngine([make_wav(b"\x01\x00\x02\x00")])
         adapter = KokoroAdapter(engine=engine, default_voice="af_heart")
+        cancellation = CancellationToken()
 
         chunks = [
             chunk
             async for chunk in adapter.synthesize(
                 SynthesisRequest(request_id="r1", text="Hi", speed=1.25),
-                CancellationToken(),
+                cancellation,
             )
         ]
 
         assert [chunk.pcm for chunk in chunks] == [b"\x01\x00\x02\x00"]
         assert engine.calls == [("Hi", "af_heart", 1.25)]
+        assert cancellation.cancelled is False
 
     asyncio.run(scenario())
 
