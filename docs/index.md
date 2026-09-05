@@ -14,6 +14,20 @@ happens locally — no cloud APIs, no data leaving the machine.
 | TTS | Kokoro / Piper | Local text-to-speech synthesis |
 | VAD | Silero VAD | Voice activity detection |
 
+## Streaming TTS endpoint
+
+Install `.[endpoint]` to serve Kokoro, Breeze-TTS-2, or an installed model
+adapter over WebSocket:
+
+```bash
+geno-voice-remote-server --protocol websocket --model kokoro
+geno-voice start-endpoint --protocol websocket --model Breeze-TTS-2
+```
+
+The service streams mono PCM audio and accepts interruption, supersession, and
+priority backchannel commands. It is TTS-only and intended for a trusted
+private network.
+
 ## Navigation
 
 - [Getting Started](getting-started.md) — installation, prerequisites, first use
