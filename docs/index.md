@@ -31,3 +31,11 @@ private network.
 ## Navigation
 
 - [Getting Started](getting-started.md) — installation, prerequisites, first use
+- [Open-source TTS models](research/open-source-tts-models-for-quick-agent.md) —
+  model and runtime options for expressive local synthesis
+- [Full-duplex recent literature](research/full-duplex-recent-literature.md) —
+  primary-source survey and staged voice-agent architecture
+- [Full-duplex papers explained](research/full-duplex-paper-explainers.md) —
+  plain-language explanations of the archived research papers
+- [Engineering full-duplex systems survey](research/survey/full-duplex-systems/README.md) —
+  LaTeX source, BibTeX bibliography, and compiled systems survey

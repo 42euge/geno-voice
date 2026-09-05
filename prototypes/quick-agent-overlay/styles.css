@@ -1,0 +1,211 @@
+:root {
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif;
+  color: #f8f8fc;
+  background: #0b0b0e;
+  font-synthesis: none;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 68% 12%, rgba(113, 88, 255, .13), transparent 32%),
+    linear-gradient(145deg, #111216 0%, #08090b 58%, #111014 100%);
+}
+
+button { font: inherit; }
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 30px;
+  border: 1px solid rgba(255,255,255,.055);
+  border-radius: 14px;
+  background:
+    linear-gradient(rgba(255,255,255,.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.018) 1px, transparent 1px);
+  background-size: 40px 40px;
+  box-shadow: 0 50px 100px rgba(0,0,0,.45);
+}
+
+body::after {
+  content: "WORKSPACE  ·  QUICK QUESTION";
+  position: fixed;
+  top: 54px;
+  left: 58px;
+  color: rgba(255,255,255,.24);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .16em;
+}
+
+#prototype { position: fixed; inset: 0; }
+
+.glass {
+  border: 1px solid rgba(255,255,255,.13);
+  background: linear-gradient(150deg, rgba(43,43,49,.94), rgba(22,22,27,.94));
+  box-shadow: 0 24px 70px rgba(0,0,0,.52), inset 0 1px rgba(255,255,255,.08);
+  backdrop-filter: blur(30px) saturate(135%);
+}
+
+.brand-mark {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 9px;
+  color: white;
+  background: linear-gradient(145deg, #8c72ff, #6144e8);
+  box-shadow: 0 7px 20px rgba(100,70,235,.38), inset 0 1px rgba(255,255,255,.35);
+  font-size: 14px;
+}
+
+.eyebrow {
+  margin: 0 0 5px;
+  color: #a7a5b2;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+.question { color: #b8b6c2; font-size: 13px; line-height: 1.35; }
+.answer { margin: 0; color: #f5f4f9; font-size: 15px; line-height: 1.55; }
+
+.hint {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  color: #7f7d88;
+  font-size: 11px;
+}
+
+kbd {
+  min-width: 21px;
+  padding: 2px 6px;
+  border: 1px solid rgba(255,255,255,.11);
+  border-radius: 6px;
+  color: #aaa8b2;
+  background: rgba(255,255,255,.055);
+  box-shadow: inset 0 -1px rgba(0,0,0,.35);
+  font: 10px ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-align: center;
+}
+
+.waveform { display: flex; align-items: center; justify-content: center; gap: 3px; height: 32px; }
+.waveform i {
+  display: block;
+  width: 3px;
+  height: 7px;
+  border-radius: 3px;
+  background: linear-gradient(#c8bdff, #755af0);
+  animation: wave .62s ease-in-out infinite alternate;
+}
+.waveform i:nth-child(2n) { animation-delay: -.31s; }
+.waveform i:nth-child(3n) { animation-delay: -.16s; }
+.waveform i:nth-child(4n) { animation-duration: .44s; }
+@keyframes wave { to { height: var(--peak, 25px); opacity: .9; } }
+
+.dots { display: flex; gap: 5px; }
+.dots i { width: 6px; height: 6px; border-radius: 50%; background: #9987f2; animation: dot 1s infinite ease-in-out; }
+.dots i:nth-child(2) { animation-delay: .14s; }
+.dots i:nth-child(3) { animation-delay: .28s; }
+@keyframes dot { 0%, 60%, 100% { opacity: .25; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
+
+.state-listening [data-answer], .state-listening [data-thinking] { display: none; }
+.state-thinking [data-answer], .state-thinking [data-listening] { display: none; }
+.state-answer [data-listening], .state-answer [data-thinking] { display: none; }
+
+/* A — the recording capsule grows into the answer in the same bottom-center place. */
+.variant-a { position: absolute; left: 50%; bottom: 92px; transform: translateX(-50%); width: 620px; }
+.variant-a .surface { width: 100%; border-radius: 24px; overflow: hidden; cursor: pointer; transition: height .28s ease, border-radius .28s ease; }
+.variant-a.state-listening .surface, .variant-a.state-thinking .surface { width: 410px; height: 72px; margin-inline: auto; border-radius: 36px; }
+.variant-a.state-answer .surface { height: 330px; }
+.capsule-row { height: 72px; display: flex; align-items: center; gap: 13px; padding: 12px 16px; }
+.capsule-copy { min-width: 116px; }
+.capsule-copy strong { display: block; font-size: 13px; font-weight: 620; }
+.capsule-copy span { color: #8d8b97; font-size: 11px; }
+.capsule-row .waveform { flex: 1; }
+.capsule-row .hint { margin-left: auto; }
+.a-answer { padding: 0 22px 20px; }
+.a-answer .divider { height: 1px; margin: 0 -6px 18px; background: rgba(255,255,255,.075); }
+.a-answer .question { margin-bottom: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.answer-actions { display: flex; align-items: center; gap: 9px; margin-top: 20px; }
+.answer-actions button {
+  padding: 7px 11px;
+  border: 1px solid rgba(255,255,255,.09);
+  border-radius: 9px;
+  color: #aaa8b2;
+  background: rgba(255,255,255,.045);
+  font-size: 11px;
+}
+.answer-actions .spacer { flex: 1; }
+
+/* B — a Spotlight-like palette keeps the question as a transcript field. */
+.variant-b { position: absolute; top: 20%; left: 50%; width: 720px; transform: translateX(-50%); }
+.variant-b .surface { border-radius: 19px; overflow: hidden; cursor: pointer; }
+.palette-input { min-height: 78px; display: flex; align-items: center; gap: 15px; padding: 17px 19px; }
+.palette-input .spoken { flex: 1; color: #ecebf1; font-size: 19px; font-weight: 430; }
+.palette-input .spoken.muted { color: #8e8c96; }
+.palette-body { min-height: 225px; padding: 20px 24px 24px 62px; border-top: 1px solid rgba(255,255,255,.075); }
+.palette-body .answer { font-size: 16px; max-width: 590px; }
+.palette-footer { display: flex; gap: 18px; margin-top: 28px; color: #777580; font-size: 11px; }
+.variant-b.state-listening .palette-body, .variant-b.state-thinking .palette-body { display: none; }
+.variant-b.state-listening .surface, .variant-b.state-thinking .surface { width: 620px; margin: auto; }
+.variant-b .waveform { width: 110px; }
+
+/* C — deliberately avoids the center and reads like a macOS side utility. */
+.variant-c { position: absolute; top: 92px; right: 54px; width: 350px; }
+.variant-c .surface { border-radius: 20px; padding: 15px; cursor: pointer; }
+.side-header { display: flex; align-items: center; gap: 10px; }
+.side-header div:nth-child(2) { flex: 1; }
+.side-header strong { display: block; font-size: 12px; }
+.side-header span { color: #85838d; font-size: 10px; }
+.side-close { color: #6f6d76; font-size: 16px; }
+.side-question { margin-top: 15px; padding: 12px; border-radius: 12px; color: #aaa8b3; background: rgba(255,255,255,.045); font-size: 12px; line-height: 1.4; }
+.side-answer { min-height: 210px; padding: 18px 8px 8px; }
+.side-answer .answer { font-size: 14px; }
+.side-listening { height: 144px; display: grid; place-items: center; text-align: center; }
+.side-listening .waveform { width: 180px; }
+.side-listening p { margin: 5px 0 0; color: #96949f; font-size: 12px; }
+.variant-c.state-listening [data-answer], .variant-c.state-thinking [data-answer] { display: none; }
+
+.switcher {
+  position: fixed;
+  z-index: 20;
+  left: 50%;
+  bottom: 24px;
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  min-width: 286px;
+  padding: 8px;
+  border: 1px solid rgba(255,255,255,.15);
+  border-radius: 16px;
+  background: rgba(6,6,8,.94);
+  box-shadow: 0 14px 38px rgba(0,0,0,.55);
+  transform: translateX(-50%);
+}
+.switcher > div { flex: 1; text-align: center; }
+.switcher-kicker { display: block; margin-bottom: 2px; color: #6f6c7b; font-size: 8px; font-weight: 800; letter-spacing: .13em; }
+.switcher strong { font-size: 11px; font-weight: 650; }
+.switcher button {
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 10px;
+  color: #d8d6df;
+  background: #1b1a20;
+  cursor: pointer;
+}
+.switcher button:hover { background: #292730; }
+
+@media (max-width: 760px) {
+  .variant-a, .variant-b { width: calc(100vw - 32px); }
+  .variant-b.state-listening .surface, .variant-b.state-thinking .surface { width: 100%; }
+  .variant-c { right: 16px; width: calc(100vw - 32px); }
+}
