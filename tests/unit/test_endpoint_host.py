@@ -116,6 +116,15 @@ def test_websocket_preflight_requires_a_websocket_protocol_driver(monkeypatch) -
         ensure_protocol_dependencies("websocket")
 
 
+def test_missing_grpc_dependency_has_install_hint(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "geno_voice.endpoint.host.importlib.util.find_spec", lambda name: None
+    )
+
+    with pytest.raises(RuntimeError, match=r"grpcio.*geno-voice\[endpoint\]"):
+        ensure_protocol_dependencies("grpc")
+
+
 def test_breeze_license_warning_is_printed_at_launch() -> None:
     async def scenario() -> None:
         calls: list[str] = []

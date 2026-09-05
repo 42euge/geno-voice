@@ -38,8 +38,9 @@ python -m pip install -e '.[endpoint]'
 ## Streaming TTS endpoint
 
 `geno-voice-remote-server` loads one TTS model and exposes interruptible,
-low-latency synthesis over WebSocket. The service is TTS-only; callers retain
-VAD, STT, turn-taking, backchannel timing, and dialogue policy.
+low-latency synthesis over WebSocket or bidirectional gRPC. The service is
+TTS-only; callers retain VAD, STT, turn-taking, backchannel timing, and dialogue
+policy.
 
 ```bash
 geno-voice-remote-server --list-models
@@ -52,11 +53,12 @@ geno-voice start-endpoint --protocol websocket --model Breeze-TTS-2 \
   --device cuda:0
 ```
 
-The first supported transport is:
+The supported transports are:
 
 | Protocol | Command value | Connection surface | Port |
 |----------|---------------|--------------------|------|
 | WebSocket | `websocket` or `ws` | `WS /v1/tts/stream` | 8765 |
+| gRPC | `grpc` | `geno.voice.endpoint.v1.TTS/Stream` | 50051 |
 
 The connection supports append, commit, speak, cancel, supersede, backchannel,
 and close commands. Each server process loads one model. The endpoint is

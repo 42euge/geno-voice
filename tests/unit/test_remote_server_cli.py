@@ -15,6 +15,7 @@ from geno_voice.endpoint import cli as endpoint_cli
     [
         ("WS", "websocket"),
         ("websocket", "websocket"),
+        ("GRPC", "grpc"),
     ],
 )
 def test_remote_server_parser_accepts_protocol_without_subcommand(
@@ -29,7 +30,7 @@ def test_remote_server_parser_accepts_protocol_without_subcommand(
     assert args.model == "Breeze-TTS-2"
 
 
-@pytest.mark.parametrize("protocol", ["grpc", "webrtc", "rtp"])
+@pytest.mark.parametrize("protocol", ["webrtc", "rtp"])
 def test_remote_server_rejects_protocols_not_in_this_release(protocol) -> None:
     with pytest.raises(SystemExit):
         endpoint_cli.build_parser().parse_args(["--protocol", protocol])
