@@ -54,7 +54,7 @@ def test_run_agent_injects_mode_into_shared_runner(
             speed=1.25,
             llm_config={
                 "model": "blue-model",
-                "base_url": "https://litellm.example/v1",
+                "base_url": "https://llm.example/v1",
                 "api_key": "test-only",
             },
             chat_config={"stt_engine": "faster_whisper"},
@@ -72,7 +72,7 @@ def test_run_agent_injects_mode_into_shared_runner(
             "barge_in_enabled": expected_barge,
             "llm_config": {
                 "model": "blue-model",
-                "base_url": "https://litellm.example/v1",
+                "base_url": "https://llm.example/v1",
                 "api_key": "test-only",
             },
             "chat_config": {"stt_engine": "faster_whisper"},
