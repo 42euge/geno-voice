@@ -1,22 +1,22 @@
-# Open-source TTS models for Geno Quick Agent
+# Open-source TTS models for GenoVoice
 
 _Research snapshot: 2026-09-03. Primary sources only: official repositories,
 model cards, source code, and measurements already captured in this repository._
 
 ## Executive recommendation
 
-**Breeze-TTS-2 is not an eligible Quick Agent backend despite its strong voice
+**Breeze-TTS-2 is not an eligible GenoVoice backend despite its strong voice
 quality and streaming design.** Its source code is Apache-2.0, but its official
 license explicitly says the model is not open source and limits the weights,
 derivatives, and self-hosted outputs to research/non-commercial use. The 7.68
 GB checkpoint's supported runtime requires Linux, CUDA, and at least a 12 GB
 NVIDIA GPU. The released streaming class raises on any non-CUDA device, so it
-does not run on Quick Agent's Apple-Silicon target without a new port. It is
+does not run on GenoVoice's Apple-Silicon target without a new port. It is
 worth using as a listening-quality and expressiveness reference, not as a
 dependency.
 
 Use **Kokoro 82M** as the first replacement candidate for
-`AVSpeechSynthesizer`. It is the best fit for Quick Agent, not merely the best
+`AVSpeechSynthesizer`. It is the best fit for GenoVoice, not merely the best
 small model on a leaderboard:
 
 - Apache-2.0 code and weights;
@@ -25,7 +25,7 @@ small model on a leaderboard:
 - warm synthesis was observed locally at about 162 ms from first LLM token to
   audio; and
 - most importantly, its public pipeline exposes token `start_ts` and `end_ts`,
-  preserving Quick Agent's synchronized word highlighting without a second
+  preserving GenoVoice's synchronized word highlighting without a second
   forced-alignment model.
 
 The implementation decision is really a choice between two Kokoro runtimes:
@@ -39,7 +39,7 @@ The implementation decision is really a choice between two Kokoro runtimes:
    It reports roughly 300 ms to synthesize five seconds of audio on an M1 and
    now exposes the model's per-token predicted durations. This is the cleanest
    native integration, but FluidAudio currently declares Swift tools 6.0 and
-   macOS 14 while Quick Agent declares Swift tools 5.10 and macOS 13.
+   macOS 14 while GenoVoice declares Swift tools 5.10 and macOS 13.
 
 Run **PocketTTS** and **KittenTTS 0.8 Mini** beside Kokoro in a listening and
 latency bake-off. PocketTTS is the best real-streaming challenger; KittenTTS is
@@ -49,10 +49,10 @@ large enough to justify approximate highlighting or a forced aligner.
 
 Treat Breeze-TTS-2, Qwen3-TTS 0.6B, and Chatterbox Nano as quality-ceiling
 experiments, not initial production choices. Their published assets are about
-7.68 GB, 2.5 GB, and 3.0 GB respectively, and none solves Quick Agent's
+7.68 GB, 2.5 GB, and 3.0 GB respectively, and none solves GenoVoice's
 word-timing requirement.
 
-## Quick Agent's actual selection criteria
+## GenoVoice's actual selection criteria
 
 The current implementation and design establish stricter requirements than
 "sounds good":
@@ -74,10 +74,10 @@ answer rendering.
 
 ## Comparison
 
-| Candidate | License and published size | Apple Silicon and latency evidence | Voices / rate | Public word timing | Quick Agent fit |
+| Candidate | License and published size | Apple Silicon and latency evidence | Voices / rate | Public word timing | GenoVoice fit |
 |---|---|---|---|---|---|
 | **Breeze-TTS-2** | Apache-2.0 code, but weights, derivatives, and self-hosted outputs use a research/non-commercial license that expressly says it is not open source. Official checkpoint: 7.682 GB. | No supported Apple-Silicon path. Official requirements are Linux, CUDA, 7.7 GiB eager VRAM / 12 GB minimum GPU; the released streaming runtime rejects non-CUDA devices. Vendor reports <40 ms warmed TTFA and 0.32 RTF on H100, not on a Mac. | Voice cloning, reference-free voice design, natural-language direction of emotion/pace, and vocal-event tags. No numeric speed control. | **No.** Stream chunks contain PCM, codec-frame counts, and compute timing—not words, source spans, or alignment. The HTTP API strips even the internal timing metadata. | **Ineligible for the app.** Useful as an expressive quality ceiling or non-commercial H100 evaluation only. |
-| **Kokoro 82M** | Apache-2.0. The main weight is 327 MB; the complete model repository is about 361 MB including voices and samples. | Existing Python path works locally. This repo observed a 24.98 s cold load and a 162 ms first-token-to-audio gap on one real run. FluidAudio's native path reports a ~0.3 s warm load, 3–11x real-time synthesis, and ~300 ms for 5 s of audio on M1. | Many English voices; explicit `speed`. FluidAudio's documented ANE fast path is more constrained than the Python voice set. | **Yes.** Python `KPipeline` attaches `start_ts`/`end_ts` to source tokens. FluidAudio exposes input token IDs and exact predicted acoustic-frame durations, though Quick Agent would still need to map phoneme tokens back to source-text ranges. | **Best first candidate.** The only option with a timing path already proven in this repo. |
+| **Kokoro 82M** | Apache-2.0. The main weight is 327 MB; the complete model repository is about 361 MB including voices and samples. | Existing Python path works locally. This repo observed a 24.98 s cold load and a 162 ms first-token-to-audio gap on one real run. FluidAudio's native path reports a ~0.3 s warm load, 3–11x real-time synthesis, and ~300 ms for 5 s of audio on M1. | Many English voices; explicit `speed`. FluidAudio's documented ANE fast path is more constrained than the Python voice set. | **Yes.** Python `KPipeline` attaches `start_ts`/`end_ts` to source tokens. FluidAudio exposes input token IDs and exact predicted acoustic-frame durations, though GenoVoice would still need to map phoneme tokens back to source-text ranges. | **Best first candidate.** The only option with a timing path already proven in this repo. |
 | **PocketTTS** | MIT code; CC-BY-4.0 weights. 100M parameters. The current English model is 219 MB plus a roughly 4–8 MB voice state. | Official Python implementation is CPU-first: approximately 200 ms to its first streamed chunk and 6x real time on two M4 Air CPU cores. FluidAudio has a native CoreML port, but its current converted pack is 549 MB at int8 and the SDK requires macOS 14. | Many preset/reference voices and voice cloning. No documented speech-rate or pronunciation-control API. | **No documented output.** The stream yields audio, not source spans or token times. | **Best streaming challenger.** Requires approximate highlighting or post/parallel alignment. |
 | **KittenTTS 0.8** | Apache-2.0. 15M/40M/80M ONNX variants; published footprints range from 25 MB for Nano int8 to about 80 MB for Mini. | Officially supports CPU inference on macOS. `generate_stream` yields one completed text chunk at a time; this is chunked synthesis, not evidence of codec-level first-audio streaming. No official TTFA figure is published. | Eight built-in voices; explicit `speed`. | **No.** The public ONNX wrapper returns only waveform output. | **Best footprint challenger.** Attractive if Mini wins listening tests and coarse highlighting is acceptable. |
 | **Qwen3-TTS 0.6B CustomVoice** | Apache-2.0; official 0.6B CustomVoice assets total 2.493 GB. | Vendor reports end-to-end latency as low as 97 ms and calls the architecture streaming, but the official examples use CUDA. The public wrapper returns complete waveforms; its own docstring says `non_streaming_mode=false` only simulates streaming text input, not true streaming generation. No official MLX/CoreML or tested Apple-Silicon path is documented. | Nine voices; ten languages. The 0.6B CustomVoice model lacks the 1.7B model's instruction control. | **No.** Official generation methods return `(wavs, sample_rate)`. | **Research only.** Large, no supported native Mac route, no timing contract, and the published Python API cannot realize the headline streaming behavior. |
@@ -97,7 +97,7 @@ voice from a natural-language description, direct a cloned voice's emotion and
 pace, and synthesize inline events such as laughs, coughs, and sighs. Its
 official model card says it ranks first among open-weight systems on the
 Artificial Analysis TTS leaderboard. That makes it worth listening to before
-setting a quality target for Quick Agent.
+setting a quality target for GenoVoice.
 
 Its product fit is nevertheless unambiguous:
 
@@ -134,7 +134,7 @@ and release model state, but that is a transport behavior rather than a
 published cancellation contract.
 
 Natural-language direction can request "speak slowly," but it is not the
-deterministic numeric speed control Quick Agent currently exposes. The output
+deterministic numeric speed control GenoVoice currently exposes. The output
 also lacks the word spans required by `onSpokenRangeChanged`.
 
 Breeze therefore has two legitimate roles here:
@@ -190,7 +190,7 @@ sets `.macOS(.v14)` and Swift tools 6.0. Its Kokoro ANE documentation also
 notes an approximately 20 s first-ever ANE compilation on M1, a ~0.3 s warm
 load, a 510-phoneme per-call limit, and no built-in chunker. Those are
 engineering constraints, not model disqualifiers, but they prevent a drop-in
-dependency while Quick Agent supports macOS 13.
+dependency while GenoVoice supports macOS 13.
 
 ### 2. PocketTTS
 
@@ -255,7 +255,7 @@ Official examples use CUDA and FlashAttention. More importantly, the current
 [`Qwen3TTSModel` wrapper](https://github.com/QwenLM/Qwen3-TTS/blob/main/qwen_tts/inference/qwen3_tts_model.py)
 returns full waveform lists and explicitly says its apparent streaming mode is
 only a simulation of streaming text input. The published latency is therefore
-not a usable Quick Agent API contract today.
+not a usable GenoVoice API contract today.
 
 [Chatterbox Nano](https://github.com/resemble-ai/chatterbox) is MIT and its
 official source accepts `cpu` and `mps`. Nano itself is 110M parameters, but
@@ -279,7 +279,7 @@ are attractive, but not enough to offset those product costs.
   revisited if "open weights with use restrictions" is acceptable.
 - **Dia 1.6B:** Apache-2.0, but its official repository says short inputs under
   five seconds sound unnatural and that it has only been tested on CUDA GPUs.
-  That is almost the inverse of Quick Agent's workload.
+  That is almost the inverse of GenoVoice's workload.
 - **Piper:** still an efficient baseline, but the original MIT repository is
   archived and points to the actively maintained GPL-3 successor. Voice
   licenses also vary. It is more useful as a footprint/latency floor than as a

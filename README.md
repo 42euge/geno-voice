@@ -146,12 +146,12 @@ geno-voice agent full-duplex
 geno-voice agent half-duplex
 ```
 
-### macOS quick agent
+### Native GenoVoice app
 
-`macos/GenoQuickAgent` contains an installable menu-bar companion for one-off
-questions. Option–Space opens a Superwhisper-style voice capsule, on-device
-dictation captures the question, and an OpenAI-compatible LLM response expands
-in place. It defaults to local Ollama and can be packaged as a `.dmg`:
+`macos/GenoQuickAgent` contains GenoVoice, an installable menu-bar app for
+one-off questions. Option–Space opens a Superwhisper-style voice capsule,
+on-device dictation captures the question, and a bundled one-turn Claude
+response expands in place. It can be packaged as a `.dmg`:
 
 ```bash
 cd macos/GenoQuickAgent

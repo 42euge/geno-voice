@@ -31,7 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let status = hotKey.registerOptionSpace()
         if status != noErr {
             coordinator.presentError(
-                "Option–Space is already in use. Quit the other app using it, then relaunch Geno Quick Agent."
+                "Option–Space is already in use. Quit the other app using it, then relaunch GenoVoice."
             )
         }
     }
@@ -41,7 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let button = item.button {
             button.image = NSImage(
                 systemSymbolName: "waveform.and.mic",
-                accessibilityDescription: "Geno Quick Agent"
+                accessibilityDescription: "GenoVoice"
             )
             button.toolTip = "\(AppVersion.current.applicationName) — Option–Space"
         }

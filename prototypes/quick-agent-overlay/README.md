@@ -1,10 +1,10 @@
-# Quick Agent overlay prototype
+# GenoVoice overlay prototype
 
-THROWAWAY UI PROTOTYPE — three variants of the transient quick-agent surface,
+THROWAWAY UI PROTOTYPE — three variants of the transient GenoVoice surface,
 switchable via `?variant=`, on the standalone prototype route.
 
 Question: which structure makes a spoken one-off question and its answer easiest
-to understand without turning Geno Quick Agent into another chat window?
+to understand without turning GenoVoice into another chat window?
 
 Run it from the repository root:
 

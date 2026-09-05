@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add configurable native text-to-speech, synchronized spoken-word highlighting, and a stable dark answer card to Geno Quick Agent.
+**Goal:** Add configurable native text-to-speech, synchronized spoken-word highlighting, and a stable dark answer card to GenoVoice.
 
 **Architecture:** A deep `SpeechPlaybackController` module owns `AVSpeechSynthesizer`, preferences, delegate timing, and cancellation behind a small playback interface. `AgentCoordinator` publishes only speaking state and the active UTF-16 word range; SwiftUI renders that range and never sees the synthesizer. Explicit near-black palette colors replace adaptive material.
 
@@ -89,7 +89,7 @@ enum SpokenWordRange {
 
 Run: `cd macos/GenoQuickAgent && ./scripts/test_regressions.sh`
 
-Expected: all Geno Quick Agent regression tests pass.
+Expected: all GenoVoice regression tests pass.
 
 ---
 
@@ -242,7 +242,7 @@ Expected: regressions pass and the app builds without warnings.
 
 **Interfaces:**
 - Consumes: completed native playback and UI changes.
-- Produces: signed `Geno Quick Agent v0.2.1 (10).app` and `.dmg`, installed and running.
+- Produces: signed `GenoVoice v0.2.1 (10).app` and `.dmg`, installed and running.
 
 - [ ] **Step 1: Bump version and remove obsolete linkage**
 
@@ -266,18 +266,18 @@ cd macos/GenoQuickAgent
 node --test Backend/claude-backend.test.mjs
 swift build -c release
 ./scripts/build_dmg.sh
-./scripts/test_bundle_identity.sh "dist/Geno Quick Agent v0.2.1 (10).app"
-./scripts/test_bundle_permissions.sh "dist/Geno Quick Agent v0.2.1 (10).app"
-./scripts/test_bundle_backend.sh "dist/Geno Quick Agent v0.2.1 (10).app"
-codesign --verify --deep --strict "dist/Geno Quick Agent v0.2.1 (10).app"
-hdiutil verify "dist/Geno Quick Agent v0.2.1 (10).dmg"
+./scripts/test_bundle_identity.sh "dist/GenoVoice v0.2.1 (10).app"
+./scripts/test_bundle_permissions.sh "dist/GenoVoice v0.2.1 (10).app"
+./scripts/test_bundle_backend.sh "dist/GenoVoice v0.2.1 (10).app"
+codesign --verify --deep --strict "dist/GenoVoice v0.2.1 (10).app"
+hdiutil verify "dist/GenoVoice v0.2.1 (10).dmg"
 ```
 
 Expected: all commands exit zero.
 
 - [ ] **Step 4: Install and launch only the new version**
 
-Quit the running executable, move `/Applications/Geno Quick Agent v0.2.0
+Quit the running executable, move `/Applications/GenoVoice v0.2.0
 (9).app` to Trash, copy the v0.2.1 app to `/Applications`, launch it, and verify
 the process remains alive with zero startup windows.
 

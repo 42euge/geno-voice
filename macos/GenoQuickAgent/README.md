@@ -1,6 +1,6 @@
-# Geno Quick Agent for macOS
+# GenoVoice for macOS
 
-Geno Quick Agent is a small menu-bar utility for one-off LLM questions. Press
+GenoVoice is a small menu-bar utility for one-off LLM questions. Press
 Option–Space from any app, speak, and pause. The recording capsule turns into a
 concise answer without opening a chat window.
 
@@ -18,11 +18,11 @@ cd macos/GenoQuickAgent
 
 The current build produces:
 
-- `dist/Geno Quick Agent v0.2.1 (10).app`
-- `dist/Geno Quick Agent v0.2.1 (10).dmg`
+- `dist/GenoVoice v0.2.1 (10).app`
+- `dist/GenoVoice v0.2.1 (10).dmg`
 
 The app name and every overlay header carry the same semantic version and build
-number. `dist/Geno Quick Agent.dmg` is also refreshed as a stable latest-build
+number. `dist/GenoVoice.dmg` is also refreshed as a stable latest-build
 alias.
 
 Open the DMG and drag the app to Applications. A local build is ad-hoc signed,
@@ -70,7 +70,7 @@ export ANTHROPIC_AUTH_TOKEN="..."
 # export OPENAI_API_KEY="..."
 ```
 
-Restart Geno Quick Agent after changing `~/.zshrc`. The waveform menu-bar
+Restart GenoVoice after changing `~/.zshrc`. The waveform menu-bar
 icon → Settings shows the active backend, model, and configuration source. The
 app never stores credentials in macOS Keychain.
 
@@ -96,6 +96,6 @@ sets one endpoint and one authentication variable from the list above. If the
 backend is missing, reinstall the app from the versioned DMG. A one-minute
 timeout usually means the BlueGPT endpoint is unreachable or busy.
 
-Geno Quick Agent has no Dock icon or main window. Settings and Quit live under
+GenoVoice has no Dock icon or main window. Settings and Quit live under
 the waveform menu-bar icon. If Option–Space is already owned by Superwhisper or
-another utility, quit that app and relaunch Geno Quick Agent.
+another utility, quit that app and relaunch GenoVoice.

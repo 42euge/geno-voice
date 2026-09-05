@@ -135,7 +135,7 @@ final class AgentCoordinator: ObservableObject {
     func presentError(_ error: Error) {
         let diagnostic = error as NSError
         quickAgentLogger.error(
-            "Geno Quick Agent error: domain=\(diagnostic.domain, privacy: .public) code=\(diagnostic.code, privacy: .public) description=\(diagnostic.localizedDescription, privacy: .public)"
+            "GenoVoice error: domain=\(diagnostic.domain, privacy: .public) code=\(diagnostic.code, privacy: .public) description=\(diagnostic.localizedDescription, privacy: .public)"
         )
         let userFacingError = SpeechRecorderError.userFacing(error)
         presentError(

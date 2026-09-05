@@ -88,7 +88,7 @@ private final class FakeSpeechRecorder: SpeechRecording {
 let releaseVersion = AppVersion(shortVersion: "0.2.0", buildNumber: "9")
 expect(releaseVersion.label == "v0.2.0 (9)", "version label should include semantic and build versions")
 expect(
-    releaseVersion.applicationName == "Geno Quick Agent v0.2.0 (9)",
+    releaseVersion.applicationName == "GenoVoice v0.2.0 (9)",
     "application name should include the complete version label"
 )
 
@@ -395,4 +395,4 @@ if failures > 0 {
     exit(1)
 }
 
-print("All Geno Quick Agent regression tests passed.")
+print("All GenoVoice regression tests passed.")

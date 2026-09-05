@@ -9,7 +9,7 @@ struct AppVersion: Equatable {
     }
 
     var applicationName: String {
-        "Geno Quick Agent \(label)"
+        "GenoVoice \(label)"
     }
 
     static var current: AppVersion {

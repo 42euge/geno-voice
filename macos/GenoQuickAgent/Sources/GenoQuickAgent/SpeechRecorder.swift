@@ -28,7 +28,7 @@ enum SpeechRecorderError: LocalizedError {
         case .microphoneUnavailable:
             return "No microphone input is available."
         case .microphonePermissionDenied:
-            return "Microphone access is off. Enable Geno Quick Agent in System Settings → Privacy & Security → Microphone."
+            return "Microphone access is off. Enable GenoVoice in System Settings → Privacy & Security → Microphone."
         case .dictationDisabled:
             return "Dictation is off. Open Keyboard Settings and turn on Dictation, then try again."
         case .recognizerUnavailable:
@@ -36,7 +36,7 @@ enum SpeechRecorderError: LocalizedError {
         case .onDeviceRecognitionUnavailable:
             return "On-device speech recognition is unavailable for this Mac or language."
         case .speechPermissionDenied:
-            return "Speech recognition access is off. Enable Geno Quick Agent in System Settings → Privacy & Security → Speech Recognition."
+            return "Speech recognition access is off. Enable GenoVoice in System Settings → Privacy & Security → Speech Recognition."
         case .startFailed(let reason):
             return "Couldn’t start listening: \(reason)"
         }

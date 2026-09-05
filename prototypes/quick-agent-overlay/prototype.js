@@ -67,7 +67,7 @@ function variantC() {
     <div class="surface glass">
       <header class="side-header">
         <span class="brand-mark">✦</span>
-        <div><strong>Geno Quick Agent</strong><span>${state === "answer" ? "Answered just now" : "One-off question"}</span></div>
+        <div><strong>GenoVoice</strong><span>${state === "answer" ? "Answered just now" : "One-off question"}</span></div>
         <span class="side-close">×</span>
       </header>
       <div class="side-listening" data-listening>${wave()}<p>Go ahead, I’m listening</p></div>

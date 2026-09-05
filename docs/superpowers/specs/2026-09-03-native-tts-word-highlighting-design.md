@@ -1,4 +1,4 @@
-# Geno Quick Agent Native TTS and Word Highlighting Design
+# GenoVoice Native TTS and Word Highlighting Design
 
 ## Goal
 

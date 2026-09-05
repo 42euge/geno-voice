@@ -1,8 +1,8 @@
-# Geno Quick Agent Claude SDK Backend Implementation Plan
+# GenoVoice Claude SDK Backend Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship Geno Quick Agent with a bundled Claude Agent SDK backend that sources BlueGPT configuration from `~/.zshrc` and requires no Keychain, Ollama, Node, or Claude Code installation.
+**Goal:** Ship GenoVoice with a bundled Claude Agent SDK backend that sources BlueGPT configuration from `~/.zshrc` and requires no Keychain, Ollama, Node, or Claude Code installation.
 
 **Architecture:** Swift launches a bundled Node backend through `/bin/zsh` for each question and exchanges one JSON request and response over standard input/output. The backend maps BlueGPT environment variables to Claude Agent SDK configuration, runs one no-tools Sonnet turn, and exits.
 
@@ -109,8 +109,8 @@
 - [ ] Send `{"id":"smoke","question":"Reply with only OK.","model":"sonnet"}`
   through the bundled backend and assert the response has a non-empty `answer`.
 - [ ] Run all Swift, Node, signing-identity, microphone-entitlement, and bundled-backend tests.
-- [ ] Build and verify the `Geno Quick Agent v0.2.0 (9).dmg` checksum.
-- [ ] Install only `Geno Quick Agent v0.2.0 (9).app`, relaunch it, and verify
+- [ ] Build and verify the `GenoVoice v0.2.0 (9).dmg` checksum.
+- [ ] Install only `GenoVoice v0.2.0 (9).app`, relaunch it, and verify
   the process remains alive with no overlay visible at startup.
 - [ ] Update README build, configuration, privacy, and troubleshooting text to
   match the shipped Claude SDK backend.

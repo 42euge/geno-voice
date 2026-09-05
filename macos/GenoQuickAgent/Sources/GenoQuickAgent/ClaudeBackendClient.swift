@@ -35,17 +35,17 @@ enum ClaudeBackendError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingRuntime:
-            return "The bundled Claude runtime is missing. Reinstall Geno Quick Agent."
+            return "The bundled Claude runtime is missing. Reinstall GenoVoice."
         case .missingScript:
-            return "The bundled Claude backend is missing. Reinstall Geno Quick Agent."
+            return "The bundled Claude backend is missing. Reinstall GenoVoice."
         case .missingZshrc:
-            return "Geno Quick Agent couldn’t find ~/.zshrc with your BlueGPT configuration."
+            return "GenoVoice couldn’t find ~/.zshrc with your BlueGPT configuration."
         case .launchFailed(let reason):
             return "Couldn’t start the Claude backend: \(reason)"
         case .timeout:
             return "Claude took longer than one minute to answer. Try again."
         case .malformedResponse:
-            return "The Claude backend returned a response Geno Quick Agent couldn’t read."
+            return "The Claude backend returned a response GenoVoice couldn’t read."
         case .backend(_, let message):
             return message
         case .emptyAnswer:

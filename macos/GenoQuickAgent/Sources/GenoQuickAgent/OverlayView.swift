@@ -153,7 +153,7 @@ struct OverlayView: View {
             HStack(spacing: 11) {
                 BrandMark(symbol: "exclamationmark")
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Quick Agent \(AppVersion.current.label) couldn’t finish")
+                    Text("GenoVoice \(AppVersion.current.label) couldn’t finish")
                         .font(.system(size: 14, weight: .semibold))
                     Text(model.errorMessage)
                         .font(.system(size: 12))

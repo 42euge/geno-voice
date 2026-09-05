@@ -1,4 +1,4 @@
-# Geno Quick Agent Claude SDK Backend Design
+# GenoVoice Claude SDK Backend Design
 
 ## Goal
 

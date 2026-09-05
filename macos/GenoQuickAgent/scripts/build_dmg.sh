@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BASE_APP_NAME="Geno Quick Agent"
+BASE_APP_NAME="GenoVoice"
 EXECUTABLE_NAME="GenoQuickAgent"
 CONFIGURATION="${GENO_QUICK_AGENT_BUILD_CONFIGURATION:-release}"
 DIST_DIR="${GENO_QUICK_AGENT_DIST_DIR:-$PROJECT_DIR/dist}"
