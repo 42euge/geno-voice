@@ -8,8 +8,6 @@
 
 **Tech Stack:** Swift 5.10, AppKit, SwiftUI, AVFoundation `AVSpeechSynthesizer`, Foundation `UserDefaults`, existing shell/Swift regression harness.
 
-**Spec:** `docs/superpowers/specs/2026-09-03-native-tts-word-highlighting-design.md`
-
 ## Global Constraints
 
 - macOS 13 or newer on Apple Silicon.

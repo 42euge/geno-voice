@@ -8,8 +8,6 @@
 
 **Tech Stack:** Swift 5.10, AppKit/SwiftUI, Foundation `Process`, Node 22.22.3 arm64, `@anthropic-ai/claude-agent-sdk` 0.3.260, Node test runner, Bash packaging.
 
-**Spec:** `docs/superpowers/specs/2026-09-03-claude-sdk-backend-design.md`
-
 ## Global Constraints
 
 - macOS 13 or newer on Apple Silicon.

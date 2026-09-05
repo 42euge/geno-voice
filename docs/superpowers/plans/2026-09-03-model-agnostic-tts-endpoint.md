@@ -8,8 +8,6 @@
 
 **Tech Stack:** Python 3.11+, asyncio, FastAPI/Uvicorn, grpcio/protobuf, aiortc/PyAV, UDP RTP/RTCP, pytest.
 
-**Spec:** `docs/superpowers/specs/2026-09-03-model-agnostic-tts-endpoint-design.md`
-
 ## Global Constraints
 
 - Trusted internal LAN only; no authentication or TLS in this release.
