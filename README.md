@@ -43,6 +43,21 @@ geno-voice agent full-duplex
 geno-voice agent half-duplex
 ```
 
+### macOS quick agent
+
+`macos/GenoQuickAgent` contains an installable menu-bar companion for one-off
+questions. Option–Space opens a Superwhisper-style voice capsule, on-device
+dictation captures the question, and an OpenAI-compatible LLM response expands
+in place. It defaults to local Ollama and can be packaged as a `.dmg`:
+
+```bash
+cd macos/GenoQuickAgent
+./scripts/build_dmg.sh
+```
+
+See [`macos/GenoQuickAgent/README.md`](macos/GenoQuickAgent/README.md) for
+configuration, signing, and privacy details.
+
 Both modes run the same local voice pipeline: microphone → STT → streaming
 LLM → sentence-overlapped Kokoro TTS → speaker. The LLM is an
 OpenAI-compatible `/chat/completions` endpoint, so it can point at the Blue
