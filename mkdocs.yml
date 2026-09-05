@@ -40,6 +40,12 @@ theme:
 nav:
   - Home: index.md
   - Getting Started: getting-started.md
+  - Research:
+      - Open-source TTS models: research/open-source-tts-models-for-quick-agent.md
+      - Full-duplex recent literature: research/full-duplex-recent-literature.md
+      - Full-duplex papers explained: research/full-duplex-paper-explainers.md
+      - Archived full-duplex papers: research/papers/full-duplex/README.md
+      - Full-duplex systems survey: research/survey/full-duplex-systems/README.md
 
 extra_css:
   - stylesheets/extra.css
@@ -53,11 +59,17 @@ markdown_extensions:
   - pymdownx.inlinehilite
   - pymdownx.tabbed:
       alternate_style: true
+  - pymdownx.arithmatex:
+      generic: true
   - attr_list
   - md_in_html
   - def_list
   - toc:
       permalink: true
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
 
 extra:
   social:

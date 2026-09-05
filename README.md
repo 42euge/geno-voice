@@ -73,6 +73,21 @@ For a manual LAN smoke test, bind to `0.0.0.0`, connect using the host's private
 address, verify the ready event, stream a short `speak` request, cancel a longer
 request, then submit another request to confirm the session remains usable.
 
+## GenoVoice for macOS
+
+`macos/GenoQuickAgent` contains GenoVoice, an installable menu-bar app for
+one-off questions. Option–Space opens a voice capsule, on-device dictation
+captures the question, and a bundled one-turn Claude response expands in place.
+
+```bash
+cd macos/GenoQuickAgent
+./scripts/build_dmg.sh
+```
+
+See [`macos/GenoQuickAgent/README.md`](macos/GenoQuickAgent/README.md) for
+generic Anthropic-compatible endpoint configuration, signing, and privacy
+details.
+
 ## Project Structure
 
 ```
@@ -83,6 +98,7 @@ geno-voice/
 ├── skills/           # skill definitions
 │   └── geno-voice/   #   umbrella
 ├── geno_voice/       # Python package and remote TTS server
+├── macos/            # native GenoVoice menu-bar app
 ├── stt/              # speech-to-text pipeline
 ├── tts/              # text-to-speech pipeline
 ├── vad/              # voice activity detection
