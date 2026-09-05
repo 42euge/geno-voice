@@ -15,6 +15,8 @@ endpoint = [
     "websockets>=15",
     "grpcio>=1.83",
     "protobuf>=7.35",
+    "aiortc>=1.9",
+    "av>=13",
     "numpy>=1.26",
 ]
 
