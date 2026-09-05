@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -62,3 +63,31 @@ def print_models(*, log=print) -> None:
     for name in registry.names():
         descriptor = registry.resolve(name)
         log(f"{name}\t{descriptor.origin}")
+
+
+def build_parser(*, prog: str = "geno-voice-remote-server") -> argparse.ArgumentParser:
+    """Build the endpoint-only parser used by the remote-server executable."""
+    from examples.gv import endpoint_protocol_type, model_type, port_type
+    from geno_voice.endpoint.arguments import add_endpoint_arguments
+
+    parser = argparse.ArgumentParser(
+        prog=prog,
+        description="Serve one local TTS model over WebSocket, gRPC, WebRTC, or RTP",
+    )
+    add_endpoint_arguments(
+        parser,
+        protocol_type=endpoint_protocol_type,
+        model_type=model_type,
+        port_type=port_type,
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Launch the dedicated TTS server without a CLI subcommand."""
+    args = build_parser().parse_args(argv)
+    if args.list_models:
+        print_models()
+        return 0
+    run_endpoint(endpoint_config_from_args(args))
+    return 0

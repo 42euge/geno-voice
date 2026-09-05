@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add `geno-voice start-endpoint` with a model-agnostic, interruptible TTS session served over WebSocket, bidirectional gRPC, WebRTC, or RTP.
+**Goal:** Add `geno-voice-remote-server`, plus the compatible `geno-voice start-endpoint` form, with a model-agnostic, interruptible TTS session served over WebSocket, bidirectional gRPC, WebRTC, or RTP.
 
 **Architecture:** One loaded `TTSModelAdapter` feeds independent `SynthesisSession` instances. Sessions own incremental text, priority, cancellation, sequencing, and events; protocol adapters only translate their wire format. Breeze-TTS-2 and Kokoro are built-ins, while Python entry points add future models.
 
@@ -495,8 +495,8 @@ session events over SSE, and delete/cancel session state idempotently.
 
 ```markdown
 pip install -e '.[endpoint]'
-geno-voice start-endpoint --protocol websocket --model kokoro --host 0.0.0.0
-geno-voice start-endpoint --protocol webrtc --model Breeze-TTS-2 \
+geno-voice-remote-server --protocol websocket --model kokoro --host 0.0.0.0
+geno-voice-remote-server --protocol webrtc --model Breeze-TTS-2 \
   --host 0.0.0.0 --model-path /models/Breeze-TTS-2 --runtime-path /opt/breeze-tts
 ```
 

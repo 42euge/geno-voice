@@ -13692,33 +13692,13 @@ def build_parser(*, prog="gv"):
         "start-endpoint",
         help="Serve one local TTS model over WebSocket, gRPC, WebRTC, or RTP",
     )
-    endpoint.add_argument(
-        "--protocol",
-        type=endpoint_protocol_type,
-        default="websocket",
-        help="websocket/ws, grpc, webrtc, or rtp (default: websocket)",
-    )
-    endpoint.add_argument(
-        "--model",
-        type=model_type,
-        default="kokoro",
-        help="Built-in or installed geno_voice.tts_models adapter (default: kokoro)",
-    )
-    endpoint.add_argument("--host", default="127.0.0.1")
-    endpoint.add_argument("--port", type=port_type)
-    endpoint.add_argument("--model-path", type=Path)
-    endpoint.add_argument("--runtime-path", type=Path)
-    endpoint.add_argument("--device")
-    endpoint.add_argument("--voice")
-    endpoint.add_argument(
-        "--log-level",
-        choices=("critical", "error", "warning", "info", "debug", "trace"),
-        default="info",
-    )
-    endpoint.add_argument(
-        "--list-models",
-        action="store_true",
-        help="List built-in and installed model adapters, then exit",
+    from geno_voice.endpoint.arguments import add_endpoint_arguments
+
+    add_endpoint_arguments(
+        endpoint,
+        protocol_type=endpoint_protocol_type,
+        model_type=model_type,
+        port_type=port_type,
     )
 
     agent = sub.add_parser(

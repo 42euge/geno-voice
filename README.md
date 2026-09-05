@@ -1,10 +1,11 @@
 # geno-voice
 
-Local voice pipeline for offline, privacy-first AI voice interaction.
+A reusable library for adding private, local voice interaction to any project.
 
 ## What
 
-A reusable STT/TTS stack that runs entirely on-device. No cloud APIs, no data leaving the machine.
+An STT/TTS/VAD stack that runs entirely on-device. No cloud APIs, no data
+leaving the machine.
 
 Used by [geno-reflect](https://github.com/42euge/geno-reflect) and other geno-* projects that need voice interaction.
 
@@ -36,20 +37,20 @@ python -m pip install -e .
 
 ## Streaming TTS endpoint
 
-`geno-voice start-endpoint` loads one TTS model and exposes interruptible,
+`geno-voice-remote-server` loads one TTS model and exposes interruptible,
 low-latency synthesis over one selected transport. This service is TTS-only:
 the calling voice agent retains VAD, STT, turn-taking, backchannel timing, and
 dialogue policy. Install the transport dependencies with:
 
 ```bash
 python -m pip install -e '.[endpoint]'
-geno-voice start-endpoint --list-models
+geno-voice-remote-server --list-models
 ```
 
 Kokoro uses the existing local engine:
 
 ```bash
-geno-voice start-endpoint --protocol websocket --model kokoro \
+geno-voice-remote-server --protocol websocket --model kokoro \
   --host 0.0.0.0 --voice af_heart
 ```
 
@@ -58,7 +59,7 @@ Breeze-TTS-2 uses its official CUDA runtime and model directory. Install the
 download the model weights separately, then run:
 
 ```bash
-geno-voice start-endpoint --protocol WebRTC --model Breeze-TTS-2 \
+geno-voice-remote-server --protocol WebRTC --model Breeze-TTS-2 \
   --host 0.0.0.0 \
   --model-path /models/Breeze-TTS-2 \
   --runtime-path /opt/breeze-tts \
@@ -69,6 +70,9 @@ The model is loaded before the endpoint reports ready. Breeze inference is
 serialized because its official runtime is single-request. Breeze's open
 weights and self-hosted outputs are governed by the BreezeBlue Research and
 Non-Commercial License; the CLI prints that warning at every Breeze launch.
+
+For compatibility, `geno-voice start-endpoint` accepts the same options and
+continues to launch the same service.
 
 The supported protocols and default ports are:
 

@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 
 [project.scripts]
 geno-voice = "geno_voice.cli:main"
+geno-voice-remote-server = "geno_voice.endpoint.cli:main"
 gv = "geno_voice.cli:main"
 
 [project.optional-dependencies]

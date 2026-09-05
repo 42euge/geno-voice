@@ -2,9 +2,10 @@
 
 ## Goal
 
-Add a `geno-voice start-endpoint` command that loads one local TTS model and
-serves low-latency, interruptible speech over WebSocket, bidirectional gRPC,
-WebRTC, or RTP. Breeze-TTS-2 is the first remote-GPU target, Kokoro is the
+Add a `geno-voice-remote-server` executable, with `geno-voice start-endpoint`
+as a compatibility command, that loads one local TTS model and serves
+low-latency, interruptible speech over WebSocket, bidirectional gRPC, WebRTC,
+or RTP. Breeze-TTS-2 is the first remote-GPU target, Kokoro is the
 first existing geno-voice target, and additional models plug in without
 changing session or transport code.
 
@@ -217,7 +218,7 @@ includes a small SDP description clients can hand to an RTP receiver.
 The installed console command adds:
 
 ```text
-geno-voice start-endpoint \
+geno-voice-remote-server \
   --protocol webrtc \
   --model Breeze-TTS-2 \
   --host 0.0.0.0 \
