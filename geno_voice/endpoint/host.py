@@ -18,6 +18,7 @@ TRANSPORT_TARGETS = {
     "websocket": "geno_voice.endpoint.transports.websocket:serve_websocket",
     "grpc": "geno_voice.endpoint.transports.grpc:serve_grpc",
     "webrtc": "geno_voice.endpoint.transports.webrtc:serve_webrtc",
+    "rtp": "geno_voice.endpoint.transports.rtp:serve_rtp",
 }
 
 PROTOCOL_DEPENDENCIES = {
@@ -33,6 +34,7 @@ PROTOCOL_DEPENDENCIES = {
         ("aiortc", "aiortc"),
         ("av", "av"),
     ),
+    "rtp": (("fastapi", "fastapi"), ("uvicorn", "uvicorn")),
 }
 
 

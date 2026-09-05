@@ -22,12 +22,14 @@ PROTOCOL_ALIASES = {
     "ws": "websocket",
     "grpc": "grpc",
     "webrtc": "webrtc",
+    "rtp": "rtp",
 }
 
 DEFAULT_PORTS = {
     "websocket": 8_765,
     "grpc": 50_051,
     "webrtc": 8_787,
+    "rtp": 8_790,
 }
 
 
@@ -73,7 +75,7 @@ def build_parser(*, prog: str = "geno-voice-remote-server") -> argparse.Argument
     """Build the endpoint-only parser used by the remote-server executable."""
     parser = argparse.ArgumentParser(
         prog=prog,
-        description="Serve one local TTS model over WebSocket, gRPC, or WebRTC",
+        description="Serve one local TTS model over WebSocket, gRPC, WebRTC, or RTP",
     )
     add_endpoint_arguments(
         parser,
