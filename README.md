@@ -38,9 +38,9 @@ python -m pip install -e '.[endpoint]'
 ## Streaming TTS endpoint
 
 `geno-voice-remote-server` loads one TTS model and exposes interruptible,
-low-latency synthesis over WebSocket or bidirectional gRPC. The service is
-TTS-only; callers retain VAD, STT, turn-taking, backchannel timing, and dialogue
-policy.
+low-latency synthesis over WebSocket, bidirectional gRPC, or WebRTC. The
+service is TTS-only; callers retain VAD, STT, turn-taking, backchannel timing,
+and dialogue policy.
 
 ```bash
 geno-voice-remote-server --list-models
@@ -59,6 +59,7 @@ The supported transports are:
 |----------|---------------|--------------------|------|
 | WebSocket | `websocket` or `ws` | `WS /v1/tts/stream` | 8765 |
 | gRPC | `grpc` | `geno.voice.endpoint.v1.TTS/Stream` | 50051 |
+| WebRTC | `webrtc` | HTTP offer plus audio/data channels | 8787 |
 
 The connection supports append, commit, speak, cancel, supersede, backchannel,
 and close commands. Each server process loads one model. The endpoint is

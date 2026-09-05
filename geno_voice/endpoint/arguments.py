@@ -22,6 +22,7 @@ def endpoint_protocol_type(raw: str) -> str:
         "websocket": "websocket",
         "ws": "websocket",
         "grpc": "grpc",
+        "webrtc": "webrtc",
     }
     normalized = str(raw).strip().lower()
     try:
@@ -58,7 +59,7 @@ def add_endpoint_arguments(
         "--protocol",
         type=protocol_type,
         default="websocket",
-        help="websocket/ws or grpc (default: websocket)",
+        help="websocket/ws, grpc, or webrtc (default: websocket)",
     )
     parser.add_argument(
         "--model",

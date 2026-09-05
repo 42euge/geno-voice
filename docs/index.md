@@ -17,7 +17,7 @@ happens locally — no cloud APIs, no data leaving the machine.
 ## Streaming TTS endpoint
 
 Install `.[endpoint]` to serve Kokoro, Breeze-TTS-2, or an installed model
-adapter over WebSocket or bidirectional gRPC:
+adapter over WebSocket, bidirectional gRPC, or WebRTC:
 
 ```bash
 geno-voice-remote-server --protocol websocket --model kokoro
