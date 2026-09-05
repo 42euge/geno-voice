@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package geno.voice.endpoint.v1;
+
+service TTS {
+  rpc Stream(stream ClientMessage) returns (stream ServerMessage);
+}
+
+message ClientMessage {
+  string type = 1;
+  string request_id = 2;
+  string text = 3;
+  string priority = 4;
+  bool interrupt = 5;
+  string voice = 6;
+  double speed = 7;
+  string instruction = 8;
+  bytes reference_audio = 9;
+  string reference_text = 10;
+}
+
+message ServerMessage {
+  string type = 1;
+  string session_id = 2;
+  string request_id = 3;
+  bytes audio = 4;
+  uint64 sequence = 5;
+  uint64 pts_samples = 6;
+  uint32 sample_count = 7;
+  uint32 sample_rate = 8;
+  string encoding = 9;
+  bool final = 10;
+  string priority = 11;
+  uint32 queue_depth = 12;
+  uint64 total_samples = 13;
+  bool interrupted = 14;
+  string code = 15;
+  string message = 16;
+  string json = 17;
+}

@@ -16,6 +16,7 @@ from .types import TTSModelAdapter
 
 TRANSPORT_TARGETS = {
     "websocket": "geno_voice.endpoint.transports.websocket:serve_websocket",
+    "grpc": "geno_voice.endpoint.transports.grpc:serve_grpc",
 }
 
 PROTOCOL_DEPENDENCIES = {
@@ -24,6 +25,7 @@ PROTOCOL_DEPENDENCIES = {
         ("uvicorn", "uvicorn"),
         ("websockets", "websockets"),
     ),
+    "grpc": (("grpc", "grpcio"),),
 }
 
 

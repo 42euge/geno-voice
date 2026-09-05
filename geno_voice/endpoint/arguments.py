@@ -21,6 +21,7 @@ def endpoint_protocol_type(raw: str) -> str:
     aliases = {
         "websocket": "websocket",
         "ws": "websocket",
+        "grpc": "grpc",
     }
     normalized = str(raw).strip().lower()
     try:
@@ -57,7 +58,7 @@ def add_endpoint_arguments(
         "--protocol",
         type=protocol_type,
         default="websocket",
-        help="websocket or ws (default: websocket)",
+        help="websocket/ws or grpc (default: websocket)",
     )
     parser.add_argument(
         "--model",
