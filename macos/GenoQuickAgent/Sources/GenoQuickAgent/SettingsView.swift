@@ -44,7 +44,7 @@ struct SettingsView: View {
                         Text("Bundled Claude Agent SDK")
                     }
                     LabeledContent("Model") {
-                        Text("sonnet via BlueGPT")
+                        Text("sonnet via configured endpoint")
                     }
                     LabeledContent("Configuration") {
                         Text("~/.zshrc")
@@ -83,7 +83,7 @@ struct SettingsView: View {
                 .padding(10)
             }
 
-            Text("The app sources your BlueGPT endpoint and credentials from ~/.zshrc for each question. It does not use macOS Keychain and does not require Ollama, Node, or Claude Code to be installed.")
+            Text("The app sources standard Anthropic endpoint configuration from ~/.zshrc for each question. It does not use macOS Keychain and does not require Ollama, Node, or Claude Code to be installed.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

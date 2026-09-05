@@ -39,7 +39,7 @@ enum ClaudeBackendError: LocalizedError {
         case .missingScript:
             return "The bundled Claude backend is missing. Reinstall GenoVoice."
         case .missingZshrc:
-            return "GenoVoice couldn’t find ~/.zshrc with your BlueGPT configuration."
+            return "GenoVoice couldn’t find ~/.zshrc with your Claude endpoint configuration."
         case .launchFailed(let reason):
             return "Couldn’t start the Claude backend: \(reason)"
         case .timeout:
@@ -185,15 +185,6 @@ struct ClaudeBackendClient: Sendable {
 
     private static let shellCommand = #"""
 source "$GENO_ZSHRC_PATH" >/dev/null 2>&1 || exit 72
-if [[ -z "${ANTHROPIC_AUTH_TOKEN:-}" ]]; then
-  export ANTHROPIC_AUTH_TOKEN="${BLUEGPT_API_TOKEN:-${BLUEGPT_API_KEY:-${OPENAI_API_KEY:-}}}"
-fi
-if [[ -z "${ANTHROPIC_BASE_URL:-}" ]]; then
-  geno_bluegpt_url="${OPENAI_BASE_URL:-}"
-  geno_bluegpt_url="${geno_bluegpt_url%/}"
-  geno_bluegpt_url="${geno_bluegpt_url%/v1}"
-  export ANTHROPIC_BASE_URL="$geno_bluegpt_url"
-fi
 exec "$GENO_BACKEND_RUNTIME" "$GENO_BACKEND_SCRIPT"
 """#
 }

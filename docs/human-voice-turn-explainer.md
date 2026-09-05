@@ -7,8 +7,8 @@ This document follows the exact production path exercised on August 26, 2026:
 ```
 
 It explains which code runs from process startup through the first sound heard
-from the assistant, what remains local, what is sent to Blue LiteLLM, and why
-the live test interrupted its own responses.
+from the assistant, what remains local, what is sent to the configured LLM
+endpoint, and why the live test interrupted its own responses.
 
 The traced checkout was `prototype-wav-agent` at commit `9a0a844`. The reusable
 agent entrypoint was introduced on `agent-duplex-cli` at `d443859`.
@@ -22,31 +22,31 @@ flowchart LR
     Human[Human speech] --> Mic[PyAudio microphone\n16 kHz mono]
     Mic --> VAD[Energy VAD\nRMS > 0.003]
     VAD --> STT[MLX Whisper\nlarge-v3-turbo]
-    STT -->|text only| Blue[Blue LiteLLM\nClaude Sonnet 4.6]
-    Blue -->|SSE text tokens| Split[Sentence splitter]
+    STT -->|text only| LLM[OpenAI-compatible LLM endpoint\nconfigured model]
+    LLM -->|SSE text tokens| Split[Sentence splitter]
     Split --> TTS[Kokoro 82M\naf_heart]
     TTS --> Speaker[PyAudio speaker\n24 kHz mono]
     Speaker --> Heard[Response heard]
 
     Mic -. full-duplex watch .-> Barge[Barge-in coordinator]
-    Barge -. cancel .-> Blue
+    Barge -. cancel .-> LLM
     Barge -. stop audio .-> Speaker
 ```
 
-Audio never goes to Blue. Whisper turns the microphone recording into text on
-the Mac. Blue receives the system prompt and textual conversation. Kokoro turns
-Blue's response text back into audio locally.
+Audio never goes to the configured LLM endpoint. Whisper turns the microphone
+recording into text on the Mac. The endpoint receives the system prompt and
+textual conversation. Kokoro turns the response text back into audio locally.
 
 ## Runtime configuration used in the test
 
-The checked-in local configuration selects the Blue OpenAI-compatible endpoint,
-MLX Whisper, and a Zone-calibrated VAD threshold:
+This provider-neutral example selects an OpenAI-compatible endpoint, MLX
+Whisper, and a calibrated VAD threshold:
 
 ```yaml
 llm:
-  model: us.anthropic.claude-sonnet-4-6
-  base_url: https://litellm.leap.blueorigin.com/v1
-  api_key: ${LITELLM_API_KEY}
+  model: your-model-name
+  base_url: https://llm.example.com/v1
+  api_key: ${LLM_API_KEY}
   max_tokens: 150
 
 chat:
@@ -127,7 +127,7 @@ checkout.
 [`examples/mic_chat.py`](../examples/mic_chat.py) performs startup in this
 order:
 
-1. Resolve `${LITELLM_API_KEY}` and validate the Blue endpoint configuration.
+1. Resolve `${LLM_API_KEY}` and validate the endpoint configuration.
 2. Build `FullDuplexConfig(enabled=True)`.
 3. Parse STT and VAD settings.
 4. Load MLX Whisper and Kokoro.
@@ -159,7 +159,7 @@ run_session
     │   └── MLX Whisper transcription
     └── ChatLoop._stream_response
         ├── stream_chat_completion
-        │   └── POST Blue /chat/completions
+        │   └── POST LLM /chat/completions
         ├── split_complete_sentences
         └── SentenceWorker thread
             ├── synthesize_with_alignment
@@ -225,7 +225,7 @@ result = self._mlx_whisper.transcribe(
 return result["text"].strip(), elapsed
 ```
 
-No raw PCM, WAV, or Whisper features are sent to Blue.
+No raw PCM, WAV, or Whisper features are sent to the LLM endpoint.
 
 ### 3. Build the textual conversation
 
@@ -244,7 +244,7 @@ You are a concise voice assistant.
 The context is capped after successful turns so a long session does not grow
 without bound.
 
-### 4. Stream the response from Blue LiteLLM
+### 4. Stream the response from the configured LLM endpoint
 
 [`examples/_chat_llm.py`](../examples/_chat_llm.py) makes an ordinary
 OpenAI-compatible streaming chat-completions request:
@@ -269,10 +269,10 @@ resp = requests.post(
 The endpoint in this trace was:
 
 ```text
-https://litellm.leap.blueorigin.com/v1/chat/completions
+https://llm.example.com/v1/chat/completions
 ```
 
-Blue streams Server-Sent Events. `parse_sse_token_stream()` extracts
+The endpoint streams Server-Sent Events. `parse_sse_token_stream()` extracts
 `choices[0].delta.content` and yields text fragments as soon as they arrive.
 
 ### 5. Split tokens into speakable sentences

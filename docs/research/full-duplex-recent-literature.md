@@ -21,8 +21,8 @@ That is the central idea in 2026's
 [DuplexOmni](https://arxiv.org/abs/2606.09186), and it is also compatible with
 [FlexDuo](https://arxiv.org/abs/2502.13472)'s pluggable controller. It fits
 geno-voice better than replacing the current stack with Moshi or another native
-speech model, because the configured Blue LiteLLM or custom endpoint can remain
-the thinking and tool-using brain.
+speech model, because the configured LLM endpoint can remain the thinking and
+tool-using brain.
 
 Two additional findings sharpen that split.
 [FireRedChat](https://arxiv.org/abs/2509.06502) shows a deployable modular
@@ -276,7 +276,7 @@ flowchart LR
     Fast --> Arbiter[Interaction arbiter<br/>timestamped action lane]
     STT --> Arbiter
     Playback[Playback ledger<br/>spoken prefix + cursor] --> Arbiter
-    Arbiter -->|COMMIT_USER_TURN| Brain[Blue LiteLLM / custom endpoint<br/>agent + tools]
+    Arbiter -->|COMMIT_USER_TURN| Brain[Configured LLM endpoint<br/>agent + tools]
     Brain --> Planner[Speech planner<br/>clauses + style]
     Planner --> TTS[Local streaming TTS]
     TTS --> Playback

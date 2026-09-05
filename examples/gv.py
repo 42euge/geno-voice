@@ -7,7 +7,7 @@ Usage:
     gv bench              # batch mode — wait for silence, transcribe, show timing
     gv stream             # streaming mode — live progressive transcription
     gv talk               # talk mode — STT → NLP → canned response → TTS
-    gv chat               # chat mode — STT → LLM (litellm) → TTS
+    gv chat               # chat mode — STT → OpenAI-compatible LLM → TTS
     gv simulate-mirror …  # offline WPM-mirror trajectory / grid-sweep simulator
     gv calibrate-base-wpm … # offline base_wpm calibration (dispersion grade agree/loose/scattered + margin to next grade; --verdict for an adopt/keep call; --json/--csv for per-sample data)
     gv calibrate-base-wpm-batch --voice af_heart 50:18.2 --voice am_adam 40:15.0  # calibrate a CORPUS of voices — per-voice base_wpm + grade + drift + the corpus median (which voices agree?); --json/--csv for the machine-readable corpus; --sort-by base_wpm/grade/drift/delta to float the most-useful voices to the top; --top-n N to keep only the N most-useful; --min-grade scattered/loose/agree to drop voices below a dispersion floor; --summary to name the single most-representative voice (nearest the corpus median); --flyers-only to show ONLY the outlier voices; the flyers: line names outlier voices (outside the Q1-1.5·IQR..Q3+1.5·IQR Tukey fence), also marked ← flyer in the table
@@ -13703,7 +13703,7 @@ def build_parser(*, prog="gv"):
 
     agent = sub.add_parser(
         "agent",
-        help="Voice agent using a configured LiteLLM/custom endpoint",
+        help="Voice agent using a configured OpenAI-compatible endpoint",
     )
     agent_modes = agent.add_subparsers(dest="agent_mode", required=True)
     for mode, help_text in (
@@ -13756,7 +13756,7 @@ def build_parser(*, prog="gv"):
         help=f"TTS speed in [{SPEED_MIN}, {SPEED_MAX}] (default: 1.0)",
     )
 
-    chat = sub.add_parser("chat", help="Chat mode — STT → LLM (litellm) → TTS")
+    chat = sub.add_parser("chat", help="Chat mode — STT → OpenAI-compatible LLM → TTS")
     chat.add_argument("--model", type=model_type, default=DEFAULT_MODEL)
     chat.add_argument(
         "--voice",

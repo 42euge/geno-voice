@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship GenoVoice with a bundled Claude Agent SDK backend that sources BlueGPT configuration from `~/.zshrc` and requires no Keychain, Ollama, Node, or Claude Code installation.
+**Goal:** Ship GenoVoice with a bundled Claude Agent SDK backend that sources Anthropic-compatible configuration from `~/.zshrc` and requires no Keychain, Ollama, Node, or Claude Code installation.
 
-**Architecture:** Swift launches a bundled Node backend through `/bin/zsh` for each question and exchanges one JSON request and response over standard input/output. The backend maps BlueGPT environment variables to Claude Agent SDK configuration, runs one no-tools Sonnet turn, and exits.
+**Architecture:** Swift launches a bundled Node backend through `/bin/zsh` for each question and exchanges one JSON request and response over standard input/output. The backend sources standard Claude Agent SDK environment variables, runs one no-tools Sonnet turn, and exits.
 
 **Tech Stack:** Swift 5.10, AppKit/SwiftUI, Foundation `Process`, Node 22.22.3 arm64, `@anthropic-ai/claude-agent-sdk` 0.3.260, Node test runner, Bash packaging.
 
@@ -29,7 +29,7 @@
 - Create: `macos/GenoQuickAgent/Backend/claude-backend.test.mjs`
 
 **Interfaces:**
-- Consumes: one stdin line shaped as `{"id":"...","question":"...","model":"sonnet"}` and BlueGPT/Anthropic environment variables.
+- Consumes: one stdin line shaped as `{"id":"...","question":"...","model":"sonnet"}` and standard Anthropic environment variables.
 - Produces: one stdout line shaped as `{"id":"...","answer":"..."}` or `{"id":"...","error":{"code":"...","message":"..."}}`.
 
 - [ ] Write Node tests that inject a fake `query` function and assert the
@@ -91,7 +91,7 @@
   archive extraction with architecture validation, `npm ci --omit=dev`, and
   resource copying.
 - [ ] Replace editable endpoint/key settings with read-only Claude SDK,
-  BlueGPT, `.zshrc`, and model information.
+  `.zshrc`, and model information.
 - [ ] Bump all version references to `v0.2.0 (9)`.
 - [ ] Run the build and bundle tests and verify they pass.
 
@@ -101,7 +101,7 @@
 - Modify: `macos/GenoQuickAgent/README.md`
 
 **Interfaces:**
-- Consumes: bundled backend plus the user's existing `~/.zshrc` BlueGPT values.
+- Consumes: bundled backend plus the user's existing `~/.zshrc` Anthropic values.
 - Produces: a non-empty Claude answer and an installed signed app/DMG.
 
 - [ ] Send `{"id":"smoke","question":"Reply with only OK.","model":"sonnet"}`

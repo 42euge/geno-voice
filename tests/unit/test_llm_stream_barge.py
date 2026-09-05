@@ -9,7 +9,7 @@ gets cancelled.
 
 This is the closest we can get to testing
 ``examples/mic_chat.run_chat`` without spinning up a real
-LiteLLM server. The components themselves
+OpenAI-compatible LLM server. The components themselves
 (``BargeInCoordinator``, ``BargeInWatcher``, ``SentenceWorker``)
 have full unit coverage already — this just verifies the
 orchestration shape.

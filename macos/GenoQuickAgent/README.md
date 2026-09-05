@@ -47,27 +47,22 @@ answer card's Speak action replays an answer from the beginning and changes to
 Stop while speech is active. Dismissing the card, asking another question, or
 showing an error stops playback and clears the highlight.
 
-## Claude SDK and BlueGPT
+## Claude SDK endpoint
 
 The DMG includes its own arm64 Node 22 runtime, Claude Agent SDK, and Claude
 executable. The installed app does not require Ollama, Homebrew, Node, npm, or
 Claude Code.
 
 For each question, the app starts a one-turn, no-tools Sonnet agent and sources
-your BlueGPT endpoint and credentials from `~/.zshrc`. Existing BlueGPT setups
-using these variables are supported:
+standard Anthropic-compatible endpoint configuration from `~/.zshrc`:
 
 ```bash
-# Endpoint: either form is accepted. A trailing /v1 is removed when mapping
-# OPENAI_BASE_URL for the Claude SDK.
-export ANTHROPIC_BASE_URL="https://your-bluegpt-host"
-# export OPENAI_BASE_URL="https://your-bluegpt-host/v1"
+# Endpoint for an Anthropic-compatible API.
+export ANTHROPIC_BASE_URL="https://anthropic-compatible.example.com"
 
-# Authentication: the first populated value is used.
+# Authentication: use either variable supported by the Claude SDK.
 export ANTHROPIC_AUTH_TOKEN="..."
-# export BLUEGPT_API_TOKEN="..."
-# export BLUEGPT_API_KEY="..."
-# export OPENAI_API_KEY="..."
+# export ANTHROPIC_API_KEY="..."
 ```
 
 Restart GenoVoice after changing `~/.zshrc`. The waveform menu-bar
@@ -75,8 +70,8 @@ icon → Settings shows the active backend, model, and configuration source. The
 app never stores credentials in macOS Keychain.
 
 Audio is handled by Apple's on-device speech recognizer. Only the transcribed
-question is sent to BlueGPT; the agent has no tools and receives no conversation
-history.
+question is sent to the configured endpoint; the agent has no tools and receives
+no conversation history.
 
 ## Interaction
 
@@ -94,7 +89,7 @@ Agent there, then press Option–Space to try again.
 If the app reports missing configuration, confirm that `~/.zshrc` exists and
 sets one endpoint and one authentication variable from the list above. If the
 backend is missing, reinstall the app from the versioned DMG. A one-minute
-timeout usually means the BlueGPT endpoint is unreachable or busy.
+timeout usually means the configured endpoint is unreachable or busy.
 
 GenoVoice has no Dock icon or main window. Settings and Quit live under
 the waveform menu-bar icon. If Option–Space is already owned by Superwhisper or

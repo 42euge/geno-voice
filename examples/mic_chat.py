@@ -1,4 +1,4 @@
-"""Chat mode — full voice loop with LLM responses via LiteLLM.
+"""Chat mode — full voice loop with an OpenAI-compatible LLM endpoint.
 
 STT → LLM (streaming) → TTS (per-sentence) → speaker playback.
 Text streams to terminal in sync with speech output.

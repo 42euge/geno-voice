@@ -210,7 +210,12 @@ try FileManager.default.createDirectory(
 defer { try? FileManager.default.removeItem(at: backendFixtureDirectory) }
 
 let fixtureZshrc = backendFixtureDirectory.appendingPathComponent("zshrc")
-try "export GENO_TEST_CONFIG_LOADED=1\n".write(
+try """
+export GENO_TEST_CONFIG_LOADED=1
+unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_BASE_URL
+export OPENAI_API_KEY=provider-neutral-test-token
+export OPENAI_BASE_URL=https://openai-compatible.example/v1
+""".write(
     to: fixtureZshrc,
     atomically: true,
     encoding: .utf8
@@ -222,6 +227,10 @@ payload="$(cat)"
 request_id="$(printf '%s' "$payload" | sed -E 's/.*"id":"([^"]+)".*/\\1/')"
 if [ "$GENO_TEST_CONFIG_LOADED" != "1" ]; then
   printf '{"id":"%s","error":{"code":"missing_config","message":"zshrc was not sourced"}}\\n' "$request_id"
+  exit 1
+fi
+if [ -n "${ANTHROPIC_AUTH_TOKEN:-}" ] || [ -n "${ANTHROPIC_BASE_URL:-}" ]; then
+  printf '{"id":"%s","error":{"code":"cross_mapped_config","message":"backend remapped configuration for another API"}}\\n' "$request_id"
   exit 1
 fi
 case "$payload" in

@@ -1625,7 +1625,7 @@ Notes:
 
 **289 unit tests passing in 18s.** Every function in `examples/`
 that's not directly tied to a runtime resource (PyAudio, the
-LiteLLM HTTP server) is now covered by unit tests. The tests
+OpenAI-compatible HTTP server) is now covered by unit tests. The tests
 that ARE tied to runtime resources (real kokoro, virtual mic
 + speaker as PyAudio surrogates) compose them through the
 production code path itself.
