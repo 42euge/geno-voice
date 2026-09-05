@@ -148,16 +148,16 @@ geno-voice agent half-duplex
 
 Both modes run the same local voice pipeline: microphone → STT → streaming
 LLM → sentence-overlapped Kokoro TTS → speaker. The LLM is an
-OpenAI-compatible `/chat/completions` endpoint, so it can point at the Blue
-LiteLLM gateway or another custom endpoint; it is not tied to OpenAI.
+OpenAI-compatible `/chat/completions` endpoint, so it can point at any
+compatible gateway or self-hosted service; it is not tied to one provider.
 
 Create an untracked `config.local.yaml` in the checkout:
 
 ```yaml
 llm:
-  model: your-blue-deployment-name
-  base_url: https://your-litellm-host/v1
-  api_key: ${BLUE_LITELLM_API_KEY}
+  model: your-model-name
+  base_url: https://llm.example.com/v1
+  api_key: ${LLM_API_KEY}
   max_tokens: 150
 
 chat:
@@ -195,9 +195,9 @@ run_agent(
         mode=AgentMode.FULL_DUPLEX,
         stt_model="large-v3",
         llm_config={
-            "model": "your-blue-deployment-name",
-            "base_url": "https://your-litellm-host/v1",
-            "api_key": os.environ["BLUE_LITELLM_API_KEY"],
+            "model": "your-model-name",
+            "base_url": "https://llm.example.com/v1",
+            "api_key": os.environ["LLM_API_KEY"],
         },
         chat_config={"stt_engine": "faster_whisper", "stt_device": "cuda"},
     )
